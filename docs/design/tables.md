@@ -538,6 +538,62 @@ run as sentences do (12 words or more): its text is the page's prose, its
 headings and lists read as such. A column of short entries, one a row
 (`Np Number of reputation tables…`), is a list read as a table, as before.
 
+## A table read across the page's gutter
+
+On a page set in two columns, the text reader's lines run the width of the
+page, so a row of one column's table shares a line with whatever the other
+column sets on its baseline. A reading of that table could take the other
+column's text as its first column or its last:
+- a structure report's crystal data beside its title;
+- a table beside the paragraph next to it;
+- two tables set side by side, read as one;
+- the first table's last rows read with the second's, beating the second
+  table's own reading.
+
+A reading two fifths of the page wide or more is tested at each place where
+its rows' text starts again, at one place, after a gap of three quarters of
+an em or more: a column after a gutter starts its lines at the same place,
+however far the text before it reaches. The places most rows start at are
+tested first, and the gutter is sought in the span the rows leave open there,
+where fewest of the page's runs of text cross it (a column's prose starts at
+its edge, and a table set in it may start its labels further in). A table
+in one column of two is under half the page wide, and is not tested. The
+reading crosses between two of the page's columns of text there when all of
+these hold:
+- **Text doesn't run across the gutter.** On none of its rows does text run
+  across the place: a gap under three quarters of an em is a word space,
+  not a gutter.
+- **A second stub starts past the gutter.** On most rows the first words past
+  the gutter are a label, or a key set against its value (`Z = 2`), not a
+  figure. A table's columns after its labels hold figures.
+- **Both sides are columns of the page's text.** Between the nearest runs of
+  text set across the place over and under the reading, each side sets a
+  paragraph: two lines of eight words or more, the second carrying the first
+  on in lowercase, at most a third of an em apart. The text reader's lines
+  give the runs, their parts on one baseline either side joined into a
+  column's lines. A table's own gap between columns of text is crossed by
+  the page's prose over it, or the page holds none.
+- **The sides are not one table's halves.** A long table wrapped into two
+  halves side by side sets a row on both sides on four rows in five, on one
+  baseline, and neither half's column runs on past the reading's top or
+  bottom while the other's stops.
+
+Such a reading is dropped before the larger of two readings of one table is
+kept, and each side is read again from that column's text alone:
+- **The side's own reading stands.** A table's reading in its own column
+  stands, the second table's included.
+- **A side that reads no table, ruled as one, is cut from the reading.**
+  Where the side's re-read finds nothing but the side is ruled across its
+  width over or under its rows, the reading is cut at the gutter: that side's
+  columns on its rows, less the rows the other side's text alone set. A
+  ruled table of words, which only the reading across the gutter read in
+  rows, keeps them.
+- **Any other side is the page's prose.** That includes a title, a paragraph,
+  or a list of references beside their numbers.
+
+Alignment's tables are read the same way: one across the gutter is read
+again on each side's glyphs.
+
 ## Banners
 
 A letterhead is a single row of fields ruled side by side, and it is a table.

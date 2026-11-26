@@ -2131,6 +2131,326 @@ fn figures_row(row: &[String]) -> bool {
             .all(|t| figures(t) || t.chars().all(|c| "-–—".contains(c)))
 }
 
+/// Of a gap a column of text crossed by a page's gutter leaves, less than
+/// this many ems between the last word before the gutter and the first after
+/// is text running across it: a word space, or the wide space of a
+/// justified line, is under three quarters of an em, and a gutter between
+/// two columns of text over one.
+const ACROSS_GUTTER: f64 = 0.75;
+
+/// Within this many ems of a reading's top or bottom, a line of a page
+/// column's text runs on past it: lines of a paragraph or rows of a table
+/// stand a fifth of an em apart or less, ink to ink, and a caption or
+/// heading set over a table stands off it by half an em or more.
+const RUNS_PAST: f64 = 0.35;
+
+/// Words to a line of a paragraph set in a page's column, at the least: a
+/// column of a two-column page sets ten or more, a table cell's text two or
+/// three before it wraps.
+const COLUMN_PROSE_WORDS: usize = 8;
+
+/// Shares of a reading's rows, and of those rows' baselines, that make its
+/// two sides one table's halves: a long table wrapped into two halves side
+/// by side holds a row on both sides on every line but perhaps its last.
+const HALVES: f64 = 0.8;
+
+/// Where a gutter between two of the page's columns could run down through
+/// a reading: the gaps of three quarters of an em or more
+/// (`ACROSS_GUTTER`) its rows leave before text that starts at one place,
+/// as the span from where the text before them ends, at the latest, to
+/// where that text starts; the places most rows start at first. A column
+/// after a gutter starts each of its lines at the same place, however far
+/// the text before the gutter reaches; a row with text on one side alone
+/// leaves no gap there.
+pub(crate) fn channels_in(rows: &[ReadingRow]) -> Vec<(f64, f64)> {
+    let mut gaps: Vec<(f64, f64, f64)> = Vec::new();
+    for row in rows.iter().filter(|r| r.len() >= 2) {
+        let mut end = row[0].1.x1;
+        for &(q, bb) in &row[1..] {
+            let em = q.font_size.max(1.0) as f64;
+            if bb.x0 - end >= em * ACROSS_GUTTER {
+                gaps.push((bb.x0, end, em));
+            }
+            end = end.max(bb.x1);
+        }
+    }
+    gaps.sort_by(|a, c| a.0.total_cmp(&c.0));
+    // (rows, latest end before, earliest start after)
+    let mut found: Vec<(usize, f64, f64)> = Vec::new();
+    let mut last = f64::MIN;
+    for (x, open, em) in gaps {
+        match found.last_mut() {
+            Some((n, ends, starts)) if x - last <= em * ACROSS_GUTTER => {
+                *n += 1;
+                *ends = ends.max(open);
+                *starts = starts.min(x);
+            }
+            _ => found.push((1, open, x)),
+        }
+        last = x;
+    }
+    // The places most rows start at first.
+    found.sort_by(|a, c| c.0.cmp(&a.0).then(a.2.total_cmp(&c.2)));
+    found
+        .into_iter()
+        .filter(|(_, ends, starts)| starts > ends)
+        .map(|(_, ends, starts)| (ends, starts))
+        .collect()
+}
+
+/// A reading's row: its glyphs, left to right, with their boxes.
+pub(crate) type ReadingRow<'g> = Vec<(&'g crate::glyph::Glyph, BBox)>;
+
+/// A reading's rows of text, each its glyphs left to right: read once for
+/// every place a gutter is looked for ([`channels_in`],
+/// [`crosses_gutter`]).
+pub(crate) fn reading_rows<'g>(g: &Grid, glyphs: &'g [crate::glyph::Glyph]) -> Vec<ReadingRow<'g>> {
+    let b = g.bbox;
+    let mut inside: Vec<(&crate::glyph::Glyph, BBox)> = glyphs
+        .iter()
+        .filter(|q| q.is_horizontal() && !q.text.trim().is_empty())
+        .filter_map(|q| q.bbox.map(|bb| (q, bb)))
+        .filter(|(_, bb)| {
+            let (cx, cy) = ((bb.x0 + bb.x1) / 2.0, (bb.y0 + bb.y1) / 2.0);
+            cx >= b.x0 && cx <= b.x1 && cy >= b.y0 && cy <= b.y1
+        })
+        .collect();
+    inside.sort_by(|a, c| a.1.x0.total_cmp(&c.1.x0));
+    g.ys.windows(2)
+        .map(|w| {
+            inside
+                .iter()
+                .filter(|(_, bb)| {
+                    let cy = (bb.y0 + bb.y1) / 2.0;
+                    cy >= w[0] && cy < w[1]
+                })
+                .copied()
+                .collect()
+        })
+        .collect()
+}
+
+/// A run of text set together on a line: its box, its words, its size.
+#[derive(Debug, Clone)]
+pub(crate) struct TextRun {
+    pub bbox: BBox,
+    pub text: String,
+    pub size: f64,
+}
+
+/// The lines a page column sets between `c0` and `c1`, from `top` to
+/// `bottom`: its runs on one baseline, joined.
+fn column_lines(runs: &[&TextRun], (c0, c1): (f64, f64), top: f64, bottom: f64) -> Vec<TextRun> {
+    let mut side: Vec<&&TextRun> = runs
+        .iter()
+        .filter(|r| {
+            r.bbox.x0 >= c0 - 2.0
+                && r.bbox.x1 <= c1 + 2.0
+                && r.bbox.y0 >= top
+                && r.bbox.y1 <= bottom
+        })
+        .collect();
+    side.sort_by(|a, b| {
+        a.bbox
+            .y1
+            .total_cmp(&b.bbox.y1)
+            .then(a.bbox.x0.total_cmp(&b.bbox.x0))
+    });
+    let mut out: Vec<TextRun> = Vec::new();
+    for r in side {
+        match out.last_mut() {
+            Some(l) if (l.bbox.y1 - r.bbox.y1).abs() <= l.size.max(r.size) * 0.3 => {
+                l.bbox = l.bbox.union(&r.bbox);
+                l.text.push(' ');
+                l.text.push_str(&r.text);
+                l.size = l.size.max(r.size);
+            }
+            _ => out.push((*r).clone()),
+        }
+    }
+    out
+}
+
+/// Whether some of `lines` run as a paragraph does: a line of a column's
+/// prose, open at its end, carried on in lowercase by the line set under it
+/// at its indent, both full lines of words (`COLUMN_PROSE_WORDS`).
+fn runs_as_prose(lines: &[TextRun]) -> bool {
+    lines.windows(2).any(|w| {
+        let (a, c) = (&w[0], &w[1]);
+        let em = a.size.max(1.0);
+        let open = a
+            .text
+            .trim_end()
+            .chars()
+            .next_back()
+            .is_some_and(|ch| ch.is_lowercase() || matches!(ch, ',' | '-'));
+        let carried = c
+            .text
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(char::is_lowercase);
+        let words = |l: &TextRun| l.text.split_whitespace().count() >= COLUMN_PROSE_WORDS;
+        c.bbox.y0 - a.bbox.y1 <= em * RUNS_PAST
+            && (c.bbox.x0 - a.bbox.x0).abs() <= em * 2.0
+            && open
+            && carried
+            && words(a)
+            && words(c)
+    })
+}
+
+/// Whether a reading set across a page's gutter, between the page columns
+/// `left` and `right`, crosses between two of the page's columns of text:
+/// two tables set side by side, a table and the prose beside it, a block of
+/// facts and a title.
+///
+/// - On none of its rows does text run across the gutter, and on most rows
+///   the first words past it are a label, not a figure. A table's columns
+///   after its labels hold figures; a second column of labels past the
+///   page's gutter is another table's stub, the keys of a block of facts, or
+///   prose.
+/// - Its two sides are not one table's halves: a long table wrapped into
+///   two halves side by side sets a row on both sides on one baseline, and
+///   neither half runs on past the other.
+///
+/// `rows` are the reading's ([`reading_rows`]); `runs` gives the page's runs
+/// of text, read only for a reading that passes the first test. The gutter
+/// is looked for in the span its rows leave open between `ends` and
+/// `starts` ([`channels_in`]), where fewest runs cross it; the place found
+/// is returned.
+pub(crate) fn crosses_gutter<'a>(
+    g: &Grid,
+    rows: &[ReadingRow],
+    runs: impl Fn() -> &'a [TextRun],
+    (ends, starts): (f64, f64),
+    width: f64,
+) -> Option<f64> {
+    let mut gutter = (ends + starts) / 2.0;
+    let b = g.bbox;
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let mut firsts: Vec<String> = Vec::new();
+    let (mut held, mut both, mut level) = (0usize, 0usize, 0usize);
+    let mut fs = 0.0f64;
+    for row in rows {
+        if row.is_empty() {
+            continue;
+        }
+        held += 1;
+        let split = row.partition_point(|(_, bb)| (bb.x0 + bb.x1) / 2.0 < gutter);
+        let (before, after) = row.split_at(split);
+        let Some(&(first, fb)) = after.first() else {
+            continue;
+        };
+        let em = first.font_size.max(1.0) as f64;
+        fs = fs.max(em);
+        if let Some(&(_, lb)) = before.last() {
+            if fb.x0 - lb.x1 < em * ACROSS_GUTTER {
+                return None;
+            }
+            both += 1;
+            let mut l: Vec<f64> = before.iter().map(|(q, _)| q.origin.1).collect();
+            let mut r: Vec<f64> = after.iter().map(|(q, _)| q.origin.1).collect();
+            if (median(&mut l) - median(&mut r)).abs() <= em * 0.25 {
+                level += 1;
+            }
+        }
+        let mut text = first.text.clone();
+        let mut end = fb.x1;
+        for &(q, qb) in &after[1..] {
+            if qb.x0 - end > em * ACROSS_GUTTER {
+                break;
+            }
+            text.push_str(&q.text);
+            end = qb.x1;
+        }
+        firsts.push(text);
+    }
+    // A label: words, or a key set against its value (`Z = 2`).
+    let labels = firsts
+        .iter()
+        .filter(|t| {
+            let t = t.trim();
+            let keyed = t
+                .split_once('=')
+                .is_some_and(|(k, _)| k.chars().any(char::is_alphabetic));
+            keyed || t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && !is_numeric_cell(t)
+        })
+        .count();
+    if both == 0 || firsts.len() < 2 || labels * 2 <= firsts.len() {
+        return None;
+    }
+    // The page's runs of text outside the reading, read only for a reading
+    // that passes the tests above.
+    let runs: Vec<&TextRun> = runs()
+        .iter()
+        .filter(|r| {
+            let (cx, cy) = ((r.bbox.x0 + r.bbox.x1) / 2.0, (r.bbox.y0 + r.bbox.y1) / 2.0);
+            !(cx >= b.x0 && cx <= b.x1 && cy >= b.y0 && cy <= b.y1)
+        })
+        .collect();
+    // The gutter stands where fewest of the page's runs cross the span its
+    // rows leave open: a column's prose starts at its edge, and a table set
+    // in it may start its labels further in.
+    let crossing = |x: f64| {
+        runs.iter()
+            .filter(|r| r.bbox.x0 < x - 0.5 && r.bbox.x1 > x + 0.5)
+            .count()
+    };
+    let mut places: Vec<f64> = vec![gutter, ends + 0.5, starts - 0.5];
+    places.extend(
+        runs.iter()
+            .flat_map(|r| [r.bbox.x0 - 0.5, r.bbox.x1 + 0.5])
+            .filter(|&x| x > ends && x < starts),
+    );
+    gutter = places
+        .into_iter()
+        .map(|x| (crossing(x), (x - gutter).abs(), x))
+        .min_by(|a, c| a.0.cmp(&c.0).then(a.1.total_cmp(&c.1)))
+        .map_or(gutter, |(_, _, x)| x);
+    let (left, right) = ((0.0, gutter), (gutter, width));
+    // The gutter parts two columns of the page's text: between the nearest
+    // runs set across it over and under the reading, each side sets a
+    // paragraph of its own, a line running on into the next. A gap between
+    // a table's own columns parts nothing but the table: the page's prose
+    // runs across it, or the page holds none.
+    let across = |r: &TextRun| r.bbox.x0 < gutter - 1.0 && r.bbox.x1 > gutter + 1.0;
+    let top = runs
+        .iter()
+        .filter(|r| across(r) && r.bbox.y1 <= b.y0)
+        .map(|r| r.bbox.y1)
+        .fold(f64::MIN, f64::max);
+    let bottom = runs
+        .iter()
+        .filter(|r| across(r) && r.bbox.y0 >= b.y1)
+        .map(|r| r.bbox.y0)
+        .fold(f64::MAX, f64::min);
+    if !runs_as_prose(&column_lines(&runs, left, top, bottom))
+        || !runs_as_prose(&column_lines(&runs, right, top, bottom))
+    {
+        return None;
+    }
+    // A side's column text running on past the reading's top or bottom.
+    let runs_past = |(c0, c1): (f64, f64), top: bool| {
+        runs.iter().any(|r| {
+            let rb = r.bbox;
+            let gap = if top { b.y0 - rb.y1 } else { rb.y0 - b.y1 };
+            rb.x0 >= c0 - 2.0
+                && rb.x1 <= c1 + 2.0
+                && gap >= -0.5 * fs
+                && gap <= RUNS_PAST * r.size.max(1.0)
+        })
+    };
+    let alone = [true, false]
+        .iter()
+        .any(|&top| runs_past(left, top) != runs_past(right, top));
+    let halves = both as f64 >= held as f64 * HALVES && level as f64 >= both as f64 * HALVES;
+    (alone || !halves).then_some(gutter)
+}
+
 pub(crate) fn is_numeric_cell(s: &str) -> bool {
     if s.is_empty() || !s.chars().any(|c| c.is_ascii_digit()) {
         return false;
@@ -12148,4 +12468,138 @@ pub fn walled_in(b: &crate::geom::BBox, walls: &[Wall]) -> bool {
     walls
         .iter()
         .any(|w| w.x > b.x0 + 1.0 && w.x < b.x1 - 1.0 && w.y0 <= b.y0 && w.y1 >= b.y1)
+}
+
+#[cfg(test)]
+mod cross_gutter_tests {
+    use super::*;
+
+    /// `text` set at `x` on the baseline `y`, 9 pt, a glyph a character
+    /// 4.5 pt wide, rising 8.5 pt over its baseline and dropping 2 under it; a space is a gap of the
+    /// same width.
+    fn say(text: &str, x: f64, y: f64) -> Vec<crate::glyph::Glyph> {
+        let mut out = Vec::new();
+        for (i, c) in text.chars().enumerate() {
+            if c == ' ' {
+                continue;
+            }
+            let x0 = x + i as f64 * 4.5;
+            out.push(crate::glyph::Glyph {
+                text: c.to_string(),
+                bbox: Some(BBox {
+                    x0,
+                    y0: y - 8.5,
+                    x1: x0 + 4.2,
+                    y1: y + 2.0,
+                }),
+                page: 0,
+                origin: (x0, y),
+                rotation_deg: 0.0,
+                font_size: 9.0,
+                advance: Some(4.5),
+                weight: None,
+                draw_index: 0,
+            });
+        }
+        out
+    }
+
+    const PROSE: &str = "the members agreed that the outlook for the economy";
+
+    /// A paragraph of `n` lines from baseline `y`, 11 pt apart, at `x`.
+    fn paragraph(x: f64, y: f64, n: usize) -> Vec<crate::glyph::Glyph> {
+        (0..n)
+            .flat_map(|i| say(PROSE, x, y + 11.0 * i as f64))
+            .collect()
+    }
+
+    fn grid(xs: &[f64], ys: &[f64]) -> Grid {
+        Grid {
+            layout: None,
+            page: 0,
+            xs: xs.to_vec(),
+            ys: ys.to_vec(),
+            bbox: BBox {
+                x0: xs[0],
+                y0: ys[0],
+                x1: *xs.last().unwrap(),
+                y1: *ys.last().unwrap(),
+            },
+        }
+    }
+
+    fn crosses(glyphs: &[crate::glyph::Glyph], g: &Grid) -> bool {
+        let runs = crate::textgrid::runs(&crate::textgrid::lines(glyphs));
+        let rows = reading_rows(g, glyphs);
+        channels_in(&rows)
+            .into_iter()
+            .any(|span| crosses_gutter(g, &rows, || &runs, span, 600.0).is_some())
+    }
+
+    #[test]
+    fn a_table_read_with_the_prose_beside_it_crosses_the_gutter() {
+        // The left column's paragraph runs from the page's top to its foot;
+        // the right column sets a paragraph, then a table of labels and
+        // figures. A reading of the table took the paragraph's lines beside
+        // it as its first column.
+        let mut gl = paragraph(40.0, 100.0, 26);
+        gl.extend(paragraph(310.0, 100.0, 6));
+        let rows = [
+            "Inventories",
+            "Product liabilities",
+            "Accrued expenses",
+            "State taxes",
+        ];
+        for (i, label) in rows.iter().enumerate() {
+            let y = 200.0 + 14.0 * i as f64;
+            gl.extend(say(label, 310.0, y));
+            gl.extend(say("1,513", 520.0, y));
+        }
+        let g = grid(
+            &[40.0, 300.0, 500.0, 560.0],
+            &[190.0, 203.0, 217.0, 231.0, 245.0],
+        );
+        assert!(crosses(&gl, &g));
+    }
+
+    #[test]
+    fn a_table_wrapped_into_two_halves_does_not_cross_the_gutter() {
+        // Prose in both columns over and under one table set in two halves
+        // side by side, every row on one baseline across both.
+        let mut gl = paragraph(40.0, 100.0, 4);
+        gl.extend(paragraph(310.0, 100.0, 4));
+        for i in 0..6 {
+            let y = 180.0 + 14.0 * i as f64;
+            gl.extend(say(&format!("C{}—C{}", i + 1, i + 2), 40.0, y));
+            gl.extend(say("1.392 (3)", 200.0, y));
+            gl.extend(say(&format!("N{}—C{}", i + 1, i + 3), 310.0, y));
+            gl.extend(say("1.401 (2)", 470.0, y));
+        }
+        gl.extend(paragraph(40.0, 300.0, 4));
+        gl.extend(paragraph(310.0, 300.0, 4));
+        let ys: Vec<f64> = (0..7).map(|i| 170.0 + 14.0 * i as f64).collect();
+        let g = grid(&[40.0, 190.0, 300.0, 460.0, 560.0], &ys);
+        assert!(!crosses(&gl, &g));
+    }
+
+    #[test]
+    fn a_gap_between_a_tables_own_columns_is_no_gutter() {
+        // One column of prose across the page over a table whose columns of
+        // text leave a gap where a gutter would be: the prose runs across
+        // it, and nothing beside the table runs on as a paragraph.
+        let mut gl: Vec<crate::glyph::Glyph> = (0..4)
+            .flat_map(|i| say(&format!("{PROSE} {PROSE}"), 40.0, 100.0 + 12.0 * i as f64))
+            .collect();
+        let rows = [
+            ("Spray drying", "Budesonide"),
+            ("Freeze drying", "Fenofibrate"),
+        ];
+        for (i, (a, b)) in rows.iter().enumerate() {
+            let y = 180.0 + 14.0 * i as f64;
+            gl.extend(say(a, 40.0, y));
+            gl.extend(say(b, 310.0, y));
+        }
+        let g = grid(&[40.0, 300.0, 560.0], &[170.0, 183.0, 197.0]);
+        assert!(!crosses(&gl, &g));
+    }
 }
