@@ -1086,6 +1086,10 @@ fn marker_beside(m: &Line, l: &Line) -> bool {
 /// Size ratio from which text is display type beside the text next to it.
 const DISPLAY_RATIO: f64 = 2.0;
 
+/// Size ratio from which a side label is set a step over the text beside
+/// it: a form's `Third Party` at 10pt over `Designee`, 8pt text beside.
+const STACK_SIZE_RATIO: f64 = 1.2;
+
 /// Most blocks of another column that may stand between two stacked lines
 /// of a display title in reading order.
 const STACK_WINDOW: usize = 8;
@@ -2616,6 +2620,110 @@ const MIN_SIDE_HEAD_SHARE: f64 = 0.6;
 ///
 /// `tables` are the page's tables, which leave the prose before blocks
 /// form: a head beside a table is level with the table's top.
+/// Most words on each line of a side label stacked over two.
+const MAX_SIDE_LABEL_WORDS: usize = 3;
+
+/// Join a side label's two lines read apart: `Sign` over `Here` at 12pt in
+/// a form's margin, beside its 6.9pt declaration. Reading the page in
+/// cells, the label's lines can fall in two, each a block, and each came
+/// out a heading of its own. One-line blocks of a few words of letters, at
+/// one size and one left edge, one under the other at their leading, set a
+/// step over the text beside them ([`STACK_SIZE_RATIO`]), are one label, in
+/// the first's place: `Acceptable` over `Means of` over `Compliance` in a
+/// regulation's margin. An article's number under it (`1410(1)`) is no
+/// line of the label. A form's stacked labels (`Name` over
+/// `Address`) are set at their values' size; a division's label over its
+/// title (`Part 2` over `Planning`) stays its own.
+pub fn join_side_labels(mut columns: Vec<Vec<Block>>) -> Vec<Vec<Block>> {
+    let at: Vec<(usize, usize)> = columns
+        .iter()
+        .enumerate()
+        .flat_map(|(c, col)| (0..col.len()).map(move |k| (c, k)))
+        .collect();
+    // Whether text stands beside the block on its row, set a step smaller
+    // than it, or not.
+    let beside = |cols: &Vec<Vec<Block>>, p: (usize, usize), smaller: bool| {
+        let b = &cols[p.0][p.1];
+        let fs = b.font_size as f64;
+        at.iter().any(|&q| {
+            let o = &cols[q.0][q.1];
+            q != p
+                && o.bbox.x0 >= b.bbox.x1
+                && o.bbox.y1.min(b.bbox.y1) > o.bbox.y0.max(b.bbox.y0)
+                && (o.font_size as f64 * STACK_SIZE_RATIO <= fs) == smaller
+        })
+    };
+    // A one-line block of a few words, of letters, set over the page's
+    // text, with nothing as large beside it on its row. A drawing's labels
+    // (`Dimmer` over `Load Side`) are set at the text's size or under it.
+    let body = body_size(columns.iter().flatten().flat_map(|b| &b.lines));
+    let label = |cols: &Vec<Vec<Block>>, p: (usize, usize)| {
+        let b = &cols[p.0][p.1];
+        let t = b.text();
+        b.lines.len() == 1
+            && b.font_size as f64 > body * (1.0 + FONT_SIZE_TOLERANCE)
+            && b.marker.is_none()
+            && t.split_whitespace().count() <= MAX_SIDE_LABEL_WORDS
+            && !t.chars().any(|c| c.is_ascii_digit())
+            && t.chars().filter(|c| c.is_alphabetic()).count() >= 2
+            && !beside(cols, p, false)
+    };
+    // Each label line's next: the label line under it.
+    let mut next: Vec<((usize, usize), (usize, usize))> = Vec::new();
+    for &p in &at {
+        let a = &columns[p.0][p.1];
+        if !label(&columns, p) || crate::heading::division_label(&a.text()) {
+            continue;
+        }
+        let size = (a.font_size as f64).max(1.0);
+        let under = at.iter().copied().find(|&q| {
+            let b = &columns[q.0][q.1];
+            let gap = b.bbox.y0 - a.bbox.y1;
+            q != p
+                && (b.font_size - a.font_size).abs() as f64 <= size * FONT_SIZE_TOLERANCE
+                && b.bold == a.bold
+                && (b.bbox.x0 - a.bbox.x0).abs() <= size * 0.5
+                && gap > -size * 0.2
+                && gap <= size * 0.75
+        });
+        if let Some(q) = under.filter(|&q| label(&columns, q)) {
+            if !next.iter().any(|&(_, y)| y == q) {
+                next.push((p, q));
+            }
+        }
+    }
+    // A label is a chain of such lines, joined into its first, where smaller
+    // text stands beside one of them.
+    let mut gone: Vec<(usize, usize)> = Vec::new();
+    let heads: Vec<(usize, usize)> = next
+        .iter()
+        .map(|&(p, _)| p)
+        .filter(|p| !next.iter().any(|&(_, q)| q == *p))
+        .collect();
+    for head in heads {
+        let mut chain = vec![head];
+        while let Some(&(_, q)) = next.iter().find(|&&(p, _)| Some(&p) == chain.last()) {
+            chain.push(q);
+        }
+        if !chain.iter().any(|&p| beside(&columns, p, true)) {
+            continue;
+        }
+        for &q in &chain[1..] {
+            let b = columns[q.0][q.1].clone();
+            let a = &mut columns[head.0][head.1];
+            a.lines.extend(b.lines);
+            a.bbox = a.bbox.union(&b.bbox);
+            gone.push(q);
+        }
+    }
+    gone.sort_unstable_by(|x, y| y.cmp(x));
+    gone.dedup();
+    for (c, k) in gone {
+        columns[c].remove(k);
+    }
+    columns
+}
+
 pub fn read_side_heads(columns: Vec<Vec<Block>>, tables: &[BBox]) -> Vec<Vec<Block>> {
     let mut out: Vec<Vec<Block>> = Vec::with_capacity(columns.len());
     let mut columns = columns.into_iter().peekable();
@@ -2757,6 +2865,54 @@ pub(crate) fn build(lines: Vec<Line>) -> Block {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_side_labels_lines_read_apart_are_one_label() {
+        // `Sign` over `Here` at 12pt in the margin, each beside 7pt text,
+        // read in two cells; and a drawing's labels at the text's size.
+        let b = |text: &str, x: f64, y: f64, fs: f32| {
+            let mut line = l(text, x, y, fs);
+            line.bbox.x1 = x + text.len() as f64 * fs as f64 * 0.5;
+            build(vec![line])
+        };
+        let columns = vec![
+            vec![
+                b("Sign", 36.0, 100.0, 12.0),
+                b("Under penalties of perjury", 94.0, 101.0, 7.0),
+            ],
+            vec![
+                b("Here", 36.0, 112.0, 12.0),
+                b("they are true and complete", 94.0, 110.0, 7.0),
+                b("Body text runs on here", 94.0, 200.0, 7.0),
+                b("Body text runs on here", 94.0, 210.0, 7.0),
+            ],
+        ];
+        let out = join_side_labels(columns);
+        let texts: Vec<String> = out.iter().flatten().map(|b| b.text()).collect();
+        assert!(texts.iter().any(|t| t == "Sign Here"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "Here"), "{texts:?}");
+        // A clause's number under the label is no line of it.
+        let columns = vec![vec![
+            b("Means of", 36.0, 100.0, 12.0),
+            b("text beside it", 94.0, 101.0, 7.0),
+            b("Compliance", 36.0, 112.0, 12.0),
+            b("1410(1)", 36.0, 124.0, 12.0),
+            b("more text", 94.0, 125.0, 7.0),
+            b("Body text runs on here", 94.0, 200.0, 7.0),
+            b("Body text runs on here", 94.0, 210.0, 7.0),
+            b("Body text runs on here", 94.0, 220.0, 7.0),
+        ]];
+        let texts: Vec<String> = join_side_labels(columns)
+            .iter()
+            .flatten()
+            .map(|b| b.text())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == "Means of Compliance"),
+            "{texts:?}"
+        );
+        assert!(texts.iter().any(|t| t == "1410(1)"), "{texts:?}");
+    }
 
     fn l(text: &str, x: f64, y: f64, fs: f32) -> Line {
         Line {

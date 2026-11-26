@@ -4295,7 +4295,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     _ => runs.push((c, blocks)),
                 }
             }
-            block::read_side_heads(runs.into_iter().map(|(_, r)| r).collect(), &tables)
+            block::join_side_labels(block::read_side_heads(
+                runs.into_iter().map(|(_, r)| r).collect(),
+                &tables,
+            ))
         });
         let mut out: Vec<Block> = block_columns.into_iter().flatten().collect();
         if contents_layout {
