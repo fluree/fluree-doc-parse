@@ -105,8 +105,7 @@ All 17 engines scored:
 | 17 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
 
 The deterministic engine, which uses no model, GPU or API key, places third
-on its own. With the layout detector, still on CPU alone, it would place
-second. The full cascade places first, 0.034 ahead of the next engine.
+on its own. The full cascade places first, 0.034 ahead of the next engine.
 
 Notes on how both `s/doc` figures were timed, and the caveats that apply to
 these scores, are on [the benchmarks page](docs/benchmarks/README.md). That
@@ -177,8 +176,8 @@ and the OOXML readers use [quick-xml](https://github.com/tafia/quick-xml) and
 [zip](https://github.com/zip-rs/zip2) (both MIT).
 
 No weights ship here. Model readings enter through three doors: a deep
-reader configured over HTTPS, JSON sidecars from any layout detector or
-reader you run yourself, and the built-in OCR engine. That engine links
+reader configured over HTTPS, JSON sidecars from any reader you run
+yourself, and the built-in OCR engine. That engine links
 [oar-ocr](https://github.com/GreatV/oar-ocr) (Apache-2.0), with the
 [ort](https://github.com/pykeio/ort) bindings and
 [image](https://github.com/image-rs/image) (both MIT OR Apache-2.0); it can

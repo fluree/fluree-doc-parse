@@ -1595,6 +1595,32 @@ fn part_at_gutters(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> 
                     && o.x1 < far - *em
             })
     };
+    // Lines of words: two or more with letters, as a column of text's are,
+    // and a chart's ticks are not.
+    let worded: Vec<bool> = lines
+        .iter()
+        .map(|l| {
+            l.text
+                .split_whitespace()
+                .filter(|w| w.chars().any(char::is_alphabetic))
+                .count()
+                >= 2
+        })
+        .collect();
+    // Where three lines of words or more start, to a point: a column of
+    // text's left edge.
+    let column_starts_in = |x0: f64, x1: f64| {
+        let mut starts: Vec<f64> = boxes
+            .iter()
+            .zip(&worded)
+            .filter(|((b, _, horizontal), w)| **w && *horizontal && b.x0 > x0 && b.x0 < x1)
+            .map(|((b, _, _), _)| b.x0)
+            .collect();
+        starts.sort_by(f64::total_cmp);
+        starts
+            .windows(COLUMN_STARTS)
+            .any(|w| w[COLUMN_STARTS - 1] - w[0] <= 1.0)
+    };
     let mut out = Vec::with_capacity(lines.len());
     for (me, l) in lines.into_iter().enumerate() {
         if !l.is_horizontal() {
@@ -1620,10 +1646,21 @@ fn part_at_gutters(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> 
                 continue;
             };
             let size = glyphs[*inked].font_size.max(next.font_size).max(1.0) as f64;
+            // A gap wider than any space a justified line stretches, with a
+            // column of text starting inside it and another where the text
+            // past it starts, is a gutter, whatever the lines beside it do: where three columns share a baseline, a row run
+            // together across both gutters puts ink in the middle of a gap
+            // between the first and third, and that ink is the middle
+            // column's, whose lines start at one place in the gap. A
+            // contents line's long gap to its page number is crossed by
+            // longer entries starting at the margin, not by a column.
+            let gutter = b.x0 - a.x1 > size * GUTTER_GAP_RATIO
+                && column_starts_in(a.x1 + size, b.x0 - size)
+                && column_starts_in(b.x0 - 1.0, b.x0 + 1.0);
             if b.x0 - a.x1 > size * BLOCK_GAP_RATIO
                 && (!lone_label(glyphs, &idxs[from..k])
                     || heads_a_column(me, &idxs[from..k], &glyphs[*inked], next, size))
-                && !crossed(me, a.x1, b.x0, size)
+                && (gutter || !crossed(me, a.x1, b.x0, size))
             {
                 cuts.push(k);
             }
@@ -1739,6 +1776,17 @@ const RESTYLED: f64 = 0.1;
 /// Rows above and below, in the line's size, whose lines show a gap is no
 /// gutter by running across it.
 const GUTTER_ROWS: f64 = 2.5;
+
+/// Widest a justified line stretches a space, in its size, past which a gap
+/// is a gutter whatever runs across it. Measured gaps (see
+/// [`BLOCK_GAP_RATIO`]): word spaces are exhausted by 1.0, and the gaps past
+/// 5.0 are gutters, cell boundaries and a header's groups.
+const GUTTER_GAP_RATIO: f64 = 5.0;
+
+/// Fewest lines of words starting at one place, to a point, that make a
+/// column of text's left edge: three, as a paragraph's lines do; a heading
+/// or a lone label starts one.
+const COLUMN_STARTS: usize = 3;
 
 /// Is the line so far a number or a marker alone, `3.1`, `12`, `IV.`,
 /// `(a)`, `•`, or one a word names, `Note 3.`, `Item 1A.`, `Section 2.1`,

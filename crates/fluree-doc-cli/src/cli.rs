@@ -231,11 +231,6 @@ pub struct ConvertArgs {
     #[arg(long, value_enum, value_name = "MODE")]
     pub mode: Option<crate::mode::Mode>,
 
-    /// Directory of layout-detector sidecars (`<stem>_p<N>_page.json`) used
-    /// to promote missed section titles [env: FDOC_TITLE_BOXES]
-    #[arg(long, value_name = "DIR")]
-    pub layout_boxes: Option<PathBuf>,
-
     /// Directory of model-tier readings (`<stem>_<crop>.json`) to splice into
     /// the output [env: FDOC_TIER_RESULTS]
     #[arg(long, value_name = "DIR")]

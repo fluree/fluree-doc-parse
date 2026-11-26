@@ -70,8 +70,7 @@ From the escalation path:
 | `route` | a routed region supplied this |
 | `page-tier` | the whole page escalated |
 | `table-confidence` | a table escalated because its reading is in doubt: structure that disagrees with itself, or a header other than one plain row |
-| `table-missing` | a detector found a table where the grid pass found none |
-| `layout-demoted` | a detector corroborated demoting this heading to prose |
+| `layout-demoted` | a grid read as no table (a drawing's labels, a chart's scales), kept as prose in its reading order |
 
 And from the declared formats: `markdown`, `text`, `html`, `docx`, `pptx`, `xlsx`, and
 `header` and `footer` for what a Word file's page header and footer hold. These are

@@ -78,8 +78,8 @@ Renders every routed page and region to PNG at **2×** (≈144 dpi) with a small
 margin, and writes `manifest.jsonl` alongside:
 
 ```jsonl
-{"bbox":[75.6,255.6,536.4,489.6],"doc":"datasheet-b","kind":"region","page":33,"png":"datasheet-b_p33_r0.png","reason":"region","scale":2.0,"table":true,"vetoed":false}
-{"bbox":[72.0,118.4,540.0,402.7],"doc":"datasheet-b","kind":"region","page":34,"png":"datasheet-b_p34_t0.png","reason":"table","scale":2.0,"table":true,"vetoed":true}
+{"bbox":[75.6,255.6,536.4,489.6],"doc":"datasheet-b","kind":"region","page":33,"png":"datasheet-b_p33_r0.png","reason":"region","scale":2.0,"vetoed":false}
+{"bbox":[72.0,118.4,540.0,402.7],"doc":"datasheet-b","kind":"region","page":34,"png":"datasheet-b_p34_t0.png","reason":"table","scale":2.0,"vetoed":true}
 {"doc":"form","kind":"page","page":0,"png":"form_p0_full.png","reason":"heading_doubt","scale":2.0}
 ```
 

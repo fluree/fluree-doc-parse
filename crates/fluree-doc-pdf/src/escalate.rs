@@ -2,19 +2,17 @@
 //! pixels to send, the words to send with them, and the container a
 //! reading comes back in.
 //!
-//! `fdoc convert --escalate` runs this loop with a configured Gemini
+//! `fdoc convert` in mode `vlm` runs this loop with a configured Gemini
 //! reader; an embedded consumer (a worker Lambda routing readings through
 //! its own model proxy) runs the same loop with its own reader. What this
 //! module owns is everything EXCEPT the reader call, so the two cannot
 //! drift: the crop set, the render scale, and the prompts are the ones the
 //! published benchmark scores describe.
 //!
-//! `fdoc` also has a layout detector's table boxes, from sidecar files an
-//! embedded consumer does not have. They are a hint, [`CropHints`]: they
-//! widen a table crop the grid under-measured and tell a region it holds a
-//! table. [`crops_for`] and [`prompt_for_crop`] are the same selection and
-//! prompts without them; [`crops_for_with`] and [`prompt_for_crop_with`]
-//! take them.
+//! What a caller knows beyond the document is a [`CropHints`]: whether
+//! pages in column doubt are read whole. [`crops_for`] and
+//! [`prompt_for_crop`] are the same selection and prompts with the default
+//! hints; [`crops_for_with`] and [`prompt_for_crop_with`] take them.
 //!
 //! A caller that splices the readings back into the analysis it chose the
 //! crops from, as `fdoc` does, takes them with [`crops_at_anchors`]: its
@@ -279,9 +277,6 @@ pub enum CropReason {
     EmbeddedImage,
     /// A table the deterministic grid found but does not trust.
     Table,
-    /// A table a layout detector found and no grid covered: text the grid
-    /// missed, or a raster table too small to route as a region.
-    TableMissing,
     /// A whole page whose hierarchy rests on nothing but font size.
     HeadingDoubt,
     /// A whole page whose text sits inside its drawings.
@@ -302,7 +297,6 @@ impl CropReason {
             CropReason::SmallRegion => "small_region",
             CropReason::EmbeddedImage => "embedded_image",
             CropReason::Table => "table",
-            CropReason::TableMissing => "table_missing",
             CropReason::HeadingDoubt => "heading_doubt",
             CropReason::FigureDoubt => "figure_doubt",
             CropReason::ColumnDoubt => "column_doubt",
@@ -310,12 +304,11 @@ impl CropReason {
     }
 
     /// The reason for a region crop, from its tag: `r{i}` a routed region,
-    /// `n{i}` a table only a layout detector found, `t{i}` a table the grid
-    /// does not trust. `None` for a tag no region crop carries.
+    /// `t{i}` a table the grid does not trust. `None` for a tag no region
+    /// crop carries.
     pub fn of_region_tag(tag: &str) -> Option<Self> {
         match tag.chars().next() {
             Some('r') => Some(CropReason::Region),
-            Some('n') => Some(CropReason::TableMissing),
             Some('t') => Some(CropReason::Table),
             _ => None,
         }
@@ -414,8 +407,6 @@ pub struct CropHints {
     /// Off unless asked for: whether it helps depends on the corpus — see
     /// [`crops_for_with`].
     pub on_column_doubt: bool,
-    /// Tables a layout detector boxed, by page, in PDF units.
-    pub layout_tables: HashMap<usize, Vec<BBox>>,
     /// The caller crops a page's routed regions apart even when a doubt
     /// asks for the page whole (`render-routed --ocr-regions`), so the whole
     /// page keeps its doubt's reason: the regions' pixels have crops of their
@@ -739,22 +730,6 @@ fn select(
     }
 
     for e in &analysis.elements {
-        if e.evidence == "table-missing" {
-            // Insert anchor: the box is the crop, nothing to re-derive.
-            let tag = e
-                .text
-                .trim_start_matches("[[VLMNEW:")
-                .trim_end_matches("]]");
-            let Some((_, n)) = tag.split_once(':') else {
-                continue;
-            };
-            match jobs.iter_mut().find(|(pi, _)| *pi == e.page) {
-                Some((_, Some(list))) => list.push((n.to_string(), e.rect())),
-                Some((_, None)) => {}
-                None => jobs.push((e.page, Some(vec![(n.to_string(), e.rect())]))),
-            }
-            continue;
-        }
         if e.evidence != "table-confidence" {
             continue;
         }
@@ -774,31 +749,6 @@ fn select(
             x.kind == "doco:Table" && x.page == e.page && (x.rect().y0 - e.rect().y0).abs() < 1.0
         }) {
             bbox = tb.rect();
-            // Where the layout detector boxes the same table with different
-            // bounds, crop the union: our grid may cover only part of the
-            // real table, and the reader cannot read pixels it is not shown.
-            for lt in hints.layout_tables.get(&e.page).into_iter().flatten() {
-                let ix = (bbox.x1.min(lt.x1) - bbox.x0.max(lt.x0)).max(0.0);
-                let iy = (bbox.y1.min(lt.y1) - bbox.y0.max(lt.y0)).max(0.0);
-                if ix * iy <= 0.0 {
-                    continue;
-                }
-                let ux0 = bbox.x0.min(lt.x0);
-                let uy0 = bbox.y0.min(lt.y0);
-                let ux1 = bbox.x1.max(lt.x1);
-                let uy1 = bbox.y1.max(lt.y1);
-                // Expand only when the detector says the table is
-                // substantially larger than our grid; small disagreements
-                // are box jitter and would only bust crop caches.
-                let a0 = (bbox.x1 - bbox.x0) * (bbox.y1 - bbox.y0);
-                let au = (ux1 - ux0) * (uy1 - uy0);
-                if au >= 1.15 * a0 {
-                    bbox.x0 = ux0;
-                    bbox.y0 = uy0;
-                    bbox.x1 = ux1;
-                    bbox.y1 = uy1;
-                }
-            }
         }
         match jobs.iter_mut().find(|(pi, _)| *pi == e.page) {
             Some((_, Some(list))) => list.push((t.to_string(), bbox)),
@@ -841,9 +791,8 @@ pub fn crop_count(jobs: &CropJobs) -> usize {
 /// 1. whole pages the router sent — a scan, a near-blank page, glyphs
 ///    whose Unicode cannot be trusted — where nothing else reads the page;
 /// 2. routed regions, the same loss confined to part of a page;
-/// 3. tables the deterministic pass found no structure for;
-/// 4. tables it found but does not trust;
-/// 5. whole pages asked for on a doubt about their hierarchy or layout,
+/// 3. tables the deterministic pass found but does not trust;
+/// 4. whole pages asked for on a doubt about their hierarchy or layout,
 ///    whose every word the deterministic pass already has.
 ///
 /// Within a rank, earlier pages first. A whole-page job on a page that
@@ -903,7 +852,6 @@ pub fn within_budget(jobs: CropJobs, reasons: &PageReasons, max_crops: usize) ->
                 for (tag, bbox) in list {
                     let rank = match tag.chars().next() {
                         Some('r') => 1,
-                        Some('n') => 2,
                         _ => 3,
                     };
                     crops.push(Ranked {
@@ -1271,14 +1219,6 @@ In every case:
 
 /// A whole page is not a big region: a page *is* the shape, so its reading
 /// has to carry headings and reading order.
-/// Prepended when a layout detector boxed a table inside a region crop. It
-/// says what the image holds; the form rules still decide how to write it.
-const TABLE_HINT: &str = "This image contains a table: values arranged in rows and columns.
-Transcribe that table as HTML markup, and any text printed outside it as plain
-lines.
-
-";
-
 const FULL: &str = "Transcribe this page exactly as printed, as Markdown.
 
 Reading order follows the page's own layout. Where the page is laid out in
@@ -1326,9 +1266,10 @@ pub fn prompt_for_crop(crop: &Crop, links: &[(String, String)]) -> String {
     prompt_for_crop_with(crop, &CropHints::default(), links)
 }
 
-/// The prompt for one crop: a region a layout detector boxed a table in is
-/// told it holds one.
-pub fn prompt_for_crop_with(crop: &Crop, hints: &CropHints, links: &[(String, String)]) -> String {
+/// The prompt for one crop, given what the caller knows beyond the
+/// document. No hint changes a prompt today; the signature keeps a caller's
+/// hints in reach of the prompt as of the selection.
+pub fn prompt_for_crop_with(crop: &Crop, _hints: &CropHints, links: &[(String, String)]) -> String {
     if crop.is_table() {
         // Table markup has no place to put a Markdown link, so the listing
         // is not offered here.
@@ -1337,13 +1278,7 @@ pub fn prompt_for_crop_with(crop: &Crop, hints: &CropHints, links: &[(String, St
     let base = if crop.is_page() {
         FULL.to_string()
     } else {
-        let boxed = crop.bbox.is_some_and(|b| {
-            hints
-                .layout_tables
-                .get(&crop.page)
-                .is_some_and(|tables| tables.iter().any(|t| overlaps(&b, t)))
-        });
-        format!("{}{REGION}", if boxed { TABLE_HINT } else { "" })
+        REGION.to_string()
     };
     if links.is_empty() {
         return base;
@@ -1652,7 +1587,6 @@ mod tests {
             (CropReason::BrokenText, "broken_text"),
             (CropReason::Region, "region"),
             (CropReason::Table, "table"),
-            (CropReason::TableMissing, "table_missing"),
             (CropReason::HeadingDoubt, "heading_doubt"),
             (CropReason::FigureDoubt, "figure_doubt"),
             (CropReason::ColumnDoubt, "column_doubt"),
@@ -2113,10 +2047,7 @@ mod tests {
     #[test]
     fn region_tags_name_their_reason() {
         assert_eq!(CropReason::of_region_tag("r0"), Some(CropReason::Region));
-        assert_eq!(
-            CropReason::of_region_tag("n1"),
-            Some(CropReason::TableMissing)
-        );
+        assert_eq!(CropReason::of_region_tag("n1"), None);
         assert_eq!(CropReason::of_region_tag("t2"), Some(CropReason::Table));
         assert_eq!(CropReason::of_region_tag("full"), None);
     }
@@ -2173,11 +2104,11 @@ mod tests {
     #[test]
     fn the_budget_keeps_what_would_otherwise_be_lost() {
         // A scanned page, a page escalated on heading doubt, and a page
-        // with one untrusted table and one missing one.
+        // with one untrusted table and one routed region.
         let jobs: CropJobs = vec![
             (0, None),
             (1, None),
-            (2, Some(vec![region("t0"), region("n0")])),
+            (2, Some(vec![region("t0"), region("r0")])),
         ];
         let reasons = PageReasons::from([(0, CropReason::Scanned), (1, CropReason::HeadingDoubt)]);
         assert_eq!(crop_count(&jobs), 4);
@@ -2189,8 +2120,8 @@ mod tests {
         assert_eq!(kept[1].0, 2);
         assert_eq!(
             kept[1].1.as_ref().unwrap()[0].0,
-            "n0",
-            "a missing table before a doubted one"
+            "r0",
+            "a routed region before a doubted table"
         );
 
         let (all, none) = within_budget(jobs, &reasons, 4);
@@ -2481,35 +2412,6 @@ mod tests {
         assert!(prompt_for_crop(&crop("p0_t0"), &[]).starts_with("This image is one table"));
         assert!(prompt_for_crop(&crop("p0_full"), &[]).starts_with("Transcribe this page"));
         assert!(prompt_for_crop(&crop("p0_r0"), &[]).starts_with("Transcribe what is printed"));
-    }
-
-    #[test]
-    fn a_region_a_detector_boxed_a_table_in_is_told_so() {
-        let mut c = crop("p0_r0");
-        c.bbox = Some(BBox {
-            x0: 0.0,
-            y0: 0.0,
-            x1: 100.0,
-            y1: 100.0,
-        });
-        let mut hints = CropHints::default();
-        hints.layout_tables.insert(
-            0,
-            vec![BBox {
-                x0: 50.0,
-                y0: 50.0,
-                x1: 150.0,
-                y1: 150.0,
-            }],
-        );
-        assert!(prompt_for_crop_with(&c, &hints, &[]).starts_with("This image contains a table"));
-        assert!(prompt_for_crop(&c, &[]).starts_with("Transcribe what is printed"));
-        // A whole page and a table crop are prompted as they always are.
-        assert!(
-            prompt_for_crop_with(&crop("p0_full"), &hints, &[]).starts_with("Transcribe this page")
-        );
-        assert!(prompt_for_crop_with(&crop("p0_t0"), &hints, &[])
-            .starts_with("This image is one table"));
     }
 
     #[test]

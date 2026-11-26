@@ -40,7 +40,6 @@ fn fdoc(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         "FDOC_OCR_WORDS",
         "FDOC_TIER_RESULTS",
         "FDOC_VLM_ANCHORS",
-        "FDOC_TITLE_BOXES",
         "FDOC_STRUCTURE_RESULTS",
     ] {
         cmd.env_remove(var);

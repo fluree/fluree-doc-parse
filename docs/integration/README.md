@@ -37,7 +37,7 @@ the readings have to be auditable, or when nothing may leave the machine.
           │
   PDF ────┤
           │                     ┌── your GPU service ──┐
-          └── fdoc dev          │  layout detector     │
+          └── fdoc dev          │  OCR                 │
               render-routed ───►│  table structure     │──► sidecar JSON
                   (crops)       │  VLM                 │        │
                                 └──────────────────────┘        │

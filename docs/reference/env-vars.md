@@ -29,12 +29,6 @@ FDOC_OCR_MODELS=~/assets/ocr \
 fdoc convert report.pdf -f doco
 ```
 
-## Behavior
-
-| variable | effect |
-|---|---|
-| `FDOC_INSERT_TABLES` | emit tables a detector found where the grid pass found none. Measured net-negative against benchmark ground truth, which rarely transcribes them — but a completeness-first deployment may want them |
-
 ## Diagnostics
 
 Unstable, like [`fdoc dev`](../cli/dev.md) itself.

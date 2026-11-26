@@ -46,16 +46,14 @@ the same.
 | 16 | markitdown | 0.588504 | 0.8437 | 0.2729 | 0.0000 | 0.114 |
 | 17 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
 
-The deterministic engine — no model, no GPU, no API key — places third. The
-layout detector, still CPU only, would lift it to second, and the cascade
-places first by 0.034.
+The deterministic engine — no model, no GPU, no API key — places third, and
+the cascade places first by 0.034.
 
 By [mode](../getting-started/modes.md):
 
 | tier | adds | overall | typical cost/document |
 |---|---|---|---|
 | 1 | deterministic extraction and layout | 0.901319 | 8 ms, CPU |
-| 2 | layout-detector arbitration | 0.908607 | ~0.2 s³ |
 | 3 | deep reading of pixels-only content | 0.940703 | ~1.5 s across the corpus¹ |
 
 ¹ The harness prints 0.012 s/document for the cascade, which is only the Rust
@@ -68,11 +66,6 @@ one process per document, so this is substantially process startup rather
 than parsing — an upper bound on the engine, not a profile of it. In one
 process, `fdoc convert <dir> -j 1` reads the same 200 documents at 7.7 ms
 each: the 8 ms in the tier table. A single timing is not a measurement.
-
-³ PP-DocLayoutV3 on a GPU host, 178 ms a page. It runs on CPU too, at
-0.82 s a page on an Apple M4 Max, whose GPU it cannot use. Boxes made afresh
-for all 200 pages score tier 2 the same as the committed layout cache,
-0.908607.
 
 ## Reproducing it
 
@@ -97,8 +90,8 @@ _ENGINE_MODULES = { ..., "fluree-doc-parse": "pdf_parser_fluree",
 
 The adapter runs `fdoc convert <pdf> --format md --md-links text
 --no-escalate` on each document, so links are written as their words, as the
-reference writes them, and no model is called: tiers 2 and 3 read the
-committed caches named below.
+reference writes them, and no model is called: tier 3 reads the committed
+caches named below.
 Set `FLUREE_DOC_MD_LINKS=inline` to score the default Markdown, links and
 all.
 
@@ -111,22 +104,13 @@ cargo build --release --manifest-path <repo>/Cargo.toml
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
   uv run python src/run.py --engine fluree-doc-parse --force
 
-# tier 2 — the layout detector, from the committed cache
-FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
-FDOC_TITLE_BOXES=<repo>/eval/layout-cache \
-  uv run python src/run.py --engine fluree-doc-parse-cascade --force
-
 # tier 3 — the full cascade, from the committed caches: model readings are
 # mode vlm, which builds on ocr and so needs the OCR assets
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
-FDOC_TITLE_BOXES=<repo>/eval/layout-cache \
 FDOC_TIER_RESULTS=<repo>/eval/cascade-cache \
 FDOC_OCR_MODELS=<assets>/ocr \
   uv run python src/run.py --engine fluree-doc-parse-cascade --force
 ```
-
-Tiers 2 and 3 share an engine name and so an output directory: run them one
-after the other, and keep tier 2's `evaluation.json` before running tier 3.
 
 `--force` re-parses; without it the harness re-scores the Markdown already on
 disk. Per-document scores land in `prediction/<engine>/evaluation.json` under
@@ -160,7 +144,13 @@ State these whenever the scores are quoted.
   left out of these scores by `--md-links text`; the default Markdown scores
   0.0020 lower on tier 1.
 
-## Two rungs that were retired, with their numbers
+## Rungs that were retired, with their numbers
+
+A layout detector (PP-DocLayoutV3, its boxes read from files) once lifted the
+deterministic engine from 0.901319 to 0.908607, promoting titles it had
+missed and settling which regions were tables. Measured again after the
+deterministic pass caught up, it was worth nothing: −0.00026 under the model
+readings and −0.00019 under OCR. It has been removed.
 
 A separate table-structure model was measured in both roles it could hold. As
 the reading source it scores 0.892130, *below* the layout boxes alone; as a

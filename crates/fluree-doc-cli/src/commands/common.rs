@@ -1,6 +1,5 @@
-//! Shared plumbing: input discovery, tier configuration, and the two
-//! post-analysis passes (layout title promotion, model-tier splicing) used by
-//! `convert` and the dev renderers alike.
+//! Shared plumbing: input discovery, the run's configuration and mode, and
+//! the model-tier splice used by `convert` and the dev renderers alike.
 
 use std::path::{Path, PathBuf};
 
@@ -85,7 +84,6 @@ impl std::fmt::Debug for OcrHandle {
 /// adapter command line.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TierConfig {
-    pub layout_boxes: Option<PathBuf>,
     pub tier_results: Option<PathBuf>,
     pub structure_results: Option<PathBuf>,
     /// OCR word readings, added as glyphs before analysis.
@@ -112,15 +110,11 @@ pub(crate) struct TierConfig {
     pub verbose: bool,
     /// `FDOC_TABLE_CONF`: print each table's confidence signals.
     pub table_conf_debug: bool,
-    /// `FDOC_INSERT_TABLES`: anchor the tables a layout detector found and
-    /// no grid covered.
-    pub insert_missing_tables: bool,
 }
 
 impl TierConfig {
     pub fn from_env() -> Self {
         Self {
-            layout_boxes: std::env::var_os("FDOC_TITLE_BOXES").map(PathBuf::from),
             tier_results: std::env::var_os("FDOC_TIER_RESULTS").map(PathBuf::from),
             structure_results: std::env::var_os("FDOC_STRUCTURE_RESULTS").map(PathBuf::from),
             ocr_words: std::env::var_os("FDOC_OCR_WORDS").map(PathBuf::from),
@@ -135,25 +129,17 @@ impl TierConfig {
             ),
             verbose: false,
             table_conf_debug: std::env::var_os("FDOC_TABLE_CONF").is_some(),
-            insert_missing_tables: std::env::var_os("FDOC_INSERT_TABLES").is_some(),
         }
     }
 
     /// Environment config with per-flag overrides on top.
     pub fn from_env_with(
-        layout_boxes: Option<&Path>,
         tier_results: Option<&Path>,
         structure_results: Option<&Path>,
         ocr_words: Option<&Path>,
         emit_anchors: bool,
     ) -> Self {
-        Self::from_env().with_flags(
-            layout_boxes,
-            tier_results,
-            structure_results,
-            ocr_words,
-            emit_anchors,
-        )
+        Self::from_env().with_flags(tier_results, structure_results, ocr_words, emit_anchors)
     }
 
     /// `self` with the flags of [`Self::from_env_with`] on top. What no flag
@@ -161,14 +147,12 @@ impl TierConfig {
     /// environment as `triage` and `render-routed` do.
     fn with_flags(
         self,
-        layout_boxes: Option<&Path>,
         tier_results: Option<&Path>,
         structure_results: Option<&Path>,
         ocr_words: Option<&Path>,
         emit_anchors: bool,
     ) -> Self {
         Self {
-            layout_boxes: layout_boxes.map(Path::to_path_buf).or(self.layout_boxes),
             tier_results: tier_results.map(Path::to_path_buf).or(self.tier_results),
             structure_results: structure_results
                 .map(Path::to_path_buf)
@@ -250,18 +234,16 @@ impl TierConfig {
         Ok(r)
     }
 
-    pub fn options_for(&self, stem: &str) -> fluree_doc_pdf::document::AnalyzeOptions {
+    pub fn options_for(&self) -> fluree_doc_pdf::document::AnalyzeOptions {
         fluree_doc_pdf::document::AnalyzeOptions {
-            layout_prefix: self.layout_boxes.as_ref().map(|d| d.join(stem)),
             // Anchors whenever this run splices readings, from sidecars or
-            // from a reader it calls itself: a region, table or inserted
-            // table reading lands only at its anchor, and one with nowhere
+            // from a reader it calls itself: a region or table reading lands
+            // only at its anchor, and one with nowhere
             // to land was paid for and dropped. The splice removes every
             // anchor no reading answers, so none reaches the output unless
             // `--emit-anchors` asked for them.
             emit_anchors: self.emit_anchors || self.tier_results.is_some() || self.escalate,
             table_conf_debug: self.table_conf_debug,
-            insert_missing_tables: self.insert_missing_tables,
         }
     }
 }
@@ -290,158 +272,8 @@ pub(crate) struct ModeFlags<'a> {
 }
 
 /// Build core options from the CLI's environment variables.
-pub(crate) fn opts_for(pdf: &Path) -> fluree_doc_pdf::document::AnalyzeOptions {
-    TierConfig::from_env().options_for(stem_of(pdf))
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum LayoutRole {
-    DocumentTitle,
-    FloatTitle,
-    FloatBody,
-    Ignore,
-}
-
-fn layout_role(label: &str) -> LayoutRole {
-    match label {
-        "paragraph_title" | "doc_title" | "title" => LayoutRole::DocumentTitle,
-        "figure_title" | "chart_title" | "table_title" => LayoutRole::FloatTitle,
-        "figure_caption" | "chart" | "image" | "figure" => LayoutRole::FloatBody,
-        _ => LayoutRole::Ignore,
-    }
-}
-
-fn box_covers(
-    element: fluree_doc_model::geom::BBox,
-    &(x0, y0, x1, y1): &(f64, f64, f64, f64),
-) -> bool {
-    let area = ((element.x1 - element.x0) * (element.y1 - element.y0)).max(1.0);
-    let ix = (element.x1.min(x1) - element.x0.max(x0)).max(0.0);
-    let iy = (element.y1.min(y1) - element.y0.max(y0)).max(0.0);
-    ix * iy >= 0.5 * area
-}
-
-fn explicit_float_caption(text: &str) -> bool {
-    let Some(first) = text.split_whitespace().next() else {
-        return false;
-    };
-    matches!(
-        first
-            .trim_matches(|c: char| !c.is_ascii_alphabetic())
-            .to_ascii_lowercase()
-            .as_str(),
-        "figure" | "fig" | "table" | "chart"
-    )
-}
-
-/// Arbitrate headings where a layout detector saw a title or float.
-///
-/// `dir` holds `<stem>_p<N>_page.json` files — layout-detector boxes over 2x
-/// page renders. Document-title boxes promote short prose blocks. Float-body
-/// boxes demote non-outline headings. Float-title boxes demote explicit
-/// `Figure`/`Table`/`Chart` captions, but otherwise defer to the deterministic
-/// reading because the benchmark treats some descriptive float titles as
-/// document headings.
-pub(crate) fn arbitrate_layout_titles(
-    dir: Option<&Path>,
-    stem: &str,
-    elements: &mut [fluree_doc_pdf::document::Element],
-) {
-    let Some(dir) = dir else {
-        return;
-    };
-    let mut boxes_per_page: std::collections::HashMap<usize, Vec<(f64, f64, f64, f64)>> =
-        Default::default();
-    let mut float_title_boxes: std::collections::HashMap<usize, Vec<(f64, f64, f64, f64)>> =
-        Default::default();
-    let mut caption_boxes: std::collections::HashMap<usize, Vec<(f64, f64, f64, f64)>> =
-        Default::default();
-    let mut pages_seen: std::collections::HashSet<usize> = Default::default();
-    for e in elements.iter() {
-        if !pages_seen.insert(e.page) {
-            continue;
-        }
-        let f = dir.join(format!("{stem}_p{}_page.json", e.page));
-        let Ok(txt) = std::fs::read_to_string(&f) else {
-            continue;
-        };
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) else {
-            continue;
-        };
-        for b in v.as_array().into_iter().flatten() {
-            let label = b["label"].as_str().unwrap_or("");
-            let score = b["score"].as_f64().unwrap_or(0.0);
-            let role = layout_role(label);
-            if role == LayoutRole::Ignore || score < 0.6 {
-                continue;
-            }
-            let c: Vec<f64> = b["box"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|x| x.as_f64())
-                .collect();
-            if c.len() == 4 {
-                // Pixel space at 2x back to PDF units.
-                let r = (c[0] / 2.0, c[1] / 2.0, c[2] / 2.0, c[3] / 2.0);
-                match role {
-                    LayoutRole::DocumentTitle => {
-                        boxes_per_page.entry(e.page).or_default().push(r);
-                    }
-                    LayoutRole::FloatTitle => {
-                        float_title_boxes.entry(e.page).or_default().push(r);
-                    }
-                    LayoutRole::FloatBody => {
-                        caption_boxes.entry(e.page).or_default().push(r);
-                    }
-                    LayoutRole::Ignore => {}
-                }
-            }
-        }
-    }
-    // Arbitrated demotion: a heading of ours sitting in a figure/chart body is
-    // float content. Float titles are deliberately excluded: this corpus'
-    // ground truth blesses some of them as document headings.
-    for e in elements.iter_mut() {
-        if e.kind != "doco:SectionTitle" || e.evidence == "outline" {
-            continue;
-        }
-        let eb = e.rect();
-        let in_caption = caption_boxes
-            .get(&e.page)
-            .is_some_and(|bs| bs.iter().any(|b| box_covers(eb, b)));
-        let in_float_title = float_title_boxes
-            .get(&e.page)
-            .is_some_and(|bs| bs.iter().any(|b| box_covers(eb, b)));
-        let in_title = boxes_per_page
-            .get(&e.page)
-            .is_some_and(|bs| bs.iter().any(|b| box_covers(eb, b)));
-        if (in_caption || (in_float_title && explicit_float_caption(&e.text))) && !in_title {
-            e.kind = "doco:Paragraph".to_string();
-            e.level = None;
-            e.evidence = "layout-caption";
-        }
-    }
-    for e in elements.iter_mut() {
-        if e.kind != "doco:Paragraph" && e.kind != "doc:ListItem" {
-            continue;
-        }
-        if e.text.chars().count() > 120 {
-            continue;
-        }
-        let Some(boxes) = boxes_per_page.get(&e.page) else {
-            continue;
-        };
-        let eb = e.rect();
-        for b in boxes {
-            if box_covers(eb, b) {
-                e.kind = "doco:SectionTitle".to_string();
-                e.level = Some(2);
-                e.evidence = "layout-title";
-                break;
-            }
-        }
-    }
+pub(crate) fn opts_for() -> fluree_doc_pdf::document::AnalyzeOptions {
+    TierConfig::from_env().options_for()
 }
 
 /// The OCR word readings `dir` holds for one document: for each page, the
@@ -570,16 +402,6 @@ pub(crate) fn splice(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fluree_doc_model::{element::Element, geom::BBox};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn element(kind: &str, text: &str, bbox: BBox) -> Element {
-        Element {
-            bbox: Some(bbox),
-            level: (kind == "doco:SectionTitle").then_some(2),
-            ..Element::new(kind, text, "rust", "font-size")
-        }
-    }
 
     /// `convert`'s flags override the environment they name and keep the
     /// rest of it: `FDOC_ESCALATE_COLUMNS` decides column doubt for
@@ -592,70 +414,10 @@ mod tests {
                 columns,
                 ..Default::default()
             };
-            let cfg = env.with_flags(None, Some(Path::new("flag-readings")), None, None, true);
+            let cfg = env.with_flags(Some(Path::new("flag-readings")), None, None, true);
             assert_eq!(cfg.columns, columns);
             assert_eq!(cfg.tier_results, Some(PathBuf::from("flag-readings")));
             assert!(cfg.emit_anchors);
         }
-    }
-
-    #[test]
-    fn float_titles_are_neutral_but_float_bodies_demote() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("fdoc-layout-{nonce}"));
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::write(
-            dir.join("sample_p0_page.json"),
-            r#"[
-                {"label":"figure_title","score":0.9,"box":[0,0,200,20]},
-                {"label":"figure_title","score":0.9,"box":[0,40,200,60]},
-                {"label":"chart","score":0.9,"box":[0,80,200,100]}
-            ]"#,
-        )
-        .unwrap();
-        let mut elements = vec![
-            element(
-                "doco:SectionTitle",
-                "Performance details",
-                BBox {
-                    x0: 0.0,
-                    y0: 0.0,
-                    x1: 100.0,
-                    y1: 10.0,
-                },
-            ),
-            element(
-                "doco:SectionTitle",
-                "Figure 4.5. Fuel mix",
-                BBox {
-                    x0: 0.0,
-                    y0: 20.0,
-                    x1: 100.0,
-                    y1: 30.0,
-                },
-            ),
-            element(
-                "doco:SectionTitle",
-                "OCR-Recall",
-                BBox {
-                    x0: 0.0,
-                    y0: 40.0,
-                    x1: 100.0,
-                    y1: 50.0,
-                },
-            ),
-        ];
-
-        arbitrate_layout_titles(Some(&dir), "sample", &mut elements);
-
-        assert_eq!(elements[0].kind, "doco:SectionTitle");
-        assert_eq!(elements[1].kind, "doco:Paragraph");
-        assert_eq!(elements[1].evidence, "layout-caption");
-        assert_eq!(elements[2].kind, "doco:Paragraph");
-        assert_eq!(elements[2].evidence, "layout-caption");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

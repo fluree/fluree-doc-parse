@@ -61,6 +61,12 @@ pub struct Ocr {
     /// scan unread, and a crop costs a fraction of a second of this
     /// machine's time rather than a paid call.
     pub max_crops: Option<usize>,
+    /// Most small regions the engine reads on one page, the largest first
+    /// (default `0`, every one: [`fluree_doc_pdf::ocr::DEFAULT_SMALL_REGIONS_PER_PAGE`]).
+    /// Routed regions and pages read whole are always read. Set it where a
+    /// page's time must be bounded: a drawing's callouts can make a hundred
+    /// crops of one page.
+    pub max_small_regions_per_page: Option<usize>,
     /// Most megapixels the engine's detector reads in one pass (default
     /// 12.5: a page scanned at 300 dpi, or a 12 Mpx photo). A larger image
     /// is read in overlapping strips, or, too wide for them, shrunk. What
@@ -82,6 +88,12 @@ impl Ocr {
     /// `max_crops`, or its default.
     pub fn max_crops(&self) -> usize {
         self.max_crops.unwrap_or(DEFAULT_OCR_MAX_CROPS)
+    }
+
+    /// `max_small_regions_per_page`, or its default.
+    pub fn max_small_regions_per_page(&self) -> usize {
+        self.max_small_regions_per_page
+            .unwrap_or(fluree_doc_pdf::ocr::DEFAULT_SMALL_REGIONS_PER_PAGE)
     }
 }
 

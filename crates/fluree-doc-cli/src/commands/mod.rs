@@ -49,7 +49,6 @@ fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         pages: None,
         jobs: 1,
         mode: None,
-        layout_boxes: None,
         tier_results: None,
         structure_results: None,
         ocr_words: None,

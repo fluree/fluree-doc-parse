@@ -38,11 +38,9 @@ fn fdoc(dir: &Path, args: &[&str], columns: Option<&str>) -> Output {
     // from, so a developer's shell cannot change what is counted.
     for var in [
         "FDOC_ESCALATE_COLUMNS",
-        "FDOC_TITLE_BOXES",
         "FDOC_TIER_RESULTS",
         "FDOC_STRUCTURE_RESULTS",
         "FDOC_VLM_ANCHORS",
-        "FDOC_INSERT_TABLES",
         "FDOC_TABLE_CONF",
         "FDOC_NO_REJOIN",
     ] {

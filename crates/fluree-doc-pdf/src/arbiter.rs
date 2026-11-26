@@ -21,9 +21,8 @@
 //! A model's reading of a region enters the document only through the rules
 //! here, all of which were set by measurement (see `eval/TEST_PLAN.md`):
 //!
-//! * **Region and insert anchors** take the reading outright — they exist
-//!   only where the deterministic pass had nothing (pixels-only content, or
-//!   a table the layout detector found that no grid covered).
+//! * **Region anchors** take the reading outright — they exist only where
+//!   the deterministic pass had nothing (pixels-only content).
 //! * **Table anchors** are arbitrated by *shape*: the reading replaces the
 //!   deterministic table only when their row/column structure disagrees
 //!   (rows off by two or more, or any column difference) — except the
@@ -448,7 +447,6 @@ fn promote_response_chart_title(text: &str) -> Option<String> {
 enum AnchorKind {
     Region,
     Table,
-    Insert,
 }
 
 fn parse_anchor(text: &str) -> Option<(String, AnchorKind)> {
@@ -458,7 +456,6 @@ fn parse_anchor(text: &str) -> Option<(String, AnchorKind)> {
     let kind = match head {
         "VLM" => AnchorKind::Region,
         "VLMTAB" => AnchorKind::Table,
-        "VLMNEW" => AnchorKind::Insert,
         _ => return None,
     };
     Some((format!("{page}_{idx}"), kind))
@@ -778,15 +775,11 @@ fn splice_anchors(
             continue;
         };
         match kind {
-            AnchorKind::Region | AnchorKind::Insert => {
+            AnchorKind::Region => {
                 let reading = readings.read(stem, &crop);
                 let answered = reading.is_some() || page_read(e.page);
                 if let Some(mut text) = reading.as_deref().and_then(blocks_to_text) {
-                    let chart_title = if kind == AnchorKind::Region {
-                        promote_response_chart_title(&text)
-                    } else {
-                        None
-                    };
+                    let chart_title = promote_response_chart_title(&text);
                     let is_chart = chart_title.is_some();
                     if let Some(promoted) = chart_title {
                         text = promoted;

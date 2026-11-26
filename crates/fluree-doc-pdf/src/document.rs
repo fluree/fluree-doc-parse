@@ -621,10 +621,9 @@ pub(crate) fn renumber(elements: &mut [Element]) {
 }
 
 /// An element the analysis minted as an address for a reader's text (a
-/// routed region, a table to confirm, a table the layout found and the
-/// rules did not), not content of the page.
+/// routed region, a table to confirm), not content of the page.
 fn is_splice_anchor(e: &Element) -> bool {
-    matches!(e.evidence, "route" | "table-confidence" | "table-missing")
+    matches!(e.evidence, "route" | "table-confidence")
 }
 
 /// Link a table the page break split to its part on the page before.
@@ -1503,43 +1502,6 @@ fn interleave_tables(mut content: Vec<Element>, mut table_elements: Vec<Element>
         content.insert(insertion, table);
     }
     content
-}
-
-/// Layout-detector boxes for one page, filtered by label set, in PDF units.
-/// Returns None when no sidecar exists (layout arbitration not in use), so
-/// callers can distinguish "layout saw nothing" from "layout never ran".
-fn layout_boxes(
-    prefix: Option<&std::path::Path>,
-    page: usize,
-    labels: &[&str],
-) -> Option<Vec<crate::geom::BBox>> {
-    let f = prefix?.as_os_str().to_string_lossy().to_string();
-    let txt = std::fs::read_to_string(format!("{f}_p{page}_page.json")).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
-    Some(
-        v.as_array()
-            .into_iter()
-            .flatten()
-            .filter(|b| {
-                labels.contains(&b["label"].as_str().unwrap_or(""))
-                    && b["score"].as_f64().unwrap_or(0.0) >= 0.6
-            })
-            .filter_map(|b| {
-                let c: Vec<f64> = b["box"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|x| x.as_f64())
-                    .collect();
-                (c.len() == 4).then(|| crate::geom::BBox {
-                    x0: c[0] / 2.0,
-                    y0: c[1] / 2.0,
-                    x1: c[2] / 2.0,
-                    y1: c[3] / 2.0,
-                })
-            })
-            .collect(),
-    )
 }
 
 /// The size most of a page's text is set in: its prose, against which a
@@ -2633,52 +2595,6 @@ fn overlap_area(a: &crate::geom::BBox, b: &crate::geom::BBox) -> f64 {
     ix * iy
 }
 
-/// Split a block where a layout-detector title box covers a contiguous prefix
-/// or suffix of its lines but not all of them. See the call site for why.
-fn split_block_at_titles(b: Block, boxes: &[crate::geom::BBox]) -> Vec<Block> {
-    if b.lines.len() < 2 {
-        return vec![b];
-    }
-    for title in boxes {
-        let inside: Vec<bool> = b
-            .lines
-            .iter()
-            .map(|l| {
-                let (cx, cy) = ((l.bbox.x0 + l.bbox.x1) * 0.5, (l.bbox.y0 + l.bbox.y1) * 0.5);
-                cx >= title.x0 && cx <= title.x1 && cy >= title.y0 && cy <= title.y1
-            })
-            .collect();
-        let n_in = inside.iter().filter(|x| **x).count();
-        if n_in == 0 || n_in == b.lines.len() {
-            continue;
-        }
-        // Contiguous run only — a box straddling scattered lines is noise.
-        let first = inside.iter().position(|x| *x).unwrap();
-        let last = inside.iter().rposition(|x| *x).unwrap();
-        if last - first + 1 != n_in {
-            continue;
-        }
-        let (marker, marker_x) = (b.marker.clone(), b.marker_x);
-        let mut parts = Vec::new();
-        let mut lines = b.lines;
-        let tail: Vec<Line> = lines.split_off(last + 1);
-        let mid: Vec<Line> = lines.split_off(first);
-        if !lines.is_empty() {
-            parts.push(block::build(lines));
-        }
-        let mut title = block::build(mid);
-        title.marker = marker;
-        title.marker_x = marker_x;
-        parts.push(title);
-        if !tail.is_empty() {
-            // The remainder may contain further titles.
-            parts.extend(split_block_at_titles(block::build(tail), boxes));
-        }
-        return parts;
-    }
-    vec![b]
-}
-
 /// Signals for how much a detected grid can be trusted.
 ///
 /// * occupancy — fraction of cells holding text; misdetected grids are
@@ -3007,17 +2923,8 @@ fn lists_its_rows(g: &Grid, glyphs: &[Glyph]) -> bool {
 /// (The `fdoc` CLI maps its `FDOC_*` variables onto this struct.)
 #[derive(Debug, Default, Clone)]
 pub struct AnalyzeOptions {
-    /// Path prefix for layout-detector sidecars: `<prefix>_p<N>_page.json`.
-    /// Enables heading promotion/demotion, block splitting at title boxes,
-    /// and table-region arbitration.
-    pub layout_prefix: Option<std::path::PathBuf>,
     /// Emit `[[VLM…]]` splice anchors for the model tiers.
     pub emit_anchors: bool,
-    /// Also emit insert anchors for tables the layout detector found that no
-    /// grid covers. Off by default: on the benchmark corpus these insertions
-    /// measured net-negative (ground truth rarely transcribes them), but a
-    /// completeness-first deployment may prefer them.
-    pub insert_missing_tables: bool,
     /// Print table-confidence signals to stderr (diagnostic).
     pub table_conf_debug: bool,
 }
@@ -3133,8 +3040,6 @@ struct PageLayout {
     /// sets its own measure; see [`crate::region::Group`].
     prose_sources: Vec<(usize, bool)>,
     route: crate::route::Route,
-    missing_tables: Vec<crate::geom::BBox>,
-    demoted_tables: Vec<bool>,
 }
 
 /// Where the time went, per pipeline stage.
@@ -3606,14 +3511,13 @@ fn timed<T>(slot: &mut std::time::Duration, f: impl FnOnce() -> T) -> T {
 
 /// Does anything downstream read the routing verdict?
 ///
-/// Only two things do: layout-table arbitration, which needs the sidecars,
-/// and the splice anchors, which are env-gated. A pure deterministic run
+/// Only the splice anchors do, and they are asked for. A pure deterministic run
 /// reads neither, and [`crate::route::decide`] is not free — it scans every
 /// glyph, rasterises image coverage onto a grid, and tests glyph containment
 /// once per candidate region. Computing a verdict nobody consumes is the
 /// clearest kind of waste, even where the corpus is too noisy to time it.
 pub fn routing_is_consulted(opts: &AnalyzeOptions) -> bool {
-    opts.emit_anchors || opts.layout_prefix.is_some()
+    opts.emit_anchors
 }
 
 /// Text that is dot leaders alone: a run of
@@ -4806,50 +4710,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 );
             }
         }
-        // Layout arbitration for table *regions*. The three residual TEDS
-        // deficits were all region decisions, not readings: a list promoted
-        // to a grid, a grid over the wrong content, a table never found. The
-        // layout detector boxes tables independently, so it arbitrates here
-        // the same way it arbitrates headings:
-        //   - an *inferred* grid no layout table overlaps is demoted to prose
-        //     (drawn rules still outrank the detector);
-        //   - a layout table no grid overlaps becomes an insert anchor for
-        //     the VLM tier (`missing_per_page`).
-        let mut missing: Vec<crate::geom::BBox> = Vec::new();
-        let mut demoted: Vec<bool> = vec![false; grids.len()];
-        if let Some(ltables) = layout_boxes(opts.layout_prefix.as_deref(), p.index, &["table"]) {
-            // Demotion changes the *kind*, not the text: the grid's row-major
-            // reading is kept as a paragraph. Returning the glyphs to prose
-            // assembly instead re-ordered them worse than the grid had
-            // (NID 0.625 → 0.484 on one such page), because a tabular
-            // region's row-major order was already right — it just is not a
-            // table.
-            for (gi, g) in grids.iter().enumerate() {
-                let area = ((g.bbox.x1 - g.bbox.x0) * (g.bbox.y1 - g.bbox.y0)).max(1.0);
-                demoted[gi] = grid_sources[gi] != GridSource::Ruled
-                    && !ltables
-                        .iter()
-                        .any(|b| overlap_area(b, &g.bbox) >= 0.2 * area);
-            }
-            // A layout table already covered by a router region (a raster
-            // table the VLM reads via the route-tier splice) must not become
-            // an insert anchor too — that emitted the same table twice.
-            let routed: Vec<crate::geom::BBox> = match &route {
-                crate::route::Route::VlmRegions(r) => r.clone(),
-                _ => Vec::new(),
-            };
-            for b in &ltables {
-                let area = ((b.x1 - b.x0) * (b.y1 - b.y0)).max(1.0);
-                let covered = grids.iter().any(|g| overlap_area(b, &g.bbox) >= 0.2 * area)
-                    || routed.iter().any(|r| overlap_area(b, r) >= 0.2 * area);
-                if !covered {
-                    missing.push(*b);
-                }
-            }
-        }
         suspect_tables.extend(table::suspect_tables(&grids, &p.glyphs));
         assert_eq!(grids.len(), grid_sources.len());
-        assert_eq!(grids.len(), demoted.len());
         layouts.push(PageLayout {
             grids,
             grid_sources,
@@ -4857,8 +4719,6 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             prose_columns: cols,
             prose_sources,
             route,
-            missing_tables: missing,
-            demoted_tables: demoted,
         });
     }
 
@@ -5221,24 +5081,6 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             .into_iter()
             .flat_map(block::split_structural_prefix)
             .collect();
-        // Layout-detector arbitration, part 1: force block boundaries at
-        // title boxes. A single-word heading set at body size with no weight
-        // merges into the paragraph below it — no deterministic signal exists
-        // to stop that — and once merged, the promotion pass in the CLI can
-        // never mark it (a box cannot cover half a block). Splitting here is
-        // still promotion-only in effect: text and order are untouched.
-        if let Some(boxes) = layout_boxes(
-            opts.layout_prefix.as_deref(),
-            pi,
-            &["paragraph_title", "doc_title", "title"],
-        ) {
-            if !boxes.is_empty() {
-                out = out
-                    .into_iter()
-                    .flat_map(|b| split_block_at_titles(b, &boxes))
-                    .collect();
-            }
-        }
         blocks_per_page.push(out);
     }
 
@@ -5680,9 +5522,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 None
             };
             let drawn_in = drawn_in.or(scaled).or(paneled);
-            if layout.demoted_tables[gi] || drawn_in.is_some() || line_art || scale {
-                // Judged non-table by the layout arbiter: same reading
-                // order, prose form.
+            if drawn_in.is_some() || line_art || scale {
+                // Judged no table: same reading order, prose form.
                 let text = (0..g.rows())
                     .map(|r| {
                         (0..g.cols())
@@ -6124,11 +5965,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // anchor sits immediately above its table so the hybrid adapter can
         // replace the pipe rows with the VLM's reading of the same region;
         // the pure engine's output is untouched. A grid read as no table
-        // (demoted, or a drawing's labels) has none to replace and does not
+        // (a drawing's labels, a chart's scales) has none to replace and does not
         // anchor.
         if opts.emit_anchors {
             for (ti, g) in layout.grids.iter().enumerate() {
-                if layout.demoted_tables[ti] || !in_doubt[ti] {
+                if !in_doubt[ti] {
                     continue;
                 }
                 // A document with this many drawn grids is a chart or a
@@ -6153,24 +5994,6 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         format!("[[VLMTAB:p{pi}:t{ti}]]"),
                         "rust",
                         "table-confidence",
-                    )
-                });
-            }
-        }
-
-        // Insert anchors for tables the layout detector found and we did
-        // not. There is nothing deterministic to arbitrate against, so the
-        // VLM's reading is inserted at the region's position outright.
-        if opts.emit_anchors && opts.insert_missing_tables {
-            for (ni, b) in layout.missing_tables.iter().enumerate() {
-                table_elements.push(Element {
-                    page: pi,
-                    bbox: Some(*b),
-                    ..Element::new(
-                        "doco:Figure",
-                        format!("[[VLMNEW:p{pi}:n{ni}]]"),
-                        "rust",
-                        "table-missing",
                     )
                 });
             }
