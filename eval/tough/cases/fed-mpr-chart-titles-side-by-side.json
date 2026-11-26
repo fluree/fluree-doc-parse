@@ -1,0 +1,20 @@
+{
+  "document": {
+    "file": "fed-mpr-2025-06.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20250620_mprfullreport.pdf",
+    "sha256": "6f8538cb4ce2902ac35cc9ec8311feda6c5c94953b76db50de94192741bb07f4",
+    "about": "Federal Reserve Monetary Policy Report, June 2025. Page 29 sets Figures 20 and 21 side by side, each chart in a panel drawn round it with its title set in the panel's head."
+  },
+  "notes": [
+    "2026-11-26 (#398): the two charts' titles were read line by line across the pair, so Figure 20's second line, `consumption expenditures`, came after Figure 21's title."
+  ],
+  "checks": [
+    {
+      "id": "figure-20-title-whole",
+      "found": "2026-11-26",
+      "issue": "#398: the title's two lines parted by the chart beside it. It reads whole in the body and in the list of figures.",
+      "text": "Figure 20. Change in real personal consumption expenditures",
+      "count": 2
+    }
+  ]
+}

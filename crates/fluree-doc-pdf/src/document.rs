@@ -258,8 +258,10 @@ fn layout_title(
         return None;
     }
     // A banner over the column names the reading found under it heads the
-    // header (`December 31, 2017` over `2017 | 2016`), not the table.
-    if lay.header_rows > 1 {
+    // header (`December 31, 2017` over `2017 | 2016`), not the table. Nor
+    // does the first block's title over its own column names, as each later
+    // block's does (`Uganda 1995 2011` over `<16 | 16/17`).
+    if lay.header_rows > 1 || lay.restated_headers.contains(&1) {
         return None;
     }
     // Set where a title is: at the table's left edge, or centred on it. A
@@ -325,6 +327,7 @@ fn layout_title(
             })
             .collect(),
         sub_headers: lay.sub_headers.iter().filter_map(|&r| up(r)).collect(),
+        restated_headers: lay.restated_headers.iter().filter_map(|&r| up(r)).collect(),
         cells: lay.cells[cols..].to_vec(),
         claimed: lay.claimed.clone(),
     }));
@@ -404,6 +407,10 @@ fn names_spanned_columns(
             .iter()
             .all(|t| t.trim().is_empty() || keyed || !table::is_numeric_cell(t.trim()))
 }
+
+/// Words a row of a one-column grid holds to read as a sentence, not an
+/// entry: a list's entries are a name and a few words of what it is.
+const SENTENCE_WORDS: usize = 12;
 
 /// The columns each spanning label of a header row covers, as `start..end`,
 /// from that row's flags for a cell continuing the one to its left.
@@ -1436,6 +1443,14 @@ const FURNITURE_ROW_SLACK: f64 = 0.005;
 /// paragraph brushing the drawing's margin stays prose.
 const FIGURE_CONTAINMENT: f64 = 0.6;
 
+/// Most words a figure's label says; a block of the page's prose inside a
+/// figure's region says more (see [`find_figures`]).
+const FIGURE_PROSE_WORDS: usize = 15;
+
+/// Share of the body's size a paragraph inside a figure's region may differ
+/// by and still be the page's prose.
+const FIGURE_PROSE_SIZE: f64 = 0.12;
+
 /// Fraction of a grid inferred from its text's alignment, and corroborated by
 /// drawn geometry, that must lie on a drawing for its alignment to be the
 /// drawing's.
@@ -1554,6 +1569,128 @@ fn callouts(cells: &[String]) -> bool {
 /// across it, and its horizontal ones at more than as many times its row
 /// boundaries' down it. Places are counted to the point, so a rule drawn in
 /// dashes, or cell by cell, is one.
+/// Farthest a tick, or a gridline's end, stands from the side of its
+/// number, in the number's size.
+const TICK_REACH: f64 = 1.5;
+
+/// Farthest a tick's middle stands above or below its number's, in the
+/// number's size: level with it, where an underline runs under it.
+const TICK_LEVEL: f64 = 0.3;
+
+/// Is grid `g` a chart's scale beside the page's prose rather than a
+/// table? A column of two numbers or more, each level with a horizontal
+/// stroke that ends beside it (an axis's tick, or a gridline's end), with
+/// at most one other cell, the axis's unit (`Percent`); one column of
+/// running prose, the page's column read across the gutter with the
+/// chart's scale (`spending have deteriorated. Business | 18.0`); and
+/// beyond them only columns of a word or a few, the chart's own labels. A
+/// table's figures stand between its rules, not level with a stroke's end,
+/// and a table holds columns of text of its own.
+fn scale_beside_text(
+    g: &Grid,
+    glyphs: &[crate::glyph::Glyph],
+    rules: &[crate::rule::Rule],
+    ticks: &[crate::rule::Rule],
+) -> bool {
+    let (rows, cols) = (g.rows(), g.cols());
+    if rows < 2 || cols < 2 {
+        return false;
+    }
+    let texts = g.cell_texts(glyphs);
+    let homes = g.glyph_cells(glyphs);
+    // Each cell's ink and its text's size.
+    let mut boxes: Vec<Option<(crate::geom::BBox, f64)>> = vec![None; rows * cols];
+    for (gl, home) in glyphs.iter().zip(&homes) {
+        let (Some(i), Some(b)) = (home, gl.bbox) else {
+            continue;
+        };
+        if gl.text.trim().is_empty() {
+            continue;
+        }
+        let size = (gl.font_size as f64).max(1.0);
+        boxes[*i] = Some(match boxes[*i] {
+            Some((u, s)) => (u.union(&b), s.max(size)),
+            None => (b, size),
+        });
+    }
+    let number = |t: &str| {
+        let t = t.trim();
+        !t.is_empty()
+            && t.chars().count() <= 9
+            && t.chars().any(|c| c.is_ascii_digit())
+            && t.chars()
+                .all(|c| c.is_ascii_digit() || ".,−-+%".contains(c))
+    };
+    let horizontal = rules
+        .iter()
+        .chain(ticks)
+        .filter(|r| r.orientation == crate::rule::Orientation::Horizontal);
+    let ticks: Vec<crate::geom::BBox> = horizontal.map(|r| r.bbox).collect();
+    let ticked = |b: &crate::geom::BBox, size: f64| {
+        let y = (b.y0 + b.y1) / 2.0;
+        ticks.iter().any(|t| {
+            let ty = (t.y0 + t.y1) / 2.0;
+            let left = t.x1 <= b.x0 + 1.0 && b.x0 - t.x1 <= size * TICK_REACH;
+            let right = t.x0 >= b.x1 - 1.0 && t.x0 - b.x1 <= size * TICK_REACH;
+            (ty - y).abs() <= size * TICK_LEVEL && (left || right)
+        })
+    };
+    // Lines of running text, a cell each: words enough to a line, and a
+    // line that carries on into the next (`… Business` over `investment
+    // rose …`). A chart's labels set beside its scale say a word or two,
+    // and stay with it.
+    let prose = |filled: &[usize]| {
+        let lines: Vec<&str> = filled.iter().map(|&i| texts[i].trim()).collect();
+        let worded = lines
+            .iter()
+            .filter(|t| t.split_whitespace().count() >= 4)
+            .count();
+        let runs_on = lines.windows(2).any(|w| {
+            let ends_open = !w[0].ends_with(['.', '!', '?', ':', ';']);
+            let next = w[1].split_whitespace().next().unwrap_or("");
+            ends_open
+                && w[0].split_whitespace().count() >= 4
+                && next.chars().next().is_some_and(char::is_lowercase)
+        });
+        worded >= 2 && runs_on
+    };
+    // Columns of the chart's own scale, of running prose, and of other
+    // text; a column of a word or a few to a cell is the chart's legend
+    // or a series' name (`Yield`), set inside the plot.
+    let mut scales = 0;
+    let mut texted = 0;
+    let mut prosed = 0;
+    for c in 0..cols {
+        let filled: Vec<usize> = (0..rows)
+            .map(|r| r * cols + c)
+            .filter(|&i| !texts[i].trim().is_empty())
+            .collect();
+        if filled.is_empty() {
+            continue;
+        }
+        let numbers: Vec<usize> = filled
+            .iter()
+            .copied()
+            .filter(|&i| number(&texts[i]))
+            .collect();
+        let on_ticks = numbers
+            .iter()
+            .filter(|&&i| boxes[i].is_some_and(|(b, size)| ticked(&b, size)))
+            .count();
+        if numbers.len() >= 2 && on_ticks == numbers.len() && numbers.len() + 1 >= filled.len() {
+            scales += 1;
+        } else if prose(&filled) {
+            prosed += 1;
+        } else if filled
+            .iter()
+            .any(|&i| texts[i].split_whitespace().count() > 3)
+        {
+            texted += 1;
+        }
+    }
+    scales >= 1 && prosed == 1 && texted == 0
+}
+
 fn line_art(g: &Grid, rules: &[crate::rule::Rule]) -> bool {
     let inside = |r: &&crate::rule::Rule| {
         r.bbox.x0 >= g.bbox.x0 - 3.0
@@ -1742,6 +1879,444 @@ fn read_form_text(elements: &mut [Element]) {
             e.level = None;
             e.evidence = "layout";
         }
+    }
+}
+
+/// Least an item's marker stands right of the marker before it, in its
+/// size, to be set under that item: less is the same list's marker drawn a
+/// little off, or a wider number right-aligned.
+const NEST_INDENT: f64 = 1.0;
+
+/// Farthest before where the item before it starts its text, in its size,
+/// an item's marker stands set under that item: a slide's second-level
+/// bullet stands a little left of the first level's text.
+const NEST_BEFORE: f64 = 1.0;
+
+/// Farthest past where the item before it starts its text, in its size, an
+/// item's marker stands set under that item. A sub-list's marker stands
+/// under its parent's text, or a little into it; further is another column.
+const NEST_REACH: f64 = 2.5;
+
+/// Most space between one item and the next, in their size, for them to be
+/// read as one list: a list set with a blank line between its items.
+const LIST_GAP: f64 = 3.0;
+
+/// A list item's marker and text start, its size, whether its first line
+/// carries on the item before it, and whether it is marked by a box to tick.
+type ListMark = (f64, f64, f64, bool, bool);
+
+/// A page's list items, nested by where their markers stand.
+///
+/// An item whose marker stands under the text of the item before it, past
+/// that item's own marker, is set in a list inside it: a bulleted
+/// `UL Listed to control:` with its dashed loads indented under its text.
+/// An item whose marker stands back out returns to the level its marker
+/// stands at. Only an item following the one before it down the page, with
+/// a marker of its own, nests: a run broken by anything else, or carried to
+/// the next column, starts again at the top. A wrapped line is its item's
+/// own, and a paragraph set with a hanging indent has no marker. A line
+/// read as an item though it carries on the one before, its count standing
+/// beside a later line, is not set under it. A box to tick marks a choice,
+/// not what a list is set under: a form's `Yes` and `No` boxes, and what is
+/// set beside or under them, stay level.
+fn nest_list_items(elements: &mut [Element], item_text: &[Option<ListMark>]) {
+    // Each open level's marker and text start, and whether it is a box to
+    // tick, outermost first.
+    let mut open: Vec<(f64, f64, bool)> = Vec::new();
+    let mut prev: Option<crate::geom::BBox> = None;
+    for (e, t) in elements.iter_mut().zip(item_text) {
+        let (Some((marker, text_x, size, carried_on, ticked)), Some(b)) = (*t, e.bbox) else {
+            open.clear();
+            prev = None;
+            continue;
+        };
+        let em = size.max(1.0);
+        let follows = prev.is_some_and(|p| b.y0 >= p.y0 && b.y0 - p.y1 <= LIST_GAP * em);
+        if !follows {
+            open.clear();
+        }
+        match open.last().copied() {
+            None => open.push((marker, text_x, ticked)),
+            Some((above, above_text, above_ticked))
+                if !carried_on
+                    && !above_ticked
+                    && marker >= above + NEST_INDENT * em
+                    && marker >= above_text - NEST_BEFORE * em
+                    && marker <= above_text + NEST_REACH * em =>
+            {
+                open.push((marker, text_x, ticked))
+            }
+            Some(_) => {
+                while open.len() > 1 && open.last().is_some_and(|l| marker < l.0 - 0.5 * em) {
+                    open.pop();
+                }
+                if let Some(level) = open.last_mut() {
+                    *level = (marker, text_x, ticked);
+                }
+            }
+        }
+        e.depth = open.len() - 1;
+        prev = Some(b);
+    }
+}
+
+/// Most words in a table's column head left out above it: `2008 vs. 2007
+/// 2007 vs. 2006`, two heads read as one line. A title runs longer.
+const MAX_TABLE_HEAD_WORDS: usize = 8;
+
+/// A table's column head left out of the table, read as a heading on its
+/// weight or size: a short line set on the table's top edge, within a line's
+/// height of it with nothing between, inside its width, neither from its
+/// left edge nor centred on it, and over its value columns (past its
+/// middle) or on a row of two or more of the table's other heads. `Total
+/// SOMA` over its two years' columns, `Item` over the stub beside the period heads, `2008 vs. 2007
+/// 2007 vs. 2006` over the change columns. A table's title is set from its
+/// left edge or centred over it, and a section's heading over a table
+/// starts where the text does. Run on the final elements, where the
+/// tables are.
+/// Fewest entries in a run of headings, each over one short line, for the
+/// run to be a list.
+const MIN_LIST_ENTRIES: usize = 3;
+
+/// Most words in an entry's own heading, and in the short line under it.
+const MAX_ENTRY_WORDS: usize = 6;
+const MAX_ENTRY_NOTE_WORDS: usize = 3;
+
+/// A list set as headings: a run of three or more headings of one level on
+/// a page, each over one short line and nothing else (`Boston` over `First
+/// District`, `New York` over `Second District`, …). A list of links, each
+/// with its second label; a section heads more than a line of a few words.
+fn read_entry_lists(elements: &mut [Element]) {
+    let entry = |e: &Element| {
+        e.kind == "doco:SectionTitle"
+            && matches!(e.evidence, "bold" | "font-size")
+            && e.text.split_whitespace().count() <= MAX_ENTRY_WORDS
+    };
+    let note = |e: &Element| {
+        e.kind == "doco:Paragraph" && e.text.split_whitespace().count() <= MAX_ENTRY_NOTE_WORDS
+    };
+    let mut i = 0;
+    while i < elements.len() {
+        let mut heads = Vec::new();
+        let mut k = i;
+        while k + 1 < elements.len()
+            && entry(&elements[k])
+            && note(&elements[k + 1])
+            && elements[k].page == elements[i].page
+            && elements[k].level == elements[i].level
+        {
+            heads.push(k);
+            k += 2;
+        }
+        if heads.len() >= MIN_LIST_ENTRIES {
+            for h in heads {
+                let e = &mut elements[h];
+                e.kind = "doco:Paragraph".into();
+                e.level = None;
+                e.evidence = "layout";
+            }
+            i = k;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Most words in a contents entry's title set between its label and its
+/// page's number.
+const MAX_ENTRY_TITLE_WORDS: usize = 12;
+
+/// Fewest page numbers ending rows at one right edge for the rows to be a
+/// contents' entries.
+const MIN_CONTENTS_ROWS: usize = 3;
+
+/// A contents' entry set as a heading: its row ends on a page's number,
+/// one of three or more on the page with nothing after them on their rows,
+/// running in order down the page (`PART IX` and `Repeals, modifications
+/// and revocations` beside `80`).
+/// A page that lists its contents without leaders or a `Contents` heading
+/// of its own, as a contents' later pages do, sets each number after its
+/// entry's title or at one right edge.
+/// Words a heading closes on to say it continues a section begun earlier,
+/// lowercase: `(continued)`, `—continued`, `- Continued`, `(cont'd)`,
+/// `(suite)`, `(Fortsetzung)`, `(continuación)`.
+const CONTINUED_WORDS: &[&str] = &[
+    "continued",
+    "cont",
+    "cont.",
+    "cont'd",
+    "cont’d",
+    "contd",
+    "contd.",
+    "suite",
+    "fortsetzung",
+    "forts.",
+    "continuación",
+    "continuacion",
+    "continua",
+    "continuação",
+];
+
+/// The heading without its closing continuation mark, where it has one:
+/// `Box 1—continued` is `Box 1`, `5.5 Electrical Characteristics
+/// (continued)` is `5.5 Electrical Characteristics`. The mark closes the
+/// line after a dash, a parenthesis or a comma, or stands alone after
+/// words.
+fn continued_from(text: &str) -> Option<&str> {
+    let t = text.trim_end();
+    let inner = t.strip_suffix(')').unwrap_or(t);
+    let cut =
+        inner.rfind(|c: char| matches!(c, '(' | '—' | '–' | '-' | ',') || c.is_whitespace())?;
+    let word = inner[cut..]
+        .trim_start_matches(|c: char| matches!(c, '(' | '—' | '–' | '-' | ',') || c.is_whitespace())
+        .to_lowercase();
+    if !CONTINUED_WORDS.contains(&word.as_str()) {
+        return None;
+    }
+    let base = inner[..cut]
+        .trim_end_matches(|c: char| matches!(c, '(' | '—' | '–' | '-' | ',') || c.is_whitespace());
+    (base.chars().any(char::is_alphanumeric)).then_some(base)
+}
+
+/// Fewest letters and figures in what a continued heading restates.
+const MIN_CONTINUED_KEY: usize = 4;
+
+/// Letters and figures, lowercase: two headings name one section where
+/// these agree.
+fn heading_key(t: &str) -> String {
+    t.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// A heading that continues a section begun on an earlier page is no new
+/// section: its text runs on in the section it continues.
+///
+/// - **Marked:** it restates an earlier heading, or a part of one, and
+///   closes on a continuation mark (`Box 1—continued` after `Box 1.
+///   Employment and Earnings across Demographic Groups`, `Developments
+///   Related to Financial Stability (continued)` after `Box 3. Developments
+///   Related to Financial Stability`, `Wiring Diagrams (continued)`).
+/// - **Repeated:** it opens its page and repeats, word for word, the
+///   nearest heading at its level or above on an earlier page: a page's
+///   title set over each page a section fills (`PACKAGE OPTION ADDENDUM`),
+///   a release line over each page of a table set.
+fn read_continued_heads(elements: &mut [Element]) {
+    let title = |e: &Element| e.kind == "doco:SectionTitle";
+    let mut demote = Vec::new();
+    for i in 0..elements.len() {
+        if !title(&elements[i]) {
+            continue;
+        }
+        let e = &elements[i];
+        if let Some(base) = continued_from(&e.text) {
+            let key = heading_key(base);
+            if key.chars().count() >= MIN_CONTINUED_KEY
+                && elements[..i].iter().filter(|o| title(o)).any(|o| {
+                    continued_from(&o.text).is_none() && heading_key(&o.text).contains(&key)
+                })
+            {
+                demote.push(i);
+            }
+            continue;
+        }
+        // The nearest heading at its level or above, those already read as
+        // continuing aside.
+        let level = e.level.unwrap_or(6);
+        let nearest = (0..i)
+            .rev()
+            .filter(|k| title(&elements[*k]) && !demote.contains(k))
+            .map(|k| &elements[k])
+            .find(|o| o.level.unwrap_or(6) <= level);
+        // And it opens its page's body, a continued heading or another
+        // before it at most: a section begun on its page under a name an
+        // earlier one shares (a handbook's templates, each titled
+        // `IMPORTANT INFORMATION ABOUT YOUR DRINKING WATER` under its own
+        // label) is a section of its own.
+        let opens_page = (0..i)
+            .rev()
+            .take_while(|k| elements[*k].page == e.page)
+            .all(|k| demote.contains(&k));
+        if let Some(o) = nearest {
+            if opens_page && o.page < e.page && heading_key(&o.text) == heading_key(&e.text) {
+                demote.push(i);
+            }
+        }
+    }
+    for i in demote {
+        let e = &mut elements[i];
+        e.kind = "doco:Paragraph".into();
+        e.level = None;
+        e.evidence = "layout";
+    }
+}
+
+fn read_contents_rows(elements: &mut [Element]) {
+    let folio = |t: &str| {
+        let t = t.trim();
+        (1..=4).contains(&t.len()) && t.chars().all(|c| c.is_ascii_digit())
+    };
+    let pages: std::collections::BTreeSet<usize> = elements.iter().map(|e| e.page).collect();
+    for page in pages {
+        let on_page: Vec<usize> = (0..elements.len())
+            .filter(|&i| elements[i].page == page)
+            .collect();
+        let row = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
+            a.y1.min(b.y1) - a.y0.max(b.y0) > a.height().min(b.height()) * 0.5
+        };
+        // Page numbers ending their rows.
+        let numbers: Vec<crate::geom::BBox> = on_page
+            .iter()
+            .filter_map(|&i| {
+                let e = &elements[i];
+                let b = e.bbox?;
+                (e.kind == "doco:Paragraph" && folio(&e.text)).then_some(b)
+            })
+            .filter(|b| {
+                !on_page.iter().any(|&o| {
+                    elements[o]
+                        .bbox
+                        .is_some_and(|ob| row(&ob, b) && ob.x0 >= b.x1)
+                })
+            })
+            .collect();
+        if numbers.len() < MIN_CONTENTS_ROWS {
+            continue;
+        }
+        // A contents' pages run in order down the page, most of them
+        // different. A catalogue's quantities (`7`, `7`, `1`, `2`, or `1`,
+        // `1`, `4`) or a chart's scale (`7000` over `3500`) do not.
+        let mut by_height: Vec<(f64, u32)> = on_page
+            .iter()
+            .filter_map(|&i| {
+                let e = &elements[i];
+                let b = e.bbox?;
+                let n: u32 = e.text.trim().parse().ok()?;
+                numbers.iter().any(|m| m == &b).then_some((b.y0, n))
+            })
+            .collect();
+        by_height.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let distinct: std::collections::BTreeSet<u32> = by_height.iter().map(|p| p.1).collect();
+        if by_height.windows(2).any(|w| w[1].1 < w[0].1)
+            || distinct.len() < MIN_CONTENTS_ROWS
+            || distinct.len() * 3 < by_height.len() * 2
+        {
+            continue;
+        }
+        let aligned = numbers;
+        for &i in &on_page {
+            let e = &elements[i];
+            let Some(b) = e.bbox else { continue };
+            // Only the entry's own short text between it and its number: a
+            // slide's title level with a chart's scale has the slide's
+            // bullets between.
+            let entry_row = |n: &crate::geom::BBox| {
+                row(&b, n)
+                    && n.x0 >= b.x1
+                    && !on_page.iter().any(|&o| {
+                        let other = &elements[o];
+                        other.bbox.is_some_and(|ob| {
+                            row(&ob, &b)
+                                && ob.x0 >= b.x1
+                                && ob.x1 <= n.x0
+                                && (other.kind == "doc:ListItem"
+                                    || other.text.split_whitespace().count()
+                                        > MAX_ENTRY_TITLE_WORDS)
+                        })
+                    })
+            };
+            if e.kind == "doco:SectionTitle"
+                && matches!(e.evidence, "bold" | "font-size" | "numbering")
+                && aligned.iter().any(entry_row)
+            {
+                let e = &mut elements[i];
+                e.kind = "doco:Paragraph".into();
+                e.level = None;
+                e.evidence = "layout";
+            }
+        }
+    }
+}
+
+fn read_table_heads(elements: &mut [Element]) {
+    let heads: Vec<usize> = (0..elements.len())
+        .filter(|&i| {
+            let e = &elements[i];
+            let Some(b) = e.bbox else {
+                return false;
+            };
+            if e.kind != "doco:SectionTitle"
+                || !matches!(e.evidence, "bold" | "font-size")
+                || e.text.split_whitespace().count() > MAX_TABLE_HEAD_WORDS
+            {
+                return false;
+            }
+            let h = b.height().max(1.0);
+            // Other heads set on its row: the row of a table's column heads.
+            // Two or more: a form's part title beside its `Part I` label is
+            // one title with its number.
+            let on_a_row = |tb: &crate::geom::BBox| {
+                elements
+                    .iter()
+                    .filter(|o| {
+                        !std::ptr::eq(*o, e)
+                            && o.page == e.page
+                            && o.kind != "doco:Table"
+                            && o.bbox.is_some_and(|ob| {
+                                (ob.y0 - b.y0).abs() <= h
+                                    && ob.x0 >= tb.x0 - h
+                                    && ob.x1 <= tb.x1 + h
+                                    && (ob.x0 >= b.x1 || ob.x1 <= b.x0)
+                            })
+                    })
+                    .count()
+                    >= 2
+            };
+            // Nothing between it and the table over its width: a heading
+            // over its own paragraph heads the paragraph, not the table
+            // after it.
+            let directly_on = |tb: &crate::geom::BBox| {
+                !elements.iter().any(|o| {
+                    !std::ptr::eq(o, e)
+                        && o.page == e.page
+                        && o.kind != "doco:Table"
+                        && o.bbox.is_some_and(|ob| {
+                            ob.y0 >= b.y1 - 0.2 * h
+                                && ob.y1 <= tb.y0 + h
+                                && ob.x1.min(b.x1) > ob.x0.max(b.x0)
+                        })
+                })
+            };
+            elements.iter().any(|t| {
+                t.kind == "doco:Table"
+                    && t.page == e.page
+                    && t.bbox.is_some_and(|tb| {
+                        // A line's height is about twice its ink's.
+                        let on_top = b.y1 <= tb.y0 + h && tb.y0 - b.y1 <= 2.0 * h;
+                        let inside = b.x0 >= tb.x0 - h && b.x1 <= tb.x1 + h;
+                        let from_edge = (b.x0 - tb.x0).abs() <= 2.0 * h;
+                        let centred = ((b.x0 + b.x1) - (tb.x0 + tb.x1)).abs() * 0.5 <= 2.0 * h;
+                        // Over the value columns, past the table's middle,
+                        // or on the row of the table's other heads. A title
+                        // set a little in from a table's edge stands alone,
+                        // over its stub.
+                        let over_values = b.x0 >= (tb.x0 + tb.x1) * 0.5;
+                        on_top
+                            && inside
+                            && !from_edge
+                            && !centred
+                            && directly_on(&tb)
+                            && (over_values || on_a_row(&tb))
+                    })
+            })
+        })
+        .collect();
+    for i in heads {
+        let e = &mut elements[i];
+        e.kind = "doco:Paragraph".into();
+        e.level = None;
+        e.evidence = "layout";
     }
 }
 
@@ -1952,7 +2527,7 @@ fn split_block_at_titles(b: Block, boxes: &[crate::geom::BBox]) -> Vec<Block> {
         if last - first + 1 != n_in {
             continue;
         }
-        let marker = b.marker.clone();
+        let (marker, marker_x) = (b.marker.clone(), b.marker_x);
         let mut parts = Vec::new();
         let mut lines = b.lines;
         let tail: Vec<Line> = lines.split_off(last + 1);
@@ -1962,6 +2537,7 @@ fn split_block_at_titles(b: Block, boxes: &[crate::geom::BBox]) -> Vec<Block> {
         }
         let mut title = block::build(mid);
         title.marker = marker;
+        title.marker_x = marker_x;
         parts.push(title);
         if !tail.is_empty() {
             // The remainder may contain further titles.
@@ -2446,7 +3022,7 @@ fn find_figures(
     blocks_per_page: &[Vec<Block>],
     layouts: &[PageLayout],
 ) -> Vec<(Vec<figure::Figure>, Vec<Option<usize>>)> {
-    let mut page_figures = Vec::with_capacity(blocks_per_page.len());
+    let mut staged = Vec::with_capacity(blocks_per_page.len());
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
         // Chart and diagram regions. Text inside one is real and its *order*
         // is not: a donut's labels and percentages interleave by position on
@@ -2508,6 +3084,29 @@ fn find_figures(
             &figures,
         );
         figures.extend(charted);
+        let barred = figure::bar_plots(
+            &page.fills,
+            &page.rules,
+            &page.ticks,
+            &page.glyphs,
+            pi,
+            &figures,
+        );
+        figures.extend(barred);
+        let tables: Vec<crate::geom::BBox> = layouts
+            .get(pi)
+            .map(|l| l.grids.iter().map(|g| g.bbox).collect())
+            .unwrap_or_default();
+        let diagrams = figure::box_diagrams(
+            &page.fills,
+            &page.rules,
+            &page.glyphs,
+            pi,
+            (page.width, page.height),
+            &tables,
+            &figures,
+        );
+        figures.extend(diagrams);
         // A dimension drawing whose lines made a ruled grid of its callouts:
         // the drawing its loose callouts and view names are labels of.
         if let Some(layout) = layouts.get(pi) {
@@ -2556,6 +3155,13 @@ fn find_figures(
         let item_boxes: Vec<crate::geom::BBox> = items.iter().map(|(b, _)| *b).collect();
         figure::release_behind_items(&mut taken, &figures, &block_boxes, &item_boxes);
         figure::reassign_between(&mut taken, &figures, &block_boxes, prose_size(blocks));
+        staged.push((figures, taken, candidates));
+    }
+    assign_captions(blocks_per_page, &mut staged);
+    let mut page_figures = Vec::with_capacity(staged.len());
+    for (pi, (figures, taken, candidates)) in staged.into_iter().enumerate() {
+        let blocks = &blocks_per_page[pi];
+        let block_texts: Vec<String> = blocks.iter().map(|b| b.text()).collect();
         // Which figure each block belongs to, if any: the labels its figure
         // took, and whatever lies mostly inside the drawing itself. The
         // rectangle around a drawing and its labels is not membership: a
@@ -2581,10 +3187,199 @@ fn find_figures(
                     .position(|f| figure::share_inside(&b.bbox, &f.drawing) >= FIGURE_CONTAINMENT);
             }
         }
+        // A paragraph of the page's prose is no figure's, wherever the
+        // figure's region reaches: set at the body's size, over two lines or
+        // more, more words than a label says, and no caption or note. Shapes
+        // grouped across a column, or a panel of products, enclose the text
+        // beside or between them (a column's `Discussion` under the chart
+        // beside it). A box diagram's steps are its own, set in its boxes.
+        // The heading set over such a paragraph goes with it.
+        let prose = prose_size(blocks) as f64;
+        let mut released = vec![false; blocks.len()];
+        for (i, b) in blocks.iter().enumerate() {
+            let Some(fi) = member[i] else { continue };
+            if figures[fi].frame == Some(figures[fi].drawing) {
+                continue;
+            }
+            let text = &block_texts[i];
+            let size = (b.font_size as f64).max(1.0);
+            if text.split_whitespace().count() > FIGURE_PROSE_WORDS
+                && (size - prose).abs() <= prose * FIGURE_PROSE_SIZE
+                && b.bbox.height() >= size * 1.8
+                && !heading::is_caption(text)
+                && !figure::note_label(text)
+            {
+                member[i] = None;
+                released[i] = true;
+            }
+        }
+        for (i, b) in blocks.iter().enumerate() {
+            if member[i].is_none() {
+                continue;
+            }
+            let text = &block_texts[i];
+            let size = (b.font_size as f64).max(1.0);
+            let heads = blocks.iter().enumerate().any(|(j, p)| {
+                released[j]
+                    && p.bbox.y0 >= b.bbox.y1 - 1.0
+                    && p.bbox.y0 - b.bbox.y1 <= size * 1.5
+                    && (p.bbox.x0 - b.bbox.x0).abs() <= size
+            });
+            if heads
+                && text.split_whitespace().count() <= FIGURE_PROSE_WORDS
+                && !heading::is_caption(text)
+                && !figure::note_label(text)
+            {
+                member[i] = None;
+            }
+        }
         page_figures.push((figures, member));
     }
     page_figures
 }
+
+/// Give each figure caption, `Figure 3.` or `Fig. 2`, to the figure it
+/// names: the nearest figure on the side the document sets its captions,
+/// above or below, as the captions that stand by one figure alone show it.
+/// A caption set over the figure it names was taken by the figure above
+/// it, standing under that one; a caption under its chart, wider than the
+/// chart, was taken by none. Where the document shows no side, the nearest
+/// figure takes it. A caption with no figure across from it within reach
+/// stays where it is: its chart was not found. The lines a caption runs on
+/// into go with it.
+fn assign_captions(
+    blocks_per_page: &[Vec<Block>],
+    staged: &mut [(Vec<figure::Figure>, Vec<Vec<usize>>, Vec<usize>)],
+) {
+    use figure::CaptionSide;
+    // Each page's captions, by index into its candidates, with where they
+    // stand to each figure.
+    let mut found: Vec<Vec<(usize, Vec<(usize, CaptionSide, f64)>)>> = Vec::new();
+    let (mut above, mut below) = (0usize, 0usize);
+    for (pi, (figures, taken, candidates)) in staged.iter().enumerate() {
+        let blocks = &blocks_per_page[pi];
+        let mut page = Vec::new();
+        for (k, &bi) in candidates.iter().enumerate() {
+            let b = &blocks[bi];
+            if !figure::figure_caption(&b.text()) {
+                continue;
+            }
+            // A figure's reach: its drawing and the labels it took, other
+            // than captions.
+            let held: Vec<usize> = taken.iter().flatten().copied().collect();
+            let rel: Vec<(usize, CaptionSide, f64)> = figures
+                .iter()
+                .enumerate()
+                .filter_map(|(fi, f)| {
+                    // Measured from the drawing: the labels a figure took
+                    // can reach past its caption (a heading under it).
+                    let extent = f.drawing;
+                    let (side, gap) = figure::caption_side(&b.bbox, b.font_size, &extent)?;
+                    // Nothing of the page's prose between them: a paragraph
+                    // set between a figure and a caption parts them.
+                    let (top, bottom) = match side {
+                        CaptionSide::Below => (extent.y1, b.bbox.y0),
+                        CaptionSide::Above => (b.bbox.y1, extent.y0),
+                    };
+                    let parted = candidates.iter().enumerate().any(|(j, &bj)| {
+                        let o = &blocks[bj];
+                        j != k
+                            && !held.contains(&j)
+                            && o.bbox.y0 >= top - 1.0
+                            && o.bbox.y1 <= bottom + 1.0
+                            && o.bbox.x1.min(b.bbox.x1) > o.bbox.x0.max(b.bbox.x0)
+                            && {
+                                let text = o.text();
+                                let words: Vec<&str> = text.split_whitespace().collect();
+                                let lower = words
+                                    .iter()
+                                    .filter(|w| w.chars().next().is_some_and(char::is_lowercase))
+                                    .count();
+                                words.len() >= CAPTION_PARTED_WORDS && lower * 2 >= words.len()
+                            }
+                    });
+                    (!parted).then_some((fi, side, gap))
+                })
+                .collect();
+            if let [(_, side, _)] = rel.as_slice() {
+                match side {
+                    CaptionSide::Above => above += 1,
+                    CaptionSide::Below => below += 1,
+                }
+            }
+            page.push((k, rel));
+        }
+        found.push(page);
+    }
+    let votes = above + below;
+    let side = if votes >= CAPTION_VOTES && above * 4 >= votes * 3 {
+        Some(CaptionSide::Above)
+    } else if votes >= CAPTION_VOTES && below * 4 >= votes * 3 {
+        Some(CaptionSide::Below)
+    } else {
+        None
+    };
+    for (pi, page) in found.into_iter().enumerate() {
+        let blocks = &blocks_per_page[pi];
+        let (_, taken, candidates) = &mut staged[pi];
+        for (k, rel) in page {
+            let pick = rel
+                .iter()
+                .filter(|(_, s, _)| side.is_none_or(|want| *s == want))
+                .min_by(|a, b| a.2.total_cmp(&b.2))
+                .map(|&(fi, _, _)| fi);
+            // The caption and the lines it runs on into.
+            let mut unit = vec![k];
+            loop {
+                let last = &blocks[candidates[*unit.last().unwrap()]];
+                let next = (0..candidates.len()).find(|&j| {
+                    !unit.contains(&j) && {
+                        let b = &blocks[candidates[j]];
+                        !figure::figure_caption(&b.text())
+                            && figure::caption_runs_on(
+                                &last.bbox,
+                                last.font_size,
+                                &b.bbox,
+                                b.font_size,
+                            )
+                            && b.bbox.y0 >= last.bbox.y1 - 1.0
+                    }
+                });
+                match next {
+                    Some(j) => unit.push(j),
+                    None => break,
+                }
+            }
+            match pick {
+                Some(fi) => {
+                    for (gi, t) in taken.iter_mut().enumerate() {
+                        if gi != fi {
+                            t.retain(|x| !unit.contains(x));
+                        }
+                    }
+                    for &u in &unit {
+                        if !taken[fi].contains(&u) {
+                            taken[fi].push(u);
+                        }
+                    }
+                    taken[fi].sort_unstable();
+                }
+                // No figure across from it within reach: where it stands,
+                // a chart's title whose chart was not found, it stays.
+                None => {}
+            }
+        }
+    }
+}
+
+/// Fewest captions standing by one figure alone that settle the side a
+/// document sets its captions on; three in four of them must agree.
+const CAPTION_VOTES: usize = 2;
+
+/// Fewest words in a block of the page's prose, half of them opening in
+/// lower case, that parts a caption from a figure: an axis's values and its
+/// name (`XS S M L XL Corpus Size`) are no sentence.
+const CAPTION_PARTED_WORDS: usize = 6;
 
 /// The blocks a figure holds, by page: they do not count toward the body
 /// size. The body is the text set as running prose. A wiring diagram's
@@ -2614,6 +3409,22 @@ fn timed<T>(slot: &mut std::time::Duration, f: impl FnOnce() -> T) -> T {
     out
 }
 
+/// Text that is dot leaders alone: a run of
+/// [`crate::textgrid::LEADER_DOTS`] dots or more, spaced or not, and nothing
+/// else.
+fn leaders_only(text: &str) -> bool {
+    let mut dots = 0usize;
+    for c in text.chars() {
+        match c {
+            c if c.is_whitespace() => {}
+            '…' => dots += 3,
+            '.' | '·' | '․' | '‥' => dots += 1,
+            _ => return false,
+        }
+    }
+    dots >= crate::textgrid::LEADER_DOTS
+}
+
 fn glyphs_outside_grids(glyphs: &[Glyph], grids: &[Grid]) -> Vec<Glyph> {
     // The glyphs each grid's cells read, so that a glyph is in a cell or
     // in the prose, never both and never neither (`Grid::takes`).
@@ -2639,6 +3450,278 @@ fn glyphs_outside_grids(glyphs: &[Glyph], grids: &[Grid]) -> Vec<Glyph> {
         })
         .map(|(_, g)| g.clone())
         .collect()
+}
+
+/// Share of the page's width a reading spans, at the least, to reach across
+/// a gutter between two of its columns: a table in one column of two is
+/// under half the page wide, and one read across the gutter takes in most
+/// of both columns. Narrower readings are not tested.
+const ACROSS_COLUMNS: f64 = 0.4;
+
+/// The page's two sides of the gutter a reading is set across, where it
+/// crosses between two of the page's columns of text
+/// ([`table::crosses_gutter`]): two tables set side by side, a table and the
+/// prose beside it, a block of facts and a title. The gutter is one of the
+/// channels of white running down through the reading (`table::channels_in`);
+/// `runs` gives the page's runs of text, read once a channel parts a second
+/// stub from the first.
+///
+/// A reading ruled through the gutter at its foot is one table
+/// ([`ruled_across_gutter`]): a table set the page's full width over two
+/// columns of prose parts its columns where the prose's gutter runs, and
+/// the prose under it sets a paragraph either side; the rule under its
+/// last row joins it.
+fn crossed_gutter<'a>(
+    g: &Grid,
+    glyphs: &[Glyph],
+    rules: &[crate::rule::Rule],
+    width: f64,
+    runs: impl Fn() -> &'a [table::TextRun] + Copy,
+) -> Option<((f64, f64), (f64, f64))> {
+    if g.bbox.x1 - g.bbox.x0 < width * ACROSS_COLUMNS {
+        return None;
+    }
+    let rows = table::reading_rows(g, glyphs);
+    table::channels_in(&rows).into_iter().find_map(|span| {
+        let gutter = table::crosses_gutter(g, &rows, runs, span, width)?;
+        (!ruled_across_gutter(g, glyphs, rules, gutter)).then_some(((0.0, gutter), (gutter, width)))
+    })
+}
+
+/// Share of each side of the gutter, within a reading, that a rule run on
+/// through the gutter reaches over: a table's rules run its width; a rule
+/// under a heading in one column ends short of the gutter.
+const ACROSS_GUTTER_REACH: f64 = 0.5;
+
+/// Gap, in points, that parts one rule's pieces along a line: a rule drawn
+/// a cell at a time meets itself end to end, and two tables side by side
+/// leave the gutter's white between their rules.
+const RULE_PIECE_GAP: f64 = 1.0;
+
+/// Whether the reading is ruled through `gutter` as one table: a
+/// horizontal rule runs on through the gutter, reaching
+/// [`ACROSS_GUTTER_REACH`] of the way across the reading on both sides,
+/// - **at both its ends**, within [`RULED_ROWS`] of its lines of its first
+///   line and of its last, over, under or between them: a table ruled
+///   between its rows, read a group of rows at a time; or
+/// - **at its foot**, under its last line, within a line of it and nearer
+///   it than the next text under it: a table's bottom rule under its last
+///   group.
+///
+/// A rule drawn in pieces along one line counts as one where its pieces
+/// meet within [`RULE_PIECE_GAP`]. A ruled table over a reading's first
+/// rows only, the reading run on into the prose below it, is ruled at
+/// neither its foot nor its end, and its last rows still cross between two
+/// columns of text. Nor is a heading's rule over the reading, or the rule
+/// over a page's foot set against the foot's own line.
+fn ruled_across_gutter(
+    g: &Grid,
+    glyphs: &[Glyph],
+    rules: &[crate::rule::Rule],
+    gutter: f64,
+) -> bool {
+    let b = g.bbox;
+    let line = (b.y1 - b.y0) / g.rows().max(1) as f64;
+    let (left, right) = (
+        gutter - (gutter - b.x0) * ACROSS_GUTTER_REACH,
+        gutter + (b.x1 - gutter) * ACROSS_GUTTER_REACH,
+    );
+    // The lines on which a rule runs on through the gutter, near the reading.
+    let mut lines: Vec<(f64, f64, f64)> = rules
+        .iter()
+        .filter(|r| {
+            r.orientation == crate::rule::Orientation::Horizontal
+                && r.axis_pos() >= b.y0 - RULED_ROWS * line
+                && r.axis_pos() <= b.y1 + RULED_ROWS * line
+        })
+        .map(|r| (r.axis_pos(), r.bbox.x0, r.bbox.x1))
+        .collect();
+    lines.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.total_cmp(&q.1)));
+    let mut through: Vec<f64> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        // The pieces on one line, left to right.
+        let mut on: Vec<(f64, f64)> = Vec::new();
+        let axis = lines[i].0;
+        while i < lines.len() && lines[i].0 - axis <= 1.0 {
+            on.push((lines[i].1, lines[i].2));
+            i += 1;
+        }
+        on.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let mut runs: Vec<(f64, f64)> = Vec::new();
+        for (x0, x1) in on {
+            match runs.last_mut() {
+                Some(r) if x0 <= r.1 + RULE_PIECE_GAP => r.1 = r.1.max(x1),
+                _ => runs.push((x0, x1)),
+            }
+        }
+        if runs.iter().any(|&(a, c)| a <= left && c >= right) {
+            through.push(axis);
+        }
+    }
+    let near = |end: f64| {
+        through
+            .iter()
+            .any(|&y| (y - end).abs() <= RULED_ROWS * line)
+    };
+    if near(b.y0) && near(b.y1) {
+        return true;
+    }
+    // The next text under the reading's foot, within its width.
+    let next_under = |y: f64| {
+        glyphs
+            .iter()
+            .filter(|q| !q.text.trim().is_empty())
+            .filter_map(|q| q.bbox)
+            .filter(|q| q.y0 >= y && q.x1 > b.x0 && q.x0 < b.x1)
+            .map(|q| q.y0)
+            .fold(f64::INFINITY, f64::min)
+    };
+    through
+        .iter()
+        .any(|&y| y >= b.y1 - line * 0.5 && y - b.y1 <= line && y - b.y1 <= next_under(y) - y)
+}
+
+/// How far from a reading's first and last lines, in its lines, a rule at
+/// each end stands: a cell's padding over its first line, and under its
+/// last the room a cell's last lines leave beside a taller neighbour.
+const RULED_ROWS: f64 = 2.5;
+
+/// Share of a cut's width a rule over or under it spans to rule it as a
+/// table: a table's top and bottom rules run its full width, give or take
+/// a cell's padding.
+const RULED_ACROSS: f64 = 0.9;
+
+/// A reading set across the page's gutter, cut at it: its columns between
+/// `x0` and `x1`, on its rows, where two of them or more hold text. A side
+/// read again on its own that yields no table is still the reading's table
+/// there (a ruled table of words, which only the reading across the gutter
+/// read in rows); a side left with one column, or ruled by nothing (a list
+/// of references beside their numbers), is the page's prose. A cut's rows
+/// are the reading's, less those the other side's text alone set.
+fn side_of(
+    g: &Grid,
+    glyphs: &[Glyph],
+    rules: &[crate::rule::Rule],
+    x0: f64,
+    x1: f64,
+) -> Option<Grid> {
+    let (lo, hi) = (g.bbox.x0.max(x0), g.bbox.x1.min(x1));
+    let mut xs = vec![lo];
+    xs.extend(
+        g.xs.iter()
+            .copied()
+            .filter(|&x| x > lo + 1.0 && x < hi - 1.0),
+    );
+    xs.push(hi);
+    let mut cut = Grid {
+        xs,
+        layout: None,
+        bbox: crate::geom::BBox {
+            x0: lo,
+            x1: hi,
+            ..g.bbox
+        },
+        ..g.clone()
+    };
+    // The rows the other side's text alone set are empty here: each goes
+    // to the next row of this side's, as a table's ends are not found at
+    // its first empty row (`trim_to_content`) inside the reading's.
+    let texts = cut.cell_texts(glyphs);
+    let cols = cut.cols();
+    let used: Vec<usize> = (0..cut.rows())
+        .filter(|&r| (0..cols).any(|c| !texts[r * cols + c].trim().is_empty()))
+        .collect();
+    let Some(&first) = used.first() else {
+        return None;
+    };
+    let mut ys = vec![cut.ys[first]];
+    ys.extend(used.iter().map(|&r| cut.ys[r + 1]));
+    cut.ys = ys;
+    cut.bbox.y0 = cut.ys[0];
+    cut.bbox.y1 = cut.ys[cut.ys.len() - 1];
+    cut.trim_to_content(glyphs);
+    let texts = cut.cell_texts(glyphs);
+    let cols = cut.cols();
+    let held = (0..cols)
+        .filter(|&c| (0..cut.rows()).any(|r| !texts[r * cols + c].trim().is_empty()))
+        .count();
+    // Ruled across its width over its rows or under them, as a table: a
+    // column of the page's text, a list of references beside their
+    // numbers, is not.
+    // A rule may be drawn a piece a cell: the pieces along one line count
+    // together.
+    let b = cut.bbox;
+    let reach = (b.y1 - b.y0) / cut.rows().max(1) as f64;
+    let across = |y: f64| {
+        let mut spans: Vec<(f64, f64)> = rules
+            .iter()
+            .filter(|r| {
+                r.orientation == crate::rule::Orientation::Horizontal
+                    && (r.axis_pos() - y).abs() <= 1.0
+            })
+            .map(|r| (r.bbox.x0.max(b.x0), r.bbox.x1.min(b.x1)))
+            .filter(|(a, c)| c > a)
+            .collect();
+        spans.sort_by(|a, c| a.0.total_cmp(&c.0));
+        let (mut covered, mut end) = (0.0, f64::MIN);
+        for (a, c) in spans {
+            let a = a.max(end);
+            if c > a {
+                covered += c - a;
+                end = c;
+            }
+        }
+        covered >= (b.x1 - b.x0) * RULED_ACROSS
+    };
+    let ruled = rules.iter().any(|r| {
+        r.orientation == crate::rule::Orientation::Horizontal
+            && ((r.axis_pos() - b.y0).abs() <= reach || (r.axis_pos() - b.y1).abs() <= reach)
+            && across(r.axis_pos())
+    });
+    (cut.rows() >= 2 && held >= 2 && ruled).then_some(cut)
+}
+
+/// Alignment's tables, each read across the page's gutter between two of
+/// its columns of text read again on each side of the gutter alone.
+fn aligned_by_columns<'a>(
+    found: Vec<Grid>,
+    glyphs: &[Glyph],
+    page: &crate::extract::Page,
+    lines: impl Fn() -> &'a [table::TextRun] + Copy,
+) -> Vec<Grid> {
+    if found.is_empty() {
+        return found;
+    }
+    let mut out = Vec::with_capacity(found.len());
+    for g in found {
+        let Some(sides) = crossed_gutter(&g, glyphs, &page.rules, page.width, lines) else {
+            out.push(g);
+            continue;
+        };
+        for (x0, x1) in [sides.0, sides.1] {
+            let side: Vec<Glyph> = glyphs
+                .iter()
+                .filter(|q| {
+                    q.bbox.is_some_and(|b| {
+                        let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                        cx >= x0 && cx < x1 && cy >= g.bbox.y0 - 1.0 && cy <= g.bbox.y1 + 1.0
+                    })
+                })
+                .cloned()
+                .collect();
+            let found: Vec<Grid> =
+                table::detect_aligned(&side, &page.rules, &page.fills, page.index)
+                    .into_iter()
+                    .filter(|n| crossed_gutter(n, glyphs, &page.rules, page.width, lines).is_none())
+                    .collect();
+            if found.is_empty() {
+                out.extend(side_of(&g, glyphs, &page.rules, x0, x1));
+            }
+            out.extend(found);
+        }
+    }
+    out
 }
 
 pub fn analyze(raw: &mut RawDoc, outline: &[OutlineItem]) -> Analysis {
@@ -2688,6 +3771,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         timed(&mut timings.dedup, || {
             dedup::remove_faux_bold(&mut p.glyphs, 8)
         });
+        // An accent drawn over its letter is part of it, once any copy of
+        // either is gone: `e` and `´` are `é`.
+        timed(&mut timings.dedup, || crate::accent::compose(&mut p.glyphs));
     }
     // A watermark laid over the text, before it is read into the lines it
     // crosses.
@@ -2810,6 +3896,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grid_sources = vec![GridSource::FillBand; grids.len()];
         }
 
+        // The page's lines as the text reader reads them, read once for the
+        // readings below and for the runs of text `crossed_gutter` reads.
+        let page_text = std::cell::OnceCell::new();
+        let text_lines = || -> &[crate::textgrid::Line] {
+            page_text.get_or_init(|| crate::textgrid::lines(&p.glyphs))
+        };
         // A statement ruled by its figures' underlines rules off groups of
         // rows: each line of figures in a group is a row of its own.
         if grid_sources.contains(&GridSource::Ruled) {
@@ -2820,15 +3912,22 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 })
                 .collect();
             if !underlined.is_empty() {
-                let lines = crate::textgrid::lines(&p.glyphs);
+                let lines = text_lines();
                 for k in underlined {
-                    crate::textgrid::split_underlined_bands(&mut grids[k], &lines);
+                    crate::textgrid::split_underlined_bands(&mut grids[k], lines);
                 }
             }
         }
 
+        // The page's runs of text, for the tables read across a gutter
+        // between two columns of text (`crossed_gutter`).
+        let page_runs = std::cell::OnceCell::new();
+        let col_lines = || -> &[table::TextRun] {
+            page_runs.get_or_init(|| crate::textgrid::runs(text_lines()))
+        };
         let page_aligned = timed(&mut timings.tables, || {
-            table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index)
+            let found = table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index);
+            aligned_by_columns(found, &p.glyphs, p, col_lines)
         });
         // Alignment is read again below from the glyphs outside the grids
         // (`glyphs_outside_grids`, which keeps them in order). Where no grid
@@ -2838,7 +3937,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             if glyphs.len() == p.glyphs.len() {
                 page_aligned.clone()
             } else {
-                table::detect_aligned(glyphs, &p.rules, &p.fills, p.index)
+                let found = table::detect_aligned(glyphs, &p.rules, &p.fills, p.index);
+                aligned_by_columns(found, glyphs, p, col_lines)
             }
         };
         let mut aligned_full = page_aligned.clone();
@@ -2853,8 +3953,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // one group, the header and the rest as text). Which reading stands
         // is settled below.
         let seeded_anyway = aligned_preferred && {
-            let lines = crate::textgrid::lines(&p.glyphs);
-            !crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines).is_empty()
+            let lines = text_lines();
+            !crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, lines).is_empty()
         };
         // Tables ruled with horizontals only, or by nothing but the rules
         // under their figures, are read from their text: their bands are
@@ -2862,7 +3962,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let mut beside_prose: Vec<crate::geom::BBox> = Vec::new();
         if !aligned_preferred || seeded_anyway {
             timed(&mut timings.tables, || {
-                let lines = crate::textgrid::lines(&p.glyphs);
+                let lines = text_lines();
                 let mut read: Vec<Grid> = Vec::new();
                 let mut seeded: Vec<usize> = Vec::new();
                 let debug = std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some();
@@ -3067,6 +4167,43 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                             })
                     }));
                 }
+                // A reading set across the page's gutter, between two of its
+                // columns of text, is no table: each side is read again on
+                // its own, the next column's text beside it left out. Before
+                // the larger reading is kept, so a table's own reading in its
+                // column is not lost to one that runs on across the gutter.
+                {
+                    let mut again: Vec<Grid> = Vec::new();
+                    read.retain(|g| {
+                        let Some(sides) =
+                            crossed_gutter(g, &p.glyphs, &p.rules, p.width, col_lines)
+                        else {
+                            return true;
+                        };
+                        for (x0, x1) in [sides.0, sides.1] {
+                            let side = crate::textgrid::lines_within(&p.glyphs, x0, x1);
+                            let region = crate::geom::BBox {
+                                x0: g.bbox.x0.max(x0),
+                                x1: g.bbox.x1.min(x1),
+                                ..g.bbox
+                            };
+                            let found: Vec<Grid> =
+                                crate::textgrid::read(&side, &p.rules, region, p.index)
+                                    .into_iter()
+                                    .filter(|n| {
+                                        crossed_gutter(n, &p.glyphs, &p.rules, p.width, col_lines)
+                                            .is_none()
+                                    })
+                                    .collect();
+                            if found.is_empty() {
+                                again.extend(side_of(g, &p.glyphs, &p.rules, x0, x1));
+                            }
+                            again.extend(found);
+                        }
+                        false
+                    });
+                    read.extend(again);
+                }
                 // One table found from two seeds is kept once, the larger.
                 read.sort_by_key(|g| std::cmp::Reverse(g.rows() * g.cols()));
                 let mut kept: Vec<Grid> = Vec::new();
@@ -3142,6 +4279,62 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 grids = horizontal_bands;
                 grid_sources = vec![GridSource::HorizontalBand; grids.len()];
             }
+        }
+
+        // A header set as a shaded band over a table read under it, from
+        // its text or its alignment, is that table's header row.
+        {
+            let bands = table::header_bands(&p.rules, &p.fills);
+            if !bands.is_empty() {
+                let keep = table::take_header_bands(&mut grids, &bands, &p.glyphs);
+                let mut k = keep.iter();
+                grids.retain(|_| *k.next().unwrap_or(&true));
+                let mut k = keep.iter();
+                grid_sources.retain(|_| *k.next().unwrap_or(&true));
+            }
+        }
+
+        // A table holds two columns of content or more, as read here or as
+        // its text's alignment parts it (`Grid::split_by_alignment`, below).
+        // One left with one is a box drawn round prose, where it holds a row
+        // or two (a paragraph and a banner between a rule's marks, a
+        // figure's caption) or its rows run as sentences do: its text is the
+        // page's prose. A column of short entries, one a row, is a list the
+        // table keeps (`Np Number of reputation tables…`).
+        {
+            let tabular: Vec<bool> = grids
+                .iter()
+                .map(|g| {
+                    let filled = |g: &Grid| {
+                        let cols = g.cols();
+                        let texts = g.cell_texts(&p.glyphs);
+                        (0..cols)
+                            .filter(|&c| {
+                                (0..g.rows()).any(|r| !texts[r * cols + c].trim().is_empty())
+                            })
+                            .count()
+                    };
+                    let prose = || {
+                        let texts = g.cell_texts(&p.glyphs);
+                        let rows: Vec<&String> =
+                            texts.iter().filter(|t| !t.trim().is_empty()).collect();
+                        let sentences = rows
+                            .iter()
+                            .filter(|t| t.split_whitespace().count() >= SENTENCE_WORDS)
+                            .count();
+                        rows.len() <= 2 || sentences * 2 > rows.len()
+                    };
+                    filled(g) >= 2 || !prose() || {
+                        let mut split = g.clone();
+                        split.split_by_alignment(&p.glyphs);
+                        filled(&split) >= 2
+                    }
+                })
+                .collect();
+            let mut k = tabular.iter();
+            grids.retain(|_| *k.next().unwrap_or(&true));
+            let mut k = tabular.iter();
+            grid_sources.retain(|_| *k.next().unwrap_or(&true));
         }
 
         // The labels a ruled table sets over the rules that group its
@@ -3322,6 +4515,33 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             }
         }
 
+        // A chart's scale beside the page's text is no table: a column of
+        // numbers each set level with a tick of the axis, and at most one
+        // other column holding text, the column of prose the chart stands
+        // beside (`spending have deteriorated. Business | 18.0`) or the
+        // chart's own legend. Its lines are the page's prose, and the
+        // scale is the chart's.
+        {
+            let n = grids.len();
+            let mut kept_grids = Vec::with_capacity(n);
+            let mut kept_sources = Vec::with_capacity(n);
+            for (grid, source) in grids.into_iter().zip(grid_sources) {
+                if scale_beside_text(&grid, &p.glyphs, &p.rules, &p.ticks) {
+                    continue;
+                }
+                kept_grids.push(grid);
+                kept_sources.push(source);
+            }
+            grids = kept_grids;
+            grid_sources = kept_sources;
+            if grids.len() != n {
+                let remaining = glyphs_outside_grids(&p.glyphs, &grids);
+                cols = timed(&mut timings.columns, || {
+                    line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
+                });
+            }
+        }
+
         // A one-column grid — a key/value list ruled with horizontals only —
         // reads its columns from where its text sits.
         let spanning_rows: Vec<Vec<usize>> = timed(&mut timings.tables, || {
@@ -3331,10 +4551,27 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .collect()
         });
 
+        // A line of dot leaders alone, inside a table's box, is the gutter
+        // between a label the table reads and its value, left between their
+        // cells: none of the page's text. Kept among the page's glyphs until
+        // here, it measured the page's word spaces with them.
+        for col in cols.iter_mut() {
+            col.retain(|l| {
+                let (x, y) = ((l.bbox.x0 + l.bbox.x1) / 2.0, (l.bbox.y0 + l.bbox.y1) / 2.0);
+                !(leaders_only(&l.text)
+                    && grids.iter().any(|g| {
+                        x >= g.bbox.x0 && x <= g.bbox.x1 && y >= g.bbox.y0 && y <= g.bbox.y1
+                    }))
+            });
+        }
+
         // Each region's columns in turn, down the page.
         let table_boxes: Vec<crate::geom::BBox> = grids.iter().map(|g| g.bbox).collect();
         let pictures: Vec<crate::geom::BBox> = p.images.iter().map(|im| im.bbox).collect();
-        let groups = crate::region::read_order(cols, &p.rules, &table_boxes, &pictures);
+        // Drawn boxes, outlined or filled: a stretch's lines read box by
+        // box where they stand in boxes side by side.
+        let frames: Vec<crate::geom::BBox> = p.fills.iter().map(|f| f.bbox).collect();
+        let groups = crate::region::read_order(cols, &p.rules, &table_boxes, &pictures, &frames);
         let prose_sources: Vec<(usize, bool)> =
             groups.iter().map(|g| (g.column, g.own_measure)).collect();
         let cols: Vec<Vec<Line>> = groups.into_iter().map(|g| g.lines).collect();
@@ -3414,8 +4651,24 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         .filter_map(|it| it.page.map(|pi| (pi, it.title.clone())))
         .collect();
     let widths: Vec<f64> = raw.pages.iter().map(|p| p.width).collect();
+    // Each page's drawn shapes, by which a chart's legend and axis labels
+    // are told from running lines (see [`furniture::in_drawing`]).
+    let drawings: Vec<furniture::Drawing> = raw
+        .pages
+        .iter()
+        .map(|p| furniture::Drawing {
+            shapes: p
+                .fills
+                .iter()
+                .map(|f| f.bbox)
+                .chain(p.rules.iter().map(|r| r.bbox))
+                .chain(p.traces.iter().map(|t| t.bbox))
+                .collect(),
+            ticks: p.ticks.iter().map(|t| t.bbox).collect(),
+        })
+        .collect();
     let (mut marks, exact, kept_heads) = timed(&mut timings.furniture, || {
-        furniture::detect_with_heads(&flat_lines, &bookmarks, &widths)
+        furniture::detect_with_heads(&flat_lines, &bookmarks, &widths, &drawings)
     });
     // A line OCR read is never furniture. Repetition is furniture's only
     // evidence, and on a scan the same content repeats for its own reasons: a
@@ -3627,6 +4880,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     };
     let bare: Vec<Vec<Line>> = flat_lines.iter().map(|(l, _)| l.clone()).collect();
     let leading = block::modal_leading(&bare);
+    {
+        let mut lines: Vec<&mut Line> = layouts
+            .iter_mut()
+            .flat_map(|l| l.prose_columns.iter_mut().flatten())
+            .collect();
+        crate::line::mark_compounds(&mut lines);
+    }
 
     let mut blocks_per_page: Vec<Vec<Block>> = Vec::new();
     let mut furniture_removed = 0usize;
@@ -3696,7 +4956,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     _ => runs.push((c, blocks)),
                 }
             }
-            block::read_side_heads(runs.into_iter().map(|(_, r)| r).collect(), &tables)
+            block::join_side_labels(block::read_side_heads(
+                runs.into_iter().map(|(_, r)| r).collect(),
+                &tables,
+            ))
         });
         let mut out: Vec<Block> = block_columns.into_iter().flatten().collect();
         if contents_layout {
@@ -3851,6 +5114,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
         let _cells = crate::cells::pin(&raw.pages[pi].glyphs);
         let mut page_elements = Vec::new();
+        // Beside each element, a list item's marker and text start, its
+        // size, and whether its first line carries on the item before it.
+        let mut item_text: Vec<Option<ListMark>> = Vec::new();
         let (figures, member) = &page_figures[pi];
         let in_figure = |i: usize| member[i];
         for (block_idx, b) in blocks.iter().enumerate() {
@@ -3962,6 +5228,31 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 (_, Some(without)) if kind == "doc:ListItem" => without.to_string(),
                 _ => scrubbed,
             };
+            // A count stands in front of its item's text when it is set
+            // beside the item's first line (`block::assemble_in_measure`). A
+            // count the text doesn't open with stood beside a later line:
+            // the block's first line carries on the item before it, and is
+            // no item to set under that one.
+            let carried_on = b
+                .marker
+                .as_deref()
+                .is_some_and(|m| !block::count_values(m).is_empty() && !text.starts_with(m.trim()));
+            // Where the item's marker and text start. A marker set apart
+            // stands left of the block's box, which starts at the text; one
+            // in the text starts the box.
+            item_text.push((kind == "doc:ListItem").then(|| {
+                let em = (b.font_size as f64).max(1.0);
+                let line = b.lines.first().map_or(b.bbox.x0, |l| l.bbox.x0);
+                // A count beside a later line is no mark of this block's.
+                let ticked = b.marker.as_deref() == Some(block::CHECKBOX_MARKER);
+                match b
+                    .marker_x
+                    .filter(|&x| !carried_on && x < b.bbox.x0 - 0.3 * em)
+                {
+                    Some(x) => (x, b.bbox.x0, em, carried_on, ticked),
+                    None => (b.bbox.x0, line, em, carried_on, ticked),
+                }
+            }));
             page_elements.push(Element {
                 page: pi,
                 bbox: Some(b.bbox),
@@ -3970,6 +5261,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 ..Element::new(kind, text, "rust", evidence)
             });
         }
+        nest_list_items(&mut page_elements, &item_text);
         coalesce_heading_fragments(&mut page_elements);
         let mut table_elements = Vec::new();
         let layout = &layouts[pi];
@@ -4223,13 +5515,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     merges.continues_left[r * cols + c] = true;
                 }
             }
+            // A label's dot leaders run it up to the next column: they are
+            // the gutter's, not the cell's text, however the table was read.
+            let min = match explicit {
+                Some(_) => 3,
+                None => crate::textgrid::LEADER_DOTS,
+            };
+            for cell in rows.iter_mut().flatten() {
+                *cell = crate::textgrid::strip_leaders_of(cell, min);
+            }
             let mut header_rows = match explicit {
-                Some(lay) => {
-                    for cell in rows.iter_mut().flatten() {
-                        *cell = crate::textgrid::strip_leaders(cell);
-                    }
-                    lay.header_rows
-                }
+                Some(lay) => lay.header_rows,
                 None => {
                     let page = &raw.pages[pi];
                     let h = g.header_rows(&rows, &page.glyphs, &page.rules, &page.fills);
@@ -4522,7 +5818,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .collect(),
             };
             let restated_headers = match explicit {
-                Some(_) => Vec::new(),
+                Some(lay) => lay.restated_headers.clone(),
                 None => g.restated_header_rows(
                     &rows,
                     header_rows,
@@ -4679,6 +5975,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     demote_empty_bold_heads(&mut elements);
     read_form_text(&mut elements);
     read_blank_fields(&mut elements);
+    read_table_heads(&mut elements);
+    read_entry_lists(&mut elements);
+    read_contents_rows(&mut elements);
+    read_continued_heads(&mut elements);
     settle_cell_breaks(
         &mut elements,
         flat_lines
@@ -4745,6 +6045,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // now, and what is left of any other goes.
     for e in &mut elements {
         e.scrub_controls();
+        // A title broken over lines is one title: a heading's lines, set
+        // one under another by hand, read as one run.
+        if e.kind == "doco:SectionTitle" && e.text.contains('\n') {
+            e.text = e.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        }
     }
     Analysis {
         elements,
@@ -4923,6 +6228,189 @@ mod tests {
     }
 
     #[test]
+    fn a_list_item_set_under_the_text_of_the_one_before_nests_in_it() {
+        // 10pt items: (marker x, text x, y), each 10 high, 4 apart.
+        let rows: &[(&str, f64, f64, f64)] = &[
+            ("Before you start:", 50.0, 62.0, 100.0),
+            // Its marker under the text above: one deeper, then two.
+            ("Turn off the power", 63.0, 74.0, 114.0),
+            ("Check the breaker", 64.0, 75.0, 128.0),
+            ("At the panel", 76.0, 86.0, 142.0),
+            // Back out to the first level's marker.
+            ("Mount the bracket", 50.0, 62.0, 156.0),
+            // Half an em right: the same list's marker drawn off.
+            ("Fit the cover", 55.0, 66.0, 170.0),
+            // Far past the text above: another column's list, not a sub-list.
+            ("Order parts", 120.0, 131.0, 184.0),
+        ];
+        let mut elements: Vec<Element> = rows
+            .iter()
+            .map(|&(t, x, _, y)| line_at("doc:ListItem", t, "marker", None, y, x))
+            .collect();
+        let mut text: Vec<Option<ListMark>> = rows
+            .iter()
+            .map(|r| Some((r.1, r.2, 10.0, false, false)))
+            .collect();
+        // After a paragraph, and in the next column (back up the page), a
+        // list starts again at the top.
+        elements.push(line_at(
+            "doco:Paragraph",
+            "Note",
+            "layout",
+            None,
+            200.0,
+            50.0,
+        ));
+        text.push(None);
+        elements.push(line_at(
+            "doc:ListItem",
+            "Wire it",
+            "marker",
+            None,
+            214.0,
+            63.0,
+        ));
+        text.push(Some((63.0, 74.0, 10.0, false, false)));
+        elements.push(line_at(
+            "doc:ListItem",
+            "Test it",
+            "marker",
+            None,
+            100.0,
+            313.0,
+        ));
+        text.push(Some((313.0, 324.0, 10.0, false, false)));
+        nest_list_items(&mut elements, &text);
+        let depths: Vec<usize> = elements.iter().map(|e| e.depth).collect();
+        assert_eq!(depths, [0, 1, 1, 2, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_list_items_marker_stands_where_it_is_drawn() {
+        let item =
+            |t: &str, y: f64, box_x: f64| line_at("doc:ListItem", t, "marker", None, y, box_x);
+        // One list, its first bullet in the line (the box starts at it) and
+        // the next drawn apart at the same place (the box starts at the
+        // text): siblings. Then a sub-item whose drawn bullet stands under
+        // the text: one deeper.
+        let mut elements = vec![
+            item("Plan the route", 100.0, 40.0),
+            item("Book the rooms", 114.0, 52.0),
+            item("Two nights", 128.0, 64.0),
+        ];
+        let text = vec![
+            Some((40.0, 40.0, 10.0, false, false)),
+            Some((40.0, 52.0, 10.0, false, false)),
+            Some((52.0, 64.0, 10.0, false, false)),
+        ];
+        nest_list_items(&mut elements, &text);
+        let depths: Vec<usize> = elements.iter().map(|e| e.depth).collect();
+        assert_eq!(depths, [0, 0, 1]);
+        // A box to tick marks a choice: what is set under it stays level.
+        let mut elements = vec![
+            item("Yes", 100.0, 52.0),
+            item("Describe below", 114.0, 70.0),
+        ];
+        let text = vec![
+            Some((40.0, 52.0, 10.0, false, true)),
+            Some((58.0, 70.0, 10.0, false, false)),
+        ];
+        nest_list_items(&mut elements, &text);
+        assert_eq!(elements[1].depth, 0);
+    }
+
+    #[test]
+    fn a_list_or_contents_set_as_headings_is_text() {
+        let head =
+            |t: &str, y: f64, x: f64| line_at("doco:SectionTitle", t, "font-size", Some(4), y, x);
+        let para = |t: &str, y: f64, x: f64| line_at("doco:Paragraph", t, "layout", None, y, x);
+        // A list of links, each over its second label.
+        let mut els = vec![
+            head("North", 100.0, 40.0),
+            para("First Region", 112.0, 40.0),
+            head("South", 130.0, 40.0),
+            para("Second Region", 142.0, 40.0),
+            head("East", 160.0, 40.0),
+            para("Third Region", 172.0, 40.0),
+            head("Background", 200.0, 40.0),
+            para(
+                "A paragraph that heads its section, as text does over several words.",
+                212.0,
+                40.0,
+            ),
+        ];
+        read_entry_lists(&mut els);
+        let kinds: Vec<&str> = els.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(&kinds[..6], ["doco:Paragraph"; 6]);
+        assert_eq!(kinds[6], "doco:SectionTitle");
+        // A contents' later page: entries with their pages, in order.
+        let mut els = vec![
+            head("PART II", 100.0, 40.0),
+            para("Planning", 100.0, 120.0),
+            para("12", 100.0, 300.0),
+            head("PART III", 120.0, 40.0),
+            para("Design", 120.0, 120.0),
+            para("19", 120.0, 300.0),
+            head("PART IV", 140.0, 40.0),
+            para("Delivery", 140.0, 120.0),
+            para("27", 140.0, 300.0),
+        ];
+        read_contents_rows(&mut els);
+        assert!(els.iter().all(|e| e.kind != "doco:SectionTitle"));
+        // A catalogue's quantities end its rows too, but repeat and fall.
+        let mut els = vec![
+            head("Seal kit", 100.0, 40.0),
+            para("4", 100.0, 300.0),
+            head("Pump set", 120.0, 40.0),
+            para("1", 120.0, 300.0),
+            head("Gasket", 140.0, 40.0),
+            para("1", 140.0, 300.0),
+        ];
+        read_contents_rows(&mut els);
+        assert!(els.iter().filter(|e| e.kind == "doco:SectionTitle").count() == 3);
+    }
+
+    #[test]
+    fn a_tables_column_head_left_above_it_is_no_heading() {
+        let table = |y0: f64| {
+            let mut t = line_at("doco:Table", "Rows | 2031 | 2030", "layout", None, y0, 60.0);
+            t.bbox = Some(BBox {
+                x0: 60.0,
+                y0,
+                x1: 540.0,
+                y1: y0 + 80.0,
+            });
+            t
+        };
+        let head = |text: &str, x0: f64, x1: f64, y0: f64| {
+            let mut e = line_at("doco:SectionTitle", text, "bold", Some(3), y0, x0);
+            e.bbox = Some(BBox {
+                x0,
+                y0,
+                x1,
+                y1: y0 + 6.0,
+            });
+            e
+        };
+        let mut elements = vec![
+            // A group's head over the two value columns at the right.
+            head("Total Holdings", 440.0, 500.0, 100.0),
+            table(110.0),
+            // A section's heading over a table, from its left edge.
+            head("Holdings by Type", 60.0, 160.0, 300.0),
+            table(310.0),
+            // A table's title centred over it.
+            head("Summary of Holdings", 250.0, 350.0, 500.0),
+            table(510.0),
+        ];
+        read_table_heads(&mut elements);
+        assert_eq!(
+            heads(&elements),
+            ["Holdings by Type", "Summary of Holdings"]
+        );
+    }
+
+    #[test]
     fn a_label_over_a_blank_box_is_no_heading() {
         // A sheet's footer: two labels side by side over empty boxes for a
         // stamp, and a lead-in over its table and another over its list.
@@ -5031,6 +6519,8 @@ mod tests {
         let head = |x0, y0, x1, y1| Fill {
             bbox: BBox { x0, y0, x1, y1 },
             page: 0,
+            paint: None,
+            stroked: false,
         };
         assert!(ends_in_arrowhead(
             &line,
@@ -5144,6 +6634,94 @@ mod tests {
     }
 
     #[test]
+    fn a_reading_ruled_through_the_gutter_is_one_table() {
+        // A reading x 50-550 over four rows from y 100 to 180; the gutter
+        // found in it at x 300.
+        let g = Grid {
+            layout: None,
+            page: 0,
+            xs: vec![50.0, 175.0, 300.0, 425.0, 550.0],
+            ys: vec![100.0, 120.0, 140.0, 160.0, 180.0],
+            bbox: BBox {
+                x0: 50.0,
+                y0: 100.0,
+                x1: 550.0,
+                y1: 180.0,
+            },
+        };
+        let h = |x0: f64, x1: f64, y: f64| crate::rule::Rule {
+            bbox: BBox {
+                x0,
+                y0: y - 0.25,
+                x1,
+                y1: y + 0.25,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        // Prose under the reading from y 200, the page's foot at y 192.
+        let text = |x: f64, y: f64| Glyph {
+            text: "a".into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: y,
+                x1: x + 5.0,
+                y1: y + 8.0,
+            }),
+            page: 0,
+            origin: (x, y + 8.0),
+            rotation_deg: 0.0,
+            font_size: 8.0,
+            weight: None,
+            italic: false,
+            advance: None,
+            draw_index: 0,
+        };
+        let prose = [text(60.0, 200.0), text(320.0, 200.0)];
+        // A full-width table's rule under its last row.
+        assert!(ruled_across_gutter(
+            &g,
+            &prose,
+            &[h(40.0, 560.0, 183.0)],
+            300.0
+        ));
+        // A group of a table's rows read on its own, ruled over its first
+        // line and, past a taller cell's last lines, under its last.
+        let round = [h(40.0, 560.0, 96.0), h(40.0, 560.0, 205.0)];
+        assert!(ruled_across_gutter(&g, &[], &round, 300.0));
+        // The same rule drawn a cell at a time, its pieces meeting.
+        let pieces = [h(40.0, 300.0, 183.0), h(300.5, 560.0, 183.0)];
+        assert!(ruled_across_gutter(&g, &prose, &pieces, 300.0));
+        // Two tables side by side, each ruled to its own edge: the gutter's
+        // white parts their rules, however wide each is.
+        let apart = [h(40.0, 290.0, 183.0), h(310.0, 560.0, 183.0)];
+        assert!(!ruled_across_gutter(&g, &prose, &apart, 300.0));
+        // A rule under one column's heading, run a little past the gutter.
+        assert!(!ruled_across_gutter(
+            &g,
+            &prose,
+            &[h(60.0, 320.0, 183.0)],
+            300.0
+        ));
+        // A ruled table over the reading's first rows only, the reading run
+        // on into prose: no rule at its foot.
+        assert!(!ruled_across_gutter(
+            &g,
+            &prose,
+            &[h(40.0, 560.0, 120.0)],
+            300.0
+        ));
+        // The rule over a page's foot, set against the foot's line.
+        let foot = [text(60.0, 192.0)];
+        assert!(!ruled_across_gutter(
+            &g,
+            &foot,
+            &[h(40.0, 560.0, 190.0)],
+            300.0
+        ));
+    }
+
+    #[test]
     fn a_wide_value_standing_in_alike_from_both_edges_is_spread() {
         // A label column and two columns a value is set across (x 60–260),
         // its text at 10 pt.
@@ -5181,6 +6759,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         };
@@ -5213,6 +6792,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 8.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: i,
         };
@@ -5638,6 +7218,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: Some(6.0),
             draw_index: i,
         }
@@ -6225,6 +7806,9 @@ mod tests {
             font_size: 10.0,
             bold: false,
             opens_with_script: false,
+            italic: false,
+            x_height: None,
+            compounds: Vec::new(),
             opens_bold: false,
         }
     }
@@ -6244,6 +7828,71 @@ mod tests {
                 if table { "rules" } else { "layout" },
             )
         }
+    }
+
+    #[test]
+    fn a_heading_continuing_an_earlier_one_is_no_new_section() {
+        let at = |kind: &str, text: &str, page: usize, level: Option<usize>| {
+            let mut e = Element::new(kind, text, "rust", "layout");
+            e.page = page;
+            e.level = level;
+            e
+        };
+        let head = |text: &str, page: usize, level: usize| {
+            at("doco:SectionTitle", text, page, Some(level))
+        };
+        let text = |page: usize| at("doco:Paragraph", "Its text runs on.", page, None);
+        let mut els = vec![
+            head("Box 1. Employment across Groups", 0, 2),
+            text(0),
+            head("Box 1—continued", 1, 4),
+            text(1),
+            head("Wiring Diagrams", 1, 1),
+            head("Wiring Diagrams (continued)", 2, 1),
+            head("PACKAGE OPTION ADDENDUM", 3, 1),
+            head("Orderable parts", 3, 2),
+            head("PACKAGE OPTION ADDENDUM", 4, 1),
+            // A district's own `Labor Markets`, under another district.
+            head("Boston", 5, 1),
+            head("Labor Markets", 5, 3),
+            head("New York", 6, 1),
+            head("Labor Markets", 6, 3),
+            // A continuation of nothing read before: the excerpt's start.
+            head("Notes (continued)", 7, 2),
+            // Templates sharing a title, each under its own label.
+            head("IMPORTANT INFORMATION", 8, 1),
+            at("doco:Paragraph", "Template 3-2", 9, None),
+            head("IMPORTANT INFORMATION", 9, 1),
+        ];
+        read_continued_heads(&mut els);
+        let kinds: Vec<(&str, &str)> = els
+            .iter()
+            .filter(|e| e.text != "Its text runs on.")
+            .map(|e| (e.text.as_str(), e.kind.as_str()))
+            .collect();
+        let read_on = ["Box 1—continued", "Wiring Diagrams (continued)"];
+        for (t, kind) in &kinds {
+            let want = if read_on.contains(t) {
+                "doco:Paragraph"
+            } else {
+                "doco:SectionTitle"
+            };
+            if *t != "PACKAGE OPTION ADDENDUM" && *t != "Template 3-2" {
+                assert_eq!(*kind, want, "{t}");
+            }
+        }
+        let addenda: Vec<&str> = kinds
+            .iter()
+            .filter(|(t, _)| *t == "PACKAGE OPTION ADDENDUM")
+            .map(|(_, k)| *k)
+            .collect();
+        assert_eq!(addenda, ["doco:SectionTitle", "doco:Paragraph"]);
+        assert_eq!(continued_from("Box 4—continued"), Some("Box 4"));
+        assert_eq!(
+            continued_from("Note 11 - Stock Compensation - Continued"),
+            Some("Note 11 - Stock Compensation")
+        );
+        assert_eq!(continued_from("Continued Operations"), None);
     }
 
     #[test]
@@ -6316,6 +7965,97 @@ mod tests {
     }
 
     #[test]
+    fn a_column_of_prose_beside_a_charts_scale_is_no_table() {
+        // A row of words from `x`, each word a glyph, at 8 pt on the
+        // baseline `y`.
+        let row = |words: &str, x: f64, y: f64, glyphs: &mut Vec<Glyph>| {
+            let mut at = x;
+            for w in words.split_whitespace() {
+                let width = 4.0 * w.chars().count() as f64;
+                glyphs.push(Glyph {
+                    text: w.into(),
+                    bbox: Some(BBox {
+                        x0: at,
+                        y0: y - 8.0,
+                        x1: at + width,
+                        y1: y,
+                    }),
+                    page: 0,
+                    origin: (at, y),
+                    rotation_deg: 0.0,
+                    font_size: 8.0,
+                    weight: None,
+                    italic: false,
+                    advance: None,
+                    draw_index: glyphs.len(),
+                });
+                at += width + 3.0;
+            }
+        };
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 300.0,
+                y1: 60.0,
+            },
+            xs: vec![0.0, 240.0, 300.0],
+            ys: vec![0.0, 20.0, 40.0, 60.0],
+        };
+        // A tick of the axis at `y`, just right of the scale's numbers.
+        let tick = |y: f64| crate::rule::Rule {
+            bbox: BBox {
+                x0: 272.0,
+                y0: y - 0.2,
+                x1: 277.0,
+                y1: y + 0.2,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let ticks: Vec<crate::rule::Rule> = [16.0, 36.0, 56.0].iter().map(|&y| tick(y)).collect();
+        let scale = |glyphs: &mut Vec<Glyph>| {
+            row("18.0", 252.0, 20.0, glyphs);
+            row("17.5", 252.0, 40.0, glyphs);
+            row("17.0", 252.0, 60.0, glyphs);
+        };
+        // The page's prose, read a line to a row beside the chart's scale.
+        let mut prose = Vec::new();
+        row(
+            "spending have deteriorated. Business",
+            0.0,
+            20.0,
+            &mut prose,
+        );
+        row(
+            "investment rose moderately in the second half",
+            0.0,
+            40.0,
+            &mut prose,
+        );
+        row(
+            "of 2022, although new orders indexes, business",
+            0.0,
+            60.0,
+            &mut prose,
+        );
+        scale(&mut prose);
+        assert!(scale_beside_text(&grid, &prose, &[], &ticks));
+        // With no tick by its numbers, it may be a table's column.
+        assert!(!scale_beside_text(&grid, &prose, &[], &[]));
+        // A chart's own labels beside its scale are no prose: kept, they
+        // stay with the chart.
+        let mut labels = Vec::new();
+        row("Lower", 0.0, 20.0, &mut labels);
+        row("Broadly similar", 0.0, 40.0, &mut labels);
+        row("Higher", 0.0, 60.0, &mut labels);
+        scale(&mut labels);
+        assert!(!scale_beside_text(&grid, &labels, &[], &ticks));
+    }
+
+    #[test]
     fn a_ruled_grid_of_short_rows_reads_as_rows_and_a_frame_does_not() {
         let word = |x: f64, y: f64, i: usize| Glyph {
             text: "Value".into(),
@@ -6330,6 +8070,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 8.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: i,
         };
@@ -6653,6 +8394,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index,
         };
@@ -6733,6 +8475,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         };

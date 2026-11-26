@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "pmc4723313.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4723313/",
+    "sha256": "cb92bf77770f56cfdf25d750e30199268b215e806a81aca2694ec179202272b8",
+    "about": "PLoS ONE 2016, 11(1): e0146796, 'Core Proteomic Analysis of Unique Metabolic Pathways of Salmonella enterica for the Identification of Potential Drug Targets', PMC4723313. Its Table 2 (p6) lists 42 strains in shaded rows. Two names wrap onto a second line that starts afresh (`Gallinarum Pullorum` over `CDC1983 67`), set closer under the name than the rows are apart. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#371): the wrapped line ended the table, and rows 11 on were a second table with no header. A line holding one cell, between two rows of figures and within the extent of the cell above it, carries on that cell where it sits a quarter or more tighter under it than the next row's cell sits under it."
+  ],
+  "checks": [
+    {
+      "id": "wrapped-name-in-its-cell",
+      "found": "2026-11-25",
+      "issue": "#371: `CDC1983 67` ended the table.",
+      "cell": {
+        "value": "Gallinarum Pullorum CDC198367",
+        "column": "Organism name",
+        "row": "10"
+      }
+    },
+    {
+      "id": "rows-after-it-under-the-header",
+      "found": "2026-11-25",
+      "issue": "#371: rows 11 on were a second table with no column names.",
+      "cell": {
+        "value": "NC_021810",
+        "column": "NCBI RefSeq ID",
+        "row": "12"
+      }
+    }
+  ]
+}

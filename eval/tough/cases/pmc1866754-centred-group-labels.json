@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "pmc1866754.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1866754/",
+    "sha256": "d53667490c18acfa4bb7bb0a1948a5b07a91bcc215b2494b460c74f52dc491a8",
+    "about": "BMC Genetics 2005, 6(Suppl 1):S31, 'Linkage analysis and association analysis in the presence of linkage using age at onset of COGA alcoholism data', PMC1866754. Its Table 1 (p2) groups its marker, position and P-value columns under `Sex` and `Sex + Smoking`, each label set over the middle of its three columns with no underline of its own. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#351): the two labels were text above the table, and its columns were named `Markers`, `Position(cM)` and `P-value` twice over. Labels centred over the middle of their groups now span the groups that tile the columns past the stub."
+  ],
+  "checks": [
+    {
+      "id": "sex-p-value",
+      "found": "2026-11-25",
+      "issue": "#351: the column was named `P-value` alone, the same as the `Sex + Smoking` group's.",
+      "cell": {
+        "value": "0.0098",
+        "column": "Sex / P-value",
+        "row": "2"
+      }
+    },
+    {
+      "id": "sex-and-smoking-p-value",
+      "found": "2026-11-25",
+      "issue": "#351: as above, for `Sex + Smoking`.",
+      "cell": {
+        "value": "0.008",
+        "column": "Sex + Smoking / P-value",
+        "row": "2"
+      }
+    }
+  ]
+}

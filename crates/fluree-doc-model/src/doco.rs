@@ -1047,23 +1047,25 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         spans[p.index] = Some((p.begin, p.end));
     }
 
-    let mut open_list: Option<usize> = None;
+    // The lists open here, outermost first: each list's node, its items'
+    // depth, and its last item, which holds a list one deeper.
+    let mut open_lists: Vec<(usize, usize, Option<usize>)> = Vec::new();
     let mut titled = false;
     for (i, (e, &span)) in elements.iter().zip(&spans).enumerate() {
-        if open_list.is_some() && e.kind != "doc:ListItem" && !counted_across(elements, i) {
-            open_list = None;
+        if !open_lists.is_empty() && e.kind != "doc:ListItem" && !counted_across(elements, i) {
+            open_lists.clear();
         }
         if let Some(m) = &e.message {
-            open_list = None;
+            open_lists.clear();
             em.close_signature();
             em.open_message(m, &e.id);
         } else if let Some(opener) = &e.resumes {
-            open_list = None;
+            open_lists.clear();
             em.close_signature();
             em.resume_message(opener);
         }
         if e.signature != em.open_signature.is_some() {
-            open_list = None;
+            open_lists.clear();
             if e.signature {
                 em.open_signature();
             } else {
@@ -1113,13 +1115,30 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 em.open_sections.push((section, level));
             }
             "doc:ListItem" => {
-                let list = match open_list {
-                    Some(l) => l,
-                    None => {
+                // Close the lists deeper than the item. The outermost takes
+                // the shallowest depth it holds, so a run that opens deep
+                // and comes back out stays one list.
+                let d = e.depth;
+                while open_lists.len() > 1 && open_lists.last().is_some_and(|l| l.1 > d) {
+                    open_lists.pop();
+                }
+                if let [outer] = open_lists.as_mut_slice() {
+                    outer.1 = outer.1.min(d);
+                }
+                let list = match open_lists.last() {
+                    Some(&(l, depth, last)) if depth == d || last.is_none() => l,
+                    // One deeper: a list inside the item before.
+                    Some(&(_, _, Some(parent))) => {
+                        let l = em.node("element", "doco:List", Some("ul"));
+                        em.attach(parent, l);
+                        open_lists.push((l, d, None));
+                        l
+                    }
+                    _ => {
                         let parent = em.current_parent();
                         let l = em.node("element", "doco:List", Some("ul"));
                         em.attach(parent, l);
-                        open_list = Some(l);
+                        open_lists.push((l, d, None));
                         l
                     }
                 };
@@ -1135,6 +1154,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 let start = span.map(|(s, _)| s);
                 em.set_links(item, e, start);
                 em.attach(list, item);
+                if let Some(open) = open_lists.last_mut() {
+                    open.2 = Some(item);
+                }
             }
             "doco:Table" => {
                 let parent = em.current_parent();
@@ -1816,6 +1838,50 @@ mod tests {
             assert_eq!(item(id)["doc:xhtmlTag"], "li");
         }
         assert!(g.iter().all(|n| n["@type"] != "doc:ListItem"));
+    }
+
+    #[test]
+    fn a_deeper_item_opens_a_list_inside_the_item_before() {
+        let item = |text: &str, depth: usize| Element {
+            depth,
+            ..el("doc:ListItem", text, None)
+        };
+        let els = vec![
+            item("Fruit", 0),
+            item("Apples", 1),
+            item("Pears", 1),
+            item("Seedless", 2),
+            item("Vegetables", 0),
+            item("Leeks", 1),
+        ];
+        let g = graph(&els);
+        let node = |id: &Value| g.iter().find(|n| &n["@id"] == id).unwrap();
+        let kids =
+            |n: &Value| -> Vec<Value> { n["po:contains"].as_array().cloned().unwrap_or_default() };
+        let text = |n: &Value| n["nif:isString"].as_str().unwrap().to_string();
+        // One list at the top, holding the two top-level items.
+        let lists = find(&g, "doco:List");
+        assert_eq!(lists.len(), 4);
+        let top = lists
+            .iter()
+            .find(|l| kids(l).iter().any(|k| text(node(k)) == "Fruit"))
+            .unwrap();
+        let tops: Vec<String> = kids(top).iter().map(|k| text(node(k))).collect();
+        assert_eq!(tops, ["Fruit", "Vegetables"]);
+        // `Fruit` holds a list of its two items, and `Pears` one of its one.
+        let fruit = node(&kids(top)[0]);
+        let sub = node(&kids(fruit)[0]);
+        assert_eq!(sub["@type"], "doco:List");
+        let subs: Vec<String> = kids(sub).iter().map(|k| text(node(k))).collect();
+        assert_eq!(subs, ["Apples", "Pears"]);
+        let pears = node(&kids(sub)[1]);
+        let deeper = node(&kids(pears)[0]);
+        assert_eq!(text(node(&kids(deeper)[0])), "Seedless");
+        let veg = node(&kids(top)[1]);
+        assert_eq!(text(node(&kids(node(&kids(veg)[0]))[0])), "Leeks");
+        // A run opening deeper than it goes on stays one list.
+        let g = graph(&[item("Leeks", 1), item("Vegetables", 0)]);
+        assert_eq!(find(&g, "doco:List").len(), 1);
     }
 
     #[test]

@@ -29,6 +29,21 @@
         "row": "1000–1999",
         "section": "Monthly household income (USD)"
       }
+    },
+    {
+      "id": "banner-no-heading",
+      "found": "2026-11-25",
+      "issue": "#367: the journal's banner labels `RESEARCH` and `Open Access`, set across the row above the title, were headings, and the four-line title was not.",
+      "no_section": "Open Access"
+    },
+    {
+      "id": "long-title-is-the-title",
+      "found": "2026-11-25",
+      "issue": "#367: the four-line title, set at twice the body's size, was no heading, and the banner's `RESEARCH` above it was the h1.",
+      "section": {
+        "title": "Socioeconomic Inequality in mortality using 12-year follow-up data from nationally representative surveys in South Korea",
+        "level": 1
+      }
     }
   ]
 }

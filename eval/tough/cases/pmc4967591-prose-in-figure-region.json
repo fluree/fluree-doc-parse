@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "pmc4967591.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4967591/",
+    "sha256": "bcd4c3e817e6125ffc94abd2e6ae828c4ba2a022bb6e629b9b30ad37b19827b7",
+    "about": "PMC4967591, International Journal of Clinical Oncology 2016, enzalutamide in Japanese patients. Page 7 sets two plots in the left column and one at the top of the right column, the right column's Discussion beginning under it, level with the left column's plots. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26: the plots of both columns were grouped as one figure, whose region took in the right column's Discussion paragraph as figure text."
+  ],
+  "checks": [
+    {
+      "id": "discussion-paragraph-is-text",
+      "found": "2026-11-26",
+      "issue": "#389: the Discussion's first paragraph was figure text.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "In patients who receive primary androgen deprivation therapy, the proportion of patients with high risk and/ or advanced prostate cancer is higher in Japan than in the United States [2]. A randomized, controlled study of primary ADT by CAB with chemical castration by GnRH agonist and bicalutamide 80 mg in Japanese patients showed significant prolongation of OS compared with chemical castration alone [20]. Based on this result, CAB is used in Japan as a standard initial therapy for high-risk or progressive prostate cancer [2, 4]."
+      }
+    },
+    {
+      "id": "discussion-head-stays",
+      "found": "2026-11-26",
+      "issue": "Guard: the Discussion heading over it stays a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Discussion"
+      }
+    }
+  ]
+}

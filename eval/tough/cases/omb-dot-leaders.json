@@ -19,8 +19,11 @@
     {
       "id": "leader-read-as-dots",
       "found": "2026-11-23",
-      "issue": "As above.",
-      "text": "Exclusion of certain allowances for Federal employees abroad ....."
+      "issue": "As above. Since #352 a label's leaders are dropped from its cell as the gutter's, so the label reads whole, with no leader and no U+FFFD.",
+      "cell": {
+        "value": "Exclusion of certain allowances for Federal employees abroad",
+        "row": "3"
+      }
     },
     {
       "id": "years-under-their-span",

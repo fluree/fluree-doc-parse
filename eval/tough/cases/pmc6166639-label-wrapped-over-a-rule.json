@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "pmc6166639.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6166639/",
+    "sha256": "4a5b4146ea19c2d6cd5f508b731e154a74d49d572cc0dcc8ec784ae80d1e9aed",
+    "about": "PeerJ 2018, Sørensen and Grzelak, 'New mud dragons from Svalbard', PMC6166639. Its Table 10 (p42) heads a column `Species name and` over `ID number`, the label's second line set over the rule under the header, which runs across the table. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26 (#383): `ID number`, alone on its line with the header's rule under it, was taken for a banner underlined across the table, and named every column (`Locality / ID number`, `Depth / ID number`)."
+  ],
+  "checks": [
+    {
+      "id": "second-line-names-its-own-column",
+      "found": "2026-11-26",
+      "issue": "#383: the label read `Species name and / ID number`, two levels.",
+      "cell": {
+        "value": "Cristaphyes arctous",
+        "column": "Species name and ID number"
+      }
+    },
+    {
+      "id": "second-line-names-no-other-column",
+      "found": "2026-11-26",
+      "issue": "#383: `ID number` named the depth column too.",
+      "cell": {
+        "value": "345–441 m",
+        "column": "Depth"
+      }
+    }
+  ]
+}

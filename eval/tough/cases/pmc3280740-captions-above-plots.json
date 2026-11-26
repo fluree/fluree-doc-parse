@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "pmc3280740.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3280740/",
+    "sha256": "a093e740fc4649ba931302f64f547876bd8d68219c09d188fc16f2b7ceea89ba",
+    "about": "PMC3280740, Sensors 2009, spaceborne bistatic SAR stereo radargrammetry. Its figures set their captions above them (`Figure 11. Height uncertainty …` over its plot). The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26: figure captions went to the wrong figure, or to none: a caption under a plot wider than the plot, or one over its figure taken by the figure above."
+  ],
+  "checks": [
+    {
+      "id": "fig11-caption-is-the-plots",
+      "found": "2026-11-26",
+      "issue": "#390: the caption over its plot was a paragraph of the page.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Figure 11. Height uncertainty as a function of target latitude due to vector parallax difference uncertainty in the hybrid method for four bistatic off-nadir angles (1/10 of an image pixel assumed as co-registration uncertainty)."
+      }
+    },
+    {
+      "id": "fig12-caption-is-the-plots",
+      "found": "2026-11-26",
+      "issue": "#390: as above.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Figure 12. Performance comparison between the analyzed methods for spaceborne bistatic SAR stereo radargrammetry considering 1/10 of an image pixel as co-registration uncertainty and four bistatic off-nadir angles: (a) projection of bistatic parameters, (b) bistatic rigorous stereo SAR problem, (c) hybrid method."
+      }
+    }
+  ]
+}

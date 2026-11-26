@@ -1635,6 +1635,7 @@ fn lay_run(p: &mut Page, words: &[Level], run: &Run, start: f64, next: &mut usiz
             font_size: font as f32,
             advance: Some((at(words[j].x0) - x1).max(0.0)),
             weight: None,
+            italic: false,
             draw_index: *next,
         });
         *next += 1;
@@ -1691,6 +1692,7 @@ fn lay_along(
             font_size,
             advance: Some(advance),
             weight: None,
+            italic: false,
             draw_index,
         });
     }
@@ -2080,6 +2082,7 @@ mod tests {
                 font_size: 10.0,
                 advance: Some(6.0),
                 weight: None,
+                italic: false,
                 draw_index: i,
             })
             .collect()
