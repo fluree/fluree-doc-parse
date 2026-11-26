@@ -1153,7 +1153,9 @@ pub(crate) fn is_toc_marker(text: &str) -> bool {
 /// diamonds of the dingbat fonts are set before headings as often as before
 /// items, as an annotation guideline marks each of its subsections
 /// `❖ Gene`, `❖ Disease`. Those the heading pass decides as it would any
-/// block; a block it leaves is still a list item.
+/// block; a block it leaves is still a list item. The hollow bullets are a
+/// list's second level, as a slide sets its sub-points `○ Custom landing
+/// pages` under `●` items.
 fn starts_like_list_item(text: &str) -> bool {
     matches!(
         text.chars().next(),
@@ -1161,7 +1163,12 @@ fn starts_like_list_item(text: &str) -> bool {
             '\u{2022}' // •
                 | '\u{F0B7}' // the Symbol font's •, as Word maps it
                 | '\u{25A0}' // ■
+                | '\u{25AA}' // ▪
+                | '\u{25A1}' // □
+                | '\u{25AB}' // ▫
                 | '\u{25CF}' // ●
+                | '\u{25CB}' // ○
+                | '\u{25E6}' // ◦
                 | '\u{2751}' // ❑
                 | '\u{2752}' // ❒
                 | '-'
@@ -4176,6 +4183,26 @@ mod tests {
     use super::*;
     use crate::geom::BBox;
     use crate::line::Line;
+
+    #[test]
+    fn a_line_opening_with_a_plain_bullet_is_a_list_item() {
+        for t in [
+            "• One",
+            "● One",
+            "○ Custom landing pages",
+            "◦ A sub-point",
+            "▪ One",
+            "□ Tick here",
+            "❑ Peg rack",
+            "– A dash",
+        ] {
+            assert!(starts_like_list_item(t), "{t}");
+        }
+        // The dingbats set before headings as often as before items.
+        for t in ["❖ Gene", "➢ Scope", "Results"] {
+            assert!(!starts_like_list_item(t), "{t}");
+        }
+    }
 
     fn blk(text: &str, fs: f32, lines: usize) -> Block {
         let l = Line {
