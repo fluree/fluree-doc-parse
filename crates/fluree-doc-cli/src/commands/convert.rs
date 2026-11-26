@@ -995,6 +995,15 @@ fn report_left(stem: &str, flag: &str, left: &[(String, &'static str)], verbose:
     }
 }
 
+/// Name, with `-v`, each crop whose reading was set aside as artwork.
+fn report_set_aside(stem: &str, flag: &str, aside: &[String], verbose: bool) {
+    if verbose {
+        for crop in aside {
+            eprintln!("ocr: {stem}_{crop}: set aside: the engine is unsure of it ({flag})");
+        }
+    }
+}
+
 fn report_ocr(
     stem: &str,
     flag: &str,
@@ -1065,6 +1074,7 @@ fn convert_bytes(
             modelled,
         );
         report_left(stem, "--ocr", &pass.left, cfg.verbose);
+        report_set_aside(stem, "--ocr", &pass.set_aside, cfg.verbose);
         for (crop, e) in &pass.failed {
             if !quiet {
                 eprintln!("warning: --ocr: {stem}_{crop}: {e}");
@@ -1086,6 +1096,8 @@ fn convert_bytes(
             let left = fluree_doc_pdf::ocr::leave(&doc, &mut readings);
             report_left(stem, "--ocr-words", &left, cfg.verbose);
         }
+        let aside = fluree_doc_pdf::ocr::set_aside_unsure(&doc, &mut readings);
+        report_set_aside(stem, "--ocr-words", &aside, cfg.verbose);
         let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
         report_ocr(stem, "--ocr-words", &injected, cfg.verbose, quiet);
         injected

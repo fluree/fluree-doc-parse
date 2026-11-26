@@ -37,6 +37,11 @@
 //! reading the engine is unsure of, pictures that carry the page, or a
 //! table in a picture. The engine reads words; a model reads them with
 //! their structure.
+//!
+//! A picture's reading the engine is unsure of, on a page with text of its
+//! own, is lettering drawn into artwork, not text the page holds
+//! ([`set_aside_unsure`]): it is not laid on the page, where no model
+//! takes it either.
 
 use crate::extract::{Document, Page};
 use crate::geom::BBox;
@@ -1611,6 +1616,9 @@ pub struct OcrPass {
     /// Crops read but left to a model ([`left_to_model`]), by crop name
     /// (`p{page}_{tag}`), with why.
     pub left: Vec<(String, &'static str)>,
+    /// Crops read but set aside as artwork ([`set_aside_unsure`]), by crop
+    /// name.
+    pub set_aside: Vec<String>,
 }
 
 /// Read a document's pixels with an engine and lay the words on its pages:
@@ -1676,12 +1684,50 @@ pub fn read_pages_leaving(
     } else {
         Vec::new()
     };
+    let set_aside = set_aside_unsure(doc, &mut readings);
     OcrPass {
         injected: inject(doc, &readings),
         failed,
         capped,
         left,
+        set_aside,
     }
+}
+
+/// Take out of `readings` a picture's reading the engine is unsure of
+/// (under [`WEAK_CONFIDENCE`]) on a page with text of its own, and name
+/// them (`p{page}_{tag}`).
+///
+/// An engine reads the lettering drawn into artwork, a logo's or a seal's
+/// texture, a photo's grain as words, and is unsure of them: an engraving's
+/// captions read `The Thrte Pigeows, / sgoaoene`. Laid on the page, they
+/// are text it never printed. Clean print reads at 0.97 and over. Whatever
+/// its length, a reading under 0.90 is set aside, unless the page has no
+/// text but what is read from its pixels: a whole-page reading, or the
+/// regions of a page with no text layer, are all the text there is.
+pub fn set_aside_unsure(
+    doc: &Document,
+    readings: &mut Vec<(usize, Crop, WordReading)>,
+) -> Vec<String> {
+    let own = |page: usize| {
+        doc.pages.iter().find(|p| p.index == page).map_or(0, |p| {
+            p.glyphs
+                .iter()
+                .filter(|g| !g.text.trim().is_empty())
+                .count()
+        })
+    };
+    let mut aside = Vec::new();
+    readings.retain(|(page, crop, r)| {
+        let unsure = matches!(crop, Crop::Region(_))
+            && confidence(r).is_some_and(|c| c < WEAK_CONFIDENCE)
+            && own(*page) > 0;
+        if unsure {
+            aside.push(format!("p{page}_{}", crop.tag()));
+        }
+        !unsure
+    });
+    aside
 }
 
 /// Take out of `readings` those [`left_to_model`] picks, and name them
@@ -4000,6 +4046,41 @@ mod tests {
         inject(&mut doc, &readings);
         // The region left unread still routes to a reader.
         assert!(!doc.pages[0].ocr_read_region(0));
+    }
+
+    #[test]
+    fn a_pictures_lettering_the_engine_is_unsure_of_is_set_aside() {
+        let doc = page_with_regions(&[UPPER, LOWER]);
+        let weak = &[&["The Thrte Pigeows,"][..], &["sgoaoene"]];
+        let prose = &[&["Revenue rose by four percent"][..]];
+        let mut readings = vec![
+            (0, Crop::Region(0), rows_read(weak, 0.78)),
+            (0, Crop::Region(1), rows_read(prose, 0.98)),
+            // A stray mark it is unsure of, however short.
+            (0, Crop::Region(2), rows_read(&[&["1"]], 0.45)),
+        ];
+        let aside = set_aside_unsure(&doc, &mut readings);
+        assert_eq!(aside, ["p0_r0", "p0_r2"]);
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].1, Crop::Region(1));
+        // A whole page's reading is all the text it has, sure or not.
+        let mut whole = vec![(0, Crop::Page, rows_read(weak, 0.78))];
+        assert!(set_aside_unsure(&doc, &mut whole).is_empty());
+        // So is a region's on a page with no text of its own.
+        let bare = Document {
+            pages: vec![page(
+                Vec::new(),
+                vec![ImagePlacement {
+                    bbox: UPPER,
+                    texty: true,
+                    ppi: None,
+                    bitonal: false,
+                    grid: (1000, 1000),
+                }],
+            )],
+        };
+        let mut only = vec![(0, Crop::Region(0), rows_read(weak, 0.78))];
+        assert!(set_aside_unsure(&bare, &mut only).is_empty());
     }
 
     #[cfg(feature = "render")]
