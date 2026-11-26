@@ -132,7 +132,15 @@ line it crosses, and its letters are sorted in among that line's words:
 `imDpeller flangeR impeller gasAket`.
 
 Template text does neither: it sits among the page's lines, at their size,
-and nothing lies on it. A figure that repeats and overlaps its own labels
+and nothing lies on it.
+
+Turned is not enough on its own. A chart turns its own labels too: a report
+that gives each country a page sets the years under each bar chart's bars
+turned, `1990` to `2024`, and the axis's title beside its scale, `Mt CO2eq`,
+at one place on two hundred pages. A turned line is a watermark only where
+it is set large, lies on other text, or stands past the page's level text
+(the stamp up the edge, the thumb index). Set no larger than the body,
+sharing the width of a level line and lying on none, it is the page's. A figure that repeats and overlaps its own labels
 does so the same way on every page, and is drawn among the page's text, so
 it is kept as well.
 
@@ -237,6 +245,17 @@ adding signals:
   set off to its right is no column the label sits in, nor is a header
   block's own line over the next (`INSTALLATION INSTRUCTIONS` over
   `INSTRUCTIONS D’INSTALLATION`), each a label standing alone.
+- **A template's heads over the page's own figures.** A report that gives
+  each economy two pages sets the same content on each: a section's band,
+  `MERCHANDISE TRADE`, under the economy's key figures near the head; a
+  table's heads, `Residents` and `Non-residents`, over its counts near the
+  foot. Both stand at one place on every economy's page, as a running line
+  does. A running head or foot is the page's margin, and only furniture (its
+  number) stands beyond it. Where, on most of its pages, the page's own
+  figures stand between a line and the edge it is nearer, overlapping it
+  across, it is the body's: a line holding a digit on too few pages to run,
+  or a table read on the page (key figures set as a grid are a table, not
+  lines).
 - **A chart's own text.** A report that gives each country a page of its own
   draws the same chart on each, and the chart's legend stands at one place
   page after page, as a running head does: `Power Industry`, `Buildings`,

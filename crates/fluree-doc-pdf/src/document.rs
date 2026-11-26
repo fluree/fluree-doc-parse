@@ -4678,7 +4678,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     let drawings: Vec<furniture::Drawing> = raw
         .pages
         .iter()
-        .map(|p| furniture::Drawing {
+        .zip(&layouts)
+        .map(|(p, lay)| furniture::Drawing {
+            tables: lay.grids.iter().map(|g| g.bbox).collect(),
             shapes: p
                 .fills
                 .iter()

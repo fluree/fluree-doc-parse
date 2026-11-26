@@ -1436,7 +1436,10 @@ pub fn detect_with_body(
     // document-wide half of the form test; the page cap below is the other.
     let shared_bare_numbers: std::collections::HashSet<String> = {
         let mut titles: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
-        for b in pages.iter().flatten() {
+        // A list's item or a note, its number set as its marker, is no
+        // title: a paper numbers its affiliations and its notes from 1 too
+        // (`1 Faculty of …`), and its `1 Introduction` is a section still.
+        for b in pages.iter().flatten().filter(|b| b.marker.is_none()) {
             let text = b.text();
             if has_bare_number_label(&text) {
                 let label = text.split_whitespace().next().unwrap_or("").to_string();
@@ -5219,6 +5222,31 @@ mod tests {
         let h = detect(&pages, &[]);
         assert_eq!(h.len(), 3);
         assert!(h.iter().all(|h| h.evidence == Evidence::Numbering));
+
+        // A paper numbering its affiliations from 1 under its title, each
+        // number its item's marker, then its first section: `1` opens two
+        // different lines, and the section is a section still.
+        let body = || blk("Body text of the paper runs on here.", 10.0, 4);
+        let item = |n: &str, rest: &str| {
+            let mut b = blk(&format!("{n} {rest}"), 8.0, 1);
+            b.marker = Some(n.into());
+            b
+        };
+        let pages = vec![
+            vec![
+                item("1", "Faculty of Economics, University of Somewhere"),
+                item("2", "School of Finance, Another University"),
+                body(),
+            ],
+            vec![blk("1 Introduction", 10.0, 1), body(), body()],
+        ];
+        let h = detect(&pages, &[]);
+        let numbered: Vec<&str> = h
+            .iter()
+            .filter(|h| h.evidence == Evidence::Numbering)
+            .map(|h| h.text.as_str())
+            .collect();
+        assert_eq!(numbered, vec!["1 Introduction"], "{h:?}");
     }
 
     #[test]

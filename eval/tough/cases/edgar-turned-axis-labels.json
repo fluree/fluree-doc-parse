@@ -1,0 +1,27 @@
+{
+  "document": {
+    "file": "jrc-edgar-ghg-2025.pdf",
+    "url": "https://publications.jrc.ec.europa.eu/repository/bitstream/JRC143227/JRC143227_01.pdf",
+    "sha256": "7fe3123717aa552c490ccf5559611ee10aaa5ff78b72c6514d626608673b1ff6",
+    "about": "EDGAR, GHG emissions of all world countries (JRC, 2025). Each country's page draws a bar chart whose years, 1990 to 2024, are set turned under its bars, beside a turned axis title, Mt CO2eq."
+  },
+  "notes": [
+    "2026-11-26 (#420): the turned labels repeat at one place on every country's page and were read as watermarks: 14 copies of 1994 kept of 226, 227 of Mt CO2eq of 439."
+  ],
+  "checks": [
+    {
+      "id": "axis-years-kept",
+      "found": "2026-11-26",
+      "issue": "#420: the chart's turned year labels were scrubbed as watermarks.",
+      "text": "1994",
+      "count": 226
+    },
+    {
+      "id": "axis-title-kept",
+      "found": "2026-11-26",
+      "issue": "#420: the turned axis title was scrubbed as a watermark.",
+      "text": "Mt CO2eq",
+      "count": 439
+    }
+  ]
+}

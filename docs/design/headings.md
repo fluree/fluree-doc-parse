@@ -450,7 +450,11 @@ Three tests keep them out, none of which touches `5.3.1`:
 
 - **A numbered title occurs once.** An answer given more than once in a
   document is a code; so is every line labelled with a bare number that
-  names two *different* titles (`1 — Yes`, `1 — Supplier on file`).
+  names two *different* titles (`1 — Yes`, `1 — Supplier on file`). Only a
+  line that could be a title counts: a list's item or a note, its number
+  set as its marker, is none. A paper numbers its affiliations and its
+  notes from 1 too (`1 Faculty of …`), and its `1 Introduction` is a
+  section still.
 - **Sections are coarse.** A page holding more than ten bare-number
   candidates is a coding scheme, whatever each line looks like on its own.
 - **Sections count from one**, and a number set as a superscript is a

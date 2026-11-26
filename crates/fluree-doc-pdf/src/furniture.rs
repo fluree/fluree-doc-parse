@@ -440,6 +440,20 @@ fn detect_all(
             if inside * 2 > stable.len() {
                 continue;
             }
+            // Nor where, on most of its pages, the page's own figures stand
+            // between it and the edge: a template's table heads over each
+            // page's values, a section's band under each page's key
+            // figures (`Residents` over a country's counts).
+            let figured = stable
+                .iter()
+                .filter(|o| {
+                    let tables = drawings.get(o.0).map_or(&[][..], |d| &d.tables[..]);
+                    figures_beyond(pages, o.0, o.1, tables, &seen_on, &keys, needed)
+                })
+                .count();
+            if figured * 2 > stable.len() {
+                continue;
+            }
             // Nor is a line running where the pages it is missing from set
             // a longer line in its place that opens or closes with its
             // words: the place holds a title that varies from page to page
@@ -492,7 +506,7 @@ fn detect_all(
             let shown = occ
                 .iter()
                 .filter(|o| (o.2 - median).abs() < POSITION_TOLERANCE)
-                .filter(|o| watermark_shown(&pages[o.0].0, o.1))
+                .filter(|o| watermark_shown(&pages[o.0].0, o.1, body))
                 .count();
             if shown < needed {
                 if let Some(later) = template_title(pages, &occ, body) {
@@ -949,6 +963,55 @@ fn beyond_the_body(
             && seen_on.get(&keys[pi][lj]).copied().unwrap_or(1) < needed
             && in_paragraph(lines, lj, li)
     })
+}
+
+/// Whether the page's own figures stand between line `li` and the page's
+/// edge, overlapping it across: a line holding a figure that runs on no
+/// page but its own (its group seen on fewer than `needed` pages), or a
+/// table read on the page, set between the line and the head of the page
+/// where the line is in its top half, or the foot where it is in its
+/// bottom half. A running head or foot is the page's margin, and only the
+/// page's furniture (its number) stands beyond it; a template's table
+/// heads have each page's values under them, and a section's band each
+/// page's key figures over it.
+fn figures_beyond(
+    pages: &[(Vec<Line>, f64)],
+    pi: usize,
+    li: usize,
+    tables: &[crate::geom::BBox],
+    seen_on: &HashMap<String, usize>,
+    keys: &[Vec<String>],
+    needed: usize,
+) -> bool {
+    let (lines, height) = &pages[pi];
+    let line = &lines[li];
+    if *height <= 0.0 || line.rotation_bucket != 0 {
+        return false;
+    }
+    let top = (line.bbox.y0 + line.bbox.y1) / 2.0 < height / 2.0;
+    let beyond = |b: &crate::geom::BBox| {
+        b.x0 < line.bbox.x1
+            && b.x1 > line.bbox.x0
+            && if top {
+                b.y1 <= line.bbox.y0
+            } else {
+                b.y0 >= line.bbox.y1
+            }
+    };
+    tables.iter().any(beyond)
+        || lines.iter().enumerate().any(|(lj, o)| {
+            lj != li
+                && o.rotation_bucket == 0
+                && o.text.chars().any(|c| c.is_ascii_digit())
+                && o.bbox.x0 < line.bbox.x1
+                && o.bbox.x1 > line.bbox.x0
+                && if top {
+                    o.bbox.y1 <= line.bbox.y0
+                } else {
+                    o.bbox.y0 >= line.bbox.y1
+                }
+                && seen_on.get(&keys[pi][lj]).copied().unwrap_or(1) < needed
+        })
 }
 
 /// Whether line `lj` is a line of a paragraph: another line, not `skip`,
@@ -1671,23 +1734,33 @@ fn folio_run(occ: &[(usize, &str)]) -> Option<(usize, Vec<(usize, String)>)> {
 /// the right: a page title over a table, whose cells are no lines here,
 /// shares no line's width either, and is set between the running head's
 /// and the footer's ends.
-fn watermark_shown(lines: &[Line], li: usize) -> bool {
+///
+/// A turned line is a watermark set across the page large, or a stamp or
+/// a thumb index's tabs along its edge, past its level text. A chart turns
+/// its own labels too, at the text's size or smaller, among the page's
+/// level lines: the years under a bar chart's bars, the axis's title
+/// beside its scale (`Mt CO2eq`). Set no larger than the body (`body`),
+/// sharing the width of a level line and lying on none, a turned line is
+/// the page's, and shows nothing of a watermark.
+fn watermark_shown(lines: &[Line], li: usize, body: f64) -> bool {
     let l = &lines[li];
-    if l.rotation_bucket != 0 {
-        return true;
-    }
     let others = lines.iter().enumerate().filter(|(j, _)| *j != li);
+    if l.rotation_bucket != 0 {
+        let across = |o: &Line| l.bbox.x1.min(o.bbox.x1) - l.bbox.x0.max(o.bbox.x0);
+        let among = f64::from(l.font_size) <= body
+            && others
+                .clone()
+                .any(|(_, o)| o.rotation_bucket == 0 && across(o) > 0.0);
+        return !among || others.clone().any(|(_, o)| lies_on(l, o));
+    }
     let (left, right) = others.clone().fold((f64::MAX, f64::MIN), |(a, b), (_, o)| {
         (a.min(o.bbox.x0), b.max(o.bbox.x1))
     });
     let mut beside = left > right || l.bbox.x1 <= left || l.bbox.x0 >= right;
     for (_, o) in others {
-        let w = l.bbox.x1.min(o.bbox.x1) - l.bbox.x0.max(o.bbox.x0);
-        if w > 0.0 {
+        if l.bbox.x1.min(o.bbox.x1) - l.bbox.x0.max(o.bbox.x0) > 0.0 {
             beside = false;
-            let h = l.bbox.y1.min(o.bbox.y1) - l.bbox.y0.max(o.bbox.y0);
-            let smaller = (l.bbox.width() * l.bbox.height()).min(o.bbox.width() * o.bbox.height());
-            if h > 0.0 && smaller > 0.0 && w * h / smaller > 0.3 {
+            if lies_on(l, o) {
                 return true;
             }
         }
@@ -1695,12 +1768,27 @@ fn watermark_shown(lines: &[Line], li: usize) -> bool {
     beside
 }
 
+/// Whether line `l` lies on line `o`: their boxes overlap by more than
+/// [`LAID_ON`] of the smaller.
+fn lies_on(l: &Line, o: &Line) -> bool {
+    let w = l.bbox.x1.min(o.bbox.x1) - l.bbox.x0.max(o.bbox.x0);
+    let h = l.bbox.y1.min(o.bbox.y1) - l.bbox.y0.max(o.bbox.y0);
+    let smaller = (l.bbox.width() * l.bbox.height()).min(o.bbox.width() * o.bbox.height());
+    w > 0.0 && h > 0.0 && smaller > 0.0 && w * h / smaller > LAID_ON
+}
+
+/// How much of the smaller of two lines' boxes their overlap covers, at
+/// least, for one to lie on the other.
+const LAID_ON: f64 = 0.3;
+
 /// A page's drawn shapes, its fills, strokes and traces, and its tick
-/// marks: what [`in_drawing`] reads a line against.
+/// marks: what [`in_drawing`] reads a line against. And the boxes of the
+/// tables read on the page, the page's own content ([`figures_beyond`]).
 #[derive(Debug, Clone, Default)]
 pub struct Drawing {
     pub shapes: Vec<crate::geom::BBox>,
     pub ticks: Vec<crate::geom::BBox>,
+    pub tables: Vec<crate::geom::BBox>,
 }
 
 /// Whether a line is set in a chart's drawing: a legend's entry, with its
@@ -1996,6 +2084,89 @@ mod tests {
     }
 
     #[test]
+    fn a_templates_heads_over_each_pages_figures_are_not_running() {
+        // Twelve economies' pages, each setting a table at its foot: its
+        // heads at one place on every page, each page's own counts under
+        // them, and the report's running foot under all of it.
+        let pages = doc(12, |i| {
+            vec![
+                line(&format!("Economy {i}"), 20.0),
+                line(&format!("Body text of page {i}."), 400.0),
+                line("Residents Non-residents Total", 860.0),
+                line(&format!("{} {} {}", 23 + i * 7, 1 + i, 24 + i * 8), 875.0),
+                line("World Trade Report", 960.0),
+            ]
+        });
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[], &[]);
+        for m in &marks {
+            assert!(!m.contains_key(&2), "the heads are the page's: {m:?}");
+            assert!(m.contains_key(&4), "the running foot runs: {m:?}");
+        }
+        // A section's band under each page's key figures, read as a table.
+        let pages = doc(12, |i| {
+            vec![
+                line(&format!("Economy {i}"), 20.0),
+                line("MERCHANDISE TRADE", 140.0),
+                line(&format!("Body text of page {i}."), 400.0),
+                line("World Trade Report", 960.0),
+            ]
+        });
+        let drawings: Vec<Drawing> = (0..12)
+            .map(|_| Drawing {
+                tables: vec![at(10.0, 60.0, 200.0, 130.0)],
+                ..Default::default()
+            })
+            .collect();
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[], &drawings);
+        assert!(marks.iter().all(|m| !m.contains_key(&1)), "{marks:?}");
+        // Without the table, the band runs.
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[], &[]);
+        assert!(marks.iter().all(|m| m.contains_key(&1)));
+    }
+
+    #[test]
+    fn a_charts_turned_labels_among_the_text_are_no_watermark() {
+        // A line set turned at `x0`, `size` points, from `y` down.
+        let turned = |text: &str, x0: f64, y: f64, size: f32| {
+            let mut l = line_at(text, y, x0, x0 + f64::from(size) * 0.7);
+            l.bbox.y1 = y + f64::from(size) * 2.5;
+            l.rotation_bucket = 90;
+            l.font_size = size;
+            l
+        };
+        // Twelve country pages, each with its chart's years set turned under
+        // its bars, its axis's title turned beside its scale, a stamp turned
+        // in the margin past the text, and a large turned watermark.
+        let pages = doc(12, |i| {
+            vec![
+                line(&format!("Country {i}"), 40.0),
+                line_at(&format!("{}", 5000 + i * 100), 150.0, 30.0, 50.0),
+                turned("Mt CO2eq", 12.0, 230.0, 10.0),
+                turned("1990", 60.0, 380.0, 10.0),
+                turned("1992", 80.0, 380.0, 10.0),
+                line(&format!("Body text of page {i}."), 450.0),
+                turned("Verified at example.org", 280.0, 600.0, 7.0),
+                turned("DRAFT", 120.0, 560.0, 40.0),
+            ]
+        });
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[], &[]);
+        for m in &marks {
+            for li in [2, 3, 4] {
+                assert!(
+                    !m.contains_key(&li),
+                    "the chart's label {li} is the page's: {m:?}"
+                );
+            }
+            assert_eq!(m.get(&6), Some(&Furniture::Watermark), "the stamp: {m:?}");
+            assert_eq!(
+                m.get(&7),
+                Some(&Furniture::Watermark),
+                "the watermark: {m:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_charts_legend_repeated_on_every_page_is_not_running() {
         // Twelve country pages, each drawing one chart whose legend
         // entries stand at one place, under a running head on every page.
@@ -2013,6 +2184,7 @@ mod tests {
             .map(|_| Drawing {
                 shapes: vec![at(-2.0, 107.0, 7.0, 116.0), at(-2.0, 143.0, 7.0, 152.0)],
                 ticks: vec![],
+                tables: vec![],
             })
             .collect();
         let (marks, _, _) = detect_with_heads(&pages, &[], &[], &drawings);
