@@ -354,6 +354,23 @@ And a
 paragraph ended on a short line, followed at the same spacing by a line
 opening with a capital, is two paragraphs: the short line stops more than
 the next line's first word and two ems short of the lines around it.
+
+**Fields and addresses one per line.** A run of lines that each open with a
+field's label, a few words from a capital ending on a colon with the value
+after it (`Klantnummer: 6669263`, `Ust-IdNr.: DE123456789`), reads one field
+per paragraph; a value wrapped onto the next line stays with its field, and
+a field is never read as a heading. A label is no sentence carried onto the
+line (`subgrouped by age:` opens in lower case), nor a reference's volume or
+a list of abbreviations run on from the line above, and no field starts
+after a line ending on a comma, a semicolon or a word its phrase goes on
+from. A block of short lines stacked by hand, an address or a contact block,
+keeps its line breaks in one paragraph: five words or fewer to a line, all
+at one left edge and at the body's size, not all bold, and each line after
+the first opening an entry of its own (a capital, a figure, an e-mail or web
+address, or a telephone number, `fon (555) 23 78 -0`). A line ending on a
+hyphen, a comma, a dash set closed or a web address broken at its slash runs
+on into the next, and so does prose set in a narrow measure, which goes on
+in lower case. A heading's lines, broken by hand, still read as one title.
 Wrapped text, even with a designer's rag, never does. The other way round,
 a sentence that runs on stays one paragraph across a slightly wider line
 spacing, as footnotes set at a generous leading have, or across a change to

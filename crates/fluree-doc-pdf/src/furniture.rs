@@ -3194,6 +3194,16 @@ fn scrub_with(cell: &str, furniture: &[(String, bool)], ends_only: bool) -> Stri
     if trimmed.chars().count() >= 24 && furniture.iter().any(|(pat, _)| pat.starts_with(&trimmed)) {
         return String::new();
     }
+    // A block whose lines were stacked by hand, an address, keeps its line
+    // breaks; a cell's text is one run.
+    if ends_only && out.contains('\n') {
+        return out
+            .lines()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     trimmed
 }
 
