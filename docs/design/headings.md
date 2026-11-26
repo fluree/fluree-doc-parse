@@ -330,6 +330,28 @@ Tables the table pass did not take are still counted. In a catalogue whose
 specification tables outnumber its prose, the body still comes out at the
 tables' size.
 
+Charts the figure pass did not find are counted too, and their labels,
+scales and notes can outnumber the prose as well. A financial stability
+report sets its prose at 10pt beside charts set at 8pt; counted by lines,
+the body came out at 8pt, and every line of the prose that a chart cut off
+on its own was a heading by its size. So running prose is measured first:
+blocks of three lines or more whose lines, all but the last, mostly fill the
+block's measure and hold four words or more. Where 50 lines or more of it
+share a size, several paragraphs, and that size is larger than the lines'
+count gives, it is the body. Prose smaller than that count is fine print
+under the larger type a form or a deck is mostly set in (a 1099's 6pt notes
+under its 8pt form), and the count stands. A deck's few lines of prose, or a
+quote set large on a slide, are too few to count.
+
+A heading set larger than the body is held to a title's length, twelve
+words and 90 characters, unless it is set clearly larger, 1.5 times the
+body, or is set in a style the document heads two sections or more with at
+that length. Then a line or two of a title's shape may run to 20 words and
+160 characters, where it stands apart over prose: the report heads each
+part of a section with its finding in 14pt bold, `Hedge funds' leverage was
+at or near its highest level in available data` among shorter findings,
+14pt being 1.4 times its 10pt body.
+
 A document whose prose runs to fewer than eight lines has too little to say
 its body by: a page that is a label, a title and a folio over a table. Its
 prose alone counts the title's two lines against one of each other size, so

@@ -372,7 +372,7 @@ fn has_bare_number_label(text: &str) -> bool {
 /// 1, …`) is no title, and a bare number is a form's question
 /// (`12 Did you explain to the taxpayer…`), not a section's label. Nor is a
 /// formula (`GFR (mL/min/1.73m²) = 141 x …`) or a bulleted line.
-fn vouched_for(text: &str, b: &Block, body: f32) -> bool {
+fn vouched_for(text: &str, b: &Block, body: f32, styled: bool) -> bool {
     let size = b.font_size as f64 / (body as f64).max(1.0);
     let t = text.trim();
     let shaped = !t.ends_with(['.', '?', '!'])
@@ -385,16 +385,62 @@ fn vouched_for(text: &str, b: &Block, body: f32) -> bool {
     let labelled = numbering_depth(t).is_some() && !has_bare_number_label(t);
     b.lines.len() <= MAX_FONTSIZE_HEADING_LINES
         && shaped
-        && ((labelled && size >= NUMBERED_HEADING_RATIO) || size >= DISPLAY_HEADING_RATIO)
+        && ((labelled && size >= NUMBERED_HEADING_RATIO)
+            || size >= DISPLAY_HEADING_RATIO
+            || (styled && size > 1.0 + HEADING_SIZE_MARGIN))
 }
 
-/// The most words a block may hold and still be a heading.
-fn word_limit(text: &str, b: &Block, body: f32) -> usize {
-    if vouched_for(text, b, body) {
+/// The most words a block may hold and still be a heading. `styled`: the
+/// block is set in a style the document sets its headings in
+/// ([`heading_styles`]).
+fn word_limit(text: &str, b: &Block, body: f32, styled: bool) -> usize {
+    if vouched_for(text, b, body, styled) {
         MAX_LONG_HEADING_WORDS
     } else {
         MAX_HEADING_WORDS
     }
+}
+
+/// Fewest headings of ordinary length a style must set for a longer line
+/// in it to be read as one too.
+const MIN_STYLE_HEADINGS: usize = 2;
+
+/// A block's style, as [`heading_styles`] tells styles apart: its size, to
+/// a quarter point, and its weight.
+fn heading_style(b: &Block) -> (i32, bool) {
+    ((b.font_size * 4.0).round() as i32, b.bold)
+}
+
+/// The styles set larger than the body in which the document sets two
+/// headings or more of ordinary length: a line or two, few enough words.
+/// A longer line in such a style, a title's shape on two lines, is one of
+/// them however long: a financial report heads each part of a section with
+/// its finding in 14pt bold, `Hedge funds' leverage was at or near its
+/// highest level in available data` among `Bank lending to other financial
+/// entities continued to grow at a robust pace`. Set clearly larger than the
+/// body, a line may run that long anyway ([`vouched_for`]).
+fn heading_styles(pages: &[Vec<Block>], body: f32) -> std::collections::HashSet<(i32, bool)> {
+    let mut count: HashMap<(i32, bool), usize> = HashMap::new();
+    for b in pages.iter().flatten() {
+        if b.font_size as f64 <= body as f64 * (1.0 + HEADING_SIZE_MARGIN)
+            || b.marker.is_some()
+            || b.lines.len() > MAX_FONTSIZE_HEADING_LINES
+        {
+            continue;
+        }
+        let text = b.text();
+        if text.chars().count() <= MAX_FONTSIZE_HEADING_CHARS
+            && title_like(&text)
+            && !starts_like_list_item(&text)
+        {
+            *count.entry(heading_style(b)).or_default() += 1;
+        }
+    }
+    count
+        .into_iter()
+        .filter(|&(_, n)| n >= MIN_STYLE_HEADINGS)
+        .map(|(style, _)| style)
+        .collect()
 }
 
 /// Shape tests every heading candidate must pass, regardless of which signal
@@ -1192,6 +1238,73 @@ pub fn body_font_size(pages: &[Vec<Block>]) -> f32 {
 /// labels, and 64 of them outweighed a 25-line column of prose. With
 /// nothing left once drawings are set aside, every block counts.
 pub fn body_font_size_outside(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 {
+    let by_lines = body_font_size_by_lines(pages, drawn);
+    let is_drawn = |p: usize, i: usize| drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true);
+    // Running prose set larger than the size most lines are set in is the
+    // body, and the many short lines under it are a chart's or a table's:
+    // its labels, its axis's values, its cells, whether or not the chart
+    // or the table was found. Prose set smaller is fine print under the
+    // larger type a form or a deck is mostly set in, and leaves the body
+    // where the lines put it.
+    prose_body_size(pages, &is_drawn)
+        .filter(|&prose| prose > by_lines)
+        .unwrap_or(by_lines)
+}
+
+/// Fewest lines of running prose, at one size, the body is read from:
+/// several paragraphs. A deck's few lines of prose, a quote set large on
+/// a slide, are no body.
+const MIN_PROSE_LINES: usize = 50;
+
+/// Fewest lines in a block of running prose.
+const PROSE_BLOCK_LINES: usize = 3;
+
+/// Share of a block's measure a line of running prose fills.
+const PROSE_LINE_FILL: f64 = 0.8;
+
+/// Fewest words on a line of running prose.
+const PROSE_LINE_WORDS: usize = 4;
+
+/// The size most running prose is set in: blocks of three lines or more
+/// whose lines, all but the last, mostly fill the block's measure and hold
+/// several words each. `None` where fewer than [`MIN_PROSE_LINES`] such
+/// lines share a size.
+fn prose_body_size(pages: &[Vec<Block>], is_drawn: &dyn Fn(usize, usize) -> bool) -> Option<f32> {
+    let mut hist: HashMap<i32, usize> = HashMap::new();
+    for (p, blocks) in pages.iter().enumerate() {
+        for (i, b) in blocks.iter().enumerate() {
+            if is_drawn(p, i) || b.lines.len() < PROSE_BLOCK_LINES {
+                continue;
+            }
+            let measure = b
+                .lines
+                .iter()
+                .map(|l| l.bbox.width())
+                .fold(0.0_f64, f64::max);
+            let running = &b.lines[..b.lines.len() - 1];
+            let full = running
+                .iter()
+                .filter(|l| {
+                    l.bbox.width() >= measure * PROSE_LINE_FILL
+                        && l.text.split_whitespace().count() >= PROSE_LINE_WORDS
+                })
+                .count();
+            if full * 3 >= running.len() * 2 {
+                *hist.entry((b.font_size * 4.0).round() as i32).or_default() += b.lines.len();
+            }
+        }
+    }
+    hist.iter()
+        .filter(|(_, lines)| **lines >= MIN_PROSE_LINES)
+        .max_by(|(size_a, count_a), (size_b, count_b)| {
+            count_a.cmp(count_b).then_with(|| size_b.cmp(size_a))
+        })
+        .map(|(k, _)| *k as f32 / 4.0)
+}
+
+/// [`body_font_size_outside`] by lines alone: the size most of the
+/// blocks' lines are set in.
+fn body_font_size_by_lines(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 {
     let is_drawn = |p: usize, i: usize| drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true);
     let mut hist: HashMap<i32, usize> = HashMap::new();
     for (p, blocks) in pages.iter().enumerate() {
@@ -1503,7 +1616,7 @@ pub fn detect_with_body(
             if display(b) {
                 MAX_DISPLAY_TITLE_WORDS
             } else {
-                word_limit(text, b, body)
+                word_limit(text, b, body, false)
             }
         };
         let candidate = |i: usize, b: &Block| -> bool {
@@ -1664,6 +1777,7 @@ pub fn detect_with_body(
     // plausible density the signal is measuring something else and is dropped
     // for the document. Counted before emission because one page's misuse
     // discredits the cue everywhere in the document, not just on that page.
+    let heading_styles = heading_styles(pages, body);
     let bold_candidates = pages
         .iter()
         .flatten()
@@ -1789,7 +1903,11 @@ pub fn detect_with_body(
             // An ordered list's item, its number set in its own text: the
             // list counts off from one item to the next, which a section
             // number never does on its own page.
-            if !title_like_within(&text, word_limit(&text, b, body)) || block::counts_off(b) {
+            let styled = heading_styles.contains(&heading_style(b))
+                && heads_prose(blocks, block_idx, body)
+                && directly_below(blocks, block_idx).is_some_and(|k| blocks[k].marker.is_none());
+            if !title_like_within(&text, word_limit(&text, b, body, styled)) || block::counts_off(b)
+            {
                 if short_caps(&text)
                     && b.lines.len() == 1
                     && b.marker.is_none()
@@ -1913,7 +2031,9 @@ pub fn detect_with_body(
             // 5. Typography, for documents with neither. Uncorroborated, so
             // it must also look like a heading: short, and not a paragraph.
             // Display type may run longer.
-            let char_limit = if b.font_size as f64 >= body as f64 * DISPLAY_HEADING_RATIO {
+            let char_limit = if b.font_size as f64 >= body as f64 * DISPLAY_HEADING_RATIO
+                || (styled && vouched_for(&text, b, body, true))
+            {
                 MAX_LONG_HEADING_CHARS
             } else {
                 MAX_FONTSIZE_HEADING_CHARS
@@ -6099,6 +6219,76 @@ mod tests {
         blocks.push(blk("para", 11.0, 30));
         blocks.push(blk("para", 11.0, 30));
         assert_eq!(body_font_size(&[blocks]), 11.0);
+    }
+
+    #[test]
+    fn the_body_is_read_from_running_prose() {
+        let prose = |fs: f32, blocks: usize| -> Vec<Block> {
+            (0..blocks)
+                .map(|_| blk("the report's prose runs on across its measure", fs, 10))
+                .collect()
+        };
+        let labels = |fs: f32| -> Vec<Block> { (0..200).map(|_| blk("2024", fs, 1)).collect() };
+        // A chart's 8pt labels outnumber the 10pt prose, line for line:
+        // the prose is the body.
+        let charted: Vec<Block> = labels(8.0).into_iter().chain(prose(10.0, 6)).collect();
+        assert_eq!(body_font_size(&[charted]), 10.0);
+        // Prose set smaller than the lines is a form's fine print under its
+        // larger type, and leaves the body where the lines put it.
+        let form: Vec<Block> = labels(8.0).into_iter().chain(prose(6.0, 6)).collect();
+        assert_eq!(body_font_size(&[form]), 8.0);
+        // A few lines of prose, a slide's, are too few to say.
+        let deck: Vec<Block> = labels(8.0).into_iter().chain(prose(10.0, 2)).collect();
+        assert_eq!(body_font_size(&[deck]), 8.0);
+    }
+
+    #[test]
+    fn a_long_head_in_the_documents_heading_style_is_a_heading() {
+        let head = |text: &str, y: f64| -> Block {
+            let mut b = at(text, 14.0, y, true);
+            for l in &mut b.lines {
+                l.bold = true;
+                l.bbox = b.bbox;
+            }
+            b
+        };
+        let para = |y: f64| -> Block {
+            let mut b = blk("the report's prose runs on across its measure", 10.0, 3);
+            b.bbox.y0 = y;
+            b.bbox.y1 = y + 36.0;
+            b
+        };
+        // Two lines of a finding, 17 words, at 1.4 times the body.
+        let mut long = head(
+            "Hedge funds' leverage was at or near its highest level",
+            300.0,
+        );
+        let mut second = long.lines[0].clone();
+        second.text = "in available data across the largest funds".into();
+        long.lines.push(second);
+        long.bbox.y1 = 332.0;
+        let page = |shorter: bool| -> Vec<Block> {
+            let mut p = vec![at("Financial Stability Report", 24.0, 20.0, true)];
+            if shorter {
+                p.extend([
+                    head("Bank lending to other entities grew", 100.0),
+                    para(120.0),
+                    head("Insurers' leverage increased", 200.0),
+                    para(220.0),
+                ]);
+            }
+            p.extend([long.clone(), para(340.0)]);
+            p
+        };
+        let found = |shorter: bool| {
+            detect_with_body(&[page(shorter)], &[], 10.0, None)
+                .iter()
+                .any(|h| h.text.starts_with("Hedge funds"))
+        };
+        // Among shorter findings in its style, it is one of them.
+        assert!(found(true));
+        // Alone in its style, it is held to a title's length.
+        assert!(!found(false));
     }
 
     #[test]

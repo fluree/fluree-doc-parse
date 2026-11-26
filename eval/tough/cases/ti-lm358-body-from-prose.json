@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "ti-lm358.pdf",
+    "url": "https://www.ti.com/lit/ds/symlink/lm358.pdf",
+    "sha256": "8277dff7b89138c63b3582d37f378065a1dea3cae5ed1e2926ddc2779eb7e3a2",
+    "about": "TI LM358 data sheet. Its prose is set at 10pt; its tables, pin diagrams and drawings set many more lines at 8pt."
+  },
+  "notes": [
+    "2026-11-26 (#403): with the body measured at 8pt, 10pt labels of its drawings (`VOUT`, `Package`) were headings by size. Measured from its prose, the body is 10pt.",
+    "Open: the revision history's bold heads (`Changes from Revision AA … to Revision AB …`) are set bold at the body's size now, and the data sheet sets too many bold lines in its tables for bold to head a section. Left on #403."
+  ],
+  "checks": [
+    {
+      "id": "drawing-label-no-heading",
+      "found": "2026-11-26",
+      "issue": "#403: a drawing's 10pt label was an h4.",
+      "no_section": "VOUT"
+    },
+    {
+      "id": "revision-head-kept",
+      "found": "2026-11-26",
+      "status": "open",
+      "issue": "#403: at the body's size, the revision history's bold heads are text.",
+      "section": {
+        "title": "Changes from Revision AA (March 2022) to Revision AB (October 2024)"
+      }
+    }
+  ]
+}
