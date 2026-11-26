@@ -7211,6 +7211,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 8.0,
                     weight: None,
+                    italic: false,
                     advance: None,
                     draw_index: glyphs.len(),
                 });
