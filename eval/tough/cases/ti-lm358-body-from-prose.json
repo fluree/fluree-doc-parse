@@ -7,7 +7,7 @@
   },
   "notes": [
     "2026-11-26 (#403): with the body measured at 8pt, 10pt labels of its drawings (`VOUT`, `Package`) were headings by size. Measured from its prose, the body is 10pt.",
-    "Open: the revision history's bold heads (`Changes from Revision AA … to Revision AB …`) are set bold at the body's size now, and the data sheet sets too many bold lines in its tables for bold to head a section. Left on #403."
+    "Open: the revision history's bold heads (`Changes from Revision AA … to Revision AB …`) are set bold at the body's size now, each on one row with the bold `Page` label over its list's page column, and two bold lines side by side read as a table's header cells. On main both were headings by their size."
   ],
   "checks": [
     {
@@ -20,7 +20,7 @@
       "id": "revision-head-kept",
       "found": "2026-11-26",
       "status": "open",
-      "issue": "#403: at the body's size, the revision history's bold heads are text.",
+      "issue": "#403: at the body's size, each revision head and its `Page` label read as a header row.",
       "section": {
         "title": "Changes from Revision AA (March 2022) to Revision AB (October 2024)"
       }
