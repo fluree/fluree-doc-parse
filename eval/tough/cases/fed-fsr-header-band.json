@@ -1,0 +1,54 @@
+{
+  "document": {
+    "file": "fed-fsr-2025-04.pdf",
+    "url": "https://www.federalreserve.gov/publications/files/financial-stability-report-20250425.pdf",
+    "sha256": "81080ea1ebc4d6a1f3027c94f05eb40daec56c4006da6f1e7e85f9044111fb0b",
+    "about": "Federal Reserve Board Financial Stability Report, April 2025. Its tables (1.1, 2.1, 3.1, 4.1) set their header as a shaded band of four cells under a rule; the cells' dividers and the table's sides are drawn as very short horizontal strokes with a thick pen, and the body is ruled by nothing."
+  },
+  "notes": [
+    "2026-11-25 (#287): the header's three dividers are 0.5-pt horizontal segments stroked with a 36-pt pen, and the sides 1-pt segments with a 321-pt pen. Read by their outlines they were one horizontal rule through the header (y 127.9) and two stubs, so the header was cut in two and read in part, `Item` an h6. A stroke shorter than its pen is a bar across it: three vertical dividers and two sides.",
+    "2026-11-25 (#287): with the rules right, no reader took the band as the header: the body is read from its alignment or its text under it. A shaded band at a table's top, divided into cells by verticals standing on its top rule and ending at its foot, is the header row of the table read under it, one cell a column."
+  ],
+  "checks": [
+    {
+      "id": "table-1-1-outstanding",
+      "found": "2026-11-25",
+      "issue": "#287: `70,332` was under `(billions of dollars)` alone.",
+      "cell": {
+        "value": "70,332",
+        "column": "Outstanding (billions of dollars)",
+        "row": "Equities"
+      }
+    },
+    {
+      "id": "table-1-1-growth",
+      "found": "2026-11-25",
+      "issue": "#287: `22.9` was under `(billions of dollars) / (percent)`.",
+      "cell": {
+        "value": "22.9",
+        "column": "Growth, 2023:Q4–2024:Q4 (percent)",
+        "row": "Equities"
+      }
+    },
+    {
+      "id": "table-2-1-outstanding",
+      "found": "2026-11-25",
+      "issue": "#287: as above, Table 2.1.",
+      "cell": {
+        "value": "41,748",
+        "column": "Outstanding (billions of dollars)",
+        "row": "Total private nonfinancial credit"
+      }
+    },
+    {
+      "id": "item-is-the-stub-head",
+      "found": "2026-11-25",
+      "issue": "#287: each table's `Item` was an h6 above it.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Item"
+      },
+      "count": 0
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "pmc2228321.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2228321/",
+    "sha256": "6033f9126d2b5350773cb27f7405443fe940e8e6272db9ad451afd7ee7abe8b4",
+    "about": "BMC Genetics 2007, 8:81, 'An accurate method for quantifying and analyzing copy number variation in porcine KIT by an oligonucleotide ligation assay', PMC2228321. Its Table 3 (p8) groups its ratio columns under `qOLA(%)` and `Pyrosequencing (%)`, with one rule drawn under both labels, over the columns past the stub and short of it. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#351): the header walk counted the groups' rule among the table's own and stopped there, so the labels were text above the table and its columns were named `Expected`, `Observed in Pyro_CNV` and `CV` alone. A rule under the groups, past the stub and short of it, is now their underline, and the labels span the groups it runs under."
+  ],
+  "checks": [
+    {
+      "id": "qola-observed",
+      "found": "2026-11-25",
+      "issue": "#351: the column was named `Observed d in qOLA_CNV` alone.",
+      "cell": {
+        "value": "33.7",
+        "column": "qOLA(%) / Observed d in qOLA_CNV",
+        "row": "D × L·LW (Blood DNA)"
+      }
+    },
+    {
+      "id": "pyrosequencing-observed",
+      "found": "2026-11-25",
+      "issue": "#351: as above, for `Observed in Pyro_Splice` under `Pyrosequencing (%)`.",
+      "cell": {
+        "value": "35.9",
+        "column": "Pyrosequencing (%) / Observed in Pyro_Splice",
+        "row": "D × L·LW (Blood DNA)"
+      }
+    }
+  ]
+}

@@ -6,7 +6,8 @@
     "about": "PLoS ONE 13(10): e0206576, a research article. Its sections open on their first subsection, the two headings set bold at 12pt one over the other: `Materials and methods` over `Animals`."
   },
   "notes": [
-    "Stacked bold heads were one block: entries are parted where each line ends short of the column, but bold lines were left whole there, as a title broken over two lines must be. Bold lines are now parted where the next line opens with a capital and its first word would have fitted on the line before."
+    "Stacked bold heads were one block: entries are parted where each line ends short of the column, but bold lines were left whole there, as a title broken over two lines must be. Bold lines are now parted where the next line opens with a capital and its first word would have fitted on the line before.",
+    "#394: PLOS sets its sections in Helvetica Bold, its subsections in Minion Bold and the level under those in Minion Bold Italic, all at 12pt. The style key was size, bold and caps, so all three were one level. Italic now ranks below upright, and a face whose x-height is a step shorter at one size ranks below the taller one."
   ],
   "checks": [
     {
@@ -25,6 +26,33 @@
       "element": {
         "type": "doco:SectionTitle",
         "text": "Animals"
+      }
+    },
+    {
+      "id": "subsection-within-its-section",
+      "found": "2026-11-26",
+      "issue": "#394: `Animals` (Minion Bold) was a sibling of `Materials and methods` (Helvetica Bold), both 12pt.",
+      "section": {
+        "title": "Animals",
+        "within": "Materials and methods"
+      }
+    },
+    {
+      "id": "results-subsection-within-results",
+      "found": "2026-11-26",
+      "issue": "#394: as above, under `Results`.",
+      "section": {
+        "title": "Subjective MRI analysis",
+        "within": "Results"
+      }
+    },
+    {
+      "id": "italic-head-a-level-below",
+      "found": "2026-11-26",
+      "issue": "#394: `In vivo MRI` (Minion Bold Italic) was a sibling of `Histology` (Minion Bold) above it.",
+      "section": {
+        "title": "In vivo MRI",
+        "within": "Histology"
       }
     }
   ]

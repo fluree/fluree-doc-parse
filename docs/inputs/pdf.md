@@ -99,6 +99,18 @@ read: it names the glyph drawn, and the width the PDF gives the code is that
 glyph's. A map that reads a code as anything else, a small capital, a
 ligature or a symbol font's glyph, is kept.
 
+**Accents set over their letters.** Many typesetters draw `é` as an `e` and a
+spacing `´` placed over it, and TeX draws every accented letter and every
+hat, tilde and bar in its formulas that way. Read in order that is two
+characters, `Balague´`, `K¨ahler`, `A˚`, where the page shows one. A spacing
+accent (`´` `` ` `` `ˆ` `˜` `¨` `¯` `˘` `˙` `˚` `˝` `ˇ`, and `¸` `˛` under the
+letter) whose ink is centred on a letter's and touches it or nearly does is
+read as part of that letter: `Balagué`, `Kähler`, `Å`, and `K̂` or `x̄`,
+letter and combining mark, where Unicode has no single character. An
+accent over a dotless `ı` reads as an accented `i`. The same character set
+beside a letter is left as printed: an acute standing in for an apostrophe
+(`Spearman´s`), a prime after a figure, inch marks after a dimension.
+
 **Symbol fonts.** A PDF made from Word gives a character set in Symbol or
 Wingdings the font's own code plus `0xF000` as its text, a private-use
 character, and every reader of the text layer gets that code: `1600 μmole`
@@ -141,7 +153,12 @@ lines joined without a space: in a number or a code (`1-800-222-` over
 (`Polish-German`, `t-test`), a range (`(A)-(L)`). A hyphen with a space
 before it is a dash, and a space follows it too. An all-capital compound
 broken at its hyphen cannot be told from an all-capital word the typesetter
-broke, and reads as the word. Some producers map the hyphens they draw to
+broke, and reads as the word. A lowercase compound broken at its own hyphen
+looks the same as a word broken inside, and the document tells them apart:
+where it sets the compound whole on a line elsewhere, and never closed up,
+the hyphen stays (`treatment-` over `emergent` is `treatment-emergent`
+where the text has `treatment-emergent AEs`). A compound the document sets
+only across a line break reads as one word. Some producers map the hyphens they draw to
 U+00AD SOFT HYPHEN; drawn, it is read as the hyphen it prints, and one that
 draws nothing is dropped.
 
@@ -285,6 +302,27 @@ minus, its items may wrap over any number of lines. No control character
 other than a tab or a line break is written into the output, from any
 source.
 
+**Nested lists.** An item whose marker stands under the text of the item
+before it is in a list nested in that item, one level deeper (`depth`). A
+bulleted `UL Listed to control:` has its dashed loads set under its text,
+and a regulation's `(1) … from—` has its `(a)` and `(b)` set under its own.
+An item whose marker stands back out returns to the level its marker stands
+at. The marker must stand at least an em right of the marker above, from
+an em before that item's text to two and a half ems past it. A marker
+further out belongs to another column. Only an item that follows the one
+before it down the page nests. A run broken by anything else, carried to
+the next column or onto the next page, starts again at the top. A wrapped
+line is its item's own, and a paragraph set with a hanging indent has no
+marker, so neither nests. Neither does a line read as an item whose number
+stands beside a later line: it carries on the item before.
+
+A marker is placed where it is drawn. One list can set its first bullet in
+the line and draw the rest apart from it, so one item's text starts at its
+bullet and the next item's a bullet's width in. They are compared by their
+bullets, which stand level, so the items are siblings. A box to tick marks
+a choice rather than a list's lead-in: what is set beside or under a form's
+`Yes` and `No` boxes stays level with them.
+
 **Numbered lists.** A feature or safety list often sets each item's number
 in the item's own text, `2. PostureFit SL®`, with a line or two of
 description under it. Such a list is read as a list, each item's title and
@@ -321,6 +359,23 @@ And a
 paragraph ended on a short line, followed at the same spacing by a line
 opening with a capital, is two paragraphs: the short line stops more than
 the next line's first word and two ems short of the lines around it.
+
+**Fields and addresses one per line.** A run of lines that each open with a
+field's label, a few words from a capital ending on a colon with the value
+after it (`Klantnummer: 6669263`, `Ust-IdNr.: DE123456789`), reads one field
+per paragraph; a value wrapped onto the next line stays with its field, and
+a field is never read as a heading. A label is no sentence carried onto the
+line (`subgrouped by age:` opens in lower case), nor a reference's volume or
+a list of abbreviations run on from the line above, and no field starts
+after a line ending on a comma, a semicolon or a word its phrase goes on
+from. A block of short lines stacked by hand, an address or a contact block,
+keeps its line breaks in one paragraph: five words or fewer to a line, all
+at one left edge and at the body's size, not all bold, and each line after
+the first opening an entry of its own (a capital, a figure, an e-mail or web
+address, or a telephone number, `fon (555) 23 78 -0`). A line ending on a
+hyphen, a comma, a dash set closed or a web address broken at its slash runs
+on into the next, and so does prose set in a narrow measure, which goes on
+in lower case. A heading's lines, broken by hand, still read as one title.
 Wrapped text, even with a designer's rag, never does. The other way round,
 a sentence that runs on stays one paragraph across a slightly wider line
 spacing, as footnotes set at a generous leading have, or across a change to
@@ -389,6 +444,14 @@ or a note's number: `kg/10⁶ dscm`, not `kg/106 dscm`; `4.0x10⁻³`, not
 `4.0x10-3`; `2024³`, not `20243`. An ordinal's ending stays with the number
 it agrees with (`22nd`, `118th`, `21e`).
 
+Some producers write a space between a formula's letters and draw the
+subscript into it afterwards: `As`, a space and `O`, then the `2` of As₂O₃
+set back where the space stands. A space whose room a script fills — a
+glyph after a letter, smaller than it and off its baseline, starting inside
+the space's advance — is no word space, and the script joins its word:
+`As2O3`, `HNO3`, `NH4OH`, not `As 2O3`, `HNO 3`, `NH 4OH`. The same holds for
+a symbol's subscript (`τ1`, `χ2`).
+
 A degree sign set as a raised `o` or `0` reads as `°` wherever it cannot be
 an ordinal's ending or a power: before a temperature's unit (`25°C`, not
 `25oC`), after three figures or more (`~ 145°`, not `~ 145 o`), after a
@@ -416,6 +479,32 @@ sat 5pt from its baseline, and cut the description in three around it. A
 title stacked in a margin, read line by line with the column beside it, is
 put back together as one block, its number and its words in whatever
 weight: `III. Regulatory cholesterol`. Display type is never a list marker.
+
+**Currency signs set apart.** A statement or an invoice may set a figure's
+currency sign in a column of its own, a little left of the figure:
+`Totaalbedrag  €  22,50`, a column of `$` beside a statement's amounts, a
+form's `£` before its box. Such a sign alone on its line is the figure's
+unit, never a list's bullet: it stays in the text, and the figure beside it
+is no list item.
+
+**Side labels.** A form sets labels in its margin a step larger than the text
+beside them, such as Form 1040's `Sign` / `Here` at 12pt beside a 6.9pt
+declaration. The gutter after such a label is measured in the text's size
+when all of these hold:
+- the label is a word or three of letters;
+- it is set a fifth or more larger than the text;
+- the text beside it goes on in a column of its own, its next line starting
+  where it starts.
+
+Measured in the label's size, `Sign` was read into the declaration and
+`Here` stood alone. A label's lines read apart in two cells of the page
+join again as one label (`Sign Here`, `Third Party Designee`, `Acceptable
+Means of Compliance`). They must be one-line blocks at one size and one left
+edge, one under the other, set over the page's text, with smaller text
+beside them. These stay as they were:
+- a clause's number set apart (`12.3`), read as a marker;
+- a speaker's name before the speech, its next line under the name;
+- a field's label before its value (`Title: Member`).
 Nor is a number set beside another number, such as a chart's tick labels
 side by side (`2.4−` beside `2.6−`): a list's number opens an item that
 says more than a number. Taken for markers, the years under a chart's bars
@@ -458,6 +547,33 @@ full-width text is read one column after the other, even where the page as a
 whole has no gutter there. A field list keeps each value with its label, and
 a side tab's turned labels at the page's edge are not weighed.
 
+**Blocks side by side.** Two blocks of text set side by side within one
+column's stretch are each read whole, the left first, or the right where it
+starts a line or more higher: an invoice's seller beside its customer, an
+article's details beside its abstract, a paragraph beside a chart's title
+and notes. A gutter of a line's height or more parts them, where neither
+runs on as prose does, when either holds:
+- Each is set on baselines of its own: most of the shorter one's lines
+  stand level with none across.
+- The left one goes on alone two lines or more past the right one's last,
+  and its lines are not labels (ending in a colon, or bold). A column of
+  labels beside their values stays as rows, each value read after its
+  label: a value may wrap past its label, but labels do not run on alone.
+Both sides must hold text, half their lines of two words or more, so a
+chart's ticks and a column of figures are not blocks.
+
+**Boxes side by side.** Text set in drawn boxes, outlined or filled, is read
+box by box. Where every line of a stretch stands in a box, the boxes are read
+in flow order: top to bottom, and left to right across a row of boxes level
+with each other, so a flowchart's branch, set lower at a box's side, reads
+after the box it leaves. Elsewhere, a row of two or more boxes side by side,
+each holding text and one of them two lines or more, is read box by box,
+left to right: two boxes of a diagram, two charts' panels with their titles
+in bands. A box holds the boxes inside it. Text over the row, or level with
+it at its left, such as a product's name beside a row of its ratings, is
+read first. A table's cells drawn one box each touch across the row or down
+the column, and are left as rows.
+
 **Tables and boxes in the reading order.** A table is read where it stands
 in its column, under the heading it sits under: one above it in its column,
 or one beside it at the left, either just above its top or level with its
@@ -471,6 +587,17 @@ stand in a word space at least, cross no text along its length, and stand
 beside two rows of text or more on each side. So a chart's line drawn behind
 its labels parts nothing, and neither does the border between a single row's
 cells: a code and what it names stay one line.
+
+**Dot leaders.** A table's label often runs on in dot leaders up to the next
+column, a word space or less short of its text (`Kolkata, India ........
+Manufacturing`). The leaders end the label's cell: the text after them starts
+the next one, and no cell keeps its leaders. A column of labels whose leaders
+run up to the table is the table's, however far its words stand from the
+figures, and a line of leaders left between two cells is not the page's
+text. The dots must stand close together, so a table's empty values (`..`)
+in neighbouring columns are no leaders. A contents entry, whose leaders run
+to a page number alone, is left as a line of text: a contents list is not a
+table.
 
 **Columns run together.** Many producers write the space after a word as a
 glyph that puts no ink down. Where the next glyph on the line stands across a
@@ -596,6 +723,34 @@ from its text:
   behind a table turns back on itself, and a line with no axis by it is no
   plot. The text of such a plot is left in the measure of the body's size,
   as the page's headings are read against it.
+- A bar chart's bars are fills of one width, three or more at an even pitch,
+  each standing on one base or hanging from it, at lengths that differ.
+  Pieces that abut, each ending where the next starts, are one stacked bar;
+  pieces a gap apart are bars of their own, so charts set one over another
+  are read apart. Bars are a chart when an axis binds them: the base drawn
+  as a rule across them, a column of ticks beside them at an even pitch, or
+  a scale beside them whose numbers step evenly. Bars set across the page
+  are read the same way. A table's shading is no chart: its rows run to one
+  length and hold their text, its figures step unevenly, and its columns of
+  cells end, piece after piece, at the same rows across the table, where a
+  stacked bar's few pieces end at their values.
+- A box diagram, a flowchart's steps or a system's blocks, is three boxes
+  or more, each holding a label, standing apart and joined by two
+  connectors or more: a line or an arrow crossing the gap between two boxes
+  where they face each other. A connector may also be curved, outlined as a
+  shape, stopped short by an arrowhead drawn apart, or run across between
+  boxes set apart both ways. Then it meets exactly two boxes and holds no
+  text. Between boxes side by side or stacked, it is thin across the gap and
+  runs through the middle of the facing sides. Between boxes set apart both
+  ways, it stays within the pair's reach. So a table's cell dividers and
+  stripes, and a chart's shapes running on past its labels, join nothing.
+  Its labels are the ones set in its boxes, with
+  its banner and side tabs standing against it and a caption over or under
+  it; a panel of text beside it stays the page's. A table is no diagram: a
+  box holds a label, not a row of figures; a band as wide as the page is a
+  table's shaded row; a table's group underline runs along its header
+  cells' edge rather than across a gap; and no box lies within a table
+  already found. A table's caption under a diagram stays its table's.
 - A form's fields are no drawing's shapes: an empty box a line or two high,
   under or after its label's colon (`Job Name:`, set at the text's size, not
   a title's), and the boxes in line with it at its height. The box that
@@ -654,7 +809,12 @@ page's maker, not what the drawing shows. The lines it runs on from go with
 it, such as the company and street over `1-800-…` and `www.…` set under a
 logo. The rectangle
 around a drawing and its labels is not part of the figure. A paragraph or
-heading inside it that was not taken as a label keeps its type.
+heading inside it that was not taken as a label keeps its type. Nor is a
+paragraph of the page's prose ever a figure's, taken or not: set at the
+body's size, over two lines or more, saying more than fifteen words, and no
+caption or note. Drawings grouped across a column, or a page of product
+panels, can enclose the text between them; that text, and a heading set
+flush over it, stay in the reading flow. A box diagram's steps are its own.
 
 **A frame drawn round a drawing bounds its figure.** A wiring diagram set in
 a box, with its labels in the box's margins (`Line / Hot` left of the
@@ -680,8 +840,21 @@ is no caption is.
 
 This applies only to display titles: text set larger than the prose, in
 words, and no caption. A panel's axis name and ticks stay with the panel
-above, however close the next panel's labels stand, and a paper's figure
-caption stays with the figure over it.
+above, however close the next panel's labels stand.
+
+**Captions.** A figure's caption, `Figure 3.`, `Fig. 2` or `Chart 17` and
+its text, goes to the figure it names. A document sets its captions on one
+side of its figures, above or below; the captions that stand above or
+below one figure alone show which, and where three in four of them agree,
+each caption goes to the nearest figure on that side. A caption set over
+the figure it names, under the figure before it, is the lower figure's; one
+under a plot and wider than it, set past the plot's axis values, is the
+plot's all the same. Where the document shows no side, a caption goes to
+the nearest figure. A caption stands across from its figure, sharing half
+the narrower of their widths, within six of its lines, with no paragraph of
+the page's prose between them; the lines a caption runs on into go with
+it. A caption across from no figure (its chart was not found) stays where
+it was, and a table's caption stays its table's.
 
 **A list between a label and its drawing.** A list's items are never a
 drawing's labels, so a label's reach must not pass over them. A section
@@ -737,6 +910,18 @@ letters, with no words but units and a dimension's notes (`TYP`, `MAX`).
 The drawing is a figure, and the callouts and view names around it are its
 labels. A table drawn over a drawing, ruled at its rows and columns and
 mostly filled, stays a table.
+
+**A chart's scale beside prose.** Where a chart stands in one column and
+the page's prose in the next, the prose's lines and the chart's scale can
+line up into what looks like a table (`spending have deteriorated. Business
+| 18.0`). Such a grid is no table: one column of it holds two numbers or more,
+each level with a horizontal stroke that ends beside it (an axis's tick, or
+a gridline's end), and one other column holds lines of running prose, with
+nothing else beside them but columns of a word or a few (the chart's
+legend). The prose is read back into its paragraphs, and the scale stays
+with the chart. A table's figures stand between its rules, never level with
+a stroke's end. A grid of a chart's own labels beside its scale, with no
+prose in it, is kept as it is.
 No grid is read across the edge of a box drawn round a drawing, a box
 holding three shapes or more: a diagram's wire labels inside the box and a
 note in the column beside it stand on the same baselines, and read as rows

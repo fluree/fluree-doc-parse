@@ -1,0 +1,52 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro LED+ dimmer submittal sheet. Its feature list sets each bullet at the margin; a bullet's sub-items set their dashes under its text."
+  },
+  "notes": [
+    "#295: a list set under an item's text was flat, its items siblings of the item that introduces them."
+  ],
+  "checks": [
+    {
+      "id": "loads-under-ul-listed",
+      "found": "2026-11-25",
+      "issue": "Page 1's five loads under `UL Listed to control:` were top-level items.",
+      "nested": {
+        "under": "UL Listed to control:",
+        "holds": [
+          "Dimmable LEDs",
+          "Dimmable compact fluorescent lamps (CFLs) with integrated ballast",
+          "Lutron LTEA Hi-lume 1% forward-phase LED driver",
+          "Halogen",
+          "Incandescent"
+        ]
+      }
+    },
+    {
+      "id": "maximum-load-ratings",
+      "found": "2026-11-25",
+      "issue": "Page 2's ratings under `Maximum Load` were top-level items.",
+      "nested": {
+        "under": "Maximum Load",
+        "holds": [
+          "150 W dimmable LED / CFL or",
+          "600 W incandescent / halogen or"
+        ]
+      }
+    },
+    {
+      "id": "minimum-load-ratings",
+      "found": "2026-11-25",
+      "issue": "Page 2's ratings under `Minimum Load` were top-level items.",
+      "nested": {
+        "under": "Minimum Load",
+        "holds": [
+          "See approved lamp list for LED / CFL or",
+          "40 W incandescent / halogen"
+        ]
+      }
+    }
+  ]
+}

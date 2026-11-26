@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "fed-mpr-20240705.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20240705_mprfullreport.pdf",
+    "sha256": "6cfad88dd4ee058a01db2012bf009c18da45e5306301edf3ff5d3b486644d09d",
+    "about": "Federal Reserve Monetary Policy Report, July 2024. Its charts stand in a column beside the text, each with a scale of numbers set level with its axis's ticks, lined up with the lines of the paragraph beside it."
+  },
+  "notes": [
+    "2026-11-26: the text column's lines and the chart's scale beside them were read as one table, a line of the paragraph to a row with a scale value (`… and fell | 4`); what the table left of the paragraph was taken by the chart as its labels."
+  ],
+  "checks": [
+    {
+      "id": "housing-paragraph-whole",
+      "found": "2026-11-26",
+      "issue": "#389: the paragraph beside the residential investment chart was read as a table with its scale.",
+      "text": "investment declined steeply in 2022 and fell further in the first half of last year"
+    },
+    {
+      "id": "dollar-paragraph-whole",
+      "found": "2026-11-26",
+      "issue": "#389: as above, beside the dollar index chart.",
+      "text": "the broad dollar index—a measure of the exchange value of the dollar"
+    }
+  ]
+}

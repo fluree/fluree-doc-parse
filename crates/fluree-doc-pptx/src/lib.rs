@@ -575,7 +575,11 @@ fn parse_slide<'c>(
                         flush(
                             &mut out,
                             &mut text,
-                            (page, shape, para_bullet || para_level > 0),
+                            (
+                                page,
+                                shape,
+                                (para_bullet || para_level > 0).then_some(para_level),
+                            ),
                             budget,
                         )?;
                         para_bullet = false;
@@ -595,7 +599,7 @@ fn parse_slide<'c>(
                 }
                 "sp" => {
                     // A shape's title-ness does not leak into the next shape.
-                    flush(&mut out, &mut text, (page, shape, false), budget)?;
+                    flush(&mut out, &mut text, (page, shape, None), budget)?;
                     shape = Shape::Body;
                 }
                 _ => {}
@@ -604,7 +608,7 @@ fn parse_slide<'c>(
         }
         buf.clear();
     }
-    flush(&mut out, &mut text, (page, Shape::Body, false), budget)?;
+    flush(&mut out, &mut text, (page, Shape::Body, None), budget)?;
     Ok(out)
 }
 
@@ -652,11 +656,12 @@ fn spend_table(e: &Element, budget: &mut Budget) -> Result<(), TooLarge> {
 }
 
 /// The text gathered in `buf` as an element of the slide `page`, by the
-/// shape it is in and whether it reads as a list item.
+/// shape it is in. `item` is a list item's depth, its paragraph's outline
+/// level `lvl`, for a paragraph read as one.
 fn flush(
     out: &mut Vec<Element>,
     buf: &mut String,
-    (page, shape, listy): (usize, Shape, bool),
+    (page, shape, item): (usize, Shape, Option<usize>),
     budget: &mut Budget,
 ) -> Result<(), TooLarge> {
     let t = std::mem::take(buf)
@@ -670,8 +675,11 @@ fn flush(
         element("doco:Title", t, None, page)
     } else if shape == Shape::SlideTitle {
         element("doco:SectionTitle", t, Some(1), page)
-    } else if listy {
-        element("doc:ListItem", t, None, page)
+    } else if let Some(depth) = item {
+        Element {
+            depth,
+            ..element("doc:ListItem", t, None, page)
+        }
     } else {
         element("doco:Paragraph", t, None, page)
     };
@@ -810,6 +818,8 @@ mod tests {
         let els = parse_slide_xml(&x, 0).unwrap();
         assert_eq!(els[0].kind, "doc:ListItem");
         assert_eq!(els[1].kind, "doc:ListItem");
+        // An outline level is a list item's depth.
+        assert_eq!((els[0].depth, els[1].depth), (0, 1));
     }
 
     #[test]

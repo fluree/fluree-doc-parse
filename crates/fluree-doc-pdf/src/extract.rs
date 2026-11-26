@@ -371,6 +371,8 @@ struct Collector<'b> {
     faces: crate::faces::Faces,
     /// The weight each font's glyphs are read at, once found.
     weights: std::collections::HashMap<u128, Option<u32>>,
+    /// Whether each font is italic, by the interpreter's key for it.
+    italics: std::collections::HashMap<u128, bool>,
     /// The document's image probes so far; see [`Probes`].
     probes: Probes,
 }
@@ -822,6 +824,18 @@ fn outline_bytes(path: &kurbo::BezPath) -> u64 {
 /// [`PROBE_DIM`] pixels square, a step for each sixteen.
 const PROBE_STEPS: u64 = (PROBE_DIM as u64 * PROBE_DIM as u64) / 16;
 
+/// A drawn shape's paint: its colour, or the kind of pattern it is painted
+/// with.
+fn paint_of(paint: &hayro_interpret::Paint<'_>) -> rule::Paint {
+    match paint {
+        hayro_interpret::Paint::Color(c) => rule::Paint::Solid(c.to_rgba().to_rgba8()),
+        hayro_interpret::Paint::Pattern(p) => match p.as_ref() {
+            hayro_interpret::pattern::Pattern::Shading(_) => rule::Paint::Gradient,
+            hayro_interpret::pattern::Pattern::Tiling(_) => rule::Paint::Tiled,
+        },
+    }
+}
+
 impl<'a> Device<'a> for Collector<'_> {
     fn set_soft_mask(&mut self, _m: Option<hayro_interpret::SoftMask<'a>>) {}
     fn set_blend_mode(&mut self, _b: hayro_interpret::BlendMode) {}
@@ -829,13 +843,42 @@ impl<'a> Device<'a> for Collector<'_> {
         &mut self,
         path: &kurbo::BezPath,
         transform: Affine,
-        _paint: &hayro_interpret::Paint<'a>,
+        paint: &hayro_interpret::Paint<'a>,
         mode: &hayro_interpret::PathDrawMode,
     ) {
         // A step for each segment: the copy below, and its walks.
         let segments = path.elements().len() as u64;
         if !self.spend(|b| b.spend_work(segments.max(1))) {
             return;
+        }
+        // A stroke shorter than its pen is wide is a bar across it: see
+        // [`pen_bars`]. Each bar is read as any shape is, a rule or a fill.
+        if let hayro_interpret::PathDrawMode::Stroke(props) = mode {
+            if let Some(bars) = pen_bars(path, transform, props) {
+                for b in bars {
+                    if !self.page_box.intersects(&b) {
+                        continue;
+                    }
+                    match rule::classify(b, self.page) {
+                        Some(rule::Shape::Rule(x)) => {
+                            if let Some(x) = self.clip_rule(x) {
+                                if self.spend(|b| b.spend_cells(1)) {
+                                    self.rules.push(x);
+                                }
+                            }
+                        }
+                        Some(rule::Shape::Fill(x)) => {
+                            if let Some(bbox) = self.visible(x.bbox) {
+                                if self.spend(|b| b.spend_cells(1)) {
+                                    self.fills.push(rule::Fill { bbox, ..x });
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                return;
+            }
         }
         // Bounding box only. A table grid is axis-aligned rectangles and
         // segments; curve detail is irrelevant and expensive to keep.
@@ -876,6 +919,15 @@ impl<'a> Device<'a> for Collector<'_> {
             }
             return;
         }
+        // What the fills are painted with, read once and only for a fill.
+        let filled = matches!(mode, hayro_interpret::PathDrawMode::Fill(_));
+        let mut painted = None;
+        let mut fill_of = |x: rule::Fill, bbox: BBox| rule::Fill {
+            bbox,
+            paint: Some(*painted.get_or_insert_with(|| paint_of(paint))),
+            stroked: !filled,
+            ..x
+        };
         // A rule is kept as drawn: table structure reads a grid's ruling
         // whole, and a table broken by the page foot draws its next row's
         // rules on under the clip. A filled shape is measured by what shows
@@ -883,7 +935,7 @@ impl<'a> Device<'a> for Collector<'_> {
         // A path filling several rectangles apart, a table's shaded cells
         // drawn as one, is a fill each: read whole, its box covered the
         // table, and the bands it shades were none.
-        if matches!(mode, hayro_interpret::PathDrawMode::Fill(_)) {
+        if filled {
             if let Some(boxes) = subpath_fills(&path) {
                 if !self.spend(|b| b.spend_cells(boxes.len() as u64)) {
                     return;
@@ -897,7 +949,7 @@ impl<'a> Device<'a> for Collector<'_> {
                         }
                         Some(rule::Shape::Fill(x)) => {
                             if let Some(bbox) = self.visible(x.bbox) {
-                                self.fills.push(rule::Fill { bbox, ..x });
+                                self.fills.push(fill_of(x, bbox));
                             }
                         }
                         None => {}
@@ -917,7 +969,7 @@ impl<'a> Device<'a> for Collector<'_> {
             Some(rule::Shape::Fill(x)) => {
                 if let Some(bbox) = self.visible(x.bbox) {
                     if self.spend(|b| b.spend_cells(1)) {
-                        self.fills.push(rule::Fill { bbox, ..x });
+                        self.fills.push(fill_of(x, bbox));
                     }
                 }
             }
@@ -1207,6 +1259,17 @@ impl<'a> Device<'a> for Collector<'_> {
             }),
             _ => None,
         };
+        // Italic as the font's dictionary says, else as its program's name
+        // does.
+        let italic = match glyph {
+            HGlyph::Outline(o) => *self.italics.entry(o.font_cache_key()).or_insert_with(|| {
+                self.faces.get(o.font_cache_key()).is_some_and(|f| f.italic)
+                    || o.font_data()
+                        .and_then(|f| f.postscript_name)
+                        .is_some_and(|n| crate::faces::named_italic(&n))
+            }),
+            _ => false,
+        };
         // Ink density, for the faces no weight is stated for. Measured
         // here because the transformed outline is already being built for the
         // bounding box, and is not available anywhere later.
@@ -1305,6 +1368,7 @@ impl<'a> Device<'a> for Collector<'_> {
             rotation_deg,
             font_size,
             weight,
+            italic,
             advance,
             draw_index,
         });
@@ -1614,6 +1678,79 @@ fn trace_of(path: &kurbo::BezPath, drawn: BBox, page: usize) -> Option<rule::Tra
 /// Shortest underline read out of a path of several, in points: a narrow
 /// figure's width, longer than a chart's tick.
 const MIN_UNDERLINE: f64 = 8.0;
+
+/// The ink of a stroked path whose every subpath is one straight segment
+/// shorter than the pen is wide, each its own bar on the page; `None` for
+/// any other path, which is read by its outline as before.
+///
+/// A pen sweeps its width across the segment it strokes, so a segment
+/// shorter than the pen draws a bar the pen's width long, at right angles
+/// to the segment, as wide as the segment is long: a template that draws
+/// its column rules as 0.5-pt horizontal segments with a 36-pt pen draws
+/// three 0.5 × 36 vertical rules, and its borders, a 1-pt segment with a
+/// 321-pt pen, two 1 × 321 rules. Read by its outline, each was a stub of
+/// horizontal rule, and the three in one path one rule through the header
+/// they divide. A butt cap ends the bar at the segment's ends; a square or
+/// round cap carries it half the pen on past each. A dashed pen, and a
+/// segment of no length, a dot or nothing, are left to the outline. Ordinary rules, their pen thinner than their length, are
+/// not this.
+fn pen_bars(
+    path: &kurbo::BezPath,
+    transform: Affine,
+    props: &hayro_interpret::StrokeProps,
+) -> Option<Vec<BBox>> {
+    let pen = props.line_width as f64;
+    if pen <= 0.0 || !props.dash_array.is_empty() {
+        return None;
+    }
+    let cap = match props.line_cap {
+        kurbo::Cap::Butt => 0.0,
+        _ => pen / 2.0,
+    };
+    // Each subpath's one segment: a second turns it into an outline.
+    let mut segments: Vec<(kurbo::Point, kurbo::Point)> = Vec::new();
+    let mut start: Option<kurbo::Point> = None;
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) => start = Some(p),
+            kurbo::PathEl::LineTo(p) => segments.push((start.take()?, p)),
+            kurbo::PathEl::ClosePath => {}
+            _ => return None,
+        }
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    let mut bars = Vec::new();
+    for (a, b) in segments {
+        let along = b - a;
+        let length = along.hypot();
+        // No length is a dot, or nothing with a butt cap: the outline's.
+        // And only a bar that is a rule: a segment no longer than a rule is
+        // thick, under a pen at least a rule's aspect longer. A short thick
+        // stroke that paints a block is a shape the outline reads as before.
+        if length == 0.0
+            || length > rule::MAX_RULE_THICKNESS
+            || pen < length * rule::MIN_RULE_ASPECT
+        {
+            return None;
+        }
+        let dir = if length > 0.0 {
+            along / length
+        } else {
+            kurbo::Vec2::new(1.0, 0.0)
+        };
+        let across = kurbo::Vec2::new(-dir.y, dir.x) * (pen / 2.0);
+        let (from, to) = (a - dir * cap, b + dir * cap);
+        let corners = [from + across, from - across, to - across, to + across];
+        let mut r = Rect::from_points(transform * corners[0], transform * corners[1]);
+        for c in &corners[2..] {
+            r = r.union_pt(transform * *c);
+        }
+        bars.push(crate::geom::from_kurbo(r));
+    }
+    Some(bars)
+}
 
 fn subpath_rules(path: &kurbo::BezPath, page: usize) -> Option<Vec<Rule>> {
     let mut boxes: Vec<Rect> = Vec::new();
@@ -2163,6 +2300,7 @@ pub fn extract_pdf_with(
     let mut unread: Vec<(usize, usize, String, kurbo::BezPath)> = Vec::new();
     let mut faces = crate::faces::Faces::default();
     let mut weights = std::collections::HashMap::new();
+    let mut italics = std::collections::HashMap::new();
     let mut probes = Probes {
         off: !options.probe_images,
         small: options.probe_small_images,
@@ -2200,6 +2338,7 @@ pub fn extract_pdf_with(
             cased: Vec::new(),
             faces: std::mem::take(&mut faces),
             weights: std::mem::take(&mut weights),
+            italics: std::mem::take(&mut italics),
             probes: std::mem::take(&mut probes),
             page_box: BBox {
                 x0: 0.0,
@@ -2240,6 +2379,7 @@ pub fn extract_pdf_with(
         largest_page = dev.largest_page;
         faces = std::mem::take(&mut dev.faces);
         weights = std::mem::take(&mut dev.weights);
+        italics = std::mem::take(&mut dev.italics);
         probes = std::mem::take(&mut dev.probes);
         probes.settle(pdf);
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
@@ -2660,6 +2800,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 12.0,
             weight: None,
+            italic: false,
             advance: boxed.then_some(6.67),
             draw_index: 0,
         };
@@ -2685,6 +2826,7 @@ mod tests {
                 rotation_deg: 0.0,
                 font_size: 10.0,
                 weight: None,
+                italic: false,
                 advance: None,
                 draw_index: i,
             })
@@ -2911,6 +3053,7 @@ mod tests {
             rotation_deg: 90.0,
             font_size: 12.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         };
@@ -2967,6 +3110,7 @@ mod actual_text_tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: Some(5.0),
             draw_index: 0,
         }
@@ -3009,6 +3153,7 @@ mod actual_text_tests {
             cased: Vec::new(),
             faces: Default::default(),
             weights: Default::default(),
+            italics: Default::default(),
             probes: Probes::default(),
         };
         c.speak(Spoken {
@@ -3064,6 +3209,7 @@ mod actual_text_tests {
             over: None,
             faces: Default::default(),
             weights: Default::default(),
+            italics: Default::default(),
             probes: Probes::default(),
         };
         for &(start, end, said) in spans {
@@ -3113,12 +3259,10 @@ mod actual_text_tests {
         assert_eq!(cased_over(&report, &[(2, 3, "p")]), "REPORT");
     }
 
-    #[test]
-    fn a_shape_is_measured_by_what_its_clip_lets_show() {
-        // A polar chart's outer circle, drawn whole and clipped to the
-        // chart's quarter, centred on its corner and reaching off the page.
-        let mut budget = Budget::default();
-        let mut c = Collector {
+    /// A collector for a letter-size page with nothing drawn on it yet,
+    /// spending from `budget`.
+    fn collector(budget: &mut Budget) -> Collector<'_> {
+        Collector {
             page: 0,
             glyphs: Vec::new(),
             images: Vec::new(),
@@ -3145,12 +3289,21 @@ mod actual_text_tests {
             painted: Vec::new(),
             cased: Vec::new(),
             largest_page: 0,
-            budget: &mut budget,
+            budget,
             over: None,
             faces: Default::default(),
             weights: Default::default(),
+            italics: Default::default(),
             probes: Probes::default(),
-        };
+        }
+    }
+
+    #[test]
+    fn a_shape_is_measured_by_what_its_clip_lets_show() {
+        // A polar chart's outer circle, drawn whole and clipped to the
+        // chart's quarter, centred on its corner and reaching off the page.
+        let mut budget = Budget::default();
+        let mut c = collector(&mut budget);
         let circle = BBox {
             x0: 133.0,
             y0: -71.0,
@@ -3178,6 +3331,57 @@ mod actual_text_tests {
         assert!(c.visible(outside).is_none());
         c.pop_clip_path();
         assert!(c.visible(outside).is_some());
+    }
+
+    #[test]
+    fn a_fill_carries_its_paint_and_an_outline_says_it_is_one() {
+        use hayro_interpret::color::{AlphaColor, Color};
+        use hayro_interpret::{FillRule, Paint, PathDrawMode};
+        let mut budget = Budget::default();
+        let mut c = collector(&mut budget);
+        // A table's shaded cells drawn as one path: two rows of two cells,
+        // side by side, the rows a section apart.
+        let grey = Paint::Color(Color::from_rgba(AlphaColor::from_rgba8(217, 217, 217, 255)));
+        let mut cells = kurbo::BezPath::new();
+        for (x0, y0) in [
+            (100.0, 100.0),
+            (200.0, 100.0),
+            (100.0, 180.0),
+            (200.0, 180.0),
+        ] {
+            for el in Rect::new(x0, y0, x0 + 100.0, y0 + 20.0)
+                .to_path(0.1)
+                .elements()
+            {
+                cells.push(*el);
+            }
+        }
+        c.draw_path(
+            &cells,
+            Affine::IDENTITY,
+            &grey,
+            &PathDrawMode::Fill(FillRule::NonZero),
+        );
+        // A box drawn as a black outline: a fill by its extent only.
+        let black = Paint::Color(Color::from_rgba(AlphaColor::BLACK));
+        c.draw_path(
+            &Rect::new(300.0, 300.0, 400.0, 360.0).to_path(0.1),
+            Affine::IDENTITY,
+            &black,
+            &PathDrawMode::Stroke(Default::default()),
+        );
+        let painted: Vec<_> = c.fills.iter().map(|f| (f.paint, f.stroked)).collect();
+        let solid = |v| Some(rule::Paint::Solid([v, v, v, 255]));
+        assert_eq!(
+            painted,
+            vec![
+                (solid(217), false),
+                (solid(217), false),
+                (solid(217), false),
+                (solid(217), false),
+                (solid(0), true)
+            ]
+        );
     }
 
     #[test]
@@ -3250,6 +3454,44 @@ mod actual_text_tests {
 mod subpath_fill_tests {
     use super::subpath_fills;
     use kurbo::BezPath;
+
+    #[test]
+    fn a_stroke_shorter_than_its_pen_is_a_bar_across_it() {
+        let props = |w: f32| hayro_interpret::StrokeProps {
+            line_width: w,
+            ..Default::default()
+        };
+        // Three 0.5-pt segments along a row, a 36-pt pen: three columns'
+        // rules, 0.5 wide and 36 tall.
+        let mut p = BezPath::new();
+        for x in [0.0, 92.0, 184.0] {
+            p.move_to((x, 0.0));
+            p.line_to((x + 0.5, 0.0));
+        }
+        let bars = super::pen_bars(&p, kurbo::Affine::IDENTITY, &props(36.0)).expect("bars");
+        assert_eq!(bars.len(), 3);
+        for b in &bars {
+            assert!(
+                (b.width() - 0.5).abs() < 1e-6 && (b.height() - 36.0).abs() < 1e-6,
+                "{b:?}"
+            );
+        }
+        // An ordinary rule, its pen thinner than its length, is not one.
+        let mut rule = BezPath::new();
+        rule.move_to((0.0, 0.0));
+        rule.line_to((100.0, 0.0));
+        assert!(super::pen_bars(&rule, kurbo::Affine::IDENTITY, &props(1.0)).is_none());
+        // Nor a dot, a segment of no length, nor a short thick stroke that
+        // paints a block.
+        let mut dot = BezPath::new();
+        dot.move_to((5.0, 5.0));
+        dot.line_to((5.0, 5.0));
+        assert!(super::pen_bars(&dot, kurbo::Affine::IDENTITY, &props(36.0)).is_none());
+        let mut block = BezPath::new();
+        block.move_to((0.0, 0.0));
+        block.line_to((10.0, 0.0));
+        assert!(super::pen_bars(&block, kurbo::Affine::IDENTITY, &props(36.0)).is_none());
+    }
 
     fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
         format!("M{x0},{y0} L{x1},{y0} L{x1},{y1} L{x0},{y1} Z ")
@@ -3493,6 +3735,7 @@ mod budget_tests {
             cased: Vec::new(),
             faces: Default::default(),
             weights: Default::default(),
+            italics: Default::default(),
             probes: Default::default(),
             budget: &mut budget,
             over: None,

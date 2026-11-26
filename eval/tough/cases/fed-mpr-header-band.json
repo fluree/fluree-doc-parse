@@ -1,0 +1,34 @@
+{
+  "document": {
+    "file": "fed-mpr-2025-06.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20250620_mprfullreport.pdf",
+    "sha256": "6f8538cb4ce2902ac35cc9ec8311feda6c5c94953b76db50de94192741bb07f4",
+    "about": "Federal Reserve Board Monetary Policy Report, June 2025. Its balance-sheet table (p51) sets its header as a shaded band of five cells divided by verticals, over a body ruled by nothing, opened by the section label `Assets` and the group label `Total securities`."
+  },
+  "notes": [
+    "2026-11-25 (#287, second example): the header's labels were loose text above the table (`Change (since`, `(since January 2025) reduction began on`), the table's columns named by nothing. Taken as the header row, the band names each column; the two label lines between it and the first row of figures are the table's rows, each a group's label."
+  ],
+  "checks": [
+    {
+      "id": "dated-column",
+      "found": "2026-11-25",
+      "issue": "#287: `4,212` was under no column header.",
+      "cell": {
+        "value": "4,212",
+        "column": "June 11, 2025",
+        "row": "Treasury securities",
+        "section": "Assets / Total securities"
+      }
+    },
+    {
+      "id": "change-column-whole",
+      "found": "2026-11-25",
+      "issue": "#287: the change column's label was loose text in three pieces.",
+      "cell": {
+        "value": "−1,558",
+        "column": "Change (since Fed’s balance sheet reduction began on June 1, 2022)",
+        "row": "Treasury securities"
+      }
+    }
+  ]
+}
