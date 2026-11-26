@@ -97,6 +97,13 @@ pub struct Block {
     /// (a dash or bullet in the run, a count joined to it), and the box
     /// starts at the marker, or where there is none.
     pub marker_x: Option<f64>,
+    /// Its lines were stacked one per line by hand, an address or a contact
+    /// block (see [`split_stacked_lines`]): its text keeps their breaks.
+    pub stacked: bool,
+    /// A field set on a line of its own, `Klantnummer: 6669263`, parted
+    /// from the fields around it (see [`split_fields`]): a label and its
+    /// value, no section's title.
+    pub field: bool,
 }
 
 impl Block {
@@ -104,6 +111,14 @@ impl Block {
     /// paragraph wrapped across lines is one sentence flow, and NER must not
     /// see a spurious boundary mid-sentence.
     pub fn text(&self) -> String {
+        if self.stacked {
+            return self
+                .lines
+                .iter()
+                .map(|l| l.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         let mut out = String::new();
         let mut prev: Option<&Line> = None;
         for l in &self.lines {
@@ -1737,8 +1752,158 @@ fn finish(b: Block, edge: &Edge) -> Vec<Block> {
         .flat_map(split_counted)
         .flat_map(|b| split_ended(b, edge))
         .flat_map(|b| split_entries(b, edge))
+        .flat_map(split_fields)
+        .flat_map(|b| split_stacked_lines(b, edge))
         .flat_map(|b| split_stacked_heads(b, edge))
         .collect()
+}
+
+/// Most words in a field's label, before its colon.
+const FIELD_LABEL_WORDS: usize = 4;
+
+/// Does `text` open with a field's label, `Klantnummer:` or `Ust-IdNr.:`:
+/// a few words from a capital, ending on a colon set after a letter or a
+/// full stop, with its value after it? A time (`10:30`) sets its colon
+/// after a digit, a web address (`https://…`) its colon before two
+/// slashes; a sentence carried onto the line (`subgrouped by age:`) opens
+/// in lower case, and a reference's volume (`35(December):`) or an entry of
+/// a list of abbreviations run on from the line above (`rate; IL:`) holds
+/// brackets or a semicolon.
+fn opens_field(text: &str) -> bool {
+    let t = text.trim_start();
+    let Some(at) = t.find(':') else {
+        return false;
+    };
+    let (label, rest) = (&t[..at], &t[at + 1..]);
+    label.split_whitespace().count() <= FIELD_LABEL_WORDS
+        && label.chars().next().is_some_and(char::is_uppercase)
+        && !label.contains([';', ',', '(', ')'])
+        && label
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphabetic() || c == '.')
+        && !rest.starts_with("//")
+        && !rest.trim().is_empty()
+}
+
+/// Part a block of fields set one per line, `Factuurnummer: 993548900`
+/// over `Klantnummer: 6669263`, before each line that opens with a field's
+/// label: one block per field. The block's first line opens with a label
+/// too, and two lines or more do. A value that wraps onto the next line,
+/// which opens with no label, stays with its field.
+fn split_fields(b: Block) -> Vec<Block> {
+    if b.lines.len() < 2 || b.marker.is_some() || !opens_field(&b.lines[0].text) {
+        return vec![b];
+    }
+    // The line before a field ends one: not on a comma, a semicolon, a
+    // hyphen or a word its phrase runs on from.
+    let ends_open = |l: &Line| {
+        let t = l.text.trim_end();
+        t.ends_with([',', ';', '-', '\u{AD}'])
+            || t.split_whitespace()
+                .next_back()
+                .is_some_and(|w| RUNS_ON.contains(&w.to_lowercase().as_str()))
+    };
+    let starts: Vec<usize> = (1..b.lines.len())
+        .filter(|&i| opens_field(&b.lines[i].text) && !ends_open(&b.lines[i - 1]))
+        .collect();
+    if starts.is_empty() {
+        return vec![b];
+    }
+    let Block {
+        lines, gap_above, ..
+    } = b;
+    let mut out: Vec<Block> = Vec::new();
+    let mut cur: Vec<Line> = Vec::new();
+    for (i, l) in lines.into_iter().enumerate() {
+        if starts.contains(&i) {
+            out.push(build(std::mem::take(&mut cur)));
+        }
+        cur.push(l);
+    }
+    out.push(build(cur));
+    out[0].gap_above = gap_above;
+    for b in &mut out {
+        b.field = true;
+    }
+    out
+}
+
+/// Most words in a line of a block of stacked lines: an address's street,
+/// a contact's number.
+const STACKED_WORDS: usize = 5;
+
+/// Fewest digits in a telephone number.
+const PHONE_DIGITS: usize = 6;
+
+/// Is `text` a telephone or fax line, whatever word leads it (`fon (555)
+/// 23 78 -0`)? Six digits or more, and half its characters other than
+/// spaces: a wrapped line of prose holding a figure (`of 1,234,567 units`)
+/// is mostly words.
+fn phone_line(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let digits = chars.iter().filter(|c| c.is_ascii_digit()).count();
+    digits >= PHONE_DIGITS && digits * 2 >= chars.len()
+}
+
+/// Mark a block of short lines stacked one per line, an address or a
+/// contact block (`Pino Bluebird` over `Sessamestreet 32` over `1025 RX
+/// Amsterdam`), to keep its line breaks: one paragraph, its lines not
+/// reflowed into one. Every line says a few words, all
+/// set at one left edge and at the body's size, not all bold (a title
+/// broken over lines), and each line after the first opens a new entry: a
+/// capital, a figure, or an address of its own (`www.…`, an e-mail, a
+/// telephone number). Nothing runs on across a break: no line ends on a
+/// hyphen, a comma, a dash set closed, a web address broken at a slash
+/// (`http://dx.doi.org/10.1016/`), or a word its phrase goes on from
+/// (`… of`). Prose set
+/// in a narrow measure runs on in lower case from line to line, and stays
+/// whole.
+fn split_stacked_lines(b: Block, edge: &Edge) -> Vec<Block> {
+    if b.lines.len() < 2 || b.marker.is_some() {
+        return vec![b];
+    }
+    let fs = (b.font_size as f64).max(1.0);
+    let left = b.lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+    let last = b.lines.len() - 1;
+    let set = b.lines.iter().enumerate().all(|(i, l)| {
+        l.bbox.x0 - left <= fs
+            && (l.font_size as f64) < edge.body * DISPLAY_LINE_RATIO
+            && l.text.split_whitespace().count() <= STACKED_WORDS
+            && (i == last
+                || !l
+                    .text
+                    .trim_end()
+                    .ends_with(['-', '\u{AD}', ',', '/', '—', '–']))
+    }) && !b.lines.iter().all(|l| l.bold);
+    let opens_entry = |l: &Line| {
+        let first = l.text.split_whitespace().next().unwrap_or("");
+        let lower = first.to_ascii_lowercase();
+        opens_capital(l)
+            || first.chars().next().is_some_and(|c| c.is_ascii_digit())
+            || first.contains('@')
+            || lower.starts_with("www.")
+            || lower.starts_with("http")
+            || (first.starts_with(['+', '('])
+                && first[1..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit()))
+            || phone_line(&l.text)
+    };
+    let runs_on = |l: &Line| {
+        l.text
+            .split_whitespace()
+            .next_back()
+            .is_some_and(|w| RUNS_ON.contains(&w.to_lowercase().as_str()))
+    };
+    let ended = b
+        .lines
+        .windows(2)
+        .all(|w| opens_entry(&w[1]) && !runs_on(&w[0]));
+    let mut b = b;
+    b.stacked = set && ended;
+    vec![b]
 }
 
 /// Part a block before each line its paragraph was ended by hand ahead of;
@@ -2859,6 +3024,8 @@ pub(crate) fn build(lines: Vec<Line>) -> Block {
         lines,
         marker: None,
         marker_x: None,
+        stacked: false,
+        field: false,
     }
 }
 
@@ -2936,6 +3103,87 @@ mod tests {
     }
 
     #[test]
+    fn fields_set_one_per_line_are_parted() {
+        assert!(opens_field("Klantnummer: 6669263"));
+        assert!(opens_field("Ust-IdNr.: DE123456789"));
+        assert!(opens_field("Liefer- bzw. Leistungsdatum: 13.02.2014"));
+        // A sentence carried onto the line, a reference's volume, an entry
+        // run on from a list of abbreviations, a web address, a time.
+        assert!(!opens_field("subgrouped by age: older (≥65 years)"));
+        assert!(!opens_field("35(December):686-694."));
+        assert!(!opens_field("Sedimentation rate; IL: interleukin"));
+        assert!(!opens_field("https://example.org/page"));
+        assert!(!opens_field("Doors open at 10:30 daily"));
+        let at = |t: &str, y: f64| l(t, 45.0, y, 8.0);
+        let fields = build(vec![
+            at("Factuurnummer: 993548900", 150.0),
+            at("Klantnummer: 6669263", 164.0),
+            at("Factuurdatum: 19 april 2014", 178.0),
+        ]);
+        let parts = split_fields(fields);
+        assert_eq!(parts.len(), 3);
+        assert!(parts.iter().all(|p| p.field));
+        assert_eq!(parts[1].text(), "Klantnummer: 6669263");
+        // A value wrapped onto a line of its own stays with its field.
+        let wrapped = build(vec![
+            at("Results: the mean score was", 150.0),
+            at("higher in the second group.", 164.0),
+            at("Conclusions: the method works.", 178.0),
+        ]);
+        assert_eq!(split_fields(wrapped).len(), 2);
+        // A line ending on a word its phrase runs on from parts nothing.
+        let open = build(vec![
+            at("Note: the values are given in the", 150.0),
+            at("Annex: Table 2 lists them.", 164.0),
+        ]);
+        assert_eq!(split_fields(open).len(), 1);
+    }
+
+    #[test]
+    fn short_lines_stacked_by_hand_keep_their_breaks() {
+        let at = |t: &str, y: f64| l(t, 46.0, y, 10.0);
+        let stacked = |lines: Vec<Line>| {
+            let edge = Edge::of(&lines, 10.0);
+            split_stacked_lines(build(lines), &edge).remove(0)
+        };
+        // An address.
+        let address = stacked(vec![
+            at("Pino Bluebird", 100.0),
+            at("Sessamestreet 32", 114.0),
+            at("1025 RX Amsterdam", 128.0),
+        ]);
+        assert!(address.stacked);
+        assert_eq!(
+            address.text(),
+            "Pino Bluebird\nSessamestreet 32\n1025 RX Amsterdam"
+        );
+        // A contact block: a telephone line on a lower-case label, an e-mail
+        // address, a web address ending its block on a slash.
+        let contact = stacked(vec![
+            at("Ecke 12", 100.0),
+            at("fon (555) 23 78 -0", 114.0),
+            at("info@localhost.local", 128.0),
+            at("http://localhost/", 142.0),
+        ]);
+        assert!(contact.stacked);
+        // Prose in a narrow measure runs on from line to line.
+        let prose = stacked(vec![
+            at("The board met in", 100.0),
+            at("March to review", 114.0),
+            at("the plan again", 128.0),
+        ]);
+        assert!(!prose.stacked);
+        // A web address broken at its slash runs on.
+        let link = stacked(vec![
+            at("http://dx.doi.org/10.1016/", 100.0),
+            at("S2214-109X(18)30387-5", 114.0),
+        ]);
+        assert!(!link.stacked);
+        assert!(phone_line("fon (555) 23 78 -0"));
+        assert!(!phone_line("of 1,234,567 units"));
+    }
+
+    #[test]
     fn a_line_of_chinese_wrapped_mid_word_joins_without_a_space() {
         let block = |a: &str, b: &str| Block {
             lines: vec![l(a, 50.0, 100.0, 11.0), l(b, 50.0, 114.0, 11.0)],
@@ -2951,6 +3199,8 @@ mod tests {
             gap_above: None,
             marker: None,
             marker_x: None,
+            stacked: false,
+            field: false,
         };
         assert_eq!(
             block("deliver it to 青松纸业有限公", "司.").text(),

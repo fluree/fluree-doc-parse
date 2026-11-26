@@ -5582,6 +5582,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // now, and what is left of any other goes.
     for e in &mut elements {
         e.scrub_controls();
+        // A title broken over lines is one title: a heading's lines, set
+        // one under another by hand, read as one run.
+        if e.kind == "doco:SectionTitle" && e.text.contains('\n') {
+            e.text = e.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        }
     }
     Analysis {
         elements,

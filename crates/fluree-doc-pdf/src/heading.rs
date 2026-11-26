@@ -1430,6 +1430,11 @@ pub fn detect_with_body(
             if toc_from.is_some_and(|i| block_idx > i) {
                 continue;
             }
+            // A field parted from a list of fields is a label and its
+            // value, no section's title.
+            if b.field {
+                continue;
+            }
             let text = b.text();
             let n_chars = text.chars().count();
             if text.trim().is_empty() || n_chars > MAX_HEADING_CHARS {
@@ -3162,6 +3167,8 @@ mod tests {
             gap_above: None,
             marker: None,
             marker_x: None,
+            stacked: false,
+            field: false,
         }
     }
 
