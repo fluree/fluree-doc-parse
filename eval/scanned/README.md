@@ -46,8 +46,9 @@ Beside each `<id>.pdf` is `<id>.gold.json`: the profile, every fact drawn
 on the page with its kind (`name`, `id`, `amount`, `date`, `phrase`), its
 headings, and on a pasted page the screenshot's box. The headings are the
 lines the generator draws set apart in bold outside a table (a letterhead, a
-`Re:` line, a signature, `INVOICE`, `Bill to:`, a closing balance): what
-fdoc makes headings of on the born-digital page. Each fact is said exactly
+signature, `INVOICE`, `Bill to:`, a closing balance): what fdoc makes
+headings of on the born-digital page. A letter's `Re:` line, a field that
+labels its reference, is not one. Each fact is said exactly
 once on its page, by the rules the check finds it by: the generator draws a
 page again from the next random source while it says one twice, so a fact
 read wrong in one place is not credited by another place that says the same.
