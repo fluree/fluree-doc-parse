@@ -38,6 +38,12 @@
       "found": "2026-11-24",
       "issue": "A guard: a table set in two of five columns on page 39 parted the paragraphs of the other three at its top and foot.",
       "text": "In 2023, our total Scope 3 emissions were approximately 10.8 million tCO2e, representing 75% of our total carbon footprint."
+    },
+    {
+      "id": "foreword-signer-no-heading",
+      "found": "2026-11-25",
+      "issue": "#369: the foreword's signer, her name directly over her office, was a heading.",
+      "no_section": "Kate E. Brandt"
     }
   ]
 }

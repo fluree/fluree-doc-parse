@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "srivastava14a.pdf",
+    "url": "https://www.jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf",
+    "sha256": "9c196ccbe6c6a595a1adba6cd030d35f7c2e548bbf5e7f1278b0109d8dd9ebaa",
+    "about": "Journal of Machine Learning Research 15 (2014), Srivastava et al., Dropout. On p19 its equations set a math-italic P before its bracket, P(h, v; θ), on lines that write no space characters."
+  },
+  "notes": [
+    "2026-11-26 (#412): a line set tighter than its column read its word spaces from its own gaps (#388), and took the italic P's overhang before its bracket for one: P (h, v; θ). A bracket opening after a letter, a slash and a hyphen keep the column's threshold."
+  ],
+  "checks": [
+    {
+      "id": "p-against-its-bracket",
+      "found": "2026-11-26",
+      "issue": "#412: P(h, v; θ) read P (h, v; θ).",
+      "text": "P(h, v; θ)"
+    },
+    {
+      "id": "no-space-before-the-bracket",
+      "found": "2026-11-26",
+      "issue": "#412: as above.",
+      "no_text": "P (h, v; θ)"
+    }
+  ]
+}

@@ -27,6 +27,26 @@
         "text": "Federal Reserve Bank of Boston"
       },
       "count": 1
+    },
+    {
+      "id": "district-list-entry-no-heading",
+      "found": "2026-11-25",
+      "issue": "#369: page 3's list of districts, each name over its `First District` line, was a run of h6 headings. The one `Boston` left is the district's own page.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Boston"
+      },
+      "count": 1
+    },
+    {
+      "id": "district-list-entry-no-heading-2",
+      "found": "2026-11-25",
+      "issue": "#369: as above, `New York` over `Second District`; the one left is the district's own page.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "New York"
+      },
+      "count": 1
     }
   ]
 }

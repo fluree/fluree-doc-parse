@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "pmc6227383.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6227383/",
+    "sha256": "3099625883bb1a125406f9aead62cafad08c9743418952105bc221f45af64b6a",
+    "about": "The Lancet Global Health (2018) article on diabetes in the states of India, PMC6227383, set in two columns. Its table of DALY rates by state runs down the left column beside the Results' prose in the right. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#358): the table was read in pieces, each with a line of the right column's prose as a last column. A reading across the page's gutter, between two columns of text, is now read again in each column."
+  ],
+  "checks": [
+    {
+      "id": "dali-table-whole",
+      "found": "2026-11-25",
+      "issue": "#358: India's row was read with `state of India from 1990 to 2016. Age-standardised` as a third cell.",
+      "cell": {
+        "value": "1059 (923–1223)",
+        "column": "Age-standardised DALY rate per 100 000 (95% UI)",
+        "row": "India"
+      }
+    }
+  ]
+}
