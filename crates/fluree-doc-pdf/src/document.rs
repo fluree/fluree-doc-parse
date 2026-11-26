@@ -6170,7 +6170,13 @@ fn settle_cell_breaks<'a>(elements: &mut [Element], lines: impl Iterator<Item = 
     if !elements.iter().any(marked) {
         return;
     }
-    let is_word_char = |c: char| c.is_alphanumeric() || c == '-' || c == brk;
+    // A raised figure after a word is a note's number, no letter of the
+    // word: `consoli-` over `dated²` is `consolidated`.
+    let is_word_char = |c: char| {
+        (c.is_alphanumeric() && fluree_doc_model::marks::raised_figure(c).is_none())
+            || c == '-'
+            || c == brk
+    };
     let mut words: HashSet<String> = HashSet::new();
     let mut witness = |text: &str| {
         for w in text.split(|c: char| !is_word_char(c)) {
@@ -7198,6 +7204,8 @@ mod tests {
             format!("long{brk}term"),
             format!("Un{brk}employ{brk}ment"),
             format!("Wid{brk}gets"),
+            // A note's number raised after the word is no part of it.
+            format!("consoli{brk}dated²"),
         ]];
         let text = cells[0].join(" | ");
         let mut elements = vec![
@@ -7212,6 +7220,7 @@ mod tests {
             "Fluorescent Dimmer",
             "a long-term lease",
             "UNEMPLOYMENT RATE",
+            "consolidated figures",
         ];
         settle_cell_breaks(&mut elements, lines.into_iter());
         assert_eq!(
@@ -7224,11 +7233,13 @@ mod tests {
                 "Unemployment",
                 // Printed nowhere else: the hyphen stays, as it was.
                 "Wid-gets",
+                "consolidated²",
             ]
         );
         assert_eq!(
             elements[1].text,
-            "3-wire Fluorescent Ballasts | 20 Ballasts | long-term | Unemployment | Wid-gets"
+            "3-wire Fluorescent Ballasts | 20 Ballasts | long-term | Unemployment | Wid-gets \
+             | consolidated²"
         );
     }
 

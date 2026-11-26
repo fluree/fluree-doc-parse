@@ -105,7 +105,11 @@ Weight and size never make a heading of these:
   slide may title itself in a shorter sentence, and an agreement closes its
   title-case headings on a stop. A sentence is never the document's title,
   however short (`Dat betaal ik zelf wel.` under `FACTUUR.`), and neither is
-  a line of several fields (`BTW nr. NL: … IBAN: … BIC: …`).
+  a line of several fields (`BTW nr. NL: … IBAN: … BIC: …`). A stop with a
+  note's number raised on it ends a sentence wherever it stands, however
+  short the word it closes: no abbreviation carries a note, and the line
+  that goes on past it is prose (`low.³ Corporate earnings remained
+  strong…`).
 - **A value under its label:** a line in a lighter weight set at its bold
   label's size on the label's next line, alone or with more such lines
   (`K25W951` under `PRODUCT NUMBER`, a company's name and address under
@@ -629,7 +633,9 @@ title, often bold or larger than the text. Neither is a heading.
 
 - **Authors.** A line of people's names, each of two to four words, with
   the marks that point to their affiliations: `Roberta Lattanzi 1, Silvia
-  Rief2, … and*`, `Hye Chong Hong and Ari Min *`. Two names or more need a
+  Rief2, … and*`, `Hye Chong Hong and Ari Min *`, the marks raised
+  (`Alizée Roobaert¹,²`) or not, the names set apart by commas, `and` or a
+  middle dot (`Michail Hadjipantelis¹ · Onur Son²`). Two names or more need a
   mark. One name needs an affiliation's number with a corresponding
   author's symbol (`Mariana Spetea 2*`) or a list of affiliations (`1,2`).
   `Study 2`, `Model Year 2020` and `Posted Transactions*` are headings

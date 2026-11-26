@@ -821,13 +821,19 @@ const NAME_PARTICLES: &[&str] = &[
 ];
 
 /// Marks set after an author's name to point to their affiliation or to
-/// the corresponding author: `1`, `2,3`, `*`, `†`.
+/// the corresponding author: `1`, `2,3`, `*`, `†`, and the same numbers
+/// written raised (`¹,²`).
 fn affiliation_mark(c: char) -> bool {
-    c.is_ascii_digit()
+    figure(c)
         || matches!(
             c,
             '*' | '\u{2020}' | '\u{2021}' | '\u{00A7}' | '\u{00B6}' | ',' | '\u{262F}' | '\u{204E}'
         )
+}
+
+/// A figure, set on the line or raised: `2`, `²`.
+fn figure(c: char) -> bool {
+    c.is_ascii_digit() || fluree_doc_model::marks::raised_figure(c).is_some()
 }
 
 /// A line of an article's authors: people's names, each of two to four
@@ -842,9 +848,12 @@ fn byline(t: &str) -> bool {
     let mut names = 0;
     let mut marked = false;
     let mut strong = false;
+    // Names are listed with commas and `and`, or set apart by a middle
+    // dot (`Michail Hadjipantelis¹ · Onur Son²`).
     let units = t
         .replace(" and ", ", ")
         .replace(" & ", ", ")
+        .replace(" \u{00B7} ", ", ")
         .replace(';', ",");
     for unit in units.split(", ") {
         let unit = unit.trim();
@@ -895,7 +904,7 @@ fn byline(t: &str) -> bool {
             // A number past two figures is no affiliation's.
             if marks
                 .split(',')
-                .any(|m| m.trim_matches(|c: char| !c.is_ascii_digit()).len() > 2)
+                .any(|m| m.chars().filter(|&c| figure(c)).count() > 2)
             {
                 return false;
             }
@@ -909,8 +918,8 @@ fn byline(t: &str) -> bool {
 /// symbol for the corresponding author (`2*`), or a list of affiliations
 /// (`1,2`). A symbol alone is as often a note's (`Posted Transactions*`).
 fn strong_mark(marks: &str) -> bool {
-    let digits = marks.chars().any(|c| c.is_ascii_digit());
-    let symbol = marks.chars().any(|c| !c.is_ascii_digit() && c != ',');
+    let digits = marks.chars().any(figure);
+    let symbol = marks.chars().any(|c| !figure(c) && c != ',');
     (digits && symbol) || marks.trim_matches(',').contains(',')
 }
 
@@ -1032,6 +1041,28 @@ fn phone_number(tokens: &[&str]) -> bool {
 /// keep their abbreviating dot, and a title ending in a full stop (`CHAPTER 1.`)
 /// has nothing after it and is untouched.
 fn runs_into_prose(text: &str) -> bool {
+    // A stop with a note's number raised on it, and more after: a sentence
+    // ended there (`low.³ Corporate earnings remained strong`). No
+    // abbreviation carries a note, so its word may be short.
+    let chars: Vec<char> = text.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if !matches!(c, '.' | '?' | '!') {
+            continue;
+        }
+        let raised = chars[i + 1..]
+            .iter()
+            .take_while(|&&r| fluree_doc_model::marks::raised_figure(r).is_some() || r == ',')
+            .count();
+        let figures = chars[i + 1..i + 1 + raised]
+            .iter()
+            .any(|&r| fluree_doc_model::marks::raised_figure(r).is_some());
+        if figures && chars.get(i + 1 + raised) == Some(&' ') {
+            let rest: String = chars[i + 1 + raised..].iter().collect();
+            if rest.split_whitespace().count() >= 2 {
+                return true;
+            }
+        }
+    }
     let bytes = text.as_bytes();
     for (i, w) in bytes.windows(2).enumerate() {
         if !matches!(w[0], b'.' | b'?' | b'!') || w[1] != b' ' {
@@ -4798,6 +4829,9 @@ mod tests {
             "Ann B. Lee 1,2, Bo Chen3",
             "3,4, Cy D. Wu5\u{2021}, Ed F. Ng1\u{2021}",
             "Fay Gu and Hal Ito *",
+            // Their marks written raised, the names set apart by dots.
+            "Ann Lee¹,², Bo Chen² and Cy Wu¹",
+            "Ann Lee¹ · Bo Chen2 · Cy Wu¹",
         ] {
             assert!(byline(t), "{t}");
         }
@@ -4811,6 +4845,8 @@ mod tests {
             "Supplementary Figure 1",
             "Terms and Conditions",
             "Ann Lee",
+            "Study²",
+            "Wind · Solar · Storage",
         ] {
             assert!(!byline(t), "{t}");
         }
@@ -5749,6 +5785,11 @@ mod tests {
         assert!(runs_into_prose(
             "Results on data contamination. To show the in-"
         ));
+        // A note's number raised on the stop: the sentence ended there,
+        // however short its last word.
+        assert!(runs_into_prose(
+            "low.³ Corporate earnings remained strong through 2023."
+        ));
     }
 
     #[test]
@@ -5759,6 +5800,8 @@ mod tests {
         assert!(!runs_into_prose("Results vs. Baseline Methods"));
         assert!(!runs_into_prose("See Fig. 3 for details"));
         assert!(!runs_into_prose("Method of Doe et al. Revisited"));
+        // A heading's own note, at its end.
+        assert!(!runs_into_prose("Introduction.¹"));
     }
 
     #[test]

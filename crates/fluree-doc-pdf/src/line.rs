@@ -2155,7 +2155,9 @@ const FRACTION_RAISE: f64 = 0.25;
 /// Signs a power may carry beside its digits.
 const POWER_SIGNS: &[char] = &['-', '+', '\u{2212}', '\u{2013}'];
 
-/// A power's character as Unicode sets it raised.
+/// A power's or a note number's character as Unicode sets it raised. A
+/// comma between two notes' numbers has no raised form and stays as it is
+/// (`²,³`).
 fn superscript(c: char) -> char {
     match c {
         '0' => '\u{2070}',
@@ -2165,6 +2167,8 @@ fn superscript(c: char) -> char {
         '4'..='9' => char::from_u32(0x2070 + (c as u32 - '0' as u32)).unwrap_or(c),
         '+' => '\u{207A}',
         '-' | '\u{2212}' | '\u{2013}' => '\u{207B}',
+        '(' => '\u{207D}',
+        ')' => '\u{207E}',
         _ => c,
     }
 }
@@ -2530,9 +2534,14 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     // Digit-adjacent covers more than digit pairs: tabular
                     // figures leave the same wide gap before a decimal point or
                     // a unit sign, giving "1 .22V" and "1 %".
-                    let numeric_pair = prev_c.is_some_and(|c| c.is_ascii_digit())
+                    // So does a raised figure's before the punctuation
+                    // after it: `(Aǫ)²,`, `reserves.³⁷,`.
+                    let raised_prev = prev_c.is_some_and(|c| marks::raised_figure(c).is_some());
+                    let numeric_pair = (prev_c.is_some_and(|c| c.is_ascii_digit())
                         && next_c
-                            .is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '%'));
+                            .is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '%')))
+                        || (raised_prev
+                            && next_c.is_some_and(|c| matches!(c, '.' | ',' | ';' | ':')));
                     let both_digit = numeric_pair
                         || (prev_c.is_some_and(|c| matches!(c, '.' | ','))
                             && next_c.is_some_and(|c| c.is_ascii_digit()));
@@ -2593,7 +2602,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 {
                     leading = leading_mark(glyphs, idxs, k, adv);
                 }
-                // A note's mark raised after a word parts from it:
+                // A note's mark raised after a word is no part of it:
                 // `Acrylonitrile` and its `a`, not `Acrylonitrilea`. After a
                 // space, a raised mark is read only as a degree before its
                 // unit, the space kept as printed: `75 °F`.
@@ -2617,15 +2626,19 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     degrees.push(i);
                 }
                 let raised = raised.filter(|_| !degree).map(|(m, _)| m);
-                if raised
-                    .as_deref()
-                    .is_some_and(|m| marks::note_mark(&text, m))
-                {
+                // A note's number keeps its place raised, as a power's does
+                // (`countries.⁵`, `26TB¹`, `MACL-153M-XX²,³`); a note's
+                // letter or sign, which Unicode has no full raised set for,
+                // parts from the word instead (`Acrylonitrile a`).
+                let note = raised.as_deref().filter(|m| marks::note_mark(&text, m));
+                let numbered = note.is_some_and(marks::note_number);
+                if note.is_some() && !numbered {
                     text.push(' ');
                 }
                 // A power raised after a number keeps its place: `10⁶` and
                 // `10⁻³` as superscripts, never flattened into the number as
-                // `106` and `10-3`. So does a unit's: `m²`, `PIES²`.
+                // `106` and `10-3`. So does a unit's, `m²`, `PIES²`, and a
+                // note's number.
                 let continues = exponent.is_some_and(|(size, y, superiors)| {
                     (g.font_size - size).abs() <= size * 0.1
                         && (g.origin.1 - y).abs() < size.max(1.0) as f64 * 0.2
@@ -2641,7 +2654,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                                 && m.chars().any(|c| c.is_ascii_digit())
                                 && m.chars()
                                     .all(|c| c.is_ascii_digit() || POWER_SIGNS.contains(&c));
-                            power || marks::unit_power(&text, m)
+                            power || numbered || marks::unit_power(&text, m)
                         })
                         .map(|_| (g.font_size, g.origin.1, superior(g)));
                 }
@@ -4115,12 +4128,36 @@ mod tests {
 
     #[test]
     fn a_note_mark_raised_after_a_word_parts_from_it() {
+        // A note's letter parts from the word; its number keeps its place
+        // raised, as a power's does.
         let mut v = word("Acrylonitrile", 0.0, false);
         v.extend(word("a", 65.0, true));
         assert_eq!(assemble(&v)[0].text, "Acrylonitrile a");
         let mut v = word("Revenue", 0.0, false);
         v.extend(word("12", 35.0, true));
-        assert_eq!(assemble(&v)[0].text, "Revenue 12");
+        assert_eq!(assemble(&v)[0].text, "Revenue¹²");
+        // After the word's stop or comma, a list of notes, a number closing
+        // on its own bracket.
+        for (base, raised, want) in [
+            ("countries.", "5", "countries.⁵"),
+            ("MTBF,", "4", "MTBF,⁴"),
+            ("MACL-153M-XX", "2,3", "MACL-153M-XX²,³"),
+            ("dilution series", "1)", "dilution series¹⁾"),
+        ] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+        // The text after the mark is not raised, and the punctuation after
+        // it stands against it, a figure's tabular room before it no space.
+        let mut v = word("Revenue", 0.0, false);
+        v.extend(word("1", 35.0, true));
+        v.extend(word("rose", 42.0, false));
+        assert_eq!(assemble(&v)[0].text, "Revenue¹ rose");
+        let mut v = word("reserves.", 0.0, false);
+        v.extend(word("1", 45.0, true));
+        v.extend(word(",", 50.6, false));
+        assert_eq!(assemble(&v)[0].text, "reserves.¹,");
     }
 
     #[test]
@@ -4183,8 +4220,8 @@ mod tests {
     }
 
     #[test]
-    fn a_note_number_after_a_bracket_or_a_quantity_parts_from_it() {
-        for (base, raised, want) in [("(49 N)", "5", "(49 N) 5"), ("26TB", "1", "26TB 1")] {
+    fn a_note_number_after_a_bracket_or_a_quantity_stays_raised() {
+        for (base, raised, want) in [("(49 N)", "5", "(49 N)⁵"), ("26TB", "1", "26TB¹")] {
             let mut v = word(base, 0.0, false);
             v.extend(word(raised, 5.0 * base.len() as f64, true));
             assert_eq!(assemble(&v)[0].text, want);
@@ -4246,9 +4283,9 @@ mod tests {
 
     #[test]
     fn a_superior_figure_is_a_raised_mark() {
-        // A note's number after a word or a bracket parts from it, as a
-        // smaller raised one does: `Lengths 7`, not `Lengths7`.
-        for (base, want) in [("Lengths", "Lengths 7"), ("(48 mm)", "(48 mm) 7")] {
+        // A note's number after a word or a bracket, raised as a smaller
+        // one is: `Lengths⁷`, not `Lengths7`.
+        for (base, want) in [("Lengths", "Lengths⁷"), ("(48 mm)", "(48 mm)⁷")] {
             let mut v = word(base, 0.0, false);
             v.push(superior_figure("7", 5.0 * base.len() as f64));
             assert_eq!(assemble(&v)[0].text, want);
@@ -4260,11 +4297,11 @@ mod tests {
         assert_eq!(assemble(&v)[0].text, "25⁵ max");
         // Two superiors are one mark, read as the run they are: no power of
         // the first over the second, no degree. After the word's stop, a
-        // note's number, set apart.
+        // note's number.
         let mut v = word("comfit.", 0.0, false);
         v.push(superior_figure("5", 35.0));
         v.push(superior_figure("0", 38.5));
-        assert_eq!(assemble(&v)[0].text, "comfit. 50");
+        assert_eq!(assemble(&v)[0].text, "comfit.⁵⁰");
         // A figure set on the line is no superior.
         let mut v = word("Model7", 0.0, false);
         v.extend(word("x", 30.0, false));
