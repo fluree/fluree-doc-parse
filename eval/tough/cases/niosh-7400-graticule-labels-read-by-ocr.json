@@ -1,0 +1,42 @@
+{
+  "document": {
+    "file": "niosh-7400.pdf",
+    "url": "https://www.cdc.gov/niosh/nmam/pdf/7400.pdf",
+    "sha256": "dbb6a72a5487bf7265ab82ed3999ae5986c26dcbfbf3b9819d714a3a1ba9d0cf",
+    "ocr_words": "../fixtures/ocr-words/niosh-7400",
+    "about": "NIOSH Manual of Analytical Methods, Method 7400 (Asbestos and other fibers by PCM), Issue 3, 2019. Page 21 draws the Walton-Beckett graticule as a picture, its fibres labelled by size (`20×3`, `10×3`, `5×5/3`) and numbered in circles; an OCR engine reads the labels in it."
+  },
+  "notes": [
+    "The stored reading is the built-in engine's (PP-OCRv6 small) of the picture's crop: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`."
+  ],
+  "checks": [
+    {
+      "id": "graticule-label-is-figure-text",
+      "found": "2026-11-26",
+      "issue": "The labels read by OCR in the picture were read with the page's text, each a paragraph of its own.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "20×3"
+      }
+    },
+    {
+      "id": "graticule-size-label-is-figure-text",
+      "found": "2026-11-26",
+      "issue": "As above, another label.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "10×3"
+      }
+    },
+    {
+      "id": "graticule-label-no-paragraph",
+      "found": "2026-11-26",
+      "issue": "As above: no label stands as a paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "5×5/3"
+      },
+      "count": 0
+    }
+  ]
+}

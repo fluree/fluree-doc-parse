@@ -442,6 +442,11 @@ fn inject_one(p: &mut Page, crop: Crop, t: &Target, ink: bool, reading: &WordRea
     for i in regions_read {
         if !mark.regions.contains(&i) {
             mark.regions.push(i);
+            let at = match &t.area {
+                Area::Regions(rs) => rs.iter().find(|(j, _)| *j == i).map(|(_, b)| *b),
+                Area::Page => None,
+            };
+            mark.region_boxes.push(at.unwrap_or_default());
         }
     }
     result

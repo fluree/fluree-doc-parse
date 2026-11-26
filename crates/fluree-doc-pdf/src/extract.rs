@@ -139,7 +139,7 @@ pub struct Page {
 /// OCR filled keeps its place, and its number, among the page's routed
 /// regions, and a crop name read before the injection still names the same
 /// region after it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct OcrRead {
     /// Glyphs whose `draw_index` is at least this were added by OCR.
     pub first_glyph: usize,
@@ -147,6 +147,9 @@ pub struct OcrRead {
     pub whole: bool,
     /// The routed regions, by index, a reading was taken for.
     pub regions: Vec<usize>,
+    /// Those regions' boxes, in the same order: where each reading's words
+    /// lie, read as one picture's whatever images draw it.
+    pub region_boxes: Vec<crate::geom::BBox>,
 }
 
 impl Page {
