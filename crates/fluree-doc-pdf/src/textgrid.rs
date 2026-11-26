@@ -754,6 +754,69 @@ fn covered(cols: &[(f64, f64)], c: &Chunk) -> Vec<usize> {
         .collect()
 }
 
+/// The item rows over a block of totals, where the region's figure rows
+/// end in one: lines directly under the fullest rows, each setting at most
+/// half their cells, labels of a few words and an amount under one of the
+/// items' columns, one of its labels running across a gutter of the
+/// fullest rows (`Totaal
+/// exclusief BTW` across `Aantal | Prijs/st`). Such labels close the items'
+/// gutters, and outnumber them where an invoice lists one item over six
+/// totals. A statement's total sets as many cells as its rows and keeps its
+/// label in the stub: no block. `None` where the lines end in no block;
+/// else the lines that vote, and the block's lines by their baselines.
+fn items_over_totals<'a>(
+    lines: &[&'a Line],
+    x0: f64,
+    x1: f64,
+) -> Option<(Vec<&'a Line>, Vec<f64>)> {
+    let most = lines.iter().map(|l| l.chunks.len()).max()?;
+    let last = lines.iter().rposition(|l| l.chunks.len() == most)?;
+    let block: Vec<&&Line> = lines[last + 1..]
+        .iter()
+        .take_while(|l| {
+            l.chunks.len() * 2 <= most
+                && l.chunks
+                    .last()
+                    .is_some_and(|c| is_figure(&c.text) && !is_year(&c.text))
+        })
+        .collect();
+    if block.is_empty() || most < 4 {
+        return None;
+    }
+    let full: Vec<&Line> = lines[..=last]
+        .iter()
+        .copied()
+        .filter(|l| l.chunks.len() == most)
+        .collect();
+    let item_cols = columns(&full, x0, x1);
+    // Each a label or two of a few words and its amount, under an amount
+    // of the items: lines of prose ending in a year or a page (a list of
+    // references, a crystal's data) are no totals.
+    let totals = block.iter().all(|l| {
+        let (amount, labels) = l.chunks.split_last().expect("a chunk at least");
+        covered(&item_cols, amount).len() == 1
+            && labels
+                .iter()
+                .all(|c| c.text.split_whitespace().count() <= SECTION_WORDS)
+    });
+    let across = block
+        .iter()
+        .any(|l| l.chunks.iter().any(|c| covered(&item_cols, c).len() >= 2));
+    if !totals || !across {
+        return None;
+    }
+    // The items, and whatever follows the block (another table's rows).
+    let after = last + 1 + block.len();
+    Some((
+        lines[..=last]
+            .iter()
+            .chain(&lines[after..])
+            .copied()
+            .collect(),
+        block.iter().map(|l| l.base).collect(),
+    ))
+}
+
 /// A line that sits in the table's columns: each chunk within one column.
 fn fits(cols: &[(f64, f64)], l: &Line) -> bool {
     !cols.is_empty() && l.chunks.iter().all(|c| covered(cols, c).len() <= 1)
@@ -822,30 +885,7 @@ fn split_at_gutters(cols: &[(f64, f64)], held: &[usize], l: &Line) -> Line {
         let cut: Vec<Chunk> = pieces
             .into_iter()
             .enumerate()
-            .map(|(i, ws)| Chunk {
-                x0: ws.iter().map(|w| w.x0).fold(f64::MAX, f64::min),
-                x1: ws.iter().map(|w| w.x1).fold(f64::MIN, f64::max),
-                y0: ws.iter().map(|w| w.y0).fold(f64::MAX, f64::min),
-                y1: ws.iter().map(|w| w.y1).fold(f64::MIN, f64::max),
-                text: ws
-                    .iter()
-                    .map(|w| w.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                bold: c.bold,
-                glyphs: ws.iter().flat_map(|w| w.glyphs.iter().copied()).collect(),
-                trailing: if i + 1 == n {
-                    c.trailing.clone()
-                } else {
-                    Vec::new()
-                },
-                reach: if i + 1 == n {
-                    c.reach
-                } else {
-                    ws.iter().map(|w| w.x1).fold(f64::MIN, f64::max)
-                },
-                words: ws.into_iter().cloned().collect(),
-            })
+            .map(|(i, ws)| piece_of(c, &ws, i + 1 == n))
             .collect();
         if cut.len() > 1
             && cut.iter().all(|p| covered(cols, p).len() <= 1)
@@ -855,6 +895,182 @@ fn split_at_gutters(cols: &[(f64, f64)], held: &[usize], l: &Line) -> Line {
         } else {
             chunks.push(c.clone());
         }
+    }
+    Line {
+        chunks,
+        ..l.clone()
+    }
+}
+
+/// The piece of chunk `c` its words `ws` make, `last` where it ends `c`.
+fn piece_of(c: &Chunk, ws: &[&Chunk], last: bool) -> Chunk {
+    Chunk {
+        x0: ws.iter().map(|w| w.x0).fold(f64::MAX, f64::min),
+        x1: ws.iter().map(|w| w.x1).fold(f64::MIN, f64::max),
+        y0: ws.iter().map(|w| w.y0).fold(f64::MAX, f64::min),
+        y1: ws.iter().map(|w| w.y1).fold(f64::MIN, f64::max),
+        text: ws
+            .iter()
+            .map(|w| w.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        bold: c.bold,
+        glyphs: ws.iter().flat_map(|w| w.glyphs.iter().copied()).collect(),
+        trailing: if last { c.trailing.clone() } else { Vec::new() },
+        reach: if last {
+            c.reach
+        } else {
+            ws.iter().map(|w| w.x1).fold(f64::MIN, f64::max)
+        },
+        words: ws.iter().map(|w| (*w).clone()).collect(),
+    }
+}
+
+/// A line of labels of a few words each, as a header's are: a line of
+/// prose beside a chart's ticks is none. Nor is a run of three words or
+/// more ending as a sentence or a clause does (`confidence of households
+/// and businesses.`; an abbreviation's stop, `No.`, ends one word), or
+/// going on in lower case from the line before (`the influence of
+/// idiosyncratic or temporary`): a label starts its own words.
+fn labels_only(l: &Line) -> bool {
+    l.chunks.iter().all(|c| {
+        let words = c.text.split_whitespace().count();
+        let text = c.text.trim();
+        words <= SECTION_WORDS
+            && !(words >= 3
+                && (text.ends_with(['.', ',', ';']) || text.starts_with(char::is_lowercase)))
+    })
+}
+
+/// The columns with those only the header names: on a line of column
+/// labels, two others or more each over one column, a label over none of
+/// the rows' columns, standing clear between two that other labels name,
+/// heads a column no row fills (`Korting` between `Prijs/st` and `Bedrag`,
+/// over no discount on any item).
+fn with_empty_columns(mut cols: Vec<(f64, f64)>, head: &[&Line]) -> Vec<(f64, f64)> {
+    let mut extra: Vec<(f64, f64)> = Vec::new();
+    for l in head {
+        let singles = l
+            .chunks
+            .iter()
+            .filter(|c| covered(&cols, c).len() == 1)
+            .count();
+        if singles < 2 || !labels_only(l) {
+            continue;
+        }
+        // An em clear of the columns each side: a label in a gutter close
+        // to a column (one centred over values set wider) is that column's.
+        let clear = l.fs;
+        // And each neighbour named by a label of its own on the line: a
+        // label beside a column no other label names is that column's, set
+        // off to one side (`Service Areas` beside the areas).
+        let named = |k: usize| l.chunks.iter().any(|d| covered(&cols, d) == [k]);
+        for c in &l.chunks {
+            let between = cols.windows(2).enumerate().any(|(k, p)| {
+                c.x0 >= p[0].1 + clear && c.x1 <= p[1].0 - clear && named(k) && named(k + 1)
+            });
+            if between
+                && c.text.chars().any(char::is_alphabetic)
+                && !extra.iter().any(|&(a, b)| c.x1 > a && c.x0 < b)
+            {
+                extra.push((c.x0, c.x1));
+            }
+        }
+    }
+    cols.extend(extra);
+    cols.sort_by(|a, b| a.0.total_cmp(&b.0));
+    cols
+}
+
+/// Two column labels set a word space apart read as one label over both
+/// columns (`BTW Hoeveelheid` over `21 % | 1 PCS`). On a line of column
+/// labels, two others or more each over one column, a label over two
+/// neighbouring columns is cut where its words part over the gutter
+/// between them, each piece then over one column. A banner on a line of its
+/// own stays whole, as does a label whose words run on across the gutter,
+/// and a group's label over the columns' own labels `below` it
+/// (`Preparation (h)` over `Pathology | Radiology`). The second piece's
+/// column then starts where its label does, in the gutter, so that the
+/// label is read in it.
+fn part_labels(cols: &mut [(f64, f64)], l: &Line, below: &[&Line]) -> Line {
+    let singles = l
+        .chunks
+        .iter()
+        .filter(|c| covered(cols, c).len() <= 1)
+        .count();
+    if singles < 2 || !labels_only(l) {
+        return l.clone();
+    }
+    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut widen: Vec<(usize, f64)> = Vec::new();
+    for c in &l.chunks {
+        let cov = covered(cols, c);
+        let named_below = below.iter().any(|n| {
+            n.chunks
+                .iter()
+                .any(|d| covered(cols, d).iter().any(|k| cov.contains(k)))
+        });
+        if cov.len() != 2 || cov[1] != cov[0] + 1 || c.words.len() < 2 || named_below {
+            chunks.push(c.clone());
+            continue;
+        }
+        let (k, gx0, gx1) = (cov[0], cols[cov[0]].1, cols[cov[0] + 1].0);
+        let cut = (1..c.words.len())
+            .find(|&i| c.words[i - 1].x1 <= gx1 + 0.5 && c.words[i].x0 >= gx0 - 0.5);
+        let pieces = cut.map(|i| {
+            let left: Vec<&Chunk> = c.words[..i].iter().collect();
+            let right: Vec<&Chunk> = c.words[i..].iter().collect();
+            [piece_of(c, &left, false), piece_of(c, &right, true)]
+        });
+        // Each piece set on its column's axis, as a column's label is:
+        // starting where the column starts, ending where it ends, or
+        // centred over it. A phrase centred over both (`Lower lip`, `An.
+        // gambiae`) parts nowhere a column does.
+        let tol = l.fs * 0.5;
+        let on_axis = |p: &Chunk, (x0, x1): (f64, f64)| {
+            (p.x0 - x0).abs() <= tol
+                || (p.x1 - x1).abs() <= tol
+                || ((p.x0 + p.x1) / 2.0 - (x0 + x1) / 2.0).abs() <= tol
+        };
+        // The second piece starts a label of its own: a phrase goes on in
+        // lower case (`Lower lip`, `An. gambiae`). And the first closes
+        // its brackets (`OR (95% CI)` is one label).
+        let starts = |p: &Chunk| !p.text.trim_start().starts_with(char::is_lowercase);
+        let closed = |p: &Chunk| {
+            p.text.matches('(').count() == p.text.matches(')').count()
+                && p.text.matches('[').count() == p.text.matches(']').count()
+        };
+        match pieces {
+            Some([a, b])
+                if covered(cols, &a) == [k]
+                    && covered(cols, &b) == [k + 1]
+                    && on_axis(&a, cols[k])
+                    && on_axis(&b, cols[k + 1])
+                    && starts(&b)
+                    && closed(&a) =>
+            {
+                widen.push((k + 1, b.x0));
+                chunks.push(a);
+                chunks.push(b);
+            }
+            _ => chunks.push(c.clone()),
+        }
+    }
+    // Parted, the line names the columns one label each, every column but
+    // the stub's perhaps: a line of column labels, not a phrase over two
+    // columns among others (`Don't Know`).
+    let mut named: Vec<usize> = Vec::new();
+    for c in &chunks {
+        match covered(cols, c).as_slice() {
+            [k] if !named.contains(k) => named.push(*k),
+            _ => return l.clone(),
+        }
+    }
+    if widen.is_empty() || named.len() + 1 < cols.len() {
+        return l.clone();
+    }
+    for (k, x) in widen {
+        cols[k].0 = cols[k].0.min(x);
     }
     Line {
         chunks,
@@ -1148,7 +1364,13 @@ fn read_beside(
                     .any(|c| is_figure(&c.text) && !is_year(&c.text))
         })
         .collect();
-    let cols0 = if valued.len() >= 2 {
+    // A block of totals under the items casts no vote on the columns; its
+    // lines are still the table's rows.
+    let items = items_over_totals(&valued, x0, x1);
+    let totals: Vec<f64> = items.as_ref().map_or(Vec::new(), |(_, t)| t.clone());
+    let cols0 = if let Some((items, _)) = items {
+        columns(&items, x0, x1)
+    } else if valued.len() >= 2 {
         columns(&valued, x0, x1)
     } else {
         let ls: Vec<&Line> = band.iter().map(|&i| &clipped[i]).collect();
@@ -1170,7 +1392,10 @@ fn read_beside(
         .iter()
         .map(|l| split_at_gutters(&cols0, &held, l))
         .collect();
-    let value_row = |l: &Line| fits(&cols0, l) && l.chunks.len() >= 2 && has_figures(&cols0, l);
+    let value_row = |l: &Line| {
+        (fits(&cols0, l) && l.chunks.len() >= 2 && has_figures(&cols0, l))
+            || totals.iter().any(|&b| (b - l.base).abs() < 0.01)
+    };
     // A line ruled off above and below, as the rows around it are, holding
     // its label and a value in the columns: a row whatever its value says
     // (`Packaging (W x H x D) | 31.4 cm x 10.9 cm x 15.7 cm` among lengths
@@ -2118,7 +2343,11 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     let is_restated = |l: &Line| restated.iter().any(|t| std::ptr::eq(*t, l));
     let cols = {
         let rows: Vec<&Line> = body.iter().filter(|l| !is_title(l)).copied().collect();
-        columns(&rows, x0, x1)
+        // A block of totals under the items casts no vote here either.
+        match items_over_totals(&rows, x0, x1) {
+            Some((items, _)) => columns(&items, x0, x1),
+            None => columns(&rows, x0, x1),
+        }
     };
     if cols.len() < 2 {
         return None;
@@ -2167,6 +2396,14 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             break;
         }
     }
+    let mut cols = with_empty_columns(cols, &head);
+    let parted: Vec<Line> = head
+        .iter()
+        .enumerate()
+        .map(|(i, l)| part_labels(&mut cols, l, &head[i + 1..]))
+        .collect();
+    let cols = cols;
+    let head: Vec<&Line> = parted.iter().collect();
     // A header line that is a column's label wrapped onto a second line joins
     // it; a banner, or a line with a rule under it, stays a row of its own.
     // The rule under a label: the pieces under its middle, or with `joined`
@@ -4072,6 +4309,137 @@ mod tests {
         let head = texts[..lay.header_rows * g.cols()].join(" ");
         assert!(!head.contains("Gender"), "{texts:?}");
         assert!(!head.contains("Age at onset"), "{texts:?}");
+    }
+
+    /// An invoice's items under their header, then `rows` of totals, each a
+    /// label at `x` and an amount under the last column.
+    fn invoice(header: &[&str], totals: &[(&str, f64, &str)]) -> (Vec<Glyph>, BBox) {
+        let xs = [20.0, 90.0, 300.0, 360.0, 420.0, 480.0];
+        let mut gl = Vec::new();
+        for (k, t) in header.iter().enumerate() {
+            if !t.is_empty() {
+                gl.extend(set(t, xs[k], 40.0));
+            }
+        }
+        for (i, row) in [
+            ["A1031", "Service kit", "2", "49.99", "", "99.98"],
+            ["A2210", "Filter set", "1", "12.50", "", "12.50"],
+            ["B0417", "Cleaning tabs", "3", "4.99", "", "14.97"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 56.0 + 12.0 * i as f64;
+            for (k, t) in row.iter().enumerate() {
+                if !t.is_empty() {
+                    gl.extend(set(t, xs[k], y));
+                }
+            }
+        }
+        for (i, (label, x, amount)) in totals.iter().enumerate() {
+            let y = 100.0 + 12.0 * i as f64;
+            gl.extend(set(label, *x, y));
+            gl.extend(set(amount, xs[5], y));
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 48.0,
+            x1: 540.0,
+            y1: 100.0 + 12.0 * totals.len() as f64,
+        };
+        (gl, region)
+    }
+
+    #[test]
+    fn a_block_of_totals_under_the_items_merges_no_columns() {
+        // Three items in five filled columns, then totals whose labels run
+        // across the items' gutters: the totals cast no vote on the columns,
+        // and stay the table's rows.
+        let (gl, region) = invoice(
+            &["Code", "Item", "Qty", "Price", "", "Amount"],
+            &[
+                ("Total amount excluding VAT", 250.0, "127.45"),
+                ("VAT 21%", 250.0, "26.76"),
+                ("Amount due", 250.0, "154.21"),
+            ],
+        );
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert!(!grids.is_empty(), "{grids:?}");
+        let g = &grids[0];
+        let texts = g.cell_texts(&gl);
+        assert_eq!(g.cols(), 5, "{texts:?}");
+        // The totals are rows of the table still.
+        let rows: Vec<String> = texts
+            .chunks(g.cols())
+            .map(|r| {
+                r.iter()
+                    .filter(|t| !t.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        assert!(
+            rows.iter()
+                .any(|r| r == "Total amount excluding VAT 127.45"),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn a_header_label_over_no_rows_column_heads_an_empty_column() {
+        // `Discount` over a column no item fills: its own column, not a
+        // second name for the next one.
+        let (gl, region) = invoice(&["Code", "Item", "Qty", "Price", "Discount", "Amount"], &[]);
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert!(!grids.is_empty(), "{grids:?}");
+        let g = &grids[0];
+        let lay = g.layout.as_deref().expect("read from its text");
+        let texts = g.cell_texts(&gl);
+        assert_eq!(g.cols(), 6, "{texts:?}");
+        let head = &texts[..lay.header_rows.max(1) * g.cols()];
+        assert!(head.iter().any(|t| t == "Discount"), "{texts:?}");
+    }
+
+    #[test]
+    fn two_column_labels_a_word_space_apart_head_their_own_columns() {
+        // `VAT Quantity` set as one run over the VAT and quantity columns,
+        // on the line of column labels, `Quantity` ending where its
+        // column's values end: two labels.
+        let xs = [20.0, 120.0, 340.0, 378.5, 480.0];
+        let mut gl = Vec::new();
+        gl.extend(set("Code", xs[0], 40.0));
+        gl.extend(set("Item", xs[1], 40.0));
+        gl.extend(set("VAT Quantity", xs[2], 40.0));
+        gl.extend(set("Amount", xs[4], 40.0));
+        for (i, row) in [
+            ["A1031", "Service kit", "21 %", "1 PCS", "49.99"],
+            ["A2210", "Filter set", "21 %", "2 PCS", "25.00"],
+            ["B0417", "Cleaning tabs", "9 %", "3 PCS", "14.97"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 56.0 + 12.0 * i as f64;
+            for (k, t) in row.iter().enumerate() {
+                gl.extend(set(t, xs[k], y));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 48.0,
+            x1: 540.0,
+            y1: 90.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert!(!grids.is_empty(), "{grids:?}");
+        let g = &grids[0];
+        let lay = g.layout.as_deref().expect("read from its text");
+        let texts = g.cell_texts(&gl);
+        // One line of column labels: no banner row over two columns.
+        assert_eq!(lay.header_rows, 1, "{texts:?} {lay:?}");
+        assert!(texts.iter().any(|t| t == "VAT"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "Quantity"), "{texts:?}");
     }
 
     #[test]
