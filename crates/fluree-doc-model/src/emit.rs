@@ -341,6 +341,18 @@ fn carries_on_table(elements: &[Element], i: usize) -> bool {
         && cols(prev) == cols(e)
 }
 
+/// Close the open lists past the first `keep`, innermost first, with the
+/// item each was set in.
+fn close_lists(out: &mut String, lists: &mut Vec<usize>, keep: usize) {
+    while lists.len() > keep {
+        lists.pop();
+        out.push_str("</ul>\n");
+        if !lists.is_empty() {
+            out.push_str("</li>\n");
+        }
+    }
+}
+
 pub fn to_xhtml(elements: &[Element]) -> String {
     to_xhtml_with(elements, &Notes::default())
 }
@@ -360,16 +372,17 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
     let mut out = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n",
     );
-    let mut in_list = false;
+    // The depths of the lists open here, outermost first. Each but the
+    // innermost sits in an item left open to hold the list after it.
+    let mut lists: Vec<usize> = Vec::new();
     let mut open_figure: Option<String> = None;
     for (i, e) in elements.iter().enumerate() {
         if open_figure.is_some() && e.kind != "doco:Figure" {
             out.push_str("</figure>\n");
             open_figure = None;
         }
-        if in_list && e.kind != "doc:ListItem" {
-            out.push_str("</ul>\n");
-            in_list = false;
+        if e.kind != "doc:ListItem" {
+            close_lists(&mut out, &mut lists, 0);
         }
         match e.kind.as_str() {
             // The document's own title reads as its top heading.
@@ -387,11 +400,34 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                 ));
             }
             "doc:ListItem" => {
-                if !in_list {
-                    out.push_str("<ul>\n");
-                    in_list = true;
+                // Close the lists deeper than the item; the outermost takes
+                // the shallowest depth it holds.
+                let d = e.depth;
+                while lists.len() > 1 && lists.last().is_some_and(|&l| l > d) {
+                    lists.pop();
+                    out.push_str("</ul>\n");
+                    // The item that held it ends, unless this item is
+                    // deeper than it too and opens a list beside it there.
+                    if lists.last().is_some_and(|&l| l >= d) {
+                        out.push_str("</li>\n");
+                    }
                 }
-                out.push_str(&format!("<li>{}</li>\n", html_linked(e)));
+                if let [outer] = lists.as_mut_slice() {
+                    *outer = (*outer).min(d);
+                }
+                if lists.last().is_none_or(|&l| l < d) {
+                    out.push_str("<ul>\n");
+                    lists.push(d);
+                }
+                // An item holding a deeper list stays open for it.
+                let holds = elements
+                    .get(i + 1)
+                    .is_some_and(|n| n.kind == "doc:ListItem" && n.depth > d);
+                out.push_str(&format!(
+                    "<li>{}{}",
+                    html_linked(e),
+                    if holds { "\n" } else { "</li>\n" }
+                ));
             }
             "doco:Table" => {
                 if let Some(rows) = &e.cells {
@@ -530,13 +566,16 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
             _ => match (&e.turn, &e.message) {
                 (Some(t), _) => out.push_str(&html_turn(e, t)),
                 (None, Some(m)) => out.push_str(&html_message(e, m)),
-                (None, None) => out.push_str(&format!("<p>{}</p>\n", html_linked(e))),
+                // A paragraph whose lines were stacked by hand, an
+                // address, keeps their breaks.
+                (None, None) => out.push_str(&format!(
+                    "<p>{}</p>\n",
+                    html_linked(e).replace('\n', "<br/>\n")
+                )),
             },
         }
     }
-    if in_list {
-        out.push_str("</ul>\n");
-    }
+    close_lists(&mut out, &mut lists, 0);
     if open_figure.is_some() {
         out.push_str("</figure>\n");
     }
@@ -612,7 +651,14 @@ pub fn to_markdown_with_options(
     opts: &MarkdownOptions,
 ) -> String {
     let mut out = String::new();
+    // The lists open here, outermost first: each one's depth, the indent of
+    // its items, and the column its last item's text starts at, where a
+    // list inside that item is indented to.
+    let mut lists: Vec<(usize, usize, usize)> = Vec::new();
     for (i, e) in elements.iter().enumerate() {
+        if e.kind != "doc:ListItem" {
+            lists.clear();
+        }
         match e.kind.as_str() {
             "doco:Title" => out.push_str(&format!("\n# {}\n\n", md_linked(e, opts))),
             "doco:SectionTitle" => {
@@ -645,17 +691,44 @@ pub fn to_markdown_with_options(
                     out.push_str(&format!("\n{}\n\n", e.text));
                 }
             }
-            // An ordered list's item that carries its own number, `3. FAQ`:
-            // the number is the item's Markdown marker, and a bullet before
-            // it would set a numbered line inside a bulleted item.
-            "doc:ListItem" if opens_with_ordinal(&e.text) => {
-                out.push_str(&format!("{}\n", md_linked(e, opts)))
+            "doc:ListItem" => {
+                let d = e.depth;
+                while lists.len() > 1 && lists.last().is_some_and(|l| l.0 > d) {
+                    lists.pop();
+                }
+                if let [outer] = lists.as_mut_slice() {
+                    outer.0 = outer.0.min(d);
+                }
+                match lists.last() {
+                    None => lists.push((d, 0, 0)),
+                    Some(&(depth, _, text_at)) if depth < d => lists.push((d, text_at, 0)),
+                    Some(_) => {}
+                }
+                let open = lists.last_mut().unwrap();
+                let indent = " ".repeat(open.1);
+                let text = md_linked(e, opts);
+                if opens_with_ordinal(&e.text) {
+                    // An ordered list's item that carries its own number,
+                    // `3. FAQ`: the number is the item's Markdown marker,
+                    // and a bullet before it would set a numbered line
+                    // inside a bulleted item.
+                    let marker = e.text.find(' ').unwrap_or(0) + 1;
+                    open.2 = open.1 + marker;
+                    out.push_str(&format!("{indent}{text}\n"));
+                } else {
+                    open.2 = open.1 + 2;
+                    out.push_str(&format!("{indent}- {text}\n"));
+                }
             }
-            "doc:ListItem" => out.push_str(&format!("- {}\n", md_linked(e, opts))),
             _ => match (&e.turn, &e.message) {
                 (Some(t), _) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
                 (None, Some(m)) => out.push_str(&format!("{}\n\n", md_message(e, m))),
-                (None, None) => out.push_str(&format!("{}\n\n", md_linked(e, opts))),
+                // A paragraph whose lines were stacked by hand keeps their
+                // breaks, as CommonMark hard breaks: a plain line end reads
+                // as a space.
+                (None, None) => {
+                    out.push_str(&format!("{}\n\n", md_linked(e, opts).replace('\n', "  \n")))
+                }
             },
         }
     }
@@ -688,6 +761,60 @@ mod tests {
             header_rows: Some(header),
             ..Element::new("doco:Table", "", "rust", "rules")
         }
+    }
+
+    fn item(text: &str, depth: usize) -> Element {
+        Element {
+            depth,
+            ..Element::new("doc:ListItem", text, "rust", "layout")
+        }
+    }
+
+    #[test]
+    fn a_paragraphs_kept_line_breaks_are_hard_breaks() {
+        let address = para("Pino Bluebird\nSessamestreet 32", vec![]);
+        assert!(to_markdown(std::slice::from_ref(&address))
+            .contains("Pino Bluebird  \nSessamestreet 32\n\n"));
+        assert!(to_xhtml(&[address]).contains("<p>Pino Bluebird<br/>\nSessamestreet 32</p>"));
+    }
+
+    #[test]
+    fn a_nested_list_nests_in_xhtml_and_markdown() {
+        let els = [
+            item("Fruit", 0),
+            item("Apples", 1),
+            item("Seedless", 2),
+            item("Vegetables", 0),
+            item("10. Leeks", 1),
+            item("Onions", 2),
+            para("After", vec![]),
+        ];
+        let html = to_xhtml(&els);
+        let body = html.split("<body>\n").nth(1).unwrap();
+        assert_eq!(
+            body.split("</body>").next().unwrap(),
+            "<ul>\n<li>Fruit\n<ul>\n<li>Apples\n<ul>\n<li>Seedless</li>\n</ul>\n</li>\n</ul>\n</li>\n\
+             <li>Vegetables\n<ul>\n<li>10. Leeks\n<ul>\n<li>Onions</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n\
+             <p>After</p>\n"
+        );
+        // Each sub-list is indented to where its parent item's text starts,
+        // past a bullet or past the item's own number.
+        assert_eq!(
+            to_markdown(&els),
+            "- Fruit\n  - Apples\n    - Seedless\n- Vegetables\n  10. Leeks\n      - Onions\nAfter\n\n"
+        );
+        // Back out of a list two deeper to one deeper: a second list in the
+        // same item.
+        let skip = [item("Fruit", 0), item("Seedless", 2), item("Apples", 1)];
+        let body = to_xhtml(&skip);
+        assert!(body.contains(
+            "<li>Fruit\n<ul>\n<li>Seedless</li>\n</ul>\n<ul>\n<li>Apples</li>\n</ul>\n</li>\n</ul>\n"
+        ));
+        assert_eq!(to_markdown(&skip), "- Fruit\n  - Seedless\n  - Apples\n");
+        // A flat list reads as it always has.
+        let flat = [item("one", 0), item("two", 0)];
+        assert_eq!(to_markdown(&flat), "- one\n- two\n");
+        assert!(to_xhtml(&flat).contains("<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n"));
     }
 
     #[test]

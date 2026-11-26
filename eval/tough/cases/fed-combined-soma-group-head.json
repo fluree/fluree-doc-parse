@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "fed-combined-fin-stmts-2023.pdf",
+    "url": "https://www.federalreserve.gov/aboutthefed/files/combinedfinstmt2023.pdf",
+    "sha256": "ef2e222446c28e78021854b1c335bd2d34a52887eb0ac7aaa014ab8ed078f460",
+    "about": "Federal Reserve Banks Combined Financial Statements for 2023 and 2022. Its statements are ruled by underlines alone: a piece under each column of figures beneath a subtotal, a double rule beneath a total, under a header shaded and ruled a column at a time."
+  },
+  "notes": [
+    "2026-11-25 (#242): a securities-lending table heads its two years' columns `Total SOMA`, in bold, over the years. The table is found from the years down, and `Total SOMA` stood above it as an h6."
+  ],
+  "checks": [
+    {
+      "id": "soma-no-heading",
+      "found": "2026-11-25",
+      "issue": "#242: `Total SOMA` was an h6 over its table.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Total SOMA"
+      },
+      "count": 0
+    }
+  ]
+}

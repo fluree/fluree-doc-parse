@@ -432,6 +432,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         }
@@ -533,6 +534,7 @@ mod tests {
                     font_size: 10.0,
                     advance: Some(5.0),
                     weight: None,
+                    italic: false,
                     draw_index: glyphs.len(),
                 });
                 x += 5.0;

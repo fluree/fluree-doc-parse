@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "pmc3359190.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3359190/",
+    "sha256": "58bfaa04d31137cf6984ec90fe43f60601e1ac25267682aab34ecef5863bd276",
+    "about": "BMC Public Health 2012, 12:81, Murrin et al., 'Body mass index and height over three generations', PMC3359190. Its Table 2 (p4) is ruled across over `Gender`, under the groups `Boys | Girls` beside `Age` over `(Years)`, and under `n | Mean | SD`. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26 (#383): the walk stopped at the rule under the groups, so the columns were named `n`, `Mean`, `SD` alone. Read across that rule, `(Years)` (`Age`'s second line, over the same rule) was first taken for a banner naming every column."
+  ],
+  "checks": [
+    {
+      "id": "groups-over-the-inner-rule-name-their-columns",
+      "found": "2026-11-26",
+      "issue": "#383: `109.88` was named `Mean` alone.",
+      "cell": {
+        "value": "109.88",
+        "column": "Gender / Boys / Mean"
+      }
+    },
+    {
+      "id": "second-line-of-a-label-names-no-other-column",
+      "found": "2026-11-26",
+      "issue": "#383: `5.02` was named `Gender / Boys / SD / (Years)`, `Age`'s second line spread over every column.",
+      "cell": {
+        "value": "5.02",
+        "column": "Gender / Boys / SD"
+      }
+    }
+  ]
+}

@@ -153,7 +153,26 @@ pub struct Line {
     /// where the fact is still visible — the text reads `95 Ibid.` either
     /// way.
     pub opens_with_script: bool,
+    /// Set in italic: most of its letters drawn in an italic face.
+    pub italic: bool,
+    /// The height of its lowercase letters without ascenders or descenders
+    /// (`a`, `e`, `o`, `x`), as a share of its size: the median over those
+    /// letters, where it has two or more. Two faces at one size set it apart
+    /// (Helvetica's 0.52 against Minion's 0.44), and so tell one level of
+    /// heading from another where the size, the weight and the slant are
+    /// all the same.
+    pub x_height: Option<f32>,
+    /// The words the document sets after this line's closing word and a
+    /// hyphen, whole on one line elsewhere (`treatment-emergent`), lowercase.
+    /// A typesetter breaks a compound at its own hyphen, and the hyphen is
+    /// the compound's where the next line opens on one of them. Filled for
+    /// the whole document once its lines are read
+    /// ([`mark_compounds`]).
+    pub compounds: Vec<String>,
 }
+
+/// Lowercase letters that rise to the x-height and no further.
+const X_HEIGHT_LETTERS: &str = "acemnorsuvwxz";
 
 impl Line {
     pub fn is_horizontal(&self) -> bool {
@@ -751,10 +770,14 @@ fn assemble_walled(glyphs: &[Glyph], walls: &[BBox]) -> Vec<Line> {
             // the body text's size, as the baseline is ([`shares_baseline`]):
             // a margin title's last letter stood 40pt from the column beside
             // it, under 1.5 of its own ems and nearly four of the column's
-            // (`Regulatory the three arms of the State`). Measured from the
-            // last glyph that put ink down, past an explicit space, and past
-            // a sign raised on the word: a title's `®` is the word's, and
-            // the title goes on after it at the title's size.
+            // (`Regulatory the three arms of the State`). So it is after a
+            // label of a word or three set a step over the text beside it: a
+            // form's 12pt side label `Sign` stood 39pt from the 6.9pt
+            // declaration and was read into it, its second line `Here` left
+            // alone. Measured from the last glyph that put ink down, past an
+            // explicit space, and past a sign raised on the word: a title's
+            // `®` is the word's, and the title goes on after it at the
+            // title's size.
             let display_gap = cur
                 .iter()
                 .rev()
@@ -768,7 +791,24 @@ fn assemble_walled(glyphs: &[Glyph], walls: &[BBox]) -> Vec<Line> {
                         (Some(ba), Some(bb)) => adv.start(&bb) - adv.end(&ba),
                         _ => return false,
                     };
-                    big >= small * DISPLAY_RATIO && gap > small * BLOCK_GAP_RATIO
+                    // The text beside a side label goes on in a column of
+                    // its own, its later lines starting where it starts: a
+                    // speaker's line or a field's value runs on under its
+                    // label.
+                    let column = || {
+                        let Some(start) = b.bbox.map(|bb| adv.start(&bb)) else {
+                            return false;
+                        };
+                        let own = cluster_of.get(&i);
+                        spans
+                            .iter()
+                            .enumerate()
+                            .any(|(c, sp)| Some(&c) != own && (sp.0 - start).abs() <= small * 0.5)
+                    };
+                    let label = a.font_size > b.font_size && side_label(&cur, glyphs) && column();
+                    gap > small * BLOCK_GAP_RATIO
+                        && (big >= small * DISPLAY_RATIO
+                            || (big >= small * MIXED_SIZE_RATIO && label))
                 });
             // A run read after the line it is set behind: a cluster of glyphs
             // on a baseline near this one that lies wholly before where the
@@ -1003,6 +1043,37 @@ fn label_display(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> {
             None => Some(l),
         })
         .collect()
+}
+
+/// Size ratio from which a label is set a step over the text beside it, and
+/// a gutter after it is measured in the text's size: a form's side label
+/// (`Third Party` at 10pt beside 8pt text). Within one size, a script,
+/// small capitals or a figure's label differ less.
+const MIXED_SIZE_RATIO: f64 = 1.2;
+
+/// Most words in a side label read on a line before its gutter.
+const MAX_LABEL_WORDS: usize = 3;
+
+/// The line so far is a side label: a word or three, of letters. A
+/// clause's number set apart from its text (`12.3`, `(a)`, `2`) is the
+/// marker pass's to read, and a rule or a separator (`|`) is no label.
+fn side_label(cur: &[usize], glyphs: &[Glyph]) -> bool {
+    let mut words = 0;
+    let mut inside = false;
+    let mut letters = 0;
+    for &j in cur {
+        let t = &glyphs[j].text;
+        if t.chars().any(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        letters += t.chars().filter(|c| c.is_alphabetic()).count();
+        let ink = !t.trim().is_empty();
+        if ink && !inside {
+            words += 1;
+        }
+        inside = ink;
+    }
+    words <= MAX_LABEL_WORDS && letters >= 2
 }
 
 /// Size ratio from which the larger of two glyphs is display type beside
@@ -2104,6 +2175,86 @@ const MARK_RAISE: f64 = 0.15;
 /// Word gaps in letter-spaced text sit this far above the letter gaps.
 const TRACKING_WORD_FACTOR: f64 = 1.5;
 
+/// A line's own word spaces ([`line_space_ratio`]), in ems: its letters
+/// stand no more than `LETTER_GAP` apart (kerning, a hair of tracking),
+/// its word spaces `WORD_GAP` or more (a tight justified line's are an
+/// eighth of an em and up), with a valley `GAP_VALLEY` wide or more between
+/// the two and nothing in it.
+const LETTER_GAP: f64 = 0.08;
+const WORD_GAP: f64 = 0.12;
+const GAP_VALLEY: f64 = 0.1;
+
+/// Fewest letter gaps on a line for its letter spacing to be read from it.
+const MIN_LETTER_GAPS: usize = 3;
+
+/// Fewest word gaps on a line for its word spacing to be read from it: one
+/// gap wider than the rest may be a kern in a word set alone.
+const MIN_WORD_GAPS: usize = 2;
+
+/// What an italic letter's overhang leaves room before, a word space's
+/// width or less: a bracket, a slash, a hyphen. A gap there keeps the
+/// column's threshold ([`adaptive_space_ratio`]), not a tight line's own
+/// ([`line_space_ratio`]).
+const OVERHANG_BEFORE: &str = "([{/-\u{2010}";
+
+/// Two glyphs of one size, within a tenth: a raised note mark or a
+/// subscript is set a step or more smaller.
+fn same_size(a: f32, b: f32) -> bool {
+    (a - b).abs() <= a.max(b) * 0.1
+}
+
+/// The threshold a line's own gaps set for its word spaces, on a line that
+/// writes no space characters, where they part into two groups: letters
+/// set close and words set apart, the narrowest word space well clear of
+/// the widest letter gap. The column's threshold
+/// ([`adaptive_space_ratio`]) is drawn from all its lines, and a line set
+/// tighter than its column (a caption under body text, a heading in display
+/// type, a reference in a smaller face) can space its words narrower than
+/// the column's threshold: `TABLE2 | Modelfitandmeasurement…`,
+/// `Treasury andAgency`. The cut is the valley's middle. Pairs of figures
+/// keep their own threshold, and pairs of glyphs of two sizes (a raised
+/// mark beside its word) the column's, and both are left out; `None` where
+/// the line's gaps do not part so.
+fn line_space_ratio(glyphs: &[Glyph], idxs: &[usize], adv: Advance) -> Option<f64> {
+    // A line that writes its spaces says where its words part: a gap with
+    // no space there is a kern (`CETIRIZ INE`'s `Z` and `I`).
+    if idxs.iter().any(|&i| {
+        let t = &glyphs[i].text;
+        !t.is_empty() && t.trim().is_empty()
+    }) {
+        return None;
+    }
+    let mut gaps: Vec<f64> = Vec::new();
+    let mut prev: Option<(&Glyph, f64)> = None;
+    for &i in idxs {
+        let g = &glyphs[i];
+        let (Some(b), Some(a)) = (g.bbox, g.advance) else {
+            continue;
+        };
+        let start = adv.start(&b).min(adv.at(g.origin));
+        if let Some((p, end)) = prev {
+            let last = p.text.chars().last();
+            let next = g.text.chars().next();
+            let figures = last.is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ','))
+                && next.is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '%'));
+            let spaceless =
+                last.is_some_and(is_spaceless_script) && next.is_some_and(is_spaceless_script);
+            if !figures && !spaceless && same_size(p.font_size, g.font_size) {
+                gaps.push((start - end) / g.font_size.max(1.0) as f64);
+            }
+        }
+        prev = Some((g, adv.at(g.origin) + a));
+    }
+    gaps.sort_by(f64::total_cmp);
+    let letters = gaps.partition_point(|&d| d <= LETTER_GAP);
+    if letters < MIN_LETTER_GAPS || gaps.len() - letters < MIN_WORD_GAPS {
+        return None;
+    }
+    let (widest_letter, narrowest_word) = (gaps[letters - 1], gaps[letters]);
+    (narrowest_word >= WORD_GAP && narrowest_word - widest_letter >= GAP_VALLEY)
+        .then_some((widest_letter + narrowest_word) / 2.0)
+}
+
 /// The explicit space at `idxs[k]` is a stray: drawn out of turn, and set
 /// on a mark's ink rather than between two marks.
 ///
@@ -2179,6 +2330,57 @@ fn stray_space(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool
         at >= start - same && at < start + width(b) - SPACE_INSIDE * em
     }) || after.is_some_and(|a| (adv.at(a.origin) - at).abs() < same)
 }
+
+/// The explicit space at `idxs[k]` is the room a script is set in: a
+/// subscript or a superscript, smaller than the letter before the space and
+/// off its baseline, drawn after the word's letters but set back into the
+/// space's advance, straight after them. A producer writes `As`, a space and
+/// `O`, then draws the `2` of As₂O₃ in the space, and `HNO`, a space and the
+/// stop, then the `3` of HNO₃ where the space starts: the page shows no
+/// space, and the script joins its word (`As 2O3`, `HNO 3.` before).
+fn script_set_in(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool {
+    let space = &glyphs[idxs[k]];
+    let drawn = |i: &&usize| glyphs[**i].bbox.is_some();
+    let (Some(&p), Some(&n)) = (
+        idxs[..k].iter().rev().find(drawn),
+        idxs[k + 1..].iter().find(drawn),
+    ) else {
+        return false;
+    };
+    let (before, script) = (&glyphs[p], &glyphs[n]);
+    let size = before.font_size.max(1.0) as f64;
+    let em = space.font_size.max(1.0) as f64;
+    // Smaller than the letter it follows, as a script is.
+    let ratio = script.font_size as f64 / size;
+    if !(SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&ratio) {
+        return false;
+    }
+    // Off the letter's baseline, raised or lowered.
+    let across = |g: &Glyph| {
+        if adv.vertical() {
+            g.origin.0
+        } else {
+            g.origin.1
+        }
+    };
+    if (across(script) - across(before)).abs() < size * SCRIPT_LEAST_SHIFT {
+        return false;
+    }
+    // Set into the space, from where it starts to where its pen stops.
+    let at = adv.at(space.origin);
+    let width = space.advance.unwrap_or(0.0);
+    let start = adv.at(script.origin);
+    if start < at - SPACE_INSIDE * em || start > at + width + SPACE_INSIDE * em {
+        return false;
+    }
+    // After a letter: a formula's element, a symbol's name.
+    before.text.chars().last().is_some_and(char::is_alphabetic)
+}
+
+/// Least shift, as a share of the base letter's size, of a script's
+/// baseline from it: a subscript drops a fifth of the size or more, and a
+/// glyph a tenth off is on the line, jittered.
+const SCRIPT_LEAST_SHIFT: f64 = 0.1;
 
 /// How far, in ems, a space must sit short of the pen's stop after the mark
 /// ahead of it to be inside that mark: further than a kern moves a space.
@@ -2272,6 +2474,16 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
             (space_ratio, false)
         }
     };
+    // A line set tighter than its column spaces its words by its own gaps,
+    // between glyphs of one size: a note's raised mark keeps the column's
+    // threshold (its gap, in its own smaller ems, reads wide).
+    let line_ratio = if tracked {
+        None
+    } else {
+        line_space_ratio(glyphs, idxs, adv).map(|r| r.min(space_ratio))
+    };
+    let mut prev_size: Option<f32> = None;
+    let mut prev_italic = false;
     let mut bbox: Option<BBox> = None;
     let mut text = String::new();
     let mut prev_end: Option<f64> = None;
@@ -2324,10 +2536,33 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     let both_digit = numeric_pair
                         || (prev_c.is_some_and(|c| matches!(c, '.' | ','))
                             && next_c.is_some_and(|c| c.is_ascii_digit()));
+                    // Punctuation closing a word or opening one stands
+                    // against it: a kern before a full stop or inside a
+                    // bracket is no word space. Nor is the room a lone
+                    // italic letter's overhang leaves before a bracket, a
+                    // slash or a hyphen (`P(h, v)`, `P/P0`, `T-gate`): a
+                    // maths symbol's. A word's gap before a bracket is a
+                    // word space, roman or italic (`solve (34)`, a title's
+                    // `Bethe (The Bethe wavefunction)`).
+                    let lone_letter = {
+                        let mut back = text.chars().rev();
+                        back.next().is_some_and(char::is_alphabetic)
+                            && !back.next().is_some_and(char::is_alphabetic)
+                    };
+                    let overhang = prev_italic
+                        && lone_letter
+                        && next_c.is_some_and(|c| OVERHANG_BEFORE.contains(c));
+                    let held = overhang
+                        || next_c.is_some_and(|c| ".,;:!?)]}”’".contains(c))
+                        || prev_c.is_some_and(|c| "([{“‘".contains(c));
+                    let one_size = !held && prev_size.is_some_and(|ps| same_size(ps, g.font_size));
                     let ratio = if both_digit {
                         DIGIT_SPACE_GAP_RATIO
                     } else {
-                        space_ratio
+                        match line_ratio {
+                            Some(r) if one_size => r,
+                            _ => space_ratio,
+                        }
                     };
                     let after_cap = cap_head && text.chars().count() == 1;
                     if !both_cjk
@@ -2420,6 +2655,8 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     Some(a) => adv.at(g.origin) + a,
                     None => adv.end(&b),
                 });
+                prev_size = Some(g.font_size);
+                prev_italic = g.italic;
                 bbox = Some(match bbox {
                     Some(acc) => acc.union(&b),
                     None => b,
@@ -2453,6 +2690,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     && !text.is_empty()
                     && !text.ends_with(' ')
                     && !stray_space(glyphs, idxs, k, adv)
+                    && !script_set_in(glyphs, idxs, k, adv)
                 {
                     text.push(' ');
                 }
@@ -2542,6 +2780,26 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         .find(|g| g.bbox.is_some())
         .is_some_and(|g| g.font_size as f64 <= font_size as f64 * SCRIPT_SIZE_RATIO);
 
+    let lettered = idxs
+        .iter()
+        .map(|&i| &glyphs[i])
+        .filter(|g| g.bbox.is_some() && g.text.chars().any(char::is_alphabetic));
+    let (letters, slanted) = lettered.fold((0, 0), |(n, k), g| (n + 1, k + usize::from(g.italic)));
+    let italic = slanted * 2 > letters;
+    let mut heights: Vec<f32> = idxs
+        .iter()
+        .map(|&i| &glyphs[i])
+        .filter(|g| g.font_size > 0.0)
+        .filter(|g| {
+            let mut cs = g.text.chars();
+            matches!((cs.next(), cs.next()), (Some(c), None) if X_HEIGHT_LETTERS.contains(c))
+        })
+        .filter_map(|g| g.bbox.map(|b| ((b.y1 - b.y0) as f32) / g.font_size))
+        .collect();
+    heights.sort_by(f32::total_cmp);
+    // Measured upright only: a turned glyph's box is its width.
+    let x_height = (bucket == 0 && heights.len() >= 2).then(|| heights[heights.len() / 2]);
+
     Some(Line {
         text,
         bbox,
@@ -2552,7 +2810,88 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         bold,
         opens_bold,
         opens_with_script,
+        italic,
+        x_height,
+        compounds: Vec::new(),
     })
+}
+
+/// The lowercase letters a word ends or opens on, around its punctuation:
+/// `(treatment` → `treatment`, `emergent,` → `emergent`.
+fn letters(word: &str, from_end: bool) -> String {
+    let t: String = if from_end {
+        let v: Vec<char> = word
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphabetic())
+            .collect();
+        v.into_iter().rev().collect()
+    } else {
+        word.chars().take_while(|c| c.is_alphabetic()).collect()
+    };
+    t.to_lowercase()
+}
+
+/// The lowercase letters a line's text opens on.
+pub(crate) fn opening_letters(text: &str) -> String {
+    letters(text.split_whitespace().next().unwrap_or(""), false)
+}
+
+/// Marks each line that ends on a word and a hyphen with the words the
+/// document sets after that word and a hyphen whole on one line, and never
+/// closed up (`treatment-emergent`, never `treatmentemergent`). A break
+/// inside a word and a break at a compound's own hyphen look alike at a
+/// line's end, both between two lowercase letters; the document's own
+/// text tells them apart.
+pub fn mark_compounds(lines: &mut [&mut Line]) {
+    use std::collections::{HashMap, HashSet};
+    let mut whole: HashMap<String, Vec<String>> = HashMap::new();
+    let mut closed: HashSet<String> = HashSet::new();
+    for l in lines.iter() {
+        let words: Vec<&str> = l.text.split_whitespace().collect();
+        for (i, w) in words.iter().enumerate() {
+            // A line's closing hyphen is no evidence: it may be the break.
+            let last = i + 1 == words.len() && w.ends_with('-');
+            let parts: Vec<&str> = w.split('-').collect();
+            if parts.len() == 1 {
+                closed.insert(w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase());
+                continue;
+            }
+            if last {
+                continue;
+            }
+            for p in parts.windows(2) {
+                let (a, b) = (letters(p[0], true), letters(p[1], false));
+                if a.chars().count() >= 2 && b.chars().count() >= 2 {
+                    let v = whole.entry(a).or_default();
+                    if !v.contains(&b) {
+                        v.push(b);
+                    }
+                }
+            }
+        }
+    }
+    if whole.is_empty() {
+        return;
+    }
+    for l in lines.iter_mut() {
+        let Some(stem) = l
+            .text
+            .split_whitespace()
+            .next_back()
+            .and_then(|w| w.strip_suffix('-'))
+        else {
+            continue;
+        };
+        let a = letters(stem, true);
+        if let Some(v) = whole.get(&a) {
+            l.compounds = v
+                .iter()
+                .filter(|b| !closed.contains(&format!("{a}{b}")))
+                .cloned()
+                .collect();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2573,6 +2912,7 @@ mod tests {
             rotation_deg: rot,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         }
@@ -2594,6 +2934,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: size,
             weight: None,
+            italic: false,
             advance: Some(0.55 * s * text.chars().count() as f64),
             draw_index: 0,
         }
@@ -2744,6 +3085,7 @@ mod tests {
             .enumerate()
             .map(|(k, c)| Glyph {
                 weight,
+                italic: false,
                 ..g(&c.to_string(), x + 5.0 * k as f64, 0.0, 5.0, 0.0)
             })
             .collect()
@@ -2856,6 +3198,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: size,
             weight: None,
+            italic: false,
             advance: Some(size as f64 * 0.5),
             draw_index: 0,
         }
@@ -3001,6 +3344,47 @@ mod tests {
         v.extend(sized_word("the", 306.6, 171.2, 10.5));
         let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
         assert_eq!(texts.len(), 2, "{texts:?}");
+    }
+
+    #[test]
+    fn a_side_label_stops_at_the_smaller_text_beside_it() {
+        // A 12pt label, a space, and 7pt text 12pt on, past one and a half
+        // of its ems: with the text's next line starting where it starts,
+        // the label hangs in its margin.
+        let space = |x: f64| Glyph {
+            bbox: None,
+            text: " ".into(),
+            ..sized(" ", x, 100.0, 12.0)
+        };
+        let row = |label: &str, next_x: f64| {
+            let mut v = sized_word(label, 36.0, 100.0, 12.0);
+            v.push(space(60.0));
+            v.extend(sized_word("Under", 72.0, 100.0, 7.0));
+            v.extend(sized_word("belief", next_x, 109.0, 7.0));
+            assemble(&v)
+                .into_iter()
+                .map(|l| l.text)
+                .collect::<Vec<String>>()
+        };
+        let texts = row("Sign", 72.0);
+        assert!(texts.iter().any(|t| t == "Sign"), "{texts:?}");
+        // A speaker's name before the speech, its next line under the name
+        // at the margin: one line.
+        let texts = row("LEE.", 36.0);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("LEE.") && t.contains("Under")),
+            "{texts:?}"
+        );
+        // A clause's number set apart is no label: the marker pass reads it.
+        let texts = row("12.3", 72.0);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("12.3") && t.contains("Under")),
+            "{texts:?}"
+        );
     }
 
     #[test]
@@ -3222,6 +3606,7 @@ mod tests {
                     rotation_deg: -90.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: Some(6.0),
                     draw_index: i,
                 }
@@ -3257,6 +3642,7 @@ mod tests {
                     rotation_deg: 90.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: Some(6.0),
                     draw_index: glyphs.len(),
                 });
@@ -3360,6 +3746,87 @@ mod tests {
                 l
             })
             .collect()
+    }
+
+    /// Words set on one row, letters abutting 5 apart, each word `gap`
+    /// after the last.
+    fn spaced(words: &[&str], gap: f64) -> Vec<Glyph> {
+        let mut out = Vec::new();
+        let mut x = 0.0;
+        for w in words {
+            out.extend(run(w, x, out.len()));
+            x += 5.0 * w.chars().count() as f64 + gap;
+        }
+        out
+    }
+
+    #[test]
+    fn a_line_set_tighter_than_its_column_spaces_its_words_by_its_own_gaps() {
+        // A caption's words stand 0.28 em apart, its letters together; the
+        // column's body text set the threshold at 0.30.
+        let gl = spaced(&["Model", "fit", "and", "measurement"], 2.8);
+        let idxs: Vec<usize> = (0..gl.len()).collect();
+        let line = build_line(&gl, &idxs, 0, 0.30).unwrap();
+        assert_eq!(line.text, "Model fit and measurement");
+    }
+
+    #[test]
+    fn a_math_letters_overhang_before_a_bracket_a_slash_or_a_hyphen_is_no_space() {
+        // A tight line's words 0.28 em apart under a column threshold of
+        // 0.30, and a 0.2 em gap before a bracket, a slash or a hyphen:
+        // the line's own threshold (0.14) would part it there.
+        let line_with = |head: &str, italic: bool, tail: &str| {
+            let mut gl = spaced(&["the", "ratio"], 2.8);
+            let x = gl.last().and_then(|l| l.bbox).map_or(0.0, |b| b.x1) + 2.8;
+            let mut h = run(head, x, gl.len());
+            h.iter_mut().for_each(|l| l.italic = italic);
+            gl.extend(h);
+            let x = x + 5.0 * head.chars().count() as f64 + 2.0;
+            gl.extend(run(tail, x, gl.len()));
+            let mut x = x + 5.0 * tail.chars().count() as f64 + 2.8;
+            for w in ["of", "the", "model"] {
+                gl.extend(run(w, x, gl.len()));
+                x += 5.0 * w.chars().count() as f64 + 2.8;
+            }
+            let idxs: Vec<usize> = (0..gl.len()).collect();
+            build_line(&gl, &idxs, 0, 0.30).unwrap().text
+        };
+        // A math-italic letter's overhang: no word space.
+        for (head, tail) in [("P", "(h,"), ("P", "/P0"), ("T", "-gate")] {
+            assert_eq!(
+                line_with(head, true, tail),
+                format!("the ratio {head}{tail} of the model")
+            );
+        }
+        // A word's gap before its bracket is a word space, roman or italic.
+        assert_eq!(
+            line_with("solve", false, "(34)"),
+            "the ratio solve (34) of the model"
+        );
+        assert_eq!(
+            line_with("Bethe", true, "(The"),
+            "the ratio Bethe (The of the model"
+        );
+    }
+
+    #[test]
+    fn letters_set_apart_unevenly_leave_the_columns_threshold() {
+        // Gaps spread from the letters' (0 to 0.05 em) up into a narrow
+        // word space (0.09 to 0.14 em), no valley between: nothing on the
+        // line says where its words part.
+        let mut gl = run("abcdefg", 0.0, 0);
+        let mut shift = 0.0;
+        for (k, d) in [0.0, 0.2, 0.5, 0.9, 1.0, 1.4].iter().enumerate() {
+            shift += d;
+            let l = &mut gl[k + 1];
+            l.origin.0 += shift;
+            if let Some(b) = l.bbox.as_mut() {
+                b.x0 += shift;
+                b.x1 += shift;
+            }
+        }
+        let idxs: Vec<usize> = (0..gl.len()).collect();
+        assert_eq!(line_space_ratio(&gl, &idxs, Advance::Right), None);
     }
 
     /// An explicit space at `x`, drawn `nth`.
@@ -3582,6 +4049,39 @@ mod tests {
         v.push(space(10.0, 2));
         v.extend(run("the", 13.0, 3));
         assert_eq!(assemble(&v)[0].text, "of the");
+    }
+
+    #[test]
+    fn a_script_set_into_a_space_joins_its_word() {
+        // `As`, a space and `O` drawn in turn, then the subscripts: the `2`
+        // set back into the space, the `3` after the `O`.
+        let lowered = |text: &str, x: f64, nth: usize| {
+            let mut l = g(text, x, 2.5, 3.0, 0.0);
+            l.font_size = 6.0;
+            l.advance = Some(3.3);
+            l.draw_index = nth;
+            l
+        };
+        let mut v = run("As", 0.0, 0);
+        v.push(space(10.0, 2));
+        v.extend(run("O", 12.0, 3));
+        v.push(lowered("2", 10.1, 4));
+        v.push(lowered("3", 17.1, 5));
+        assert_eq!(assemble(&v)[0].text, "As2O3");
+        // A space before a word of the line's own size is a word space.
+        let mut v = run("As", 0.0, 0);
+        v.push(space(10.0, 2));
+        v.extend(run("O", 12.0, 3));
+        assert_eq!(assemble(&v)[0].text, "As O");
+        // So is one before a smaller word set on the line's baseline.
+        let mut v = run("As", 0.0, 0);
+        v.push(space(10.0, 2));
+        let mut small = g("x", 10.1, 0.0, 3.0, 0.0);
+        small.font_size = 6.0;
+        small.advance = Some(3.3);
+        small.draw_index = 3;
+        v.push(small);
+        assert_eq!(assemble(&v)[0].text, "As x");
     }
 
     #[test]
@@ -3922,6 +4422,9 @@ mod tests {
             font_size: size,
             bold: false,
             opens_with_script: false,
+            italic: false,
+            x_height: None,
+            compounds: Vec::new(),
             opens_bold: false,
         }
     }
@@ -4135,6 +4638,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 9.75,
             weight: None,
+            italic: false,
             advance: (w > 0.0).then_some(w),
             draw_index: 0,
         };
@@ -4271,5 +4775,27 @@ mod tests {
         rejoin_spanning_lines(&mut v, &[], &cols);
         assert_eq!(v[0][0].text, "Fax (636)272-2408 • Toll Free (800)325-6152");
         assert_eq!(v[1].len(), 6, "rows cut at a space stay apart: {v:?}");
+    }
+
+    #[test]
+    fn a_compound_the_document_sets_whole_keeps_its_hyphen_at_a_break() {
+        let mk = |t: &str| {
+            let mut l = ln(t, 0.0, 100.0, 0.0, 10.0);
+            l.text = t.into();
+            l
+        };
+        let mut a = mk("The most frequent treatment-emergent AEs were");
+        let mut b = mk("Serious treatment-");
+        let mut c = mk("adverse events, each micro-");
+        let mut d = mk("No microscope was used.");
+        let mut e = mk("A break in a long word as well as in a dis-");
+        {
+            let mut lines: Vec<&mut Line> = vec![&mut a, &mut b, &mut c, &mut d, &mut e];
+            mark_compounds(&mut lines);
+        }
+        assert_eq!(b.compounds, vec!["emergent".to_string()]);
+        // A closing hyphen is no evidence, and `micro` is set closed up.
+        assert!(c.compounds.is_empty() && e.compounds.is_empty());
+        assert_eq!(opening_letters("emergent adverse"), "emergent");
     }
 }

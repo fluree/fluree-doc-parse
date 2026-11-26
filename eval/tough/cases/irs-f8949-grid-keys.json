@@ -47,6 +47,24 @@
         "type": "doco:SectionTitle",
         "text": "Part I"
       }
+    },
+    {
+      "id": "group-head-no-heading",
+      "found": "2026-11-25",
+      "issue": "#370: the column group head `Adjustment, if any, to gain or loss`, over its note in the grid's header band, was an h4.",
+      "no_section": "Adjustment, if any, to gain or loss"
+    },
+    {
+      "id": "column-head-no-heading",
+      "found": "2026-11-25",
+      "issue": "#370: the last column's head `Gain or (loss)` was an h3.",
+      "no_section": "Gain or (loss)"
+    },
+    {
+      "id": "instruction-no-heading",
+      "found": "2026-11-25",
+      "issue": "#370: the instruction `See the separate instructions.` in the header band was an h4.",
+      "no_section": "See the separate instructions"
     }
   ]
 }

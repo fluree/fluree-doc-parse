@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "pmc6116456.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6116456/",
+    "sha256": "e9e802496aa99a5bb3ffec91a9e05d3737edccdb9f25979e1fb346ee9cf4e4b6",
+    "about": "PMC6116456, International Journal of Endocrinology: uterine artery pulsatility in PCOS pregnancies. Page 3 sets its participants' flow as boxes of a count and a step, the lines joining them drawn as outlined shapes rather than straight strokes, over the two arms' examination boxes. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25: the flow's connectors were not read as straight lines across the gaps, so the diagram was found as no drawing and each box was a paragraph of the page's."
+  ],
+  "checks": [
+    {
+      "id": "cohort-box-is-the-diagrams",
+      "found": "2026-11-25",
+      "issue": "Each box of the participant flow was a paragraph.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "273 PCOS women"
+      }
+    },
+    {
+      "id": "control-box-is-the-diagrams",
+      "found": "2026-11-25",
+      "issue": "As above, for the control arm's box.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "124 healthy control women"
+      }
+    },
+    {
+      "id": "results-head-stays",
+      "found": "2026-11-25",
+      "issue": "Guard: the body's section heading in the column under the flow stays a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "3. Results"
+      }
+    }
+  ]
+}
