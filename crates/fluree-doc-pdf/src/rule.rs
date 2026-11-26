@@ -784,6 +784,7 @@ mod tests {
                     italic: false,
                     advance: Some(5.0),
                     draw_index: i,
+                    ocr: None,
                 }
             })
             .collect()

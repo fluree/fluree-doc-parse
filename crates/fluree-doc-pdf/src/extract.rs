@@ -1171,6 +1171,7 @@ impl<'a> Device<'a> for Collector {
             italic,
             advance,
             draw_index,
+            ocr: None,
         });
     }
 }
@@ -2369,6 +2370,7 @@ mod tests {
             italic: false,
             advance: boxed.then_some(6.67),
             draw_index: 0,
+            ocr: None,
         };
         let mut g = vec![
             glyph("o", 57.76, true),
@@ -2395,6 +2397,7 @@ mod tests {
                 italic: false,
                 advance: None,
                 draw_index: i,
+                ocr: None,
             })
             .collect();
         Page {
@@ -2600,6 +2603,7 @@ mod actual_text_tests {
             italic: false,
             advance: Some(5.0),
             draw_index: 0,
+            ocr: None,
         }
     }
 

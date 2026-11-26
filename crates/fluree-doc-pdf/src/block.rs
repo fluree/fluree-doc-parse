@@ -107,6 +107,19 @@ pub struct Block {
 }
 
 impl Block {
+    /// Read by an OCR engine, and where: the source most of its lines were
+    /// read from, `None` where most are the file's own.
+    pub fn ocr(&self) -> Option<crate::glyph::OcrSource> {
+        [
+            crate::glyph::OcrSource::Region,
+            crate::glyph::OcrSource::Page,
+        ]
+        .into_iter()
+        .find(|&source| {
+            self.lines.iter().filter(|l| l.ocr == Some(source)).count() * 2 > self.lines.len()
+        })
+    }
+
     /// Joined text. Lines are joined with a space rather than a newline: a
     /// paragraph wrapped across lines is one sentence flow, and NER must not
     /// see a spurious boundary mid-sentence.
@@ -3483,6 +3496,7 @@ mod tests {
             bold: false,
             opens_with_script: false,
             italic: false,
+            ocr: None,
             x_height: None,
             compounds: Vec::new(),
             opens_bold: false,

@@ -42,6 +42,12 @@ Private cases follow the same format with `"path"` (absolute, `~`, or relative
 to the case file) in place of `"url"`. Their documents and their checks quote
 text that must not enter the repository, so the whole directory stays local.
 
+A case on a page an OCR engine reads names the engine's word readings by
+`"ocr_words"` in its document: a directory relative to the case file, read
+as `fdoc convert --ocr-words` reads it. Stored with the case, a reading reads
+the same on every machine, with no engine or models. Its notes say how it was
+made (`fdoc dev render-routed`, then `fdoc ocr`).
+
 ## A case
 
 ```json
