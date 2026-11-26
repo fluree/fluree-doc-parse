@@ -397,6 +397,17 @@ body text, a box laid out around paragraphs, a drawing's labels.
   on. A table's figures and codes do not, whatever its one description
   column does. Such a grid is dropped before the page's prose is read, so
   its text is read column by column.
+- **A bulleted list.** Its bullets line up down the page as a column does,
+  and its items beside them as another, so alignment reads a list as a
+  table of two columns, `• | Transfer pipettes`, often under a heading or a
+  running head set level with it. A grid read from alignment whose first
+  column holds nothing but bullets, at least two, below at most one first
+  row of other text, is a list, and is read as one. Bullets only, each
+  marker one character: a numbered or lettered list read back as prose sets
+  each item as a numbered line of its own, and a numbered line reads as a
+  numbered section, as a contract's `(b) "Board" means …` did. Those stay
+  as they are read until heading detection can tell a list's numbering
+  from a section's (#451).
 - **A box round paragraphs.** A ruled box whose one row under its labels
   holds a paragraph (sixty words or more in a cell) is a page laid out in
   columns, not a table.
@@ -557,6 +568,23 @@ Two header rules follow from reading the items' own columns.
 Both rules read only lines of labels of a few words each. A line of prose
 beside a chart's ticks (`the influence of idiosyncratic or temporary`) is no
 line of labels, and adds no column.
+
+The totals' labels can also cost the items their own. A run of figures read
+from its text takes in its label column on the left only where most of its
+lines start with figures, a region of figures alone. An invoice that labels
+its items at the margin and its totals within the figures' columns (`Total
+HT : | 46,68 €` under `P.U. HT`) gives three lines starting with a figure
+and three starting with a label, and no majority. The block of totals casts
+no vote here either: the lines that end the region under its last line with
+the most cells, each with half as many cells or fewer, ending in an amount,
+its labels set over the items' figures, with nothing to the region's left.
+A figure run can be read across two tables set side by side, and the
+second's rows running on under the first's end look like totals but for
+their labels, which stand over the first's labels, not its figures; taken
+for totals, they handed the vote to the first table's figures, and the
+first table's labels were taken in as the run's, merging the two. Leaving
+every line with nothing to its left out of the vote did the same, with a
+page's prose for labels.
 
 ## An item several lines tall
 
@@ -1592,7 +1620,10 @@ paragraphs, which is right for a page ruled into a frame with a table set in
 one of its columns. But a band reading whose first column is nothing but list
 markers is the list in a cell, read cell by cell (`a) | Change the pump
 frit`), and taking it for the table pulled the settings beside the lists out
-into a table of their own.
+into a table of their own. Any bullet a list item opens with is such a
+marker, `●` and `■` as well as `•`: a competence framework whose outcomes
+are lists of `●` beside `Knowledge`, `Skills` and `Attitudes and Values`
+read as a table of its bullets, with its labels left out of it.
 
 Nor is a long cell a sign of a frame when the wider reading lies within one
 row of a ruled grid of four rows or more: that is a grid nested in the row
@@ -1649,13 +1680,23 @@ one a box's spacing below, are linked in two ways:
 
 ## Escalation signals
 
-A table earns a model tier when its detected structure **disagrees with
-itself**:
+A table earns a model tier when its reading is in doubt: its detected
+structure **disagrees with itself**, or its **header is anything but one
+plain row**.
 
 | signal | meaning |
 |---|---|
 | `Fragmented` | column boundaries are inconsistent between rows |
 | `MergedRows` | rows do not segment cleanly |
+| header in doubt | no header row found, a header of two rows or more, a cell spanning rows or columns, a banner over a group of rows, a header restated further down |
+
+A table under one plain header row is not sent, drawn or inferred. A
+reading replaces our table wherever their shapes differ, and on such a
+table it had little to add and something to cost: a merged column, a
+dropped row, a caption taken in. Measured with two readers over the
+benchmark's tables, readings of plain-header tables made more documents
+worse than better, and readings of tables whose header was in doubt made
+none worse.
 
 ```bash
 fdoc triage ./corpus/
