@@ -63,7 +63,7 @@ From the escalation path:
 |---|---|
 | `route` | a routed region supplied this |
 | `page-tier` | the whole page escalated |
-| `table-confidence` | a table escalated on self-disagreeing structure |
+| `table-confidence` | a table escalated because its reading is in doubt: structure that disagrees with itself, or a header other than one plain row |
 | `table-missing` | a detector found a table where the grid pass found none |
 | `layout-demoted` | a detector corroborated demoting this heading to prose |
 
