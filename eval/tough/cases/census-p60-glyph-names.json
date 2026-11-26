@@ -1,0 +1,34 @@
+{
+  "document": {
+    "file": "census-p60-287.pdf",
+    "url": "https://www2.census.gov/library/publications/2025/demo/p60-287.pdf",
+    "sha256": "b99624bfd024a4f9396594d23a845d5bd581f8094401a3b469aa0a3fb6c799d1",
+    "about": "US Census Bureau P60-287, Poverty in the United States: 2024 (62 pages, Adobe InDesign 20.2). Its figures are set in Gotham subsets embedded as CFF with their own encoding and no ToUnicode map. They name their ligatures and figures by ligature and variant names."
+  },
+  "notes": [
+    "2026-11-26: the interpreter reads a glyph's text from a name only where the Adobe Glyph List lists the whole name, so the figures' ligatures and numbers read as nothing: `the Ocial Poverty Measure`, `by Dierent Poverty Measures`, and the value cells of each chart's table were empty. The program's names are now read by the list's own rules (see chuj-narratives-glyph-names). With its numbers read, Figure 7 grids as one table under its column names. Before, it read as three fragments."
+  ],
+  "checks": [
+    {
+      "id": "no-ffi-ligature-lost",
+      "found": "2026-11-26",
+      "issue": "The ffi ligature in the figures' titles read as nothing: `Using the Ocial Poverty Measure` (the contents page, set in another font, reads it).",
+      "no_text": "Ocial"
+    },
+    {
+      "id": "no-ff-ligature-lost",
+      "found": "2026-11-26",
+      "issue": "The ff ligature read as nothing: `by Dierent Poverty Measures`.",
+      "no_text": "Dierent"
+    },
+    {
+      "id": "figure-values-under-their-measures",
+      "found": "2026-11-26",
+      "issue": "Figure 7's values read as nothing, and its table as fragments without its column names.",
+      "row": {
+        "Official+": "14.3",
+        "SPM": "13.4"
+      }
+    }
+  ]
+}
