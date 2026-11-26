@@ -1044,6 +1044,10 @@ struct Out {
     over: Option<TooLarge>,
     /// What the walk asks of each node of the page.
     facts: Facts,
+    /// How many list items the walk is inside: a list item's depth.
+    items: usize,
+    /// Whether the walk is directly in a list, not in one of its items.
+    in_list: bool,
 }
 
 impl Out {
@@ -1109,7 +1113,10 @@ impl Out {
         }
     }
 
-    fn keep(&mut self, e: Element) {
+    fn keep(&mut self, mut e: Element) {
+        if e.kind == "doc:ListItem" {
+            e.depth = self.items;
+        }
         self.elements.push(e);
         self.depths.push(self.depth);
     }
@@ -1933,6 +1940,13 @@ fn children_of(h: &Handle) -> Vec<Handle> {
 }
 
 fn walk(h: &Handle, out: &mut Out) {
+    // A list set straight in a list rather than in one of its items, as
+    // hand-written markup often has it, shows inside the item before it:
+    // one deeper.
+    let list = matches!(tag_of(h).as_deref(), Some("ul" | "ol"));
+    let nested = list && out.in_list;
+    out.items += usize::from(nested);
+    let in_list = std::mem::replace(&mut out.in_list, list);
     if is_citation(h) {
         out.depth += 1;
         walk_node(h, out);
@@ -1940,6 +1954,8 @@ fn walk(h: &Handle, out: &mut Out) {
     } else {
         walk_node(h, out);
     }
+    out.in_list = in_list;
+    out.items -= usize::from(nested);
 }
 
 fn walk_node(h: &Handle, out: &mut Out) {
@@ -1981,8 +1997,20 @@ fn walk_node(h: &Handle, out: &mut Out) {
                         .filter(|c| !matches!(tag_of(c).as_deref(), Some("ul" | "ol" | "table"))),
                 );
                 for c in children {
-                    if matches!(tag_of(&c).as_deref(), Some("ul" | "ol" | "table")) {
-                        walk(&c, out);
+                    match tag_of(&c).as_deref() {
+                        // A list in an item is one deeper than the item.
+                        Some("ul" | "ol") => {
+                            out.items += 1;
+                            walk(&c, out);
+                            out.items -= 1;
+                        }
+                        // A table's cells start afresh.
+                        Some("table") => {
+                            let items = std::mem::take(&mut out.items);
+                            walk(&c, out);
+                            out.items = items;
+                        }
+                        _ => {}
                     }
                 }
                 return;
@@ -3109,6 +3137,35 @@ mod tests {
         let els = parse("<ul><li>outer<ul><li>inner</li></ul></li></ul>");
         let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, ["outer", "inner"]);
+    }
+
+    #[test]
+    fn a_list_in_an_item_is_one_deeper() {
+        let els = parse(
+            "<ul><li>Fruit<ol><li>Apples<ul><li>Seedless</li></ul></li><li>Pears</li></ol></li>\
+             <li>Vegetables<table><tr><td><ul><li>In a cell</li></ul></td></tr></table></li></ul>",
+        );
+        let got: Vec<(&str, usize)> = els
+            .iter()
+            .filter(|e| e.kind == "doc:ListItem")
+            .map(|e| (e.text.as_str(), e.depth))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Fruit", 0),
+                ("Apples", 1),
+                ("Seedless", 2),
+                ("Pears", 1),
+                ("Vegetables", 0),
+                // A list in a table's cell starts afresh.
+                ("In a cell", 0)
+            ]
+        );
+        // A list set straight in a list, as a browser shows it.
+        let els = parse("<ul><li>Fruit</li><ul><li>Apples</li></ul><li>Vegetables</li></ul>");
+        let got: Vec<usize> = els.iter().map(|e| e.depth).collect();
+        assert_eq!(got, [0, 1, 0]);
     }
 
     #[test]

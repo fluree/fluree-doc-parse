@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "SA100-2026.pdf",
+    "url": "https://assets.publishing.service.gov.uk/media/69c14d07cfa346b9d4704a8d/SA100-2026.pdf",
+    "sha256": "53841ec2138b5d1ccd8e69ae402b35e6e3a04f17556bb3b0829f55b47f51b506",
+    "about": "HMRC SA100 2026 tax return. Its amount boxes set a £ alone before each box, a column of its own beside the box's figures."
+  },
+  "notes": [
+    "2026-11-26 (#401): a £ alone on its line, set just left of the box's figures, was read as a list marker and consumed. A currency sign is never a marker."
+  ],
+  "checks": [
+    {
+      "id": "pound-before-the-wfp-box",
+      "found": "2026-11-26",
+      "issue": "#401: the £ before the box for the Winter Fuel Payment received was read as a list marker and lost; the form's two other £ boxes set as figures kept theirs.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "£"
+      },
+      "count": 3
+    }
+  ]
+}

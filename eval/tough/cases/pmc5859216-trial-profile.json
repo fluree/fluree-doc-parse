@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "pmc5859216.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5859216/",
+    "sha256": "d71be0c456e31d28f892c227f6efb34740e617951847d5778e40b95babd0eb05",
+    "about": "PMC5859216, The Lancet Global Health: a cluster-randomised trial of water, sanitation, handwashing and nutrition. Page 4 sets its trial profile as boxes of counts, the allocation box set off to the side of the eligibility box and joined to it, and each arm's box under the allocation line."
+  },
+  "notes": [
+    "2026-11-25: the profile's boxes were joined by connectors that do not cross a gap between facing sides, so the diagram was found as no drawing and each box was a paragraph of the page's."
+  ],
+  "checks": [
+    {
+      "id": "eligibility-box-is-the-diagrams",
+      "found": "2026-11-25",
+      "issue": "Each box of the trial profile was a paragraph.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "13 279 compounds assessed for eligibility"
+      }
+    },
+    {
+      "id": "arm-box-is-the-diagrams",
+      "found": "2026-11-25",
+      "issue": "As above, for an arm's allocation box.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "90 clusters (698 compounds) assigned to water"
+      }
+    }
+  ]
+}

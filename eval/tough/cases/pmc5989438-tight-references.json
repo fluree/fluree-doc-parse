@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "pmc5989438.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5989438/",
+    "sha256": "97ef65eea301fccc2609eaab8bfc177dd71a4d764136e39f40849c194b1d3be1",
+    "about": "An open-access article on dermoscopic image segmentation, PMC5989438. Its references are set in a smaller face, tightly spaced and with no space characters. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26 (#346): references ran together (`RademakerM, OakleyA.Digitalmonitoringbywholebodyphotography`): their word spaces fell under the threshold the body text set. A line that writes no spaces now spaces its words by its own gaps where they part into letters and words."
+  ],
+  "checks": [
+    {
+      "id": "reference-words-spaced",
+      "found": "2026-11-26",
+      "issue": "#346: reference 24 read `RademakerM, OakleyA.Digitalmonitoringbywholebodyphotography`.",
+      "text": "Rademaker M, Oakley A. Digital monitoring by whole body photography"
+    }
+  ]
+}
