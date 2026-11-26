@@ -1527,6 +1527,7 @@ mod tests {
                     italic: false,
                     advance: None,
                     draw_index: p.glyphs.len(),
+                    ocr: None,
                 });
             }
         }
