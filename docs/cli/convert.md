@@ -120,6 +120,13 @@ but cannot give whole, in place of OCR's reading:
 The small regions only an engine reads stay its own. `-v` names each crop left
 to the model and why.
 
+A picture's reading that the engine is unsure of (under 0.90), on a page with
+text of its own, is set aside, model or no model. It is lettering drawn into
+artwork, a logo's or a seal's texture, a photo's grain read as words, and laid
+on the page it would be text the page never printed. A whole page's reading,
+or the regions of a page with no text layer, are kept however unsure: they are
+all the text there is.
+
 `fdoc` built without the `ocr` feature has no engine and still reads
 `--ocr-words`.
 
