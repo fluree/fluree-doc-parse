@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "fed-fsr-2025-04.pdf",
+    "url": "https://www.federalreserve.gov/publications/files/financial-stability-report-20250425.pdf",
+    "sha256": "81080ea1ebc4d6a1f3027c94f05eb40daec56c4006da6f1e7e85f9044111fb0b",
+    "about": "Federal Reserve Financial Stability Report, April 2025. Its size-of-markets tables head their stub `Item` on the row of the period heads, over a units row."
+  },
+  "notes": [
+    "2026-11-25 (#242): the size-of-markets tables head their stub `Item`, in bold, on the row of the period heads. The table is found from its units row down, and `Item` stood above it as an h6 on four pages."
+  ],
+  "checks": [
+    {
+      "id": "item-no-heading",
+      "found": "2026-11-25",
+      "issue": "#242: `Item` was an h6 over each table.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Item"
+      },
+      "count": 0
+    }
+  ]
+}

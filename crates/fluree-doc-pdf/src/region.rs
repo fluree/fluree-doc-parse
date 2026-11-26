@@ -82,6 +82,7 @@ pub fn read_order(
     rules: &[Rule],
     tables: &[BBox],
     pictures: &[BBox],
+    frames: &[BBox],
 ) -> Vec<Group> {
     let total: usize = cols.iter().map(Vec::len).sum();
     if total < 2 {
@@ -102,6 +103,7 @@ pub fn read_order(
         rules,
         tables,
         pictures,
+        frames,
         h,
     };
     let mut out = Vec::new();
@@ -115,6 +117,7 @@ struct Page<'a> {
     rules: &'a [Rule],
     tables: &'a [BBox],
     pictures: &'a [BBox],
+    frames: &'a [BBox],
     h: f64,
 }
 
@@ -267,7 +270,18 @@ impl Page<'_> {
                     .map(|(_, l)| (*l).clone())
                     .collect();
                 if !group.is_empty() {
-                    let parts = split_local(group, self.h, 2);
+                    // A stretch all in drawn boxes reads box by box; any
+                    // other at a gutter only it has, then block by block
+                    // where two stand side by side.
+                    let parts: Vec<(Vec<Line>, bool)> = match boxed(&group, self.frames) {
+                        Some(boxes) => boxes.into_iter().map(|b| (b, true)).collect(),
+                        None => split_local(group, self.h, 2)
+                            .into_iter()
+                            .flat_map(|(lines, own)| {
+                                side_blocks(lines, own, self.h, self.frames, 2)
+                            })
+                            .collect(),
+                    };
                     out.extend(parts.into_iter().map(|(lines, own_measure)| Group {
                         lines,
                         column: c,
@@ -830,6 +844,401 @@ fn local_gutter(group: &[Line], h: f64) -> Option<f64> {
     })
 }
 
+/// Narrowest gap, in the region's line height, between two blocks set side
+/// by side: wider than any word space, as a gutter is.
+const SIDE_GAP: f64 = 1.0;
+
+/// Share of the shorter of two rows' heights they overlap by when set on
+/// one baseline. Two blocks set each on its own baselines, a fraction of a
+/// line apart, overlap less, and drift through each other where their
+/// leadings differ.
+const LEVEL_SHARE: f64 = 0.8;
+
+/// Fewest rows the left of two blocks goes on alone past the right's last:
+/// a block of its own, not a column of labels beside their values, whose
+/// values may wrap past their labels but whose labels never run on alone.
+const RUN_PAST: usize = 2;
+
+/// Share of the shorter of two boxes' heights they overlap by to stand in
+/// one row.
+const BOX_LEVEL: f64 = 0.5;
+
+/// Widest space, in the region's line height, between two boxes that are a
+/// table's cells, drawn one box each: they touch, or stand a rule's width
+/// apart. A diagram's boxes and a page's cards stand a line or more apart.
+const GRID_GAP: f64 = 0.5;
+
+/// How far, in points, a line's ink may stand over a box's edge and still
+/// be inside it: the width of the box's stroke.
+const BOX_SLACK: f64 = 1.0;
+
+/// Rows of `side`: its lines grouped where one's middle is within another's
+/// height, top to bottom.
+fn side_rows<'a>(side: &[&'a Line]) -> Vec<Vec<&'a Line>> {
+    let mut v: Vec<&Line> = side.to_vec();
+    v.sort_by(|a, b| {
+        a.bbox
+            .y0
+            .partial_cmp(&b.bbox.y0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut rows: Vec<Vec<&Line>> = Vec::new();
+    for l in v {
+        let mid = (l.bbox.y0 + l.bbox.y1) * 0.5;
+        match rows.last_mut() {
+            Some(last) if last.iter().any(|p| mid > p.bbox.y0 && mid < p.bbox.y1) => last.push(l),
+            _ => rows.push(vec![l]),
+        }
+    }
+    rows
+}
+
+/// A row's top and foot.
+fn row_extent(r: &[&Line]) -> (f64, f64) {
+    (
+        r.iter().map(|l| l.bbox.y0).fold(f64::MAX, f64::min),
+        r.iter().map(|l| l.bbox.y1).fold(f64::MIN, f64::max),
+    )
+}
+
+/// Half its lines or more hold two words: text, not a column of figures or
+/// a chart's ticks.
+fn wordy<'a>(lines: impl Iterator<Item = &'a Line>) -> bool {
+    let (mut n, mut words) = (0, 0);
+    for l in lines {
+        n += 1;
+        if l.text.split_whitespace().count() >= 2 {
+            words += 1;
+        }
+    }
+    words * 2 >= n
+}
+
+/// Two blocks of text side by side in one stretch of a column, which the
+/// gutter between them did not part: neither runs on as prose does, so the
+/// region pass took them for a column of labels beside their values, and
+/// read them row by row. An invoice's seller beside its customer, an
+/// article's facts beside its abstract, prose beside a chart's title and
+/// notes. Each is read whole, the one set higher first, the left where they
+/// start together.
+///
+/// The widest gap no line crosses, [`SIDE_GAP`] or wider, with text on both
+/// sides, parts them when their rows do not pair as a list's rows do:
+/// - **Set on baselines of their own:** fewer than half the rows of the
+///   side with fewer stand level with one across ([`LEVEL_SHARE`]).
+/// - **Run on past the other:** the rows stand level, but the left goes on
+///   alone [`RUN_PAST`] rows or more past the right's last, the right holds
+///   two rows or more, and the left's level lines are not labels (ending in
+///   `:`, or bold).
+///
+/// A row of drawn boxes ([`framed_row`]) is read box by box first.
+fn side_blocks(
+    group: Vec<Line>,
+    own: bool,
+    h: f64,
+    frames: &[BBox],
+    depth: usize,
+) -> Vec<(Vec<Line>, bool)> {
+    if depth == 0 || group.len() < 3 {
+        return vec![(group, own)];
+    }
+    if let Some((over, boxes, rest)) = framed_row(&group, frames, h) {
+        let mut out = Vec::new();
+        if !over.is_empty() {
+            out.extend(side_blocks(over, own, h, frames, depth));
+        }
+        for b in boxes {
+            out.extend(side_blocks(b, true, h, frames, depth - 1));
+        }
+        if !rest.is_empty() {
+            out.extend(side_blocks(rest, own, h, frames, depth));
+        }
+        return out;
+    }
+    let upright: Vec<&Line> = group.iter().filter(|l| l.rotation_bucket == 0).collect();
+    if upright.len() < 3 {
+        return vec![(group, own)];
+    }
+    let mut spans: Vec<(f64, f64)> = upright.iter().map(|l| (l.bbox.x0, l.bbox.x1)).collect();
+    spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut widest: Option<(f64, f64)> = None;
+    let mut reach = spans[0].1;
+    for &(x0, x1) in &spans[1..] {
+        if x0 - reach >= h * SIDE_GAP && widest.is_none_or(|(a, b)| x0 - reach > b - a) {
+            widest = Some((reach, x0));
+        }
+        reach = reach.max(x1);
+    }
+    let Some((a, b)) = widest else {
+        return vec![(group, own)];
+    };
+    let x = (a + b) * 0.5;
+    let (l, r): (Vec<&Line>, Vec<&Line>) = upright.iter().partition(|l| l.bbox.x1 <= x);
+    if !wordy(l.iter().copied()) || !wordy(r.iter().copied()) {
+        return vec![(group, own)];
+    }
+    let (lr, rr) = (side_rows(&l), side_rows(&r));
+    if lr.len().max(rr.len()) < 2 {
+        return vec![(group, own)];
+    }
+    let level = |a: &[&Line], b: &[&Line]| {
+        let ((a0, a1), (b0, b1)) = (row_extent(a), row_extent(b));
+        a1.min(b1) - a0.max(b0) >= LEVEL_SHARE * (a1 - a0).min(b1 - b0)
+    };
+    let paired = |row: &[&Line], other: &[Vec<&Line>]| other.iter().any(|o| level(row, o));
+    let (ltop, lfoot) = row_extent(&l);
+    let (rtop, rfoot) = row_extent(&r);
+    if lfoot.min(rfoot) <= ltop.max(rtop) {
+        return vec![(group, own)];
+    }
+    let (fewer, more) = if lr.len() <= rr.len() {
+        (&lr, &rr)
+    } else {
+        (&rr, &lr)
+    };
+    let offset = fewer.iter().filter(|row| paired(row, more)).count() * 2 < fewer.len();
+    let runs_on = || {
+        let last = rr.last().map(|row| row_extent(row).1).unwrap_or(f64::MAX);
+        let past = lr.iter().filter(|row| row_extent(row).0 >= last).count();
+        let level_rows: Vec<&Vec<&Line>> = lr.iter().filter(|row| paired(row, &rr)).collect();
+        let labels = level_rows
+            .iter()
+            .filter(|row| {
+                row.iter().all(|l| l.bold)
+                    || row.last().is_some_and(|l| l.text.trim_end().ends_with(':'))
+            })
+            .count();
+        past >= RUN_PAST && rr.len() >= 2 && labels * 2 < level_rows.len().max(1)
+    };
+    if !offset && !runs_on() {
+        return vec![(group, own)];
+    }
+    // The left first, unless the right starts a line or more above it: a
+    // title set over the right-hand block.
+    let left_first = ltop <= rtop + h;
+    let (lv, rv): (Vec<Line>, Vec<Line>) = group.into_iter().partition(|l| l.bbox.x1 <= x);
+    let (first, second) = if left_first { (lv, rv) } else { (rv, lv) };
+    let mut out = side_blocks(first, true, h, frames, depth - 1);
+    out.extend(side_blocks(second, true, h, frames, depth - 1));
+    out
+}
+
+fn holds(b: &BBox, l: &Line) -> bool {
+    l.bbox.x0 >= b.x0 - BOX_SLACK
+        && l.bbox.x1 <= b.x1 + BOX_SLACK
+        && l.bbox.y0 >= b.y0 - BOX_SLACK
+        && l.bbox.y1 <= b.y1 + BOX_SLACK
+}
+
+/// The drawn boxes that wholly hold some of `group`'s upright lines but not
+/// all of them, a box round the whole stretch parting nothing, each with
+/// the lines it holds, nested boxes' lines too. Largest first.
+fn holding(group: &[Line], frames: &[BBox]) -> Vec<(BBox, Vec<usize>)> {
+    let upright = group.iter().filter(|l| l.rotation_bucket == 0).count();
+    let mut held: Vec<(BBox, Vec<usize>)> = Vec::new();
+    for b in frames {
+        if held.iter().any(|(k, _)| k == b) {
+            continue;
+        }
+        let v: Vec<usize> = (0..group.len())
+            .filter(|&i| group[i].rotation_bucket == 0 && holds(b, &group[i]))
+            .collect();
+        if !v.is_empty() && v.len() < upright {
+            held.push((*b, v));
+        }
+    }
+    held.sort_by(|p, q| {
+        (q.0.width() * q.0.height())
+            .partial_cmp(&(p.0.width() * p.0.height()))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    held
+}
+
+/// The rows the lines `v` of `group` stand in.
+fn rows_of(group: &[Line], v: &[usize]) -> usize {
+    let ls: Vec<&Line> = v.iter().map(|&i| &group[i]).collect();
+    side_rows(&ls).len()
+}
+
+fn boxes_level(a: &BBox, b: &BBox) -> bool {
+    a.y1.min(b.y1) - a.y0.max(b.y0) >= BOX_LEVEL * a.height().min(b.height())
+}
+
+fn overlap(a: &BBox, b: &BBox) -> bool {
+    a.x1.min(b.x1) > a.x0.max(b.x0) && a.y1.min(b.y1) > a.y0.max(b.y0)
+}
+
+/// A stretch of a column whose every upright line stands in a drawn box,
+/// the outermost boxes two or more and apart, one holding two rows of text:
+/// a box diagram, a flowchart, a page of cards. The region pass reads its
+/// lines row by row across the boxes, or parts it at a gutter between
+/// them. Read box by box instead, a box with the boxes inside it, in flow
+/// order: top to bottom, and left to right across a row of boxes level
+/// with each other ([`BOX_LEVEL`]). A branch set off a box, lower down at
+/// its side, reads after it. Turned lines read last.
+fn boxed(group: &[Line], frames: &[BBox]) -> Option<Vec<Vec<Line>>> {
+    let held = holding(group, frames);
+    let within = |b: &BBox, c: &BBox| c.x0 <= b.x0 && c.x1 >= b.x1 && c.y0 <= b.y0 && c.y1 >= b.y1;
+    let mut outer: Vec<&(BBox, Vec<usize>)> = held
+        .iter()
+        .filter(|(b, _)| !held.iter().any(|(c, _)| c != b && within(b, c)))
+        .collect();
+    if outer.len() < 2 {
+        return None;
+    }
+    for (i, (a, _)) in outer.iter().enumerate() {
+        if outer[i + 1..].iter().any(|(b, _)| overlap(a, b)) {
+            return None;
+        }
+    }
+    let upright = group.iter().filter(|l| l.rotation_bucket == 0).count();
+    if outer.iter().map(|(_, v)| v.len()).sum::<usize>() != upright {
+        return None;
+    }
+    let text = |v: &[usize]| wordy(v.iter().map(|&i| &group[i]));
+    if !outer.iter().any(|(_, v)| rows_of(group, v) >= 2)
+        || outer
+            .iter()
+            .any(|(_, v)| rows_of(group, v) >= 2 && !text(v))
+    {
+        return None;
+    }
+    outer.sort_by(|p, q| {
+        p.0.y0
+            .partial_cmp(&q.0.y0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut rows: Vec<Vec<&(BBox, Vec<usize>)>> = Vec::new();
+    for b in outer {
+        match rows.last_mut() {
+            Some(row) if boxes_level(&row[0].0, &b.0) => row.push(b),
+            _ => rows.push(vec![b]),
+        }
+    }
+    let mut out = Vec::new();
+    for mut row in rows {
+        row.sort_by(|p, q| {
+            p.0.x0
+                .partial_cmp(&q.0.x0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for (_, v) in row {
+            out.push(v.iter().map(|&i| group[i].clone()).collect());
+        }
+    }
+    let turned: Vec<Line> = group
+        .iter()
+        .filter(|l| l.rotation_bucket != 0)
+        .cloned()
+        .collect();
+    if !turned.is_empty() {
+        out.push(turned);
+    }
+    Some(out)
+}
+
+/// Lines over a row of boxes, the boxes' lines, and the rest.
+type FramedRow = (Vec<Line>, Vec<Vec<Line>>, Vec<Line>);
+
+/// A row of two or more drawn boxes side by side in a stretch of a column,
+/// level with each other ([`BOX_LEVEL`]), each holding text, one of them two
+/// rows or more: two boxes of a flowchart, two charts' panels with their
+/// titles set in bands. The region pass reads their lines row by row
+/// across the boxes; each box is read whole instead, left to right. A box
+/// holds the boxes inside it. Of such rows, the one holding most lines.
+///
+/// Not a table's cells drawn one box each, which touch across the row or
+/// down a column ([`GRID_GAP`]): read box by box, a table's rows would read
+/// as columns.
+///
+/// The lines over the row read before it, and so does one beside it on its
+/// left, a title set level with a row of boxes. A box outside the row goes
+/// whole, before or after it by its top.
+fn framed_row(group: &[Line], frames: &[BBox], h: f64) -> Option<FramedRow> {
+    let held = holding(group, frames);
+    if held.len() < 2 {
+        return None;
+    }
+    let apart = |a: &BBox, b: &BBox| a.x1 <= b.x0 || b.x1 <= a.x0;
+    let near = |a: f64, b: f64| (a - b).abs() < GRID_GAP * h;
+    let mut best: Option<(usize, Vec<usize>)> = None;
+    for k in 0..held.len() {
+        // Largest first: a box beside `k`'s before the boxes within it.
+        let mut row: Vec<usize> = vec![k];
+        for j in 0..held.len() {
+            let b = &held[j].0;
+            if j != k && boxes_level(&held[k].0, b) && row.iter().all(|&m| apart(&held[m].0, b)) {
+                row.push(j);
+            }
+        }
+        if row.len() < 2
+            || !row.iter().any(|&m| rows_of(group, &held[m].1) >= 2)
+            || !row
+                .iter()
+                .all(|&m| wordy(held[m].1.iter().map(|&i| &group[i])))
+        {
+            continue;
+        }
+        row.sort_by(|&p, &q| {
+            held[p]
+                .0
+                .x0
+                .partial_cmp(&held[q].0.x0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let across = row
+            .windows(2)
+            .any(|w| held[w[1]].0.x0 - held[w[0]].0.x1 < GRID_GAP * h);
+        let down = row.iter().any(|&m| {
+            let a = &held[m].0;
+            held.iter().any(|(b, _)| {
+                b != a
+                    && (b.x0 - a.x0).abs() <= BOX_SLACK
+                    && (b.x1 - a.x1).abs() <= BOX_SLACK
+                    && (near(b.y0, a.y1) || near(a.y0, b.y1))
+            })
+        });
+        if across || down {
+            continue;
+        }
+        let n: usize = row.iter().map(|&m| held[m].1.len()).sum();
+        if best.as_ref().is_none_or(|(most, _)| n > *most) {
+            best = Some((n, row));
+        }
+    }
+    let (_, row) = best?;
+    let top = row.iter().map(|&m| held[m].0.y0).fold(f64::MAX, f64::min);
+    let foot = row.iter().map(|&m| held[m].0.y1).fold(f64::MIN, f64::max);
+    let first = held[row[0]].0.x0;
+    let mut taken = vec![false; group.len()];
+    let mut boxes: Vec<Vec<Line>> = Vec::new();
+    for &m in &row {
+        boxes.push(held[m].1.iter().map(|&i| group[i].clone()).collect());
+        for &i in &held[m].1 {
+            taken[i] = true;
+        }
+    }
+    let (mut over, mut rest) = (Vec::new(), Vec::new());
+    for (i, l) in group.iter().enumerate() {
+        if taken[i] {
+            continue;
+        }
+        // The largest box clear of the row's that holds the line.
+        let outside = held
+            .iter()
+            .find(|(b, v)| v.contains(&i) && !row.iter().any(|&m| overlap(b, &held[m].0)))
+            .map(|(b, _)| b.y0);
+        let at = outside.unwrap_or((l.bbox.y0 + l.bbox.y1) * 0.5);
+        if at < top || (at <= foot && l.bbox.x1 <= first) {
+            over.push(l.clone());
+        } else {
+            rest.push(l.clone());
+        }
+    }
+    Some((over, boxes, rest))
+}
+
 /// Where most of a column's lines start and end.
 fn core(lines: &[Line]) -> Option<(f64, f64)> {
     let x0 = median(lines.iter().map(|l| l.bbox.x0))?;
@@ -865,6 +1274,9 @@ mod tests {
             font_size: 8.0,
             bold: false,
             opens_with_script: false,
+            italic: false,
+            x_height: None,
+            compounds: Vec::new(),
             opens_bold: false,
         }
     }
@@ -913,7 +1325,7 @@ mod tests {
         left.extend(col("second-left", 36.0, 190.0, 6));
         let mut right = items(4, 200.0, 100.0, 3);
         right.extend(col("second-right", 200.0, 190.0, 6));
-        let out = texts(&read_order(vec![left, right], &[], &[], &[]));
+        let out = texts(&read_order(vec![left, right], &[], &[], &[], &[]));
         let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
         assert!(at("6. Item") < at("second-left"), "{out:?}");
     }
@@ -933,6 +1345,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         ));
         let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
         assert!(at("left note") < at("right chart"), "{out:?}");
@@ -948,7 +1361,7 @@ mod tests {
         ];
         left.extend(col("left", 36.0, 80.0, 4));
         let right = col("right", 200.0, 80.0, 4);
-        let out = read_order(vec![left, right], &[], &[], &[]);
+        let out = read_order(vec![left, right], &[], &[], &[], &[]);
         assert_eq!(out[0].lines.len(), 2, "{:?}", texts(&out));
         assert!(texts(&out)[2].starts_with("left"));
     }
@@ -969,7 +1382,7 @@ mod tests {
         ];
         left.extend(col("left", 40.0, 120.0, 6));
         let right = col("right", 200.0, 120.0, 6);
-        let out = read_order(vec![left, right], &[], &[], &[]);
+        let out = read_order(vec![left, right], &[], &[], &[], &[]);
         assert_eq!(out[0].lines.len(), 2, "{:?}", texts(&out));
     }
 
@@ -1019,7 +1432,7 @@ mod tests {
                 )
             })
             .collect();
-        let out = texts(&read_order(vec![left, right], &[], &[], &[]));
+        let out = texts(&read_order(vec![left, right], &[], &[], &[], &[]));
         let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
         assert!(at("right text 4") < at("Notes:"), "{out:?}");
         assert_eq!(at("Notes:") + 1, at("1 A note"), "{out:?}");
@@ -1039,7 +1452,7 @@ mod tests {
         left.extend(col("left", 30.0, 150.0, 6));
         let mut right = vec![big("PROFESSIONAL PRODUCT", 279.0, 29.0, 581.0)];
         right.extend(col("right", 230.0, 150.0, 6));
-        let out = read_order(vec![left, right], &[], &[], &[]);
+        let out = read_order(vec![left, right], &[], &[], &[], &[]);
         assert_eq!(
             texts(&out)[..2],
             ["PROFESSIONAL PRODUCT", "LOOSEFILL INSULATION SYSTEM"],
@@ -1064,7 +1477,7 @@ mod tests {
         left.extend(col("left", 30.0, 80.0, 6));
         let mut right = vec![bold(one, 279.0, 30.0, 581.0)];
         right.extend(col("right", 230.0, 80.0, 6));
-        let out = read_order(vec![left, right], &[], &[], &[]);
+        let out = read_order(vec![left, right], &[], &[], &[], &[]);
         assert!(
             out.iter().all(|g| g.lines.len() < 2
                 || !(g.lines.iter().any(|l| l.text == one)
@@ -1085,7 +1498,7 @@ mod tests {
             line("to reduce ordering effort", 70.0, 220.0, 200.0),
             line("space is limited on the rail", 230.0, 220.0, 360.0),
         ];
-        let groups = read_order(vec![lines], &[], &[], &[]);
+        let groups = read_order(vec![lines], &[], &[], &[], &[]);
         assert!(groups.iter().all(|g| g.own_measure && g.column == 0));
         let out = texts(&groups);
         assert_eq!(
@@ -1135,7 +1548,7 @@ mod tests {
             })
             .collect();
         let rules = [rule(220.0, 520.0, 124.0), rule(220.0, 520.0, 152.0)];
-        let out = texts(&read_order(vec![left, right], &rules, &[], &[]));
+        let out = texts(&read_order(vec![left, right], &rules, &[], &[], &[]));
         let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
         assert!(at("left item 7") < at("right feature 0"), "{out:?}");
     }
@@ -1167,7 +1580,7 @@ mod tests {
             x1: 178.0,
             y1: 210.0,
         };
-        let out = texts(&read_order(vec![left, right], &rules, &[], &[photo]));
+        let out = texts(&read_order(vec![left, right], &rules, &[], &[photo], &[]));
         let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
         assert!(at("left item 5") < at("right benefit 0"), "{out:?}");
     }
@@ -1192,7 +1605,7 @@ mod tests {
         right.extend(col("product", 300.0, 110.0, 1));
         right.push(big("Warranty", 300.0, 155.0));
         right.extend(col("warranty", 300.0, 175.0, 2));
-        let out = texts(&read_order(vec![left, right], &[], &[], &[]));
+        let out = texts(&read_order(vec![left, right], &[], &[], &[], &[]));
         let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
         assert!(at("standard 7") < at("Recommended"), "{out:?}");
     }
@@ -1216,7 +1629,7 @@ mod tests {
         right.extend(col("en nine", 220.0, 100.0, 4));
         right.push(head("ARTICLE 10 - CONFIDENTIALITY", 220.0, 180.0));
         right.extend(col("en ten", 220.0, 200.0, 4));
-        let out = texts(&read_order(vec![left, right], &[], &[], &[]));
+        let out = texts(&read_order(vec![left, right], &[], &[], &[], &[]));
         let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
         assert!(
             at("en nine 3") < at("ARTICLE 10 - CONFIDENTIALITE"),
@@ -1237,7 +1650,7 @@ mod tests {
                 )
             })
             .collect();
-        let out = read_order(vec![lines], &[rule(40.0, 380.0, 129.0)], &[], &[]);
+        let out = read_order(vec![lines], &[rule(40.0, 380.0, 129.0)], &[], &[], &[]);
         assert_eq!(out.len(), 1, "{:?}", texts(&out));
     }
 
@@ -1251,7 +1664,7 @@ mod tests {
         second.extend(col("second after", 200.0, 180.0, 4));
         let mut third = col("third", 360.0, 100.0, 5);
         third.extend(col("third after", 360.0, 180.0, 4));
-        let out = texts(&read_order(vec![first, second, third], &[], &[], &[]));
+        let out = texts(&read_order(vec![first, second, third], &[], &[], &[], &[]));
         let firsts: Vec<usize> = out
             .iter()
             .enumerate()
@@ -1290,7 +1703,7 @@ mod tests {
             line("to reduce ordering effort", 70.0, 220.0, 200.0),
             line("space is limited on the rail", 230.0, 220.0, 360.0),
         ];
-        let out = texts(&read_order(vec![lines], &[], &[], &[]));
+        let out = texts(&read_order(vec![lines], &[], &[], &[], &[]));
         let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
         assert!(at("to reduce") < at("The housings"), "{out:?}");
     }
@@ -1307,7 +1720,7 @@ mod tests {
             line("Core insulation", 70.0, 220.0, 140.0),
             line("Polyvinyl chloride compound", 230.0, 220.0, 340.0),
         ];
-        let out = texts(&read_order(vec![lines], &[], &[], &[]));
+        let out = texts(&read_order(vec![lines], &[], &[], &[], &[]));
         assert_eq!(out[1], "Three hundred volts", "{out:?}");
         // Values with their units, under a sentence that runs on: a number
         // opening a line is no running text, whatever letter follows it,
@@ -1322,7 +1735,214 @@ mod tests {
             line("Population range", 36.0, 454.0, 100.0),
             line("1st–99th percentile", 142.0, 454.0, 200.0),
         ];
-        let out = texts(&read_order(vec![lines], &[], &[], &[]));
+        let out = texts(&read_order(vec![lines], &[], &[], &[], &[]));
         assert_eq!(out[3], "300 lb/136 kg", "{out:?}");
+    }
+
+    /// Lines from `y`, one every `pitch`, at `x`, `w` wide.
+    fn block(texts: &[&str], x: f64, y: f64, pitch: f64, w: f64) -> Vec<Line> {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| line(t, x, y + pitch * i as f64, x + w))
+            .collect()
+    }
+
+    fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
+        BBox { x0, y0, x1, y1 }
+    }
+
+    #[test]
+    fn blocks_set_on_their_own_baselines_read_each_whole() {
+        // A delivery address at the left and the buyer's at the right, each
+        // on its own leading: their lines drift through each other.
+        let mut lines = block(
+            &[
+                "Delivery address",
+                "Ma jolie boutique",
+                "35 rue Victor Hugo",
+                "69001 Lyon France",
+                "Phone 04 72 07 08",
+            ],
+            36.0,
+            100.0,
+            11.5,
+            120.0,
+        );
+        lines.extend(block(
+            &[
+                "Ma jolie boutique",
+                "Alexandre Payet here",
+                "35 rue Victor Hugo",
+                "69001 Lyon France",
+            ],
+            300.0,
+            106.0,
+            12.6,
+            120.0,
+        ));
+        lines.sort_by(|a, b| a.bbox.y0.partial_cmp(&b.bbox.y0).unwrap());
+        let out = texts(&read_order(vec![lines], &[], &[], &[], &[]));
+        assert_eq!(
+            out[..5]
+                .iter()
+                .filter(|t| *t != "Alexandre Payet here")
+                .count(),
+            5,
+            "{out:?}"
+        );
+        assert_eq!(out[5], "Ma jolie boutique", "{out:?}");
+        assert_eq!(out[6], "Alexandre Payet here", "{out:?}");
+    }
+
+    #[test]
+    fn a_block_running_on_past_the_one_beside_it_reads_whole() {
+        // The seller's six lines beside the customer's three, level with
+        // its first three.
+        let mut lines = block(
+            &[
+                "Seller company b.v.",
+                "Main street 100, Utrecht",
+                "Chamber of Commerce 3214",
+                "VAT no. NL8204716",
+                "IBAN NL27 INGB 0000",
+                "BIC code INGBNL2A",
+            ],
+            36.0,
+            100.0,
+            10.0,
+            150.0,
+        );
+        lines.extend(block(
+            &["Mr. M. Customer", "Kapittel road 409", "1216 JD Hilversum"],
+            300.0,
+            100.0,
+            10.0,
+            100.0,
+        ));
+        lines.sort_by(|a, b| a.bbox.y0.partial_cmp(&b.bbox.y0).unwrap());
+        let out = texts(&read_order(vec![lines], &[], &[], &[], &[]));
+        assert_eq!(out[5], "BIC code INGBNL2A", "{out:?}");
+        assert_eq!(out[6], "Mr. M. Customer", "{out:?}");
+    }
+
+    #[test]
+    fn labels_beside_their_values_stay_rows() {
+        // Labels whose last ones have no value: a form, read row by row.
+        let mut lines = block(
+            &[
+                "Invoice date:",
+                "Due date:",
+                "Order number:",
+                "Customer ref:",
+                "Delivery note:",
+            ],
+            36.0,
+            100.0,
+            10.0,
+            70.0,
+        );
+        lines.extend(block(
+            &["29 October 2015", "12 November 2015", "Order 8587 3338"],
+            200.0,
+            100.0,
+            10.0,
+            90.0,
+        ));
+        lines.sort_by(|a, b| {
+            a.bbox
+                .y0
+                .partial_cmp(&b.bbox.y0)
+                .unwrap()
+                .then(a.bbox.x0.partial_cmp(&b.bbox.x0).unwrap())
+        });
+        let out = texts(&read_order(vec![lines], &[], &[], &[], &[]));
+        assert_eq!(out[1], "29 October 2015", "{out:?}");
+    }
+
+    #[test]
+    fn boxes_side_by_side_read_each_whole() {
+        // Two boxes of a flowchart, their lines level across the row.
+        let mut lines = block(
+            &["With comorbidity", "(N=44,770) patients"],
+            200.0,
+            215.0,
+            9.0,
+            57.0,
+        );
+        lines.extend(block(
+            &["Without comorbidity", "(N=57,006) patients"],
+            366.0,
+            215.0,
+            9.0,
+            68.0,
+        ));
+        lines.push(line(
+            "Figure 1: Flowchart of the study population.",
+            150.0,
+            245.0,
+            400.0,
+        ));
+        lines.sort_by(|a, b| a.bbox.y0.partial_cmp(&b.bbox.y0).unwrap());
+        let boxes = [
+            rect(184.0, 211.0, 270.0, 233.0),
+            rect(355.0, 211.0, 441.0, 233.0),
+        ];
+        let out = texts(&read_order(vec![lines.clone()], &[], &[], &[], &boxes));
+        assert_eq!(out[1], "(N=44,770) patients", "{out:?}");
+        assert_eq!(out[2], "Without comorbidity", "{out:?}");
+        // A table's cells drawn one box each touch: their rows stay rows.
+        let cells = [
+            rect(184.0, 211.0, 270.0, 233.0),
+            rect(270.0, 211.0, 441.0, 233.0),
+        ];
+        assert!(framed_row(&lines, &cells, 8.0).is_none());
+    }
+
+    #[test]
+    fn a_flowchart_reads_box_by_box_in_flow_order() {
+        // A step, a branch off it at the left set lower, and the next step.
+        let mut lines = block(
+            &["Lung cancer patients", "during 1995-2010"],
+            280.0,
+            77.0,
+            9.0,
+            66.0,
+        );
+        lines.extend(block(
+            &[
+                "Exclusion criteria:",
+                "1. Ambulatory visits <5",
+                "2. Comorbidity before",
+            ],
+            164.0,
+            107.0,
+            9.0,
+            73.0,
+        ));
+        lines.extend(block(
+            &["Lung cancer cohort", "selected in this study"],
+            280.0,
+            157.0,
+            9.0,
+            66.0,
+        ));
+        let boxes = [
+            rect(270.0, 74.0, 356.0, 105.0),
+            rect(158.0, 104.0, 244.0, 162.0),
+            rect(270.0, 154.0, 356.0, 185.0),
+        ];
+        let mut sorted = lines.clone();
+        sorted.sort_by(|a, b| a.bbox.y0.partial_cmp(&b.bbox.y0).unwrap());
+        let out = texts(&read_order(vec![sorted], &[], &[], &[], &boxes));
+        let at = |t: &str| out.iter().position(|o| o == t).unwrap();
+        assert!(
+            at("during 1995-2010") < at("Exclusion criteria:"),
+            "{out:?}"
+        );
+        assert!(
+            at("2. Comorbidity before") < at("Lung cancer cohort"),
+            "{out:?}"
+        );
     }
 }

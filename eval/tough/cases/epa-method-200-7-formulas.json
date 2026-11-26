@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "epa-method-200-7.pdf",
+    "url": "https://www.epa.gov/sites/default/files/2015-08/documents/method_200-7_rev_4-4_1994.pdf",
+    "sha256": "abe8fbbb67f799278f4392c0a91445367c88a3bbafef53a8464a8ce2877792c8",
+    "about": "US EPA Method 200.7, Revision 4.4 (1994, public domain): metals by ICP-AES. Its reagents give chemical formulas whose subscripts are set smaller and lower, drawn after the word's letters and set back into a space the producer wrote between them (`As`, a space, `O`, then the `2` of As₂O₃ drawn in the space)."
+  },
+  "notes": [
+    "2026-11-25 (#347): the space a subscript was set in stayed a word space: `As 2O3`, `HNO 3`, `NH 4OH`, `50% H 2O2`, `Pb(NO 3)2`."
+  ],
+  "checks": [
+    {
+      "id": "arsenic-trioxide-whole",
+      "found": "2026-11-25",
+      "issue": "#347: `As 2O3`.",
+      "text": "Dissolve 1.320 g of As2O3 (As fraction = 0.7574)"
+    },
+    {
+      "id": "ammonium-hydroxide-whole",
+      "found": "2026-11-25",
+      "issue": "#347: `NH 4OH`.",
+      "text": "10.0 mL concentrated NH4OH"
+    },
+    {
+      "id": "peroxide-whole",
+      "found": "2026-11-25",
+      "issue": "#347: `50% H 2O2`.",
+      "text": "50% H2O2 dropwise"
+    },
+    {
+      "id": "lead-nitrate-whole",
+      "found": "2026-11-25",
+      "issue": "#347: `Pb(NO 3)2`.",
+      "text": "Dissolve 1.599 g Pb(NO3)2"
+    },
+    {
+      "id": "no-split-nitric-acid",
+      "found": "2026-11-25",
+      "issue": "#347: thirteen of forty `HNO3` read `HNO 3`.",
+      "no_text": "HNO 3"
+    }
+  ]
+}

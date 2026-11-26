@@ -317,6 +317,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: size,
                     weight: None,
+                    italic: false,
                     advance: Some(step),
                     draw_index: 0,
                 }

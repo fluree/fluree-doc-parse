@@ -150,6 +150,9 @@ pub struct TableLayout {
     pub downs: Vec<(usize, usize, usize)>,
     /// Body rows that label the rows beneath them.
     pub sub_headers: Vec<usize>,
+    /// Body rows that name the columns again for the rows beneath them, in
+    /// the header's lowest row's place: a block's own line of column names.
+    pub restated_headers: Vec<usize>,
     /// Per cell, row-major, the page glyphs read into it.
     pub cells: Vec<Vec<usize>>,
     /// The `draw_index` of every glyph the cells hold, sorted: the glyphs the
@@ -1086,7 +1089,32 @@ impl Grid {
         // the labels' column open. A label on each side of them is two
         // rows' labels, not one span (`Japanese yen` over `Total`); a stub
         // head over a header's underlined groups, its text on one side
-        // alone, still spans.
+        // alone, still spans. Not a cell boxed across the boundary, a
+        // vertical on each of its column's edges running through it: no
+        // rule closes under it, and it spans its rows whatever the rules
+        // beside it are drawn in (a datasheet's cells, each bordered a cell
+        // at a time, `Min | Typ | Max` ruled apart under a condition
+        // wrapped over two rows of them).
+        // A vertical on the edge, above the boundary and below it: one
+        // rule through it, or a row's border meeting the next row's there.
+        let through = |x: f64, y: f64| {
+            let on_edge = |r: &&Rule| {
+                r.orientation == Orientation::Vertical
+                    && (r.axis_pos() - x).abs() <= EDGE_TOLERANCE * 2.0
+            };
+            let tol = EDGE_TOLERANCE * 2.0;
+            rules
+                .iter()
+                .filter(on_edge)
+                .any(|r| r.bbox.y0 < y - tol && r.bbox.y1 >= y - tol)
+                && rules
+                    .iter()
+                    .filter(on_edge)
+                    .any(|r| r.bbox.y1 > y + tol && r.bbox.y0 <= y + tol)
+        };
+        let boxed = |k: usize, c: usize| {
+            through(self.xs[c], self.ys[k]) && through(self.xs[c + 1], self.ys[k])
+        };
         let underlined: Vec<usize> = (1..rows)
             .filter(|&k| merges.continues_above[k * cols..(k + 1) * cols].contains(&true))
             .filter(|&k| cluster(&on(k)).iter().any(|l| !l.gutters.is_empty()))
@@ -1101,7 +1129,8 @@ impl Grid {
             };
             for k in underlined {
                 for i in k * cols..(k + 1) * cols {
-                    if merges.continues_above[i] && held(i) && held(i - cols) {
+                    if merges.continues_above[i] && held(i) && held(i - cols) && !boxed(k, i % cols)
+                    {
                         merges.continues_above[i] = false;
                     }
                 }
@@ -2128,6 +2157,326 @@ fn figures_row(row: &[String]) -> bool {
             .all(|t| figures(t) || t.chars().all(|c| "-–—".contains(c)))
 }
 
+/// Of a gap a column of text crossed by a page's gutter leaves, less than
+/// this many ems between the last word before the gutter and the first after
+/// is text running across it: a word space, or the wide space of a
+/// justified line, is under three quarters of an em, and a gutter between
+/// two columns of text over one.
+const ACROSS_GUTTER: f64 = 0.75;
+
+/// Within this many ems of a reading's top or bottom, a line of a page
+/// column's text runs on past it: lines of a paragraph or rows of a table
+/// stand a fifth of an em apart or less, ink to ink, and a caption or
+/// heading set over a table stands off it by half an em or more.
+const RUNS_PAST: f64 = 0.35;
+
+/// Words to a line of a paragraph set in a page's column, at the least: a
+/// column of a two-column page sets ten or more, a table cell's text two or
+/// three before it wraps.
+const COLUMN_PROSE_WORDS: usize = 8;
+
+/// Shares of a reading's rows, and of those rows' baselines, that make its
+/// two sides one table's halves: a long table wrapped into two halves side
+/// by side holds a row on both sides on every line but perhaps its last.
+const HALVES: f64 = 0.8;
+
+/// Where a gutter between two of the page's columns could run down through
+/// a reading: the gaps of three quarters of an em or more
+/// (`ACROSS_GUTTER`) its rows leave before text that starts at one place,
+/// as the span from where the text before them ends, at the latest, to
+/// where that text starts; the places most rows start at first. A column
+/// after a gutter starts each of its lines at the same place, however far
+/// the text before the gutter reaches; a row with text on one side alone
+/// leaves no gap there.
+pub(crate) fn channels_in(rows: &[ReadingRow]) -> Vec<(f64, f64)> {
+    let mut gaps: Vec<(f64, f64, f64)> = Vec::new();
+    for row in rows.iter().filter(|r| r.len() >= 2) {
+        let mut end = row[0].1.x1;
+        for &(q, bb) in &row[1..] {
+            let em = q.font_size.max(1.0) as f64;
+            if bb.x0 - end >= em * ACROSS_GUTTER {
+                gaps.push((bb.x0, end, em));
+            }
+            end = end.max(bb.x1);
+        }
+    }
+    gaps.sort_by(|a, c| a.0.total_cmp(&c.0));
+    // (rows, latest end before, earliest start after)
+    let mut found: Vec<(usize, f64, f64)> = Vec::new();
+    let mut last = f64::MIN;
+    for (x, open, em) in gaps {
+        match found.last_mut() {
+            Some((n, ends, starts)) if x - last <= em * ACROSS_GUTTER => {
+                *n += 1;
+                *ends = ends.max(open);
+                *starts = starts.min(x);
+            }
+            _ => found.push((1, open, x)),
+        }
+        last = x;
+    }
+    // The places most rows start at first.
+    found.sort_by(|a, c| c.0.cmp(&a.0).then(a.2.total_cmp(&c.2)));
+    found
+        .into_iter()
+        .filter(|(_, ends, starts)| starts > ends)
+        .map(|(_, ends, starts)| (ends, starts))
+        .collect()
+}
+
+/// A reading's row: its glyphs, left to right, with their boxes.
+pub(crate) type ReadingRow<'g> = Vec<(&'g crate::glyph::Glyph, BBox)>;
+
+/// A reading's rows of text, each its glyphs left to right: read once for
+/// every place a gutter is looked for ([`channels_in`],
+/// [`crosses_gutter`]).
+pub(crate) fn reading_rows<'g>(g: &Grid, glyphs: &'g [crate::glyph::Glyph]) -> Vec<ReadingRow<'g>> {
+    let b = g.bbox;
+    let mut inside: Vec<(&crate::glyph::Glyph, BBox)> = glyphs
+        .iter()
+        .filter(|q| q.is_horizontal() && !q.text.trim().is_empty())
+        .filter_map(|q| q.bbox.map(|bb| (q, bb)))
+        .filter(|(_, bb)| {
+            let (cx, cy) = ((bb.x0 + bb.x1) / 2.0, (bb.y0 + bb.y1) / 2.0);
+            cx >= b.x0 && cx <= b.x1 && cy >= b.y0 && cy <= b.y1
+        })
+        .collect();
+    inside.sort_by(|a, c| a.1.x0.total_cmp(&c.1.x0));
+    g.ys.windows(2)
+        .map(|w| {
+            inside
+                .iter()
+                .filter(|(_, bb)| {
+                    let cy = (bb.y0 + bb.y1) / 2.0;
+                    cy >= w[0] && cy < w[1]
+                })
+                .copied()
+                .collect()
+        })
+        .collect()
+}
+
+/// A run of text set together on a line: its box, its words, its size.
+#[derive(Debug, Clone)]
+pub(crate) struct TextRun {
+    pub bbox: BBox,
+    pub text: String,
+    pub size: f64,
+}
+
+/// The lines a page column sets between `c0` and `c1`, from `top` to
+/// `bottom`: its runs on one baseline, joined.
+fn column_lines(runs: &[&TextRun], (c0, c1): (f64, f64), top: f64, bottom: f64) -> Vec<TextRun> {
+    let mut side: Vec<&&TextRun> = runs
+        .iter()
+        .filter(|r| {
+            r.bbox.x0 >= c0 - 2.0
+                && r.bbox.x1 <= c1 + 2.0
+                && r.bbox.y0 >= top
+                && r.bbox.y1 <= bottom
+        })
+        .collect();
+    side.sort_by(|a, b| {
+        a.bbox
+            .y1
+            .total_cmp(&b.bbox.y1)
+            .then(a.bbox.x0.total_cmp(&b.bbox.x0))
+    });
+    let mut out: Vec<TextRun> = Vec::new();
+    for r in side {
+        match out.last_mut() {
+            Some(l) if (l.bbox.y1 - r.bbox.y1).abs() <= l.size.max(r.size) * 0.3 => {
+                l.bbox = l.bbox.union(&r.bbox);
+                l.text.push(' ');
+                l.text.push_str(&r.text);
+                l.size = l.size.max(r.size);
+            }
+            _ => out.push((*r).clone()),
+        }
+    }
+    out
+}
+
+/// Whether some of `lines` run as a paragraph does: a line of a column's
+/// prose, open at its end, carried on in lowercase by the line set under it
+/// at its indent, both full lines of words (`COLUMN_PROSE_WORDS`).
+fn runs_as_prose(lines: &[TextRun]) -> bool {
+    lines.windows(2).any(|w| {
+        let (a, c) = (&w[0], &w[1]);
+        let em = a.size.max(1.0);
+        let open = a
+            .text
+            .trim_end()
+            .chars()
+            .next_back()
+            .is_some_and(|ch| ch.is_lowercase() || matches!(ch, ',' | '-'));
+        let carried = c
+            .text
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(char::is_lowercase);
+        let words = |l: &TextRun| l.text.split_whitespace().count() >= COLUMN_PROSE_WORDS;
+        c.bbox.y0 - a.bbox.y1 <= em * RUNS_PAST
+            && (c.bbox.x0 - a.bbox.x0).abs() <= em * 2.0
+            && open
+            && carried
+            && words(a)
+            && words(c)
+    })
+}
+
+/// Whether a reading set across a page's gutter, between the page columns
+/// `left` and `right`, crosses between two of the page's columns of text:
+/// two tables set side by side, a table and the prose beside it, a block of
+/// facts and a title.
+///
+/// - On none of its rows does text run across the gutter, and on most rows
+///   the first words past it are a label, not a figure. A table's columns
+///   after its labels hold figures; a second column of labels past the
+///   page's gutter is another table's stub, the keys of a block of facts, or
+///   prose.
+/// - Its two sides are not one table's halves: a long table wrapped into
+///   two halves side by side sets a row on both sides on one baseline, and
+///   neither half runs on past the other.
+///
+/// `rows` are the reading's ([`reading_rows`]); `runs` gives the page's runs
+/// of text, read only for a reading that passes the first test. The gutter
+/// is looked for in the span its rows leave open between `ends` and
+/// `starts` ([`channels_in`]), where fewest runs cross it; the place found
+/// is returned.
+pub(crate) fn crosses_gutter<'a>(
+    g: &Grid,
+    rows: &[ReadingRow],
+    runs: impl Fn() -> &'a [TextRun],
+    (ends, starts): (f64, f64),
+    width: f64,
+) -> Option<f64> {
+    let mut gutter = (ends + starts) / 2.0;
+    let b = g.bbox;
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let mut firsts: Vec<String> = Vec::new();
+    let (mut held, mut both, mut level) = (0usize, 0usize, 0usize);
+    let mut fs = 0.0f64;
+    for row in rows {
+        if row.is_empty() {
+            continue;
+        }
+        held += 1;
+        let split = row.partition_point(|(_, bb)| (bb.x0 + bb.x1) / 2.0 < gutter);
+        let (before, after) = row.split_at(split);
+        let Some(&(first, fb)) = after.first() else {
+            continue;
+        };
+        let em = first.font_size.max(1.0) as f64;
+        fs = fs.max(em);
+        if let Some(&(_, lb)) = before.last() {
+            if fb.x0 - lb.x1 < em * ACROSS_GUTTER {
+                return None;
+            }
+            both += 1;
+            let mut l: Vec<f64> = before.iter().map(|(q, _)| q.origin.1).collect();
+            let mut r: Vec<f64> = after.iter().map(|(q, _)| q.origin.1).collect();
+            if (median(&mut l) - median(&mut r)).abs() <= em * 0.25 {
+                level += 1;
+            }
+        }
+        let mut text = first.text.clone();
+        let mut end = fb.x1;
+        for &(q, qb) in &after[1..] {
+            if qb.x0 - end > em * ACROSS_GUTTER {
+                break;
+            }
+            text.push_str(&q.text);
+            end = qb.x1;
+        }
+        firsts.push(text);
+    }
+    // A label: words, or a key set against its value (`Z = 2`).
+    let labels = firsts
+        .iter()
+        .filter(|t| {
+            let t = t.trim();
+            let keyed = t
+                .split_once('=')
+                .is_some_and(|(k, _)| k.chars().any(char::is_alphabetic));
+            keyed || t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && !is_numeric_cell(t)
+        })
+        .count();
+    if both == 0 || firsts.len() < 2 || labels * 2 <= firsts.len() {
+        return None;
+    }
+    // The page's runs of text outside the reading, read only for a reading
+    // that passes the tests above.
+    let runs: Vec<&TextRun> = runs()
+        .iter()
+        .filter(|r| {
+            let (cx, cy) = ((r.bbox.x0 + r.bbox.x1) / 2.0, (r.bbox.y0 + r.bbox.y1) / 2.0);
+            !(cx >= b.x0 && cx <= b.x1 && cy >= b.y0 && cy <= b.y1)
+        })
+        .collect();
+    // The gutter stands where fewest of the page's runs cross the span its
+    // rows leave open: a column's prose starts at its edge, and a table set
+    // in it may start its labels further in.
+    let crossing = |x: f64| {
+        runs.iter()
+            .filter(|r| r.bbox.x0 < x - 0.5 && r.bbox.x1 > x + 0.5)
+            .count()
+    };
+    let mut places: Vec<f64> = vec![gutter, ends + 0.5, starts - 0.5];
+    places.extend(
+        runs.iter()
+            .flat_map(|r| [r.bbox.x0 - 0.5, r.bbox.x1 + 0.5])
+            .filter(|&x| x > ends && x < starts),
+    );
+    gutter = places
+        .into_iter()
+        .map(|x| (crossing(x), (x - gutter).abs(), x))
+        .min_by(|a, c| a.0.cmp(&c.0).then(a.1.total_cmp(&c.1)))
+        .map_or(gutter, |(_, _, x)| x);
+    let (left, right) = ((0.0, gutter), (gutter, width));
+    // The gutter parts two columns of the page's text: between the nearest
+    // runs set across it over and under the reading, each side sets a
+    // paragraph of its own, a line running on into the next. A gap between
+    // a table's own columns parts nothing but the table: the page's prose
+    // runs across it, or the page holds none.
+    let across = |r: &TextRun| r.bbox.x0 < gutter - 1.0 && r.bbox.x1 > gutter + 1.0;
+    let top = runs
+        .iter()
+        .filter(|r| across(r) && r.bbox.y1 <= b.y0)
+        .map(|r| r.bbox.y1)
+        .fold(f64::MIN, f64::max);
+    let bottom = runs
+        .iter()
+        .filter(|r| across(r) && r.bbox.y0 >= b.y1)
+        .map(|r| r.bbox.y0)
+        .fold(f64::MAX, f64::min);
+    if !runs_as_prose(&column_lines(&runs, left, top, bottom))
+        || !runs_as_prose(&column_lines(&runs, right, top, bottom))
+    {
+        return None;
+    }
+    // A side's column text running on past the reading's top or bottom.
+    let runs_past = |(c0, c1): (f64, f64), top: bool| {
+        runs.iter().any(|r| {
+            let rb = r.bbox;
+            let gap = if top { b.y0 - rb.y1 } else { rb.y0 - b.y1 };
+            rb.x0 >= c0 - 2.0
+                && rb.x1 <= c1 + 2.0
+                && gap >= -0.5 * fs
+                && gap <= RUNS_PAST * r.size.max(1.0)
+        })
+    };
+    let alone = [true, false]
+        .iter()
+        .any(|&top| runs_past(left, top) != runs_past(right, top));
+    let halves = both as f64 >= held as f64 * HALVES && level as f64 >= both as f64 * HALVES;
+    (alone || !halves).then_some(gutter)
+}
+
 pub(crate) fn is_numeric_cell(s: &str) -> bool {
     if s.is_empty() || !s.chars().any(|c| c.is_ascii_digit()) {
         return false;
@@ -2216,30 +2565,8 @@ fn cluster(rules: &[&Rule]) -> Vec<GridLine> {
         .is_some_and(|r| r.orientation == Orientation::Horizontal);
     let t = EDGE_TOLERANCE;
     for (g, parts) in out.iter_mut().zip(&pieces).filter(|_| horizontal) {
-        let mut middles = Vec::new();
-        for (i, &(a, b)) in parts.iter().enumerate() {
-            for &(c, d) in &parts[i + 1..] {
-                let nested = (c <= a + t && d >= b - t) || (a <= c + t && b >= d - t);
-                let (lo, hi) = (a.max(c), b.min(d));
-                if hi - lo > t && !nested {
-                    middles.push((lo + hi) / 2.0);
-                }
-            }
-        }
-        g.ends.retain(|&e| {
-            let own: Vec<&(f64, f64)> = parts
-                .iter()
-                .filter(|(a, b)| (a - e).abs() <= 0.01 || (b - e).abs() <= 0.01)
-                .collect();
-            !own.iter().any(|&&(a, b)| {
-                parts.iter().any(|&(c, d)| {
-                    let contains = c <= a + t && d >= b - t;
-                    let overlaps = c < b - t && d > a + t;
-                    overlaps && !contains && c < e - t && d > e + t
-                })
-            })
-        });
-        g.ends.extend(middles);
+        g.ends.retain(end_kept(parts, t));
+        g.ends.extend(overlap_middles(parts, t));
         // The rule's runs: its pieces joined where they meet or overlap.
         let mut sorted = parts.clone();
         sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -2262,7 +2589,23 @@ fn cluster(rules: &[&Rule]) -> Vec<GridLine> {
             .collect();
         // A row's underlines under each of its figures: three gutters or
         // more. Group labels' underlines, one under each group, part at a
-        // gutter or two, and between groups, not columns.
+        // gutter or two, and between groups, not columns. Counted along one
+        // chain of pieces: a gap wider than a gutter parts two tables'
+        // rules (each of two tables side by side ruled a cell at a time,
+        // their rows level across the page's gutter), and their gutters
+        // are not one row's.
+        let mut chains: Vec<Vec<usize>> = Vec::new();
+        for &i in &parted {
+            match chains.last_mut() {
+                Some(c) if c.last().is_some_and(|&j| j + 1 == i) => c.push(i),
+                _ => chains.push(vec![i]),
+            }
+        }
+        let parted: Vec<usize> = chains
+            .into_iter()
+            .filter(|c| c.len() >= MIN_GUTTERS_PER_LINE)
+            .flatten()
+            .collect();
         if parted.len() >= MIN_GUTTERS_PER_LINE {
             g.gutters = parted
                 .iter()
@@ -2275,6 +2618,83 @@ fn cluster(rules: &[&Rule]) -> Vec<GridLine> {
     }
     out
 }
+
+/// The middles of the overlaps between a row rule's pieces, in the order of
+/// the pairs (first piece, second piece) as the pieces were drawn: one for
+/// each pair overlapping by more than `t` where neither piece holds the
+/// other.
+///
+/// A chart drawn in strokes can lay thousands of pieces along one line, most
+/// of them stacked over each other. So the pairs are found by a sweep over
+/// the pieces sorted by start, testing only the pieces that start inside
+/// another's span. A pair overlaps by more than `t` only if the later piece
+/// starts more than `t` before the earlier one ends, and that bound only
+/// falls as the start moves right.
+fn overlap_middles(parts: &[(f64, f64)], t: f64) -> Vec<f64> {
+    let mut order: Vec<usize> = (0..parts.len()).collect();
+    order.sort_by(|&i, &j| parts[i].0.total_cmp(&parts[j].0).then(i.cmp(&j)));
+    let mut found: Vec<(usize, usize, f64)> = Vec::new();
+    for (p, &i) in order.iter().enumerate() {
+        let end = parts[i].1;
+        for &j in &order[p + 1..] {
+            if end - parts[j].0 <= t {
+                break;
+            }
+            let (first, second) = (i.min(j), i.max(j));
+            let ((a, b), (c, d)) = (parts[first], parts[second]);
+            let nested = (c <= a + t && d >= b - t) || (a <= c + t && b >= d - t);
+            let (lo, hi) = (a.max(c), b.min(d));
+            if hi - lo > t && !nested {
+                found.push((first, second, (lo + hi) / 2.0));
+            }
+        }
+    }
+    found.sort_by_key(|&(i, j, _)| (i, j));
+    found.into_iter().map(|(_, _, m)| m).collect()
+}
+
+/// Whether a row rule keeps an end of one of its pieces: not when the end
+/// falls inside another piece that overlaps the end's own piece without
+/// holding it (two cells' pieces run on past each other's edge).
+///
+/// Many pieces of a chart drawn in strokes repeat one another and share
+/// their ends, so past [`FEW_PIECES`] the test reads the distinct pieces,
+/// sorted by start, and is worked out once for each distinct end.
+fn end_kept(parts: &[(f64, f64)], t: f64) -> impl FnMut(&f64) -> bool + '_ {
+    let few = parts.len() <= FEW_PIECES;
+    let mut distinct = if few { Vec::new() } else { parts.to_vec() };
+    distinct.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.total_cmp(&y.1)));
+    distinct.dedup_by(|x, y| x.0.to_bits() == y.0.to_bits() && x.1.to_bits() == y.1.to_bits());
+    let mut kept: rustc_hash::FxHashMap<u64, bool> = Default::default();
+    let ends_inside = move |pieces: &[(f64, f64)], e: f64, sorted: bool| {
+        let mut own = pieces
+            .iter()
+            .filter(|(a, b)| (a - e).abs() <= 0.01 || (b - e).abs() <= 0.01);
+        !own.any(|&(a, b)| {
+            pieces
+                .iter()
+                .take_while(|&&(c, _)| !sorted || c < e - t)
+                .any(|&(c, d)| {
+                    let contains = c <= a + t && d >= b - t;
+                    let overlaps = c < b - t && d > a + t;
+                    overlaps && !contains && c < e - t && d > e + t
+                })
+        })
+    };
+    move |&e| {
+        if few {
+            return ends_inside(parts, e, false);
+        }
+        *kept
+            .entry(e.to_bits())
+            .or_insert_with(|| ends_inside(&distinct, e, true))
+    }
+}
+
+/// How many pieces a rule, or rules a component, holds before the readings
+/// of their overlaps file them first: below it, testing each against each
+/// costs less than the filing.
+const FEW_PIECES: usize = 32;
 
 /// Drop a rule's gutters when text runs across one of them: a caption or a
 /// line of prose over a rule whose pieces happen to part under it, or a
@@ -4590,26 +5010,135 @@ fn split_stacked_boxes<T: Copy>(comp: Vec<T>, rule: impl Fn(T) -> Rule) -> Vec<V
     out
 }
 
+/// The rules of one component, filed by the cells of a coarse grid their
+/// reach covers (each rule's box widened by [`EDGE_TOLERANCE`] and a cell),
+/// so that whether any of them touches a rule is asked of the few filed
+/// near it, not of all of them. A chart drawn in strokes can put thousands
+/// of rules in one component. A component of [`FEW_PIECES`] boxes or fewer
+/// is asked box by box, unfiled.
+struct TouchGrid {
+    /// The component's distinct boxes: whether a rule touches the component
+    /// turns on its rules' boxes alone, and a chart's strokes repeat theirs.
+    boxes: Vec<BBox>,
+    filed: rustc_hash::FxHashSet<[u64; 4]>,
+    cells: rustc_hash::FxHashMap<(i64, i64), Vec<BBox>>,
+    /// Rules too long to file cell by cell, asked every time.
+    wide: Vec<BBox>,
+}
+
+fn box_bits(b: &BBox) -> [u64; 4] {
+    [
+        b.x0.to_bits(),
+        b.y0.to_bits(),
+        b.x1.to_bits(),
+        b.y1.to_bits(),
+    ]
+}
+
+impl TouchGrid {
+    const CELL: f64 = 16.0;
+    const MAX_CELLS: i64 = 4096;
+
+    fn span(lo: f64, hi: f64) -> (i64, i64) {
+        (
+            ((lo - EDGE_TOLERANCE) / Self::CELL).floor() as i64 - 1,
+            ((hi + EDGE_TOLERANCE) / Self::CELL).floor() as i64 + 1,
+        )
+    }
+
+    fn new() -> Self {
+        TouchGrid {
+            boxes: Vec::new(),
+            filed: Default::default(),
+            cells: Default::default(),
+            wide: Vec::new(),
+        }
+    }
+
+    fn filing(&self) -> bool {
+        self.boxes.len() > FEW_PIECES
+    }
+
+    fn insert(&mut self, b: &BBox) {
+        if self.filing() {
+            if self.filed.insert(box_bits(b)) {
+                self.boxes.push(*b);
+                self.file(b);
+            }
+            return;
+        }
+        if self.boxes.iter().any(|o| box_bits(o) == box_bits(b)) {
+            return;
+        }
+        self.boxes.push(*b);
+        if self.filing() {
+            for o in self.boxes.clone() {
+                self.filed.insert(box_bits(&o));
+                self.file(&o);
+            }
+        }
+    }
+
+    fn file(&mut self, b: &BBox) {
+        let ((x0, x1), (y0, y1)) = (Self::span(b.x0, b.x1), Self::span(b.y0, b.y1));
+        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > Self::MAX_CELLS {
+            self.wide.push(*b);
+            return;
+        }
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                self.cells.entry((x, y)).or_default().push(*b);
+            }
+        }
+    }
+
+    /// Whether any of the component's rules touches `c`: the test of
+    /// [`component_indices`]. Filed, it is asked of the rules filed in the
+    /// cells `c` covers: a rule touching `c` reaches a point of `c`'s box,
+    /// so it is filed in a cell `c` covers.
+    fn touches(&self, c: &BBox) -> bool {
+        let touch = |r: &BBox| {
+            r.x1 + EDGE_TOLERANCE >= c.x0
+                && c.x1 + EDGE_TOLERANCE >= r.x0
+                && r.y1 + EDGE_TOLERANCE >= c.y0
+                && c.y1 + EDGE_TOLERANCE >= r.y0
+        };
+        if !self.filing() {
+            return self.boxes.iter().any(touch);
+        }
+        if self.wide.iter().any(touch) {
+            return true;
+        }
+        let ((x0, x1), (y0, y1)) = (Self::span(c.x0, c.x1), Self::span(c.y0, c.y1));
+        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > Self::MAX_CELLS {
+            return self.boxes.iter().any(touch);
+        }
+        (x0..=x1).any(|x| {
+            (y0..=y1).any(|y| {
+                self.cells
+                    .get(&(x, y))
+                    .is_some_and(|ks| ks.iter().any(touch))
+            })
+        })
+    }
+}
+
 /// The page's rules in touching sets, as indices.
 fn component_indices(rules: &[Rule]) -> Vec<Vec<usize>> {
     let mut remaining: Vec<usize> = (0..rules.len()).collect();
     let mut components: Vec<Vec<usize>> = Vec::new();
     while let Some(seed) = remaining.pop() {
         let mut component = vec![seed];
+        let mut grid = TouchGrid::new();
+        grid.insert(&rules[seed].bbox);
         let mut changed = true;
         while changed {
             changed = false;
             let mut i = 0;
             while i < remaining.len() {
                 let candidate = rules[remaining[i]];
-                let connected = component.iter().any(|&k| {
-                    let r = rules[k];
-                    r.bbox.x1 + EDGE_TOLERANCE >= candidate.bbox.x0
-                        && candidate.bbox.x1 + EDGE_TOLERANCE >= r.bbox.x0
-                        && r.bbox.y1 + EDGE_TOLERANCE >= candidate.bbox.y0
-                        && candidate.bbox.y1 + EDGE_TOLERANCE >= r.bbox.y0
-                });
-                if connected {
+                if grid.touches(&candidate.bbox) {
+                    grid.insert(&candidate.bbox);
                     component.push(remaining[i]);
                     remaining.swap_remove(i);
                     changed = true;
@@ -4644,6 +5173,344 @@ pub enum SuspectReason {
     /// A column of single values holds cells with several crammed together —
     /// rows that were merged.
     MergedRows,
+}
+
+/// A table's header set as a shaded band at its top: shading one height
+/// under a rule across it, divided into cells by verticals that stand on
+/// that rule and end at the band's foot. The body under it is often ruled by nothing, and read from
+/// its text or its alignment; the band is its header row ([`take_header_bands`]).
+#[derive(Debug, Clone)]
+pub(crate) struct HeaderBand {
+    pub bbox: BBox,
+    pub cells: Vec<BBox>,
+}
+
+/// The page's header bands. Shading one height, run together end to end,
+/// is a band; the verticals standing on its top rule and ending at its foot
+/// divide it into its cells, however its shading was drawn (a cell at a
+/// time, or two cells under one fill).
+pub(crate) fn header_bands(rules: &[Rule], fills: &[crate::rule::Fill]) -> Vec<HeaderBand> {
+    let t = EDGE_TOLERANCE;
+    // A band hangs under a rule and is divided by verticals: a page with
+    // no rule of either kind has none, however much it shades.
+    let mut tops: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    let verticals: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Vertical)
+        .collect();
+    if fills.is_empty() || tops.is_empty() || verticals.is_empty() {
+        return Vec::new();
+    }
+    tops.sort_by(|a, b| a.axis_pos().total_cmp(&b.axis_pos()));
+    let mut boxes: Vec<BBox> = fills.iter().map(|f| f.bbox).collect();
+    boxes.sort_by(|a, b| a.y0.total_cmp(&b.y0).then(a.x0.total_cmp(&b.x0)));
+    let touch = |r: &BBox, b: &BBox| {
+        (r.y0 - b.y0).abs() <= t && (r.y1 - b.y1).abs() <= t && b.x0 <= r.x1 + t && b.x1 >= r.x0 - t
+    };
+    // Runs of shading one height, joined where they meet or overlap. The
+    // shading comes in order of its tops, so a run's top is its first
+    // piece's and the runs stand in order of their tops: a piece is only
+    // looked for among the runs whose tops lie within the tolerance of its
+    // own. A chart's page draws thousands of fills.
+    let mut runs: Vec<BBox> = Vec::new();
+    let mut from = 0;
+    for b in boxes {
+        while from < runs.len() && runs[from].y0 < b.y0 - t {
+            from += 1;
+        }
+        match runs[from..].iter_mut().find(|r| touch(r, &b)) {
+            Some(r) => *r = r.union(&b),
+            None => runs.push(b),
+        }
+    }
+    // Runs a later piece of shading joined, merged until none touch, the
+    // first touching pair first. Runs still stand in order of their tops,
+    // and a merge keeps the earlier run's top, so each is compared only with
+    // the runs after it whose tops lie within the tolerance. After a merge
+    // only the grown run can touch a run it did not before, one whose top
+    // lies within the tolerance of its own: the next pair is looked for from
+    // the first of those, not from the page's first run again.
+    let mut start = 0;
+    loop {
+        let mut hit = None;
+        'scan: for i in start..runs.len() {
+            for j in i + 1..runs.len() {
+                if runs[j].y0 > runs[i].y0 + t {
+                    break;
+                }
+                if touch(&runs[i], &runs[j]) {
+                    hit = Some((i, j));
+                    break 'scan;
+                }
+            }
+        }
+        let Some((i, j)) = hit else { break };
+        let b = runs.remove(j);
+        runs[i] = runs[i].union(&b);
+        let y0 = runs[i].y0;
+        start = runs.partition_point(|r| r.y0 < y0 - t);
+    }
+    let mut out = Vec::new();
+    for bbox in runs {
+        let lo = tops.partition_point(|r| r.axis_pos() < bbox.y0 - t);
+        let top = tops[lo..]
+            .iter()
+            .take_while(|r| r.axis_pos() <= bbox.y0 + t)
+            .any(|r| r.bbox.x0 <= bbox.x0 + t && r.bbox.x1 >= bbox.x1 - t);
+        if !top {
+            continue;
+        }
+        let mut dividers: Vec<f64> = verticals
+            .iter()
+            .filter(|r| {
+                r.axis_pos() > bbox.x0 + t
+                    && r.axis_pos() < bbox.x1 - t
+                    && (r.bbox.y0 - bbox.y0).abs() <= t
+                    && (r.bbox.y1 - bbox.y1).abs() <= t
+            })
+            .map(|r| r.axis_pos())
+            .collect();
+        dividers.sort_by(f64::total_cmp);
+        dividers.dedup_by(|a, b| (*a - *b).abs() <= t);
+        if dividers.is_empty() {
+            continue;
+        }
+        let mut edges = vec![bbox.x0];
+        edges.extend(dividers);
+        edges.push(bbox.x1);
+        let cells = edges
+            .windows(2)
+            .map(|w| BBox {
+                x0: w[0],
+                y0: bbox.y0,
+                x1: w[1],
+                y1: bbox.y1,
+            })
+            .collect();
+        out.push(HeaderBand { bbox, cells });
+    }
+    out
+}
+
+/// Take each header band over the table read under it as its header row,
+/// one cell a column: the band's cells line up with the table's columns
+/// one for one, the table's first rows below the band start within the
+/// band's own height of its foot, and nothing else of the page's text
+/// stands between. Rows the reading made of the band's own lines (its
+/// labels' second lines, `(billions of dollars)` over `(percent)`) are the
+/// band's; a table read from the band's lines alone, set over nothing, is
+/// dropped. Returns which grids to keep.
+pub(crate) fn take_header_bands(
+    grids: &mut [Grid],
+    bands: &[HeaderBand],
+    glyphs: &[crate::glyph::Glyph],
+) -> Vec<bool> {
+    let t = EDGE_TOLERANCE;
+    let mut keep = vec![true; grids.len()];
+    let centre = |g: &crate::glyph::Glyph| {
+        g.bbox
+            .filter(|_| g.is_horizontal() && !g.text.trim().is_empty())
+            .map(|b| ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0))
+    };
+    let inside = |b: &BBox, (x, y): (f64, f64)| x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1;
+    for band in bands {
+        let Some(gi) = (0..grids.len()).find(|&gi| {
+            let g = &grids[gi];
+            let cols = g.cols();
+            let lined_up = cols == band.cells.len()
+                && (0..cols).all(|c| {
+                    let mid = (g.xs[c] + g.xs[c + 1]) / 2.0;
+                    mid >= band.cells[c].x0 && mid <= band.cells[c].x1
+                });
+            let under = g.bbox.y0 >= band.bbox.y0 - t
+                && g.bbox.y1 > band.bbox.y1 + t
+                && g.bbox.y0 <= band.bbox.y1 + band.bbox.height();
+            keep[gi] && lined_up && under && g.ys[0] > band.bbox.y0 + t
+        }) else {
+            continue;
+        };
+        // Nothing of the page's text between the band and the table, but
+        // what the table holds.
+        let homes = grids[gi].glyph_cells(glyphs);
+        let top_of_body = (0..glyphs.len())
+            .filter(|&i| homes[i].is_some())
+            .filter_map(|i| centre(&glyphs[i]))
+            .filter(|&(_, y)| y > band.bbox.y1)
+            .map(|(_, y)| y)
+            .fold(f64::MAX, f64::min);
+        // Lines between the band and the table's first row are its rows
+        // too where they are labels alone, in the band's first cell: a
+        // section's label (`Assets`) over a group's (`Total securities`).
+        // Anything else between, and the band is not this table's.
+        let stray: Vec<usize> = (0..glyphs.len())
+            .filter(|&i| {
+                homes[i].is_none()
+                    && centre(&glyphs[i]).is_some_and(|(x, y)| {
+                        x > band.bbox.x0 && x < band.bbox.x1 && y > band.bbox.y1 && y < top_of_body
+                    })
+            })
+            .collect();
+        let labels_only = stray
+            .iter()
+            .all(|&i| centre(&glyphs[i]).is_some_and(|(x, _)| x <= band.cells[0].x1));
+        if top_of_body == f64::MAX || !labels_only {
+            continue;
+        }
+        // The label lines, top to bottom: (top, bottom) of each baseline's ink.
+        let mut label_lines: Vec<(f64, f64, f64)> = Vec::new();
+        for &i in &stray {
+            let (Some(b), y) = (glyphs[i].bbox, glyphs[i].origin.1) else {
+                continue;
+            };
+            let fs = (glyphs[i].font_size as f64).max(1.0);
+            match label_lines.iter_mut().find(|l| (l.0 - y).abs() < 0.3 * fs) {
+                Some(l) => {
+                    l.1 = l.1.min(b.y0);
+                    l.2 = l.2.max(b.y1);
+                }
+                None => label_lines.push((y, b.y0, b.y1)),
+            }
+        }
+        label_lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Each label line's glyphs, all of them, spaces too.
+        let label_glyphs: Vec<Vec<usize>> = label_lines
+            .iter()
+            .map(|l| {
+                (0..glyphs.len())
+                    .filter(|&i| {
+                        homes[i].is_none()
+                            && (glyphs[i].origin.1 - l.0).abs()
+                                < 0.3 * (glyphs[i].font_size as f64).max(1.0)
+                            && glyphs[i].origin.0 >= band.cells[0].x0
+                            && glyphs[i].origin.0 <= band.cells[0].x1
+                    })
+                    .collect()
+            })
+            .collect();
+        // Each cell's glyphs, its inked ones by their centres and its spaces
+        // by where the pen set them: a word space is the cell's own.
+        let head: Vec<Vec<usize>> = band
+            .cells
+            .iter()
+            .map(|cell| {
+                (0..glyphs.len())
+                    .filter(|&i| match centre(&glyphs[i]) {
+                        Some(p) => inside(cell, p),
+                        None => {
+                            glyphs[i].is_horizontal()
+                                && !glyphs[i].text.is_empty()
+                                && glyphs[i].text.trim().is_empty()
+                                && inside(cell, glyphs[i].origin)
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        if head.iter().all(Vec::is_empty) {
+            continue;
+        }
+        let g = &mut grids[gi];
+        let cols = g.cols();
+        if let Some(lay) = g.layout.as_deref() {
+            // Rows of the band's own lines, at the reading's top.
+            let in_band = |r: usize| {
+                let inked: Vec<(f64, f64)> = lay.cells[r * cols..(r + 1) * cols]
+                    .iter()
+                    .flatten()
+                    .filter_map(|&i| centre(&glyphs[i]))
+                    .collect();
+                !inked.is_empty() && inked.iter().all(|&p| inside(&band.bbox, p))
+            };
+            let rows = g.rows();
+            let k = (0..rows).take_while(|&r| in_band(r)).count();
+            if k == rows {
+                continue;
+            }
+            let mut lay = lay.clone();
+            let mut cells: Vec<Vec<usize>> = head.clone();
+            // The label rows, each a group's label across the table.
+            let labels = label_glyphs.len();
+            for ids in &label_glyphs {
+                cells.push(ids.clone());
+                cells.extend(std::iter::repeat_n(Vec::new(), cols - 1));
+            }
+            cells.extend(lay.cells.drain(k * cols..));
+            lay.cells = cells;
+            lay.header_rows = 1 + lay.header_rows.saturating_sub(k);
+            let shift = |r: usize| r + 1 + labels - k;
+            lay.spans = lay
+                .spans
+                .iter()
+                .filter(|s| s.0 >= k)
+                .map(|&(r, a, b)| (shift(r), a, b))
+                .collect();
+            lay.downs = lay
+                .downs
+                .iter()
+                .filter(|d| d.0 >= k)
+                .map(|&(r0, c, r1)| (shift(r0), c, shift(r1)))
+                .collect();
+            lay.sub_headers = (1..=labels)
+                .chain(
+                    lay.sub_headers
+                        .iter()
+                        .filter(|&&r| r >= k)
+                        .map(|&r| shift(r)),
+                )
+                .collect();
+            lay.spans.extend((1..=labels).map(|r| (r, 0, cols)));
+            let mut ys = vec![band.bbox.y0, band.bbox.y1];
+            for w in label_lines.windows(2) {
+                ys.push((w[0].2 + w[1].1) / 2.0);
+            }
+            if let Some(last) = label_lines.last() {
+                ys.push(last.2.max(band.bbox.y1 + 0.1));
+            }
+            let floor = *ys.last().expect("the band's foot");
+            ys.extend(g.ys[k + 1..].iter().map(|&y| y.max(floor + 0.1)));
+            g.ys = ys;
+            g.layout = Some(std::sync::Arc::new(lay));
+            crate::textgrid::claim(g, glyphs);
+        } else {
+            let mut below: Vec<f64> =
+                g.ys.iter()
+                    .copied()
+                    .filter(|&y| y > band.bbox.y1 + t)
+                    .collect();
+            // The table's own top edge goes where its label rows above it
+            // end, or the band's foot is its first row's top.
+            if g.ys[0] > band.bbox.y1 + t && label_lines.is_empty() {
+                below.remove(0);
+            }
+            if below.is_empty() {
+                continue;
+            }
+            let mut ys = vec![band.bbox.y0, band.bbox.y1];
+            // A row for each label line, parted midway between their ink.
+            for w in label_lines.windows(2) {
+                ys.push((w[0].2 + w[1].1) / 2.0);
+            }
+            ys.extend(below);
+            g.ys = ys;
+        }
+        // The band's cells are the table's columns as drawn, the body's
+        // lined up under them: its edges are the table's.
+        let mut xs: Vec<f64> = band.cells.iter().map(|c| c.x0).collect();
+        xs.push(band.bbox.x1);
+        g.xs = xs;
+        g.bbox = g.bbox.union(&band.bbox);
+        // Readings of the band's lines alone.
+        for (oi, o) in grids.iter().enumerate() {
+            let (x, y) = ((o.bbox.x0 + o.bbox.x1) / 2.0, (o.bbox.y0 + o.bbox.y1) / 2.0);
+            if oi != gi && inside(&band.bbox, (x, y)) && o.bbox.y1 <= band.bbox.y1 + t {
+                keep[oi] = false;
+            }
+        }
+    }
+    keep
 }
 
 /// Fraction of a column's populated cells that must carry a number before it
@@ -6613,10 +7480,18 @@ fn segment_rows(glyphs: &[crate::glyph::Glyph]) -> (Vec<Vec<usize>>, Vec<Vec<Seg
         .map(|r| {
             r.sort_by(|&a, &b| bb(a).x0.total_cmp(&bb(b).x0));
             let mut out: Vec<Seg> = Vec::new();
+            // Text after a run of dot leaders starts a cell, as in
+            // [`cell_starts`].
+            let row: Vec<&crate::glyph::Glyph> = r.iter().map(|&i| &glyphs[i]).collect();
+            let contents = crate::textgrid::contents_entry(&row);
+            let mut run = crate::textgrid::LeaderRun::default();
             for &i in r.iter() {
                 let fs = glyphs[i].font_size.max(1.0) as f64;
+                let after_leaders = run.step(&glyphs[i]) >= crate::textgrid::LEADER_DOTS
+                    && crate::textgrid::leader_dots(glyphs[i].text.trim()) == 0
+                    && !contents;
                 match out.last_mut() {
-                    Some(s) if bb(i).x0 - s.x1 <= fs * TABLE_CELL_GAP => {
+                    Some(s) if bb(i).x0 - s.x1 <= fs * TABLE_CELL_GAP && !after_leaders => {
                         s.x1 = s.x1.max(bb(i).x1);
                         s.ids.push(i);
                     }
@@ -7144,6 +8019,7 @@ fn layout_grid(
             spans: Vec::new(),
             downs: Vec::new(),
             sub_headers: Vec::new(),
+            restated_headers: Vec::new(),
             cells,
             claimed,
         })),
@@ -7230,6 +8106,7 @@ fn field_grid(
             spans: Vec::new(),
             downs: Vec::new(),
             sub_headers: Vec::new(),
+            restated_headers: Vec::new(),
             cells,
             claimed,
         })),
@@ -7427,7 +8304,7 @@ fn names_its_columns(texts: &[String]) -> bool {
 /// A list's enumerator standing for a label: `(a)`, `b.`, `iv)`, `26a.`,
 /// a number or one letter, or a roman numeral, in brackets or ended by a
 /// stop. `No.` and `Ref.` are words.
-fn enumerator(label: &str) -> bool {
+pub(crate) fn enumerator(label: &str) -> bool {
     let inner = label.trim_start_matches('(').trim_end_matches(['.', ')']);
     if inner.is_empty() || inner.len() == label.len() {
         return false;
@@ -7533,6 +8410,24 @@ fn aligned_rows(glyphs: &[crate::glyph::Glyph]) -> (Vec<Vec<&crate::glyph::Glyph
         }
     }
 
+    // A row holding dot leaders, left to right: leaders stand only between
+    // a label and its value, and part them ([`cell_starts`]), but glyphs a
+    // hair off the row's baseline were sorted by height first and come out
+    // of turn. Other rows keep their order (see [`colon_field_lists`]).
+    for r in rows.iter_mut() {
+        let mut run = crate::textgrid::LeaderRun::default();
+        let leads = r.iter().any(|g| {
+            run.step(g);
+            run.leads()
+        });
+        if leads {
+            let mut sorted = r.clone();
+            sorted.sort_by(|a, b| a.bbox.unwrap().x0.total_cmp(&b.bbox.unwrap().x0));
+            if !crate::textgrid::contents_entry(&sorted) {
+                *r = sorted;
+            }
+        }
+    }
     // Cell starts within each row.
     let cells: Vec<Vec<f64>> = rows.iter().map(|r| cell_starts(r)).collect();
     (rows, cells)
@@ -7675,12 +8570,21 @@ fn has_two_axis_header(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
 fn cell_starts(row: &[&crate::glyph::Glyph]) -> Vec<f64> {
     let mut out = Vec::new();
     let mut prev_end: Option<f64> = None;
+    // Dot leaders run a label up to the next column's text, a word space or
+    // less short of it: the text after a run of them starts a cell. Not in
+    // a contents entry's line, whose leaders run to its page.
+    let contents = crate::textgrid::contents_entry(row);
+    let mut run = crate::textgrid::LeaderRun::default();
     for g in row {
         let b = g.bbox.unwrap();
         let fs = g.font_size.max(1.0) as f64;
+        let after_leaders = run.step(g) >= crate::textgrid::LEADER_DOTS
+            && crate::textgrid::leader_dots(g.text.trim()) == 0
+            && !contents;
         match prev_end {
             None => out.push(b.x0),
             Some(pe) if b.x0 - pe > fs * TABLE_CELL_GAP => out.push(b.x0),
+            Some(_) if after_leaders => out.push(b.x0),
             _ => {}
         }
         prev_end = Some(b.x1);
@@ -7964,6 +8868,8 @@ mod header_tests {
         crate::rule::Fill {
             bbox: BBox { x0, y0, x1, y1 },
             page: 0,
+            paint: None,
+            stroked: false,
         }
     }
 
@@ -8167,6 +9073,7 @@ mod header_tests {
             rotation_deg: 0.0,
             font_size: 9.0,
             weight: None,
+            italic: false,
             advance: Some(w),
             draw_index: 0,
         }
@@ -8476,6 +9383,8 @@ mod header_tests {
                 y1: 20.0,
             },
             page: 0,
+            paint: None,
+            stroked: false,
         };
         let grids = detect_framed(&rules, &[band], &[], 0, &[]);
         assert_eq!(grids.len(), 1, "got {grids:?}");
@@ -8490,6 +9399,8 @@ mod header_tests {
                     y1: 20.0,
                 },
                 page: 0,
+                paint: None,
+                stroked: false,
             },
             crate::rule::Fill {
                 bbox: BBox {
@@ -8499,6 +9410,8 @@ mod header_tests {
                     y1: 20.0,
                 },
                 page: 0,
+                paint: None,
+                stroked: false,
             },
         ];
         let grids = detect_framed(&rules, &bands, &[], 0, &[]);
@@ -8730,6 +9643,8 @@ mod header_tests {
                 y1: 40.0,
             },
             page: 0,
+            paint: None,
+            stroked: false,
         };
         let grids = detect_framed(&rules, &[band], &glyphs, 0, &[]);
         assert_eq!(grids[0].ys.len(), 6, "got {:?}", grids[0].ys);
@@ -9942,17 +10857,23 @@ mod tests {
         let mut fills = vec![Fill {
             bbox: bb(46.0, 95.0, 421.0, 563.0),
             page: 0,
+            paint: None,
+            stroked: false,
         }];
         for k in 0..3 {
             let x = 115.0 + 100.0 * k as f64;
             fills.push(Fill {
                 bbox: bb(x, 135.0, x + 29.0, 180.0),
                 page: 0,
+                paint: None,
+                stroked: false,
             });
         }
         fills.push(Fill {
             bbox: bb(50.0, 600.0, 150.0, 700.0),
             page: 0,
+            paint: None,
+            stroked: false,
         });
         let walls = walls(&fills);
         assert_eq!(walls.len(), 2, "{walls:?}");
@@ -9986,6 +10907,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 8.4,
                     weight: None,
+                    italic: false,
                     advance: Some(4.5),
                     draw_index: i,
                 });
@@ -10059,6 +10981,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 8.4,
                     weight: None,
+                    italic: false,
                     advance: Some(4.5),
                     draw_index: j,
                 });
@@ -10097,6 +11020,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: Some(w),
             draw_index: 0,
         }
@@ -10122,6 +11046,124 @@ mod tests {
             }
         }
         rules
+    }
+
+    #[test]
+    fn a_shaded_header_band_heads_the_table_read_under_it() {
+        // A band of four shaded cells under a rule across them, divided by
+        // verticals standing on that rule and ending at the band's foot,
+        // its labels wrapped over two lines; under it a table read from its
+        // alignment, ruled by nothing.
+        let fill = |x0: f64, x1: f64| {
+            crate::rule::Fill::new(
+                BBox {
+                    x0,
+                    y0: 100.0,
+                    x1,
+                    y1: 130.0,
+                },
+                0,
+            )
+        };
+        let fills = vec![
+            fill(50.0, 200.0),
+            fill(200.0, 290.0),
+            fill(290.0, 380.0),
+            fill(380.0, 470.0),
+        ];
+        let mut rules = vec![h(50.0, 470.0, 100.0)];
+        for x in [200.0, 290.0, 380.0] {
+            rules.push(v(100.0, 130.0, x));
+        }
+        let bands = header_bands(&rules, &fills);
+        assert_eq!(bands.len(), 1, "{bands:?}");
+        assert_eq!(bands[0].cells.len(), 4);
+        // Shading with no divider standing on its rule, or dividers with no
+        // rule across the top, is no band.
+        assert!(header_bands(&rules[..1], &fills).is_empty());
+        assert!(header_bands(&rules[1..], &fills).is_empty());
+
+        let mut glyphs = vec![
+            set_at(55.0, 112.0, "Item"),
+            set_at(210.0, 112.0, "Outstanding"),
+            set_at(210.0, 124.0, "(billions)"),
+            set_at(300.0, 112.0, "Growth"),
+            set_at(300.0, 124.0, "(percent)"),
+            set_at(390.0, 112.0, "Average"),
+            set_at(390.0, 124.0, "(percent)"),
+        ];
+        for (i, label) in ["Equities", "Farmland", "Bonds"].into_iter().enumerate() {
+            let base = 145.0 + 12.0 * i as f64;
+            glyphs.push(set_at(55.0, base, label));
+            for x in [230.0, 320.0, 410.0] {
+                glyphs.push(set_at(x, base, "1.5"));
+            }
+        }
+        // The alignment's reading: its own column edges, its first row
+        // under the band.
+        let mut grids = vec![Grid {
+            layout: None,
+            page: 0,
+            xs: vec![55.0, 210.0, 305.0, 395.0, 440.0],
+            ys: vec![135.0, 147.5, 159.5, 171.5],
+            bbox: BBox {
+                x0: 55.0,
+                y0: 135.0,
+                x1: 440.0,
+                y1: 171.5,
+            },
+        }];
+        let keep = take_header_bands(&mut grids, &bands, &glyphs);
+        assert_eq!(keep, vec![true]);
+        let g = &grids[0];
+        assert_eq!(g.rows(), 4, "{:?}", g.ys);
+        // The band's divisions are the table's columns.
+        for (x, want) in g.xs.iter().zip([50.0, 200.0, 290.0, 380.0, 470.0]) {
+            assert!((x - want).abs() < 0.5, "{:?}", g.xs);
+        }
+        let texts = g.cell_texts(&glyphs);
+        assert_eq!(
+            &texts[..4],
+            &[
+                "Item",
+                "Outstanding (billions)",
+                "Growth (percent)",
+                "Average (percent)"
+            ]
+        );
+        assert_eq!(&texts[4..8], &["Equities", "1.5", "1.5", "1.5"]);
+    }
+
+    #[test]
+    fn rules_of_two_tables_side_by_side_part_at_no_gutters_together() {
+        // Two tables either side of the page's gutter, each row ruled a cell
+        // at a time: two gutters in each table's rule, a gap wider than a
+        // gutter between the tables. No row is underlined in four columns.
+        let pieces = [
+            (50.0, 193.0),
+            (198.0, 241.0),
+            (246.0, 289.0),
+            (306.0, 473.0),
+            (478.0, 509.0),
+            (514.0, 544.0),
+        ];
+        let rules: Vec<Rule> = pieces.iter().map(|&(a, b)| h(a, b, 377.7)).collect();
+        let refs: Vec<&Rule> = rules.iter().collect();
+        let lines = cluster(&refs);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].gutters.is_empty(), "{:?}", lines[0].gutters);
+        // One table's underlines, four pieces in one chain: three gutters.
+        let one: Vec<Rule> = [
+            (170.0, 225.0),
+            (230.0, 285.0),
+            (290.0, 345.0),
+            (350.0, 405.0),
+        ]
+        .iter()
+        .map(|&(a, b)| h(a, b, 80.0))
+        .collect();
+        let refs: Vec<&Rule> = one.iter().collect();
+        assert_eq!(cluster(&refs)[0].gutters.len(), 3);
     }
 
     #[test]
@@ -10229,6 +11271,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 12.0,
                     weight: None,
+                    italic: false,
                     advance: Some(6.0),
                     draw_index: 0,
                 });
@@ -10319,6 +11362,98 @@ mod tests {
         assert!(m.continues_above.iter().all(|x| !x));
     }
 
+    #[test]
+    fn a_boxed_cell_over_rows_ruled_in_pieces_spans_them() {
+        // A boxed table: a label and its condition wrapped over a group of
+        // two rows whose values are ruled apart a cell at a time, the
+        // label's cells left open. The table's verticals box its cells, so
+        // each of those is one cell spanning both rows.
+        let xs = vec![72.0, 200.0, 300.0, 360.0, 420.0, 480.0, 540.0];
+        let ys = vec![100.0, 120.0, 140.0, 160.0, 180.0];
+        let mut glyphs = Vec::new();
+        let mut put = |text: &str, x: f64, baseline: f64| {
+            let mut cx = x;
+            for ch in text.chars() {
+                glyphs.push(crate::glyph::Glyph {
+                    text: ch.to_string(),
+                    bbox: (ch != ' ').then_some(BBox {
+                        x0: cx,
+                        y0: baseline - 7.0,
+                        x1: cx + 4.5,
+                        y1: baseline + 2.0,
+                    }),
+                    page: 0,
+                    origin: (cx, baseline),
+                    rotation_deg: 0.0,
+                    font_size: 9.0,
+                    weight: None,
+                    italic: false,
+                    advance: Some(5.0),
+                    draw_index: 0,
+                });
+                cx += 5.0;
+            }
+        };
+        for (t, x) in [
+            ("Parameter", 80.0),
+            ("Condition", 205.0),
+            ("Min", 305.0),
+            ("Typ", 365.0),
+            ("Max", 425.0),
+            ("Unit", 485.0),
+        ] {
+            put(t, x, 114.0);
+        }
+        put("Operating", 80.0, 133.0);
+        put("range", 80.0, 147.0);
+        put("For temperatures", 205.0, 133.0);
+        put("below zero", 205.0, 147.0);
+        for (t, x) in [("-40", 305.0), ("25", 365.0), ("85", 425.0), ("C", 485.0)] {
+            put(t, x, 133.0);
+        }
+        for (t, x) in [("0", 305.0), ("100", 425.0), ("RH", 485.0)] {
+            put(t, x, 154.0);
+        }
+        put("Supply", 80.0, 174.0);
+        put("1.8", 365.0, 174.0);
+        put("uA", 485.0, 174.0);
+        let mut rules: Vec<Rule> = [100.0, 120.0, 160.0, 180.0]
+            .iter()
+            .map(|&y| h(72.0, 540.0, y))
+            .collect();
+        for (x0, x1) in [
+            (301.0, 359.0),
+            (361.0, 419.0),
+            (421.0, 479.0),
+            (481.0, 539.0),
+        ] {
+            rules.push(h(x0, x1, 140.0));
+        }
+        for &x in &xs {
+            rules.push(v(100.0, 180.0, x));
+        }
+        let g = Grid {
+            page: 0,
+            bbox: BBox {
+                x0: 72.0,
+                y0: 100.0,
+                x1: 540.0,
+                y1: 180.0,
+            },
+            xs,
+            ys,
+            layout: None,
+        };
+        let mut m = g.merges(&rules, &[]);
+        g.text_merges(&glyphs, &rules, &mut m);
+        let cols = 6;
+        assert!(m.continues_above[2 * cols], "the label spans its rows");
+        assert!(
+            m.continues_above[2 * cols + 1],
+            "the condition spans its rows"
+        );
+    }
+
     /// The segmented-rule shape: horizontal rules drawn as one segment per
     /// cell, no full-height verticals.
     fn segmented_table() -> Vec<Rule> {
@@ -10396,6 +11531,8 @@ mod tests {
                 y1: 210.0,
             },
             page: 0,
+            paint: None,
+            stroked: false,
         }];
         for row in 0..5 {
             for col in 0..4 {
@@ -10407,6 +11544,8 @@ mod tests {
                         y1: 110.0 + row as f64 * 20.0,
                     },
                     page: 0,
+                    paint: None,
+                    stroked: false,
                 });
             }
         }
@@ -10448,6 +11587,7 @@ mod tests {
                 rotation_deg: 0.0,
                 font_size: 10.0,
                 weight: None,
+                italic: false,
                 advance: None,
                 draw_index: 0,
             })
@@ -10479,6 +11619,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         };
@@ -10523,6 +11664,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         };
@@ -10566,6 +11708,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight,
+            italic: false,
             advance: Some(w),
             draw_index: 0,
         }
@@ -11032,6 +12175,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: None,
                     draw_index: 0,
                 });
@@ -11047,6 +12191,8 @@ mod tests {
                 y1: 15.0,
             },
             page: 0,
+            paint: None,
+            stroked: false,
         };
         assert!(
             detect_aligned(&gl, &[], &[fill], 0).is_empty(),
@@ -11062,6 +12208,8 @@ mod tests {
                         y1: 10.0 + r as f64 * 20.0,
                     },
                     page: 0,
+                    paint: None,
+                    stroked: false,
                 })
             })
             .collect();
@@ -11162,11 +12310,43 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: Some(5.5),
                     draw_index: 0,
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn text_after_dot_leaders_starts_a_cell() {
+        let inked = |gs: &[crate::glyph::Glyph]| -> Vec<crate::glyph::Glyph> {
+            gs.iter().filter(|g| g.bbox.is_some()).cloned().collect()
+        };
+        // A label's leaders run up to the next column's text, a word space
+        // short of it: the leaders are the gutter.
+        let row = inked(&set("Kolkata, India ........ Manufacturing", 40.0, 100.0));
+        let refs: Vec<&crate::glyph::Glyph> = row.iter().collect();
+        assert_eq!(cell_starts(&refs).len(), 2);
+        // An ellipsis in a sentence parts nothing.
+        let row = inked(&set("and so on... more", 40.0, 100.0));
+        let refs: Vec<&crate::glyph::Glyph> = row.iter().collect();
+        assert_eq!(cell_starts(&refs).len(), 1);
+        // A glyph a hair off the row's baseline comes first by height; a row
+        // holding leaders is still read left to right.
+        let mut glyphs = set(
+            "Kolkata, India ........ Manufacturing  Freight",
+            40.0,
+            100.0,
+        );
+        let n = glyphs.len();
+        for g in &mut glyphs[n - 7..] {
+            g.origin.1 -= 0.01;
+        }
+        glyphs.extend(set("Belo Horizonte ........ Office  Freight", 40.0, 112.0));
+        let (_, cells) = aligned_rows(&glyphs);
+        assert_eq!(cells[0].len(), 3);
+        assert_eq!(cells[1].len(), 3);
     }
 
     #[test]
@@ -11629,4 +12809,311 @@ pub fn walled_in(b: &crate::geom::BBox, walls: &[Wall]) -> bool {
     walls
         .iter()
         .any(|w| w.x > b.x0 + 1.0 && w.x < b.x1 - 1.0 && w.y0 <= b.y0 && w.y1 >= b.y1)
+}
+
+#[cfg(test)]
+mod cross_gutter_tests {
+    use super::*;
+
+    /// `text` set at `x` on the baseline `y`, 9 pt, a glyph a character
+    /// 4.5 pt wide, rising 8.5 pt over its baseline and dropping 2 under it; a space is a gap of the
+    /// same width.
+    fn say(text: &str, x: f64, y: f64) -> Vec<crate::glyph::Glyph> {
+        let mut out = Vec::new();
+        for (i, c) in text.chars().enumerate() {
+            if c == ' ' {
+                continue;
+            }
+            let x0 = x + i as f64 * 4.5;
+            out.push(crate::glyph::Glyph {
+                text: c.to_string(),
+                bbox: Some(BBox {
+                    x0,
+                    y0: y - 8.5,
+                    x1: x0 + 4.2,
+                    y1: y + 2.0,
+                }),
+                page: 0,
+                origin: (x0, y),
+                rotation_deg: 0.0,
+                font_size: 9.0,
+                advance: Some(4.5),
+                weight: None,
+                italic: false,
+                draw_index: 0,
+            });
+        }
+        out
+    }
+
+    const PROSE: &str = "the members agreed that the outlook for the economy";
+
+    /// A paragraph of `n` lines from baseline `y`, 11 pt apart, at `x`.
+    fn paragraph(x: f64, y: f64, n: usize) -> Vec<crate::glyph::Glyph> {
+        (0..n)
+            .flat_map(|i| say(PROSE, x, y + 11.0 * i as f64))
+            .collect()
+    }
+
+    fn grid(xs: &[f64], ys: &[f64]) -> Grid {
+        Grid {
+            layout: None,
+            page: 0,
+            xs: xs.to_vec(),
+            ys: ys.to_vec(),
+            bbox: BBox {
+                x0: xs[0],
+                y0: ys[0],
+                x1: *xs.last().unwrap(),
+                y1: *ys.last().unwrap(),
+            },
+        }
+    }
+
+    fn crosses(glyphs: &[crate::glyph::Glyph], g: &Grid) -> bool {
+        let runs = crate::textgrid::runs(&crate::textgrid::lines(glyphs));
+        let rows = reading_rows(g, glyphs);
+        channels_in(&rows)
+            .into_iter()
+            .any(|span| crosses_gutter(g, &rows, || &runs, span, 600.0).is_some())
+    }
+
+    #[test]
+    fn a_table_read_with_the_prose_beside_it_crosses_the_gutter() {
+        // The left column's paragraph runs from the page's top to its foot;
+        // the right column sets a paragraph, then a table of labels and
+        // figures. A reading of the table took the paragraph's lines beside
+        // it as its first column.
+        let mut gl = paragraph(40.0, 100.0, 26);
+        gl.extend(paragraph(310.0, 100.0, 6));
+        let rows = [
+            "Inventories",
+            "Product liabilities",
+            "Accrued expenses",
+            "State taxes",
+        ];
+        for (i, label) in rows.iter().enumerate() {
+            let y = 200.0 + 14.0 * i as f64;
+            gl.extend(say(label, 310.0, y));
+            gl.extend(say("1,513", 520.0, y));
+        }
+        let g = grid(
+            &[40.0, 300.0, 500.0, 560.0],
+            &[190.0, 203.0, 217.0, 231.0, 245.0],
+        );
+        assert!(crosses(&gl, &g));
+    }
+
+    #[test]
+    fn a_table_wrapped_into_two_halves_does_not_cross_the_gutter() {
+        // Prose in both columns over and under one table set in two halves
+        // side by side, every row on one baseline across both.
+        let mut gl = paragraph(40.0, 100.0, 4);
+        gl.extend(paragraph(310.0, 100.0, 4));
+        for i in 0..6 {
+            let y = 180.0 + 14.0 * i as f64;
+            gl.extend(say(&format!("C{}—C{}", i + 1, i + 2), 40.0, y));
+            gl.extend(say("1.392 (3)", 200.0, y));
+            gl.extend(say(&format!("N{}—C{}", i + 1, i + 3), 310.0, y));
+            gl.extend(say("1.401 (2)", 470.0, y));
+        }
+        gl.extend(paragraph(40.0, 300.0, 4));
+        gl.extend(paragraph(310.0, 300.0, 4));
+        let ys: Vec<f64> = (0..7).map(|i| 170.0 + 14.0 * i as f64).collect();
+        let g = grid(&[40.0, 190.0, 300.0, 460.0, 560.0], &ys);
+        assert!(!crosses(&gl, &g));
+    }
+
+    #[test]
+    fn a_gap_between_a_tables_own_columns_is_no_gutter() {
+        // One column of prose across the page over a table whose columns of
+        // text leave a gap where a gutter would be: the prose runs across
+        // it, and nothing beside the table runs on as a paragraph.
+        let mut gl: Vec<crate::glyph::Glyph> = (0..4)
+            .flat_map(|i| say(&format!("{PROSE} {PROSE}"), 40.0, 100.0 + 12.0 * i as f64))
+            .collect();
+        let rows = [
+            ("Spray drying", "Budesonide"),
+            ("Freeze drying", "Fenofibrate"),
+        ];
+        for (i, (a, b)) in rows.iter().enumerate() {
+            let y = 180.0 + 14.0 * i as f64;
+            gl.extend(say(a, 40.0, y));
+            gl.extend(say(b, 310.0, y));
+        }
+        let g = grid(&[40.0, 300.0, 560.0], &[170.0, 183.0, 197.0]);
+        assert!(!crosses(&gl, &g));
+    }
+}
+
+#[cfg(test)]
+mod piece_tests {
+    use super::*;
+
+    /// A small deterministic generator: positions on a coarse lattice, so
+    /// pieces repeat each other and share ends, as a chart's strokes do.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+        fn at(&mut self, steps: u64, step: f64) -> f64 {
+            (self.next() % steps) as f64 * step
+        }
+    }
+
+    /// The pairwise readings the sweeps replace, kept as they were.
+    fn middles_pairwise(parts: &[(f64, f64)], t: f64) -> Vec<f64> {
+        let mut middles = Vec::new();
+        for (i, &(a, b)) in parts.iter().enumerate() {
+            for &(c, d) in &parts[i + 1..] {
+                let nested = (c <= a + t && d >= b - t) || (a <= c + t && b >= d - t);
+                let (lo, hi) = (a.max(c), b.min(d));
+                if hi - lo > t && !nested {
+                    middles.push((lo + hi) / 2.0);
+                }
+            }
+        }
+        middles
+    }
+
+    fn ends_pairwise(parts: &[(f64, f64)], t: f64) -> Vec<f64> {
+        let mut ends: Vec<f64> = parts.iter().flat_map(|&(a, b)| [a, b]).collect();
+        ends.retain(|&e| {
+            let own: Vec<&(f64, f64)> = parts
+                .iter()
+                .filter(|(a, b)| (a - e).abs() <= 0.01 || (b - e).abs() <= 0.01)
+                .collect();
+            !own.iter().any(|&&(a, b)| {
+                parts.iter().any(|&(c, d)| {
+                    let contains = c <= a + t && d >= b - t;
+                    let overlaps = c < b - t && d > a + t;
+                    overlaps && !contains && c < e - t && d > e + t
+                })
+            })
+        });
+        ends
+    }
+
+    fn components_pairwise(rules: &[Rule]) -> Vec<Vec<usize>> {
+        let mut remaining: Vec<usize> = (0..rules.len()).collect();
+        let mut components: Vec<Vec<usize>> = Vec::new();
+        while let Some(seed) = remaining.pop() {
+            let mut component = vec![seed];
+            let mut changed = true;
+            while changed {
+                changed = false;
+                let mut i = 0;
+                while i < remaining.len() {
+                    let candidate = rules[remaining[i]];
+                    let connected = component.iter().any(|&k| {
+                        let r = rules[k];
+                        r.bbox.x1 + EDGE_TOLERANCE >= candidate.bbox.x0
+                            && candidate.bbox.x1 + EDGE_TOLERANCE >= r.bbox.x0
+                            && r.bbox.y1 + EDGE_TOLERANCE >= candidate.bbox.y0
+                            && candidate.bbox.y1 + EDGE_TOLERANCE >= r.bbox.y0
+                    });
+                    if connected {
+                        component.push(remaining[i]);
+                        remaining.swap_remove(i);
+                        changed = true;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            component.sort_unstable();
+            components.extend(split_stacked_boxes(component, |i| rules[i]));
+        }
+        components
+    }
+
+    fn bits(v: &[f64]) -> Vec<u64> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
+
+    #[test]
+    fn a_rules_pieces_read_by_sweep_as_they_were_pair_by_pair() {
+        let t = EDGE_TOLERANCE;
+        let (mut middles, mut dropped) = (0, 0);
+        for seed in 0..200u64 {
+            let mut rng = Lcg(seed);
+            let n = 1 + (rng.next() % 60) as usize;
+            // Some runs on a fine lattice (overlaps of every size), some on
+            // a coarse one (stacked repeats sharing their ends).
+            let step = if seed.is_multiple_of(2) { 0.5 } else { 7.5 };
+            let parts: Vec<(f64, f64)> = (0..n)
+                .map(|_| {
+                    let a = rng.at(80, step);
+                    (a, a + rng.at(40, step))
+                })
+                .collect();
+            assert_eq!(
+                bits(&overlap_middles(&parts, t)),
+                bits(&middles_pairwise(&parts, t)),
+                "middles, seed {seed}"
+            );
+            let mut ends: Vec<f64> = parts.iter().flat_map(|&(a, b)| [a, b]).collect();
+            ends.retain(end_kept(&parts, t));
+            assert_eq!(
+                bits(&ends),
+                bits(&ends_pairwise(&parts, t)),
+                "ends, seed {seed}"
+            );
+            middles += middles_pairwise(&parts, t).len();
+            dropped += 2 * parts.len() - ends.len();
+        }
+        // The runs hold both kinds of overlap the readings act on.
+        assert!(
+            middles > 0 && dropped > 0,
+            "{middles} middles, {dropped} ends dropped"
+        );
+    }
+
+    #[test]
+    fn touching_rules_are_grouped_as_they_were_rule_by_rule() {
+        let mut joined = 0;
+        for seed in 0..200u64 {
+            let mut rng = Lcg(seed ^ 0x9e37);
+            let n = 1 + (rng.next() % 80) as usize;
+            let rules: Vec<Rule> = (0..n)
+                .map(|_| {
+                    let (x, y) = (rng.at(60, 5.0), rng.at(60, 5.0));
+                    let len = rng.at(30, 5.0);
+                    let orientation = if rng.next().is_multiple_of(2) {
+                        Orientation::Horizontal
+                    } else {
+                        Orientation::Vertical
+                    };
+                    let bbox = match orientation {
+                        Orientation::Horizontal => BBox {
+                            x0: x,
+                            y0: y,
+                            x1: x + len,
+                            y1: y + 0.6,
+                        },
+                        Orientation::Vertical => BBox {
+                            x0: x,
+                            y0: y,
+                            x1: x + 0.6,
+                            y1: y + len,
+                        },
+                    };
+                    Rule {
+                        bbox,
+                        orientation,
+                        page: 0,
+                    }
+                })
+                .collect();
+            let comps = component_indices(&rules);
+            assert_eq!(comps, components_pairwise(&rules), "seed {seed}");
+            joined += comps.iter().filter(|c| c.len() > 1).count();
+        }
+        assert!(joined > 0);
+    }
 }

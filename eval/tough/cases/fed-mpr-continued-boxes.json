@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "fed-mpr-2025-06.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20250620_mprfullreport.pdf",
+    "sha256": "6f8538cb4ce2902ac35cc9ec8311feda6c5c94953b76db50de94192741bb07f4",
+    "about": "Monetary Policy Report, June 2025. Each box runs over pages, and each page it runs on heads it `Box N—continued`."
+  },
+  "notes": [
+    "#395: each `Box N—continued` opened a section of its own."
+  ],
+  "checks": [
+    {
+      "id": "box-1-continues",
+      "found": "2026-11-26",
+      "issue": "#395: `Box 1—continued` opened a section.",
+      "no_section": "Box 1—continued"
+    },
+    {
+      "id": "box-3-continues",
+      "found": "2026-11-26",
+      "issue": "#395: as above.",
+      "no_section": "Box 3—continued"
+    }
+  ]
+}

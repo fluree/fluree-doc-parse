@@ -1060,6 +1060,7 @@ mod tests {
                     font_size: 10.0,
                     advance: Some(5.0),
                     weight: None,
+                    italic: false,
                     draw_index,
                 });
             }
@@ -1159,6 +1160,7 @@ mod tests {
                     font_size: 10.0,
                     advance: Some(6.0),
                     weight: None,
+                    italic: false,
                     draw_index,
                 });
             }
@@ -1380,6 +1382,7 @@ mod tests {
                         font_size: 10.0,
                         advance: Some(6.0),
                         weight: None,
+                        italic: false,
                         draw_index,
                     });
                 }
@@ -1470,6 +1473,7 @@ mod tests {
                 font_size: 10.0,
                 advance: None,
                 weight: None,
+                italic: false,
                 draw_index,
             });
         };

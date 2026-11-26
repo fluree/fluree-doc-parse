@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "pmc6238812.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6238812/",
+    "sha256": "584abbb92333f6e9ae1e848c36f88ef0ee0eb222eb9d33f1a9699f0c92076cf8",
+    "about": "PMC6238812, a study of gastric lesions in slaughtered pigs. Page 2 sets a bar chart in one column beside the methods text in the other, its y-axis scale level with the text's lines. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26: the methods text and the chart's scale beside it were read as one table, a line of text to a row with a scale value."
+  ],
+  "checks": [
+    {
+      "id": "methods-paragraph-whole",
+      "found": "2026-11-26",
+      "issue": "#389: the methods paragraph was read as a table with the chart's scale (`… were assessed | 52`).",
+      "text": "The presenting gross changes were assessed quantitatively"
+    }
+  ]
+}

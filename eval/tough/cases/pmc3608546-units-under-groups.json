@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "pmc3608546.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3608546/",
+    "sha256": "fc2b4ffb17e4aeeb6c5c22bba08521497fc67e1bae3bd6afc9dc211b827d52e5",
+    "about": "PLoS ONE 8(3): e59818 (2013), 'Descriptive Epidemiology and Underlying Psychiatric Disorders among Hospitalizations with Self-Directed Violence', PMC3608546. Its Table 1 (p4) names its columns on three lines: `Proportion of Hospital` wrapped over `Discharges with SDV`, the groups `SDV Discharges with Self-Injury` and `… Self-Poisoning` beside that second line, and then the units `% | N | % | N | %`. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26 (audit cluster D): the units line was the first row of data, so each group named only one of its two columns. It is now the header's last line. The wrapped label's first line, a group level over its unit, is read as that level's, so the columns are named in order: `Proportion of Hospital / Discharges with SDV / %`."
+  ],
+  "checks": [
+    {
+      "id": "unit-under-its-group",
+      "found": "2026-11-26",
+      "issue": "Audit cluster D: the units line `% | N | …` was a row of data.",
+      "cell": {
+        "value": "122,330",
+        "column": "SDV Discharges with Self-Injury / N",
+        "row": "Sex"
+      }
+    },
+    {
+      "id": "wrapped-label-over-its-unit",
+      "found": "2026-11-26",
+      "issue": "Audit cluster D: with the units in the header, the wrapped label's levels came out inverted.",
+      "cell": {
+        "value": "0.54",
+        "column": "Proportion of Hospital / Discharges with SDV / %",
+        "row": "Sex"
+      }
+    }
+  ]
+}

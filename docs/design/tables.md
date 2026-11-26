@@ -30,6 +30,22 @@ fdoc dev rules  report.pdf 12    # the raw geometry
 fdoc dev tables report.pdf 12    # the grid that came out of it
 ```
 
+A rule is read by its ink, not its centre line. A template can draw its
+column rules as very short horizontal segments stroked with a thick pen: the
+Fed's Financial Stability Reports divide a header band with three 0.5-pt
+segments under a 36-pt pen, and draw the table's sides as 1-pt segments under
+a 321-pt pen. A pen sweeps its width across the segment it strokes, so each
+is a bar the pen's width long, at right angles to the segment, as wide as the
+segment is long: a vertical rule. Read by its outline, each was a stub of
+horizontal rule, and the three dividers, in one path, one rule through the
+header. Such a stroke is read as its bar, each subpath on its own, the cap
+carrying it on past the segment's ends (none with a butt cap, half the pen
+with a square or round one). Only where the bar is a rule, a segment no
+longer than a rule is thick under a pen at least four times longer: a dot,
+a stroke of no length, or a short thick stroke painting a block is read by
+its outline as before, and so is every ordinary rule, its pen thinner than
+its length.
+
 ## Detection strategies
 
 Multiple passes over one parse, rather than multiple services:
@@ -183,7 +199,11 @@ holdings: three columns for eight of figures).
 The gutters between the pieces say it instead. A gap narrower than a cell
 (12pt, one and a half of the narrowest cell) between two pieces each at
 least a cell wide is a gutter, and a line with three or more of them (four
-columns of figures) states its columns'. A gutter on two such lines or more
+columns of figures) states its columns'. They are counted along one chain of
+pieces parted only at gutters: a wider gap parts two tables' rules (two
+tables side by side across the page's gutter, each row ruled a cell at a
+time, two gutters in each), and their gutters are not one row's. A gutter on
+two such lines or more
 is a column's edge, and so are where their run of pieces starts and ends,
 the first figure column's left edge and the last one's right. A gutter is
 added only where no edge stands already. Narrower pieces are no
@@ -486,6 +506,159 @@ list, a banner spanning it — is read whole into its first cell and marked
 `merged_left` across the row, rather than having its words dealt out by which
 side of the cut they fell.
 
+## Items over a block of totals
+
+A table read from its text takes its columns from the stripes its rows of
+figures leave empty. An invoice's item lines end in a block of totals: a
+label or two and an amount on each line (`Totaal exclusief BTW | € 156,20`).
+The labels run across the items' gutters, and a single item over six totals
+is outvoted. So `Aantal | Prijs/st | Korting` closed into one column, and a
+6-column item table read as 3 (or 7 as 2).
+
+Lines under the rows with the most cells form a block of totals when each
+line:
+
+- sets at most half as many cells as those rows;
+- has labels of a few words (no more than a section's label);
+- ends in an amount under one of the items' columns.
+
+At least one label in the block must also run across a gutter of the fullest
+rows. Such a block casts no vote on the columns, here or when the grid is
+built, and its lines stay the table's last rows. A statement's `Total` row is
+never a block: it sets as many cells as the rows above it, and its label
+stays in the stub. Lines of prose ending in a year or a page (a list of
+references, a crystal's data) aren't either: their words are too many, or
+their figure falls under no item column.
+
+Two header rules follow from reading the items' own columns.
+
+- **A column only the header names.** On a line of column labels (two others
+  or more, each over one column), a label that stands an em clear between
+  two columns, both named by other labels on the line, heads a column no row
+  fills (`Korting` between `Prijs/st` and `Bedrag`, no item having a
+  discount). A label beside a column that no other label names is that
+  column's, set off to one side (`Service Areas` beside the service areas),
+  and gets no column of its own.
+- **Two labels a word space apart.** A run of words over two neighbouring
+  columns on such a line is cut where its words part over the gutter between
+  them (`BTW Hoeveelheid` over `21 % | 1 PCS`; `BTW Prijs incl. BTW` set a
+  little above `Artikel | Aantal`, which made a header row of its own). All of
+  these must hold:
+  - each piece sits on its column's axis;
+  - the second piece starts as a label does, not in lower case;
+  - the first piece closes its brackets;
+  - the parted line names every column once (the stub's head aside);
+  - no label below names either column.
+
+  So a phrase over two columns stays whole: `Lower lip`, `An. gambiae`,
+  `OR (95% CI)`, `Don't Know`, and a group's label over its columns' own
+  (`Preparation (h)` over `Pathology | Radiology`).
+
+Both rules read only lines of labels of a few words each. A line of prose
+beside a chart's ticks (`the influence of idiosyncratic or temporary`) is no
+line of labels, and adds no column.
+
+## A shaded header band over a table read from its text
+
+A table can set its header as a band of shaded cells at its top, under a rule
+across them, each divided from the next by a vertical standing on that rule
+and ending at the band's foot, and rule nothing in its body. The body is read
+from its alignment or its text, under the band; the band's labels, wrapped
+over two or three lines within their cells (`Growth,` over `2023:Q4–2024:Q4`
+over `(percent)`), were loose text above the table, or a table of their own.
+
+Such a band is the header row of the table read under it, one cell a column,
+where:
+
+- its cells line up with the table's columns one for one, each column's
+  middle within its cell;
+- the table starts under the band, within the band's own height of its foot;
+- nothing of the page's text stands between but labels in the band's first
+  cell (`Assets` over `Total securities`), which are the table's first rows,
+  each a group's label.
+
+The band's cells are then the table's columns as drawn: their edges are the
+table's, and each cell's lines, its spaces kept, are read into one header
+cell (`Outstanding (billions of dollars)`). Rows the reading made of the
+band's own lines are the band's, and a table read from the band's lines alone
+is dropped. Shading drawn a cell at a time or two cells under one fill is one
+band; the verticals divide it.
+
+## A one-column grid holding prose is no table
+
+A table holds two columns of content or more, as read, or as its text's
+alignment parts it (see above). A grid left with one is a box drawn round
+prose where it holds a row or two (a paragraph and a banner between a rule's
+two side marks, a figure's caption in a ruled box) or where most of its rows
+run as sentences do (12 words or more): its text is the page's prose, its
+headings and lists read as such. A column of short entries, one a row
+(`Np Number of reputation tables…`), is a list read as a table, as before.
+
+## A table read across the page's gutter
+
+On a page set in two columns, the text reader's lines run the width of the
+page, so a row of one column's table shares a line with whatever the other
+column sets on its baseline. A reading of that table could take the other
+column's text as its first column or its last:
+- a structure report's crystal data beside its title;
+- a table beside the paragraph next to it;
+- two tables set side by side, read as one;
+- the first table's last rows read with the second's, beating the second
+  table's own reading.
+
+A reading two fifths of the page wide or more is tested at each place where
+its rows' text starts again, at one place, after a gap of three quarters of
+an em or more: a column after a gutter starts its lines at the same place,
+however far the text before it reaches. The places most rows start at are
+tested first, and the gutter is sought in the span the rows leave open there,
+where fewest of the page's runs of text cross it (a column's prose starts at
+its edge, and a table set in it may start its labels further in). A table
+in one column of two is under half the page wide, and is not tested. The
+reading crosses between two of the page's columns of text there when all of
+these hold:
+- **Text doesn't run across the gutter.** On none of its rows does text run
+  across the place: a gap under three quarters of an em is a word space,
+  not a gutter.
+- **A second stub starts past the gutter.** On most rows the first words past
+  the gutter are a label, or a key set against its value (`Z = 2`), not a
+  figure. A table's columns after its labels hold figures.
+- **Both sides are columns of the page's text.** Between the nearest runs of
+  text set across the place over and under the reading, each side sets a
+  paragraph: two lines of eight words or more, the second carrying the first
+  on in lowercase, at most a third of an em apart. The text reader's lines
+  give the runs, their parts on one baseline either side joined into a
+  column's lines. A table's own gap between columns of text is crossed by
+  the page's prose over it, or the page holds none.
+- **The sides are not one table's halves.** A long table wrapped into two
+  halves side by side sets a row on both sides on four rows in five, on one
+  baseline, and neither half's column runs on past the reading's top or
+  bottom while the other's stops.
+- **No rule runs on through the gutter.** A table set the page's full width
+  over two columns of prose may part its columns where the prose's gutter
+  runs, and the prose under it sets a paragraph either side. Its own rules
+  join it. A rule among its rows, or within a row's height over or under
+  them, that runs on through the gutter and reaches halfway across the
+  reading on both sides, makes the reading one table. A rule drawn a cell at
+  a time counts as one where its pieces meet within a point. Two tables set
+  side by side, each ruled to its own edge, leave the gutter's white between
+  their rules.
+
+Such a reading is dropped before the larger of two readings of one table is
+kept, and each side is read again from that column's text alone:
+- **The side's own reading stands.** A table's reading in its own column
+  stands, the second table's included.
+- **A side that reads no table, ruled as one, is cut from the reading.**
+  Where the side's re-read finds nothing but the side is ruled across its
+  width over or under its rows, the reading is cut at the gutter: that side's
+  columns on its rows, less the rows the other side's text alone set. A
+  ruled table of words, which only the reading across the gutter read in
+  rows, keeps them.
+- **Any other side is the page's prose.** That includes a title, a paragraph,
+  or a list of references beside their numbers.
+
+Alignment's tables are read the same way: one across the gutter is read
+again on each side's glyphs.
+
 ## Banners
 
 A letterhead is a single row of fields ruled side by side, and it is a table.
@@ -629,6 +802,117 @@ bottom rule, not a group's, and the label reads the piece under its middle
 as before. So does the labels' column's own head: a run across the header
 under it would make the stub head a title over every column.
 
+### Group labels centred over their columns
+
+The walk up a text-read table's header stops at the table's own rules. A
+rule under the header's groups is not one of them. It starts past the stub
+and stops short of it, where the table's own rules run across the stub too
+(`qOLA(%)` and `Pyrosequencing (%)` over one rule, the columns of figures
+beneath it). Such a rule is the groups' underline: the walk crosses it and
+takes the labels above. It may be drawn anywhere between the labels and
+the header line under them, not only on their baseline.
+
+A rule under several labels of one row belongs to none of them alone.
+The groups it underlines are cut between the labels. So are groups whose
+labels sit over the middle of their columns with no rule at all (`Sex`
+over `Markers | Position(cM) | P-value`, `Sex + Smoking` over the next
+three). The groups tile the columns under the rule beneath them all, or,
+with none, every column past the stub. Each label must be centred over its
+own group, its middle within 15% of the group's width of the group's (as
+the banner passes take a centred label). Every column of a group must be
+named by the header row below. Of the cuts that centre every label, the one
+that centres them best stands.
+
+A row where any label has an underline of its own is left to those
+underlines. Tiling every column past the stub would hand a column that is
+neither group's to the first group: `September 30, 2016` underlined across
+`Carrying Amount | Fair Value`, after a `Level` column.
+
+A label naming the columns to its right, as far as the next label, also
+stops where a span already given in its row begins. Otherwise the two spans
+overlap (`Ecological association` beside `Herbarium accessions (all CANB)`,
+which is set over the states' columns).
+
+### Years and sample sizes under the heads
+
+A table read from its text starts its body at its first line of figures.
+Years are no figures there (`2008 | 2007 | 2006` under `Years Ended December
+31`), and neither is a year with its note's mark (`2007(1)`, `2004(b)`,
+`2008*`): read as a figure, the line of years began the body, and the columns
+were named by the label over them alone. Nor are the columns' sample sizes
+(`(n=735) | (n=640)` under `Overall | NH`): leading lines whose figures are all
+sample sizes, with nothing in the stub, are the header's, and the columns are
+named by both (`Overall / (n=735)`). A group's own size set beside its label
+(`Skin/Soft Tissue | n= 175`) names itself in the stub and stays a row.
+
+Nor are the columns' units: a leading line whose cells past the stub are all
+units of what the columns count is the header's. Those units are a
+percentage, a count (`n`, `N`, `No.`), both (`n (%)`), or a confidence
+interval (`95% CI`): `% | N | % | N` under the groups, `No. | %` under `New |
+Known | Total`. A row of data gives values, not what they count. The stub may
+hold its own head on that line (`BMI Class`), a label with no figure in it.
+The columns are named down to the unit: `Overall / (n=735) / n`.
+
+With a unit under it, a label wrapped over two lines heads a group level, and
+its first line is that level's too. `Proportion of Hospital` wraps over
+`Discharges with SDV`, over `%`, so the column is named `Proportion of
+Hospital / Discharges with SDV / %`; read as the column's own label, its
+first line came out under the level below it. A line takes its next line's
+kind only where it wraps onto that line on its own axis (starting where it
+starts, or centred where it is), and a column's own label stands under that
+line in the column. A unit centred under a year and the years beside it
+(`(In thousands)`) leaves the year a column's own label.
+
+Over a line of units, a group label set in the gap over its pair (`Poor (1)`
+over `n | %`) names no column outright. It is measured against the columns'
+last line of labels, the units, and stands above them: `Poor (1) / n`.
+Measured against every label instead, the stub's head level with it
+(`Ecological status`) put it under its units (`% / Poor (1)`). Headers with
+no line of units keep the measure they had.
+
+### A header framed by rules
+
+Walking up from a text-read table's first row, the header stops at the
+second rule across the table (the first is the header's own), at a gap wider
+than a row's, or after five lines. A header framed by rules lifts those three
+stops. The frame needs two things:
+
+- **A rule over the first row.** Only short label lines may sit between them:
+  the titles of the body's first sections (`Operating activities`). A longer
+  title there (`Selected information for plans with liability for service`)
+  is a block's own, and the walk reads it and what is over it as before.
+- **Another rule over the header.** Between the two rules there are only
+  header lines. Each label is a few words, no more than a section's, and
+  none ends on a colon. No line is a row of figures (years, sample sizes and
+  units aside), and none is a caption.
+
+The frame climbs from rule to rule while each band between holds header
+lines only. It stops at a second band with words in the stub. The stub holds
+the header's own head once, so a second label there is a row ruled off like
+the rows below it (`Gender | Male | Female` over `Age at diagnosis | 22
+months`). A head wrapped across a rule goes on in lower case (`Registration`
+over `period`) and is still the one head.
+
+Inside the frame, the walk goes on across a rule: in PMC1919390 Table 1,
+`Pathology | Radiology` is ruled off under `Preparation (h)`. It goes on
+across a gap: in PMC1343572 Table 9, a drug's name and `Number of | Percent
+with` sit well above `Outcome | Trials | Patients`. And it goes past five
+lines, counting the header's levels rather than its lines: a label wrapped
+over several lines (`NNT/` over `NNTp/`, `NNH` and `(95% CI)`) is one level.
+What the walk takes, and where it stops for prose, a title or a caption,
+stays the walk's own.
+
+Read across such a rule, a label's second line can sit over it alone on its
+line: `Age` over `(Years)` in PMC3359190 Table 2, `Species name and` over
+`ID number` in PMC6166639 Table 10. A line set close under a label in its
+column, on the label's axis (starting where it starts, or centred where it
+is), goes on naming that column. A rule under it across the stub and every
+column is the table's own, not the line's underline, and the column beside
+it is not the line's to name. Before, either reading made the second line a
+banner over every column (`Locality / ID number`). A label alone on its line
+with nothing over it in its column, such as a band's title across a list
+(`ENGINE BEARINGS`), is a banner as before.
+
 ### A header restated partway down
 
 A table can name its columns afresh partway down: a VOC table's `By wt |
@@ -663,6 +947,57 @@ set apart from the rows under it one of three ways:
 The row is not data. The rows under it, until the next such row, take its
 names in place of the header's lowest row, under any rows above that one:
 `K25W951 / By wt`. A band across the row is a section's label instead.
+
+A table read from its text can be set in blocks. Each block has its own
+title and opens on the same line of column names again: `<16 | 16/17 | 18/19
+| <20` under `Bolivia 1994 | Bolivia 2008`, again under `Colombia 1990 |
+Colombia 2010`, and again for each country. Such a table is one table, not
+one table per block. Blocks join where all of these hold:
+
+- the next block's first line sets the same words in the same columns as
+  the first block's;
+- that line can name columns: nothing in the stub, names over half the
+  columns or more, and no plain number among them. Bounds and ranges name
+  columns (`<16 | 16/17 | <20`). A row of data repeated under each section
+  names itself in the stub (`Number of patients | 909 | 462`). A chart's
+  repeated ticks (`3 | 3`) and a formula's subscripts (`0 | 0 | 0`) are
+  plain numbers;
+- the title between them is a header's depth of lines at most, and holds
+  words;
+- each title line holds figures, years aside, in fewer than half the
+  columns (`Kenya | 1993 | 2008/9`);
+- each title line is set in the table's type. A line set larger than the
+  column lines by the heading margin is a heading: it opens the document's
+  next section and a table of its own (`23 DESPESAS OPERACIONAIS POR
+  NATUREZA E FUNÇÃO` between two notes' tables, each opening on
+  `31/12/24 | 31/12/23`);
+- the lines are set apart as the rows are.
+
+Where the column lines differ (a block adds a column), the block is a table
+of its own.
+
+Each block's title is a section over the block's rows, the first block's
+included. Each block's line of column names is a restated header, naming
+the columns of its own rows. The first title stands over the first column
+line, and header rows must be a table's top rows. So such a table has no
+header rows, and only lines set over the first title are its header.
+
+The alternatives each name a later block's rows by another block's title:
+
+- the first title and column line as the header, with later titles as
+  sections, gives `Colombia` rows the column `Bolivia 1994 / <16`;
+- the first title as a banner over every column does the same for every
+  row.
+
+So every block's rows take their section from their own title and their
+column names from their own column line. Nothing is dropped. The Markdown
+shows the first title as the header line, then each block's column line and
+rows, then the next title.
+
+A lone first row that reads as a title is normally taken off as the table's
+title. The first block's title is not, because a restated column line
+stands under it, as it does under every later block's title (`Uganda 1995
+2011` over `<16 | 16/17`).
 
 ### Rows of parameters
 
@@ -1113,18 +1448,40 @@ It runs on, too, through a line that carries on the cells of the line above.
 That line is the next one under it (within 1.6 of the type's size, where any
 body leading lies and a line with a blank line between does not). It has
 nothing in the stub column and no figure, and each of its chunks stands in a
-column the line above fills and runs on from what stands there: it starts
-mid-phrase, or the text above ends on a word or mark that wants more. Such a
-line is a name or a description wrapped onto a second line, and it joins its
-row's cell (`LSM2 homolog, U6 small nuclear RNA` over `associated (S.
-cerevisiae)`). Spacing alone cannot tell it from a row: a journal sets its
-rows and its wrapped lines at the same leading. A row with an empty stub and
-a new value (`Banana` under `Apple`) runs on from nothing and stays a row.
-Nothing is carried on in a column whose text runs on across the rows: where,
-on half the lines that open a row (two at least), the column's text continues
-the line above it, the column is a page's prose read in beside the table, its
-sentences carried down through the rows. A table's cells start afresh on
-each row.
+column the line above fills and runs on from what stands there. It starts
+mid-phrase: a lowercase word, or, under a cell of words, a bracket opening on
+one, a qualifier set under what it qualifies (`Uracil` over
+`(extracellular)`). A list's enumerator in brackets (`(a)`, `(iv)`) starts
+an item instead, and under a number such a line is a unit's broken
+superscript (`3` over `(mg/m )`), not a wrapped name. Or the text
+above ends on a word or mark that wants more. Such a line is a name or a
+description wrapped onto a second line, and it joins its row's cell (`LSM2
+homolog, U6 small nuclear RNA` over `associated (S. cerevisiae)`).
+
+A line that starts afresh (`Gallinarum Pullorum` over `CDC1983 67`) joins
+its cell by its spacing, where all of these hold:
+
+- it holds that one cell, under a cell of words;
+- it lies between two rows of figures;
+- it stands within the extent of the cell's first line, to half the type's
+  size (a cell wraps because its first line filled its column);
+- it sits a quarter or more tighter under that cell than the next row's cell
+  in its column sits under it: a cell's own leading inside its row, where the
+  row pitch parts the rows, beyond the point or so the tops of words move
+  with their letters.
+
+A label naming the rows under it sits as near to them as to the row above.
+The spacing test alone, without the other limits, took a drawing's labels
+and a chart's axis for rows. Spacing often cannot tell at all: many
+journals set their rows and their wrapped lines at the same leading, and
+there the text has to show the run-on.
+
+A row with an empty stub and a new value (`Banana` under `Apple`) runs on
+from nothing and stays a row. Nothing is carried on in a column whose text
+runs on across the rows: where, on half the lines that open a row (two at
+least), the column's text continues the line above it, the column is a
+page's prose read in beside the table, its sentences carried down through
+the rows. A table's cells start afresh on each row.
 
 A caption wrapped over the table keeps its lines after the first. Walking
 up from the first row for the header, a line that is the next one under a

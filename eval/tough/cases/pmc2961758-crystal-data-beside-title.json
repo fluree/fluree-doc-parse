@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "pmc2961758.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2961758/",
+    "sha256": "940b0e92e73861b82d4bca766a45641dd1ded810055102b3c2dcea8b76abaa40",
+    "about": "Acta Crystallographica Section E (2008) structure report, PMC2961758. Its first page sets the title, authors and abstract in the left column and the `Experimental` section's crystal data, key against value, in the right. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#358): the crystal data were read in one table with the title's lines beside them, the title cut a line to a row. A reading across the page's gutter, between two columns of text, is now read again in each column."
+  ],
+  "checks": [
+    {
+      "id": "title-read-whole",
+      "found": "2026-11-25",
+      "issue": "#358: the title's lines were cells of a table across the gutter.",
+      "text": "Dichlorido(methanol-jO)[2-(2-pyridylmethoxy)-1,10-phenanthroline-j3N,N0,N00]manganese(II)"
+    }
+  ]
+}

@@ -254,9 +254,28 @@ and the callouts stay figure text where they fall.
   "nif:isString": "Sign the order" }
 ```
 
-The element model marks an item `doc:ListItem`, and [`-f json`](json.md)
-shows that mark, because a flat list of elements has no list to be contained
-by.
+A list nested in an item is contained by that item: the item's
+`doco:Paragraph` contains a `doco:List` of its own, after its text. Items
+further down that list hold lists of their own the same way, as deep as the
+source nests them.
+
+```json
+{ "@type": "doco:List", "po:contains": [ "…-element-7", "…-element-10" ] }
+{ "@id": "…-element-7", "@type": "doco:Paragraph", "doc:xhtmlTag": "li",
+  "nif:isString": "Before you start:", "po:contains": [ "…-element-8" ] }
+{ "@id": "…-element-8", "@type": "doco:List", "po:contains": [ "…-element-9" ] }
+{ "@id": "…-element-9", "@type": "doco:Paragraph", "doc:xhtmlTag": "li",
+  "nif:isString": "Turn off the power" }
+{ "@id": "…-element-10", "@type": "doco:Paragraph", "doc:xhtmlTag": "li",
+  "nif:isString": "Mount the bracket" }
+```
+
+Each item's text is its own, so the parent's `nif:isString` and offsets
+don't take in the items nested under it.
+
+The element model marks an item `doc:ListItem`, with its `depth`, and
+[`-f json`](json.md) shows both, because a flat list of elements has no list
+to be contained by.
 
 ## Table cells are nodes
 
