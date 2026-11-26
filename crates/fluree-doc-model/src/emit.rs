@@ -341,6 +341,163 @@ fn carries_on_table(elements: &[Element], i: usize) -> bool {
         && cols(prev) == cols(e)
 }
 
+/// Text escaped for HTML markup.
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// A table's rows as HTML, `<tr>` by `<tr>`, from row `skip` on. `cell`
+/// writes a cell's text into the markup.
+///
+/// `<th>` only where the header row was *measured* (`header_rows`);
+/// undetected tables keep plain `<td>` rather than asserting a header that
+/// may not exist. A cell spanning rows or columns is written once, with its
+/// `rowspan` and `colspan`.
+fn html_table_rows(
+    e: &Element,
+    rows: &[Vec<String>],
+    skip: usize,
+    cell: impl Fn(&str) -> String,
+    out: &mut String,
+) {
+    let th_rows = e.header_rows.unwrap_or(0);
+    let subs = e.sub_headers.clone().unwrap_or_default();
+    let ncols = rows.first().map(Vec::len).unwrap_or(0);
+    let md = e
+        .merged_down
+        .as_ref()
+        .filter(|m| ncols > 0 && m.len() == rows.len() * ncols);
+    let ml = e
+        .merged_left
+        .as_ref()
+        .filter(|m| ncols > 0 && m.len() == rows.len() * ncols);
+    for (ri, r) in rows.iter().enumerate() {
+        if ri < skip {
+            continue;
+        }
+        // A merged full-width band is one spanning header cell, not a row of
+        // blanks after the first column. Its text may be split across
+        // columns in the raw grid, so join it back.
+        if subs.contains(&ri) || (ri < th_rows && r[1..].iter().all(|c| c.is_empty())) {
+            let joined = r
+                .iter()
+                .map(|c| c.trim())
+                .filter(|c| !c.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            out.push_str(&format!(
+                "<tr><th colspan=\"{ncols}\">{}</th></tr>\n",
+                cell(&joined)
+            ));
+            continue;
+        }
+        let tag = if ri < th_rows { "th" } else { "td" };
+        out.push_str("<tr>");
+        for (ci, c) in r.iter().enumerate() {
+            // A cell continuing the one above or to its left was already
+            // emitted carrying that span.
+            if md.as_ref().is_some_and(|m| m[ri * ncols + ci])
+                || ml.as_ref().is_some_and(|m| m[ri * ncols + ci])
+            {
+                continue;
+            }
+            let span = md
+                .as_ref()
+                .map(|m| {
+                    (ri + 1..rows.len())
+                        .take_while(|k| m[k * ncols + ci])
+                        .count()
+                        + 1
+                })
+                .unwrap_or(1);
+            let colspan = ml
+                .as_ref()
+                .map(|m| (ci + 1..ncols).take_while(|k| m[ri * ncols + k]).count() + 1)
+                .unwrap_or(1);
+            // A horizontally merged run's text lives across the cells it
+            // spans in the raw grid.
+            let text = if colspan > 1 {
+                r[ci..ci + colspan]
+                    .iter()
+                    .map(|t| t.trim())
+                    .filter(|t| !t.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                c.clone()
+            };
+            let mut attrs = String::new();
+            if span > 1 {
+                attrs.push_str(&format!(" rowspan=\"{span}\""));
+            }
+            if colspan > 1 {
+                attrs.push_str(&format!(" colspan=\"{colspan}\""));
+            }
+            out.push_str(&format!("<{tag}{attrs}>{}</{tag}>", cell(&text)));
+        }
+        out.push_str("</tr>\n");
+    }
+}
+
+/// Whether a table's structure needs more than a grid of cells to say: a
+/// cell holding a value that spans rows or columns, a header of two rows or
+/// more, or a band across it labelling the rows under it.
+///
+/// An empty cell continued into its neighbours reads the same as the blank
+/// cells a grid leaves there: a worksheet's empty answer boxes, ruled two
+/// rows tall, need no markup to say so.
+fn spans_cells(e: &Element) -> bool {
+    let Some(rows) = &e.cells else {
+        return false;
+    };
+    let ncols = rows.first().map_or(0, Vec::len);
+    let n = rows.len() * ncols;
+    let flags = |m: &Option<Vec<bool>>| m.clone().filter(|m| ncols > 0 && m.len() == n);
+    let text = |r: usize, c: usize| rows[r].get(c).is_some_and(|t| !t.trim().is_empty());
+    // The cell each flagged one continues, up or to the left.
+    let spans_a_value = |m: Option<Vec<bool>>, up: bool| {
+        m.is_some_and(|m| {
+            (0..n).any(|k| {
+                let (mut r, mut c) = (k / ncols, k % ncols);
+                if !m[k] {
+                    return false;
+                }
+                let held = text(r, c);
+                while m[r * ncols + c] && (if up { r > 0 } else { c > 0 }) {
+                    if up {
+                        r -= 1;
+                    } else {
+                        c -= 1;
+                    }
+                }
+                held || text(r, c)
+            })
+        })
+    };
+    spans_a_value(flags(&e.merged_down), true)
+        || spans_a_value(flags(&e.merged_left), false)
+        || e.header_rows.is_some_and(|h| h >= 2)
+        || e.sub_headers.as_ref().is_some_and(|s| !s.is_empty())
+}
+
+/// Whether the table at `i` is written to Markdown as HTML: some part of the
+/// table it belongs to, its parts across page breaks taken together, spans
+/// cells ([`spans_cells`]). One table is written one way, so a part carried
+/// on from the page before goes on in the markup its first part opened.
+fn md_table_as_html(elements: &[Element], i: usize) -> bool {
+    let mut first = i;
+    while first > 0 && carries_on_table(elements, first) {
+        first -= 1;
+    }
+    let mut last = i;
+    while carries_on_table(elements, last + 1) {
+        last += 1;
+    }
+    elements[first..=last].iter().any(spans_cells)
+}
+
 /// Close the open lists past the first `keep`, innermost first, with the
 /// item each was set in.
 fn close_lists(out: &mut String, lists: &mut Vec<usize>, keep: usize) {
@@ -364,11 +521,6 @@ pub fn to_xhtml(elements: &[Element]) -> String {
 /// text, because a consumer extracting text would then read a sentence this
 /// library wrote as though the document had said it.
 pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
-    fn esc(s: &str) -> String {
-        s.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    }
     let mut out = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n",
     );
@@ -431,21 +583,6 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
             }
             "doco:Table" => {
                 if let Some(rows) = &e.cells {
-                    // `<th>` only where the header row was *measured*
-                    // (`header_rows == Some(1)`); undetected tables keep
-                    // plain `<td>` rather than asserting a header that may
-                    // not exist.
-                    let th_rows = e.header_rows.unwrap_or(0);
-                    let subs = e.sub_headers.clone().unwrap_or_default();
-                    let ncols = rows.first().map(Vec::len).unwrap_or(0);
-                    let md = e
-                        .merged_down
-                        .as_ref()
-                        .filter(|m| ncols > 0 && m.len() == rows.len() * ncols);
-                    let ml = e
-                        .merged_left
-                        .as_ref()
-                        .filter(|m| ncols > 0 && m.len() == rows.len() * ncols);
                     // A part carried on from the page before goes on in
                     // the table it continues, without a repeated header.
                     let carried = carries_on_table(elements, i);
@@ -456,78 +593,7 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                         out.push_str("<table>\n");
                         0
                     };
-                    for (ri, r) in rows.iter().enumerate() {
-                        if ri < skip {
-                            continue;
-                        }
-                        // A merged full-width band is one spanning header
-                        // cell, not a row of blanks after the first column.
-                        // A merged full-width band is one spanning header
-                        // cell; its text may be split across columns in the
-                        // raw grid, so join it back.
-                        if subs.contains(&ri)
-                            || (ri < th_rows && r[1..].iter().all(|c| c.is_empty()))
-                        {
-                            let joined = r
-                                .iter()
-                                .map(|c| c.trim())
-                                .filter(|c| !c.is_empty())
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            out.push_str(&format!(
-                                "<tr><th colspan=\"{ncols}\">{}</th></tr>\n",
-                                esc(&joined)
-                            ));
-                            continue;
-                        }
-                        let tag = if ri < th_rows { "th" } else { "td" };
-                        out.push_str("<tr>");
-                        for (ci, c) in r.iter().enumerate() {
-                            // A cell continuing the one above or to its left
-                            // was already emitted carrying that span.
-                            if md.as_ref().is_some_and(|m| m[ri * ncols + ci])
-                                || ml.as_ref().is_some_and(|m| m[ri * ncols + ci])
-                            {
-                                continue;
-                            }
-                            let span = md
-                                .as_ref()
-                                .map(|m| {
-                                    (ri + 1..rows.len())
-                                        .take_while(|k| m[k * ncols + ci])
-                                        .count()
-                                        + 1
-                                })
-                                .unwrap_or(1);
-                            let colspan = ml
-                                .as_ref()
-                                .map(|m| {
-                                    (ci + 1..ncols).take_while(|k| m[ri * ncols + k]).count() + 1
-                                })
-                                .unwrap_or(1);
-                            // A horizontally merged run's text lives across
-                            // the cells it spans in the raw grid.
-                            let text = if colspan > 1 {
-                                r[ci..ci + colspan]
-                                    .iter()
-                                    .map(|t| t.trim())
-                                    .filter(|t| !t.is_empty())
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                            } else {
-                                c.clone()
-                            };
-                            let mut attrs = String::new();
-                            if span > 1 {
-                                attrs.push_str(&format!(" rowspan=\"{span}\""));
-                            }
-                            if colspan > 1 {
-                                attrs.push_str(&format!(" colspan=\"{colspan}\""));
-                            }
-                            out.push_str(&format!("<{tag}{attrs}>{}</{tag}>", esc(&text)));
-                        }
-                        out.push_str("</tr>\n");
-                    }
+                    html_table_rows(e, rows, skip, esc, &mut out);
                     out.push_str("</table>\n");
                 } else if !e.text.is_empty() {
                     // Model-arbitrated table: already HTML.
@@ -624,13 +690,15 @@ fn md_cell(text: &str) -> String {
 
 /// Render elements to Markdown, for benchmark comparison.
 ///
-/// Cells are emitted **as detected**, so a merged cell's value appears once
-/// and the positions it spans are blank. That is deliberate and measured, not
-/// an oversight: Markdown has no rowspan, so the alternative is repeating the
-/// value in every position it covers, and doing that scores TEDS 0.8288
-/// against 0.8441 — a reference encodes a rowspan as one cell, not N copies.
-/// A consumer that needs the spans should read `doco` or `xhtml`, which carry
-/// them properly; see [`crate::merges`].
+/// A table is a pipe table where a grid of cells says all of it. One that
+/// does not (a cell holding a value that spans rows or columns, a header of
+/// two rows or more, a band labelling the rows under it) is written as an
+/// HTML `<table>`, which Markdown passes through, with its `rowspan`,
+/// `colspan` and `<th>` cells as the `xhtml` writer sets them. A pipe table
+/// can only leave a span's other positions blank; repeating its value in each
+/// of them instead measured worse still (TEDS 0.8288 against 0.8441), since a
+/// reference encodes a span as one cell, not N copies. `doco` carries the
+/// spans as flags; see [`crate::merges`].
 pub fn to_markdown(elements: &[Element]) -> String {
     to_markdown_with(elements, &Notes::default())
 }
@@ -670,6 +738,23 @@ pub fn to_markdown_with_options(
                     // A part carried on from the page before goes on in the
                     // table it continues: no blank line, no second header.
                     let carried = carries_on_table(elements, i);
+                    // A table whose cells span rows or columns is written
+                    // as HTML, which Markdown passes through: a grid of pipes
+                    // can only leave a span's other cells blank. Each cell
+                    // on one line, since a blank line would end the markup.
+                    if md_table_as_html(elements, i) {
+                        let skip = if carried && out.ends_with("</table>\n\n") {
+                            out.truncate(out.len() - "</table>\n\n".len());
+                            repeated_header_rows(elements, i)
+                        } else {
+                            out.push_str("\n<table>\n");
+                            0
+                        };
+                        let cell = |t: &str| esc(&t.replace(['\n', '\r'], " "));
+                        html_table_rows(e, rows, skip, cell, &mut out);
+                        out.push_str("</table>\n\n");
+                        continue;
+                    }
                     let skip = if carried {
                         out.pop();
                         repeated_header_rows(elements, i)
@@ -720,16 +805,25 @@ pub fn to_markdown_with_options(
                     out.push_str(&format!("{indent}- {text}\n"));
                 }
             }
-            _ => match (&e.turn, &e.message) {
-                (Some(t), _) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
-                (None, Some(m)) => out.push_str(&format!("{}\n\n", md_message(e, m))),
-                // A paragraph whose lines were stacked by hand keeps their
-                // breaks, as CommonMark hard breaks: a plain line end reads
-                // as a space.
-                (None, None) => {
-                    out.push_str(&format!("{}\n\n", md_linked(e, opts).replace('\n', "  \n")))
+            _ => {
+                // A list's last item ends its line and no more. A paragraph
+                // set straight under it is a lazy continuation of the item
+                // under CommonMark, read as the item's own text: a blank line
+                // ends the list first.
+                if !out.is_empty() && !out.ends_with("\n\n") {
+                    out.push('\n');
                 }
-            },
+                match (&e.turn, &e.message) {
+                    (Some(t), _) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
+                    (None, Some(m)) => out.push_str(&format!("{}\n\n", md_message(e, m))),
+                    // A paragraph whose lines were stacked by hand keeps their
+                    // breaks, as CommonMark hard breaks: a plain line end reads
+                    // as a space.
+                    (None, None) => {
+                        out.push_str(&format!("{}\n\n", md_linked(e, opts).replace('\n', "  \n")))
+                    }
+                }
+            }
         }
     }
     if let Some(note) = notes.summary() {
@@ -798,10 +892,11 @@ mod tests {
              <p>After</p>\n"
         );
         // Each sub-list is indented to where its parent item's text starts,
-        // past a bullet or past the item's own number.
+        // past a bullet or past the item's own number. The paragraph after
+        // the list stands apart from its last item, a blank line between.
         assert_eq!(
             to_markdown(&els),
-            "- Fruit\n  - Apples\n    - Seedless\n- Vegetables\n  10. Leeks\n      - Onions\nAfter\n\n"
+            "- Fruit\n  - Apples\n    - Seedless\n- Vegetables\n  10. Leeks\n      - Onions\n\nAfter\n\n"
         );
         // Back out of a list two deeper to one deeper: a second list in the
         // same item.
@@ -815,6 +910,40 @@ mod tests {
         let flat = [item("one", 0), item("two", 0)];
         assert_eq!(to_markdown(&flat), "- one\n- two\n");
         assert!(to_xhtml(&flat).contains("<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n"));
+    }
+
+    #[test]
+    fn a_paragraph_after_a_list_is_no_part_of_its_last_item() {
+        let els = [
+            item("Spatula", 0),
+            item("Weigh paper", 0),
+            para("Figure 3.", vec![]),
+        ];
+        assert_eq!(
+            to_markdown(&els),
+            "- Spatula\n- Weigh paper\n\nFigure 3.\n\n"
+        );
+        // Headings and tables after a list already open on a blank line, and
+        // a paragraph after a paragraph has one: none gains a second.
+        let heading = Element {
+            level: Some(2),
+            ..Element::new("doco:SectionTitle", "Method", "rust", "layout")
+        };
+        assert_eq!(
+            to_markdown(&[item("Spatula", 0), heading]),
+            "- Spatula\n\n## Method\n\n"
+        );
+        assert_eq!(
+            to_markdown(&[
+                item("Spatula", 0),
+                table("t", &[&["A", "B"], &["1", "2"]], 1)
+            ]),
+            "- Spatula\n\n|A|B|\n|---|---|\n|1|2|\n\n"
+        );
+        assert_eq!(
+            to_markdown(&[para("One.", vec![]), para("Two.", vec![])]),
+            "One.\n\nTwo.\n\n"
+        );
     }
 
     #[test]
@@ -833,6 +962,73 @@ mod tests {
         // Not carried on: two tables.
         let c = table("t3", &[&["X", "Y"], &["1", "2"]], 1);
         assert_eq!(to_markdown(&[a, c]).matches("|---|---|").count(), 2);
+    }
+
+    #[test]
+    fn a_table_with_spans_is_html_in_markdown_and_one_without_is_pipes() {
+        // A plain table, one header row: pipes, as ever.
+        let plain = table("t", &[&["Name", "Count"], &["alpha", "12"]], 1);
+        assert_eq!(
+            to_markdown(std::slice::from_ref(&plain)),
+            "\n|Name|Count|\n|---|---|\n|alpha|12|\n\n"
+        );
+        // `Measures` spans two columns over a second header row.
+        let mut spanned = table(
+            "s",
+            &[
+                &["Name", "Measures", ""],
+                &["", "Count", "Share"],
+                &["alpha", "12", "30"],
+            ],
+            2,
+        );
+        spanned.merged_down = Some(vec![
+            false, false, false, true, false, false, false, false, false,
+        ]);
+        spanned.merged_left = Some(vec![
+            false, false, true, false, false, false, false, false, false,
+        ]);
+        let md = to_markdown(std::slice::from_ref(&spanned));
+        assert_eq!(
+            md,
+            "\n<table>\n\
+             <tr><th rowspan=\"2\">Name</th><th colspan=\"2\">Measures</th></tr>\n\
+             <tr><th>Count</th><th>Share</th></tr>\n\
+             <tr><td>alpha</td><td>12</td><td>30</td></tr>\n\
+             </table>\n\n"
+        );
+        // The same rows as `xhtml` writes them.
+        assert!(to_xhtml(&[spanned]).contains(md.trim()));
+        // Two header rows and no span: HTML too, each header cell a `<th>`.
+        let two = table("h", &[&["Size", "Mass"], &["mm", "g"], &["4", "12"]], 2);
+        assert!(to_markdown(&[two]).contains("<tr><th>mm</th><th>g</th></tr>"));
+        // An empty cell ruled two rows tall spans nothing a grid cannot say.
+        let mut boxes = table("b", &[&["Item", "Answer"], &["one", ""], &["two", ""]], 1);
+        boxes.merged_down = Some(vec![false, false, false, false, false, true]);
+        assert!(to_markdown(&[boxes]).starts_with("\n|Item|Answer|"));
+        // Text set on two lines in a cell stays on one: a blank line would
+        // end the markup.
+        let mut wrapped = table("w", &[&["A", "B"], &["x\n\ny", "1"], &["", "2"]], 1);
+        wrapped.merged_down = Some(vec![false, false, false, false, true, false]);
+        assert!(to_markdown(&[wrapped]).contains("<td rowspan=\"2\">x  y</td>"));
+    }
+
+    #[test]
+    fn a_continued_table_with_spans_is_one_html_table() {
+        let mut a = table("t1", &[&["Group", ""], &["Noise", "Dirty cell"]], 1);
+        a.merged_left = Some(vec![false, true, false, false]);
+        // Carried on, its header repeated; it spans nothing itself, and is
+        // written as the part it continues.
+        let mut b = table("t2", &[&["Group", ""], &["Hum", "Loose lead"]], 1);
+        b.merged_left = Some(vec![false, true, false, false]);
+        b.continues = Some("t1".into());
+        let mut c = table("t3", &[&["Group", ""], &["Buzz", "Earth"]], 1);
+        c.continues = Some("t2".into());
+        let md = to_markdown(&[a, b, c]);
+        assert_eq!(md.matches("<table>").count(), 1, "{md}");
+        assert_eq!(md.matches("Group").count(), 1, "{md}");
+        assert!(md.contains("<tr><td>Hum</td><td>Loose lead</td></tr>\n"));
+        assert!(!md.contains('|'), "{md}");
     }
 
     #[test]
