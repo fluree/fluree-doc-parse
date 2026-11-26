@@ -2824,7 +2824,8 @@ fn nested_grids(g: &Grid, page: &crate::extract::Page) -> Vec<(Grid, usize, usiz
 }
 
 /// A grid's first column holds nothing but list markers (`a)`, `2.`, `(iii)`,
-/// `•`), at least two of them: an enumerated list read as a table.
+/// any bullet [`block::is_bullet`] knows, a dash), at least two of them: an
+/// enumerated list read as a table.
 fn is_marker_list(cells: &[String], cols: usize) -> bool {
     if cols < 2 {
         return false;
@@ -2837,12 +2838,42 @@ fn is_marker_list(cells: &[String], cols: usize) -> bool {
         .collect();
     let marker = |t: &str| {
         let body = t.trim_start_matches('(').trim_end_matches(['.', ')']);
-        matches!(t, "•" | "◦" | "▪" | "-" | "–" | "*")
+        let mut chars = t.chars();
+        let bullet = chars.next().is_some_and(block::is_bullet) && chars.next().is_none();
+        bullet
+            || matches!(t, "-" | "–" | "*")
             || (t != body
                 && (1..=4).contains(&body.chars().count())
                 && body.chars().all(|c| c.is_ascii_alphanumeric()))
     };
     firsts.len() >= 2 && firsts.iter().all(|t| marker(t))
+}
+
+/// A grid read from alignment that is a bulleted list: two columns, its
+/// bullets and its items ([`is_marker_list`]), with at most one first row of
+/// other text over them, a heading or a running head set level with the
+/// list. Its bullets line up down the page as a column does, and each item's
+/// text beside them as another.
+///
+/// Bullets only, each marker one character. A numbered or lettered list read
+/// back as prose sets each item as a numbered line, and a numbered line of
+/// one item reads as a numbered section: a contract's `(b) "Board" means the
+/// Board of Directors.` became a heading, and a report's list of its key
+/// audit matters, `1. Measurement of shares`, repeated the numbered heads it
+/// lists and cost them their numbering. Read as a table, those stay apart.
+fn lists_its_rows(g: &Grid, glyphs: &[Glyph]) -> bool {
+    if g.cols() != 2 {
+        return false;
+    }
+    let cells = g.cell_texts(glyphs);
+    let bulleted = |cells: &[String]| {
+        is_marker_list(cells, 2)
+            && cells
+                .iter()
+                .step_by(2)
+                .all(|t| t.trim().chars().count() <= 1)
+    };
+    bulleted(&cells) || (g.rows() >= 3 && bulleted(&cells[2..]))
 }
 
 /// Run the pipeline over an already-extracted document.
@@ -4472,6 +4503,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 && !grids.iter().any(|o| overlap_area(&o.bbox, &g.bbox) > 0.0)
                 && !table::reads_as_prose(g, &prose)
                 && !table::walled_in(&g.bbox, &walls)
+                && !lists_its_rows(g, &prose)
         });
         // Field lists set without rules, found between the page's gutters
         // where a row across the page holds more than a label and its
@@ -7568,6 +7600,19 @@ mod tests {
             2
         ));
         assert!(is_marker_list(&cells(&[["•", "One."], ["•", "Two."]]), 2));
+        // Every bullet a list item opens with, not only the commonest.
+        for bullet in ["●", "■", "○", "➢", "\u{F0B7}"] {
+            assert!(
+                is_marker_list(&cells(&[[bullet, "One."], [bullet, "Two."]]), 2),
+                "{bullet}"
+            );
+        }
+        // A column of one letter or sign is no column of bullets.
+        assert!(!is_marker_list(&cells(&[["x", "One."], ["x", "Two."]]), 2));
+        assert!(!is_marker_list(
+            &cells(&[["●●", "One."], ["●●", "Two."]]),
+            2
+        ));
         // A table with labels in its first column is a table.
         let table = [["Added cation", "Relative size"], ["K+", ""], ["Na+", ""]];
         assert!(!is_marker_list(&cells(&table), 2));
@@ -7580,6 +7625,90 @@ mod tests {
             &cells(&[["a)", "Only one."], ["", "More text."]]),
             2
         ));
+    }
+
+    /// A grid read from alignment, `rows` of cells in columns 100 pt wide
+    /// and rows 20 pt tall, and the glyphs in it, a word each.
+    fn aligned_grid(rows: &[&[&str]]) -> (Grid, Vec<Glyph>) {
+        let cols = rows[0].len();
+        let xs: Vec<f64> = (0..=cols).map(|c| c as f64 * 100.0).collect();
+        let ys: Vec<f64> = (0..=rows.len()).map(|r| r as f64 * 20.0).collect();
+        let mut glyphs = Vec::new();
+        for (r, row) in rows.iter().enumerate() {
+            for (c, word) in row.iter().enumerate() {
+                let (x, y) = (c as f64 * 100.0 + 5.0, r as f64 * 20.0 + 14.0);
+                glyphs.push(Glyph {
+                    text: (*word).into(),
+                    bbox: Some(BBox {
+                        x0: x,
+                        y0: y - 8.0,
+                        x1: x + 6.0 * word.chars().count() as f64,
+                        y1: y,
+                    }),
+                    page: 0,
+                    origin: (x, y),
+                    rotation_deg: 0.0,
+                    font_size: 8.0,
+                    weight: None,
+                    italic: false,
+                    advance: None,
+                    draw_index: glyphs.len(),
+                });
+            }
+        }
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: xs[cols],
+                y1: ys[rows.len()],
+            },
+            xs,
+            ys,
+        };
+        (grid, glyphs)
+    }
+
+    #[test]
+    fn a_bulleted_list_lined_up_as_a_table_is_a_list() {
+        // Its bullets, and its items beside them.
+        let (g, glyphs) = aligned_grid(&[&["•", "Pipettes"], &["•", "Rack"], &["•", "Tray"]]);
+        assert!(lists_its_rows(&g, &glyphs));
+        // Under a line set level with it: a running head, a heading.
+        let (g, glyphs) = aligned_grid(&[
+            &["COLLEGE", "BIO181"],
+            &["●", "Pipettes"],
+            &["●", "Rack"],
+            &["●", "Tray"],
+        ]);
+        assert!(lists_its_rows(&g, &glyphs));
+        // A numbered or lettered list stays as it was read: its items, read
+        // back as prose, would be numbered lines.
+        let (g, glyphs) = aligned_grid(&[&["1.", "Thaw."], &["2.", "Mix."], &["3.", "Spin."]]);
+        assert!(!lists_its_rows(&g, &glyphs));
+        let (g, glyphs) = aligned_grid(&[&["(a)", "Board"], &["(b)", "Code"], &["(c)", "Holder"]]);
+        assert!(!lists_its_rows(&g, &glyphs));
+        // Two rows of other text over the markers head a table.
+        let (g, glyphs) = aligned_grid(&[
+            &["Step", "Action"],
+            &["When", "Done"],
+            &["•", "Rack"],
+            &["•", "Tray"],
+        ]);
+        assert!(!lists_its_rows(&g, &glyphs));
+        // A third column is more than a list's items: numbered rows of a
+        // table.
+        let (g, glyphs) = aligned_grid(&[
+            &["1.", "Widget", "4.50"],
+            &["2.", "Gadget", "3.10"],
+            &["3.", "Sprocket", "1.25"],
+        ]);
+        assert!(!lists_its_rows(&g, &glyphs));
+        // Labels down the first column are a table's.
+        let (g, glyphs) = aligned_grid(&[&["Width", "40"], &["Depth", "25"], &["Height", "90"]]);
+        assert!(!lists_its_rows(&g, &glyphs));
     }
 
     #[test]
