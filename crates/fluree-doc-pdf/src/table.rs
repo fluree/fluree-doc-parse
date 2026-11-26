@@ -2589,7 +2589,23 @@ fn cluster(rules: &[&Rule]) -> Vec<GridLine> {
             .collect();
         // A row's underlines under each of its figures: three gutters or
         // more. Group labels' underlines, one under each group, part at a
-        // gutter or two, and between groups, not columns.
+        // gutter or two, and between groups, not columns. Counted along one
+        // chain of pieces: a gap wider than a gutter parts two tables'
+        // rules (each of two tables side by side ruled a cell at a time,
+        // their rows level across the page's gutter), and their gutters
+        // are not one row's.
+        let mut chains: Vec<Vec<usize>> = Vec::new();
+        for &i in &parted {
+            match chains.last_mut() {
+                Some(c) if c.last().is_some_and(|&j| j + 1 == i) => c.push(i),
+                _ => chains.push(vec![i]),
+            }
+        }
+        let parted: Vec<usize> = chains
+            .into_iter()
+            .filter(|c| c.len() >= MIN_GUTTERS_PER_LINE)
+            .flatten()
+            .collect();
         if parted.len() >= MIN_GUTTERS_PER_LINE {
             g.gutters = parted
                 .iter()
@@ -11116,6 +11132,38 @@ mod tests {
             ]
         );
         assert_eq!(&texts[4..8], &["Equities", "1.5", "1.5", "1.5"]);
+    }
+
+    #[test]
+    fn rules_of_two_tables_side_by_side_part_at_no_gutters_together() {
+        // Two tables either side of the page's gutter, each row ruled a cell
+        // at a time: two gutters in each table's rule, a gap wider than a
+        // gutter between the tables. No row is underlined in four columns.
+        let pieces = [
+            (50.0, 193.0),
+            (198.0, 241.0),
+            (246.0, 289.0),
+            (306.0, 473.0),
+            (478.0, 509.0),
+            (514.0, 544.0),
+        ];
+        let rules: Vec<Rule> = pieces.iter().map(|&(a, b)| h(a, b, 377.7)).collect();
+        let refs: Vec<&Rule> = rules.iter().collect();
+        let lines = cluster(&refs);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].gutters.is_empty(), "{:?}", lines[0].gutters);
+        // One table's underlines, four pieces in one chain: three gutters.
+        let one: Vec<Rule> = [
+            (170.0, 225.0),
+            (230.0, 285.0),
+            (290.0, 345.0),
+            (350.0, 405.0),
+        ]
+        .iter()
+        .map(|&(a, b)| h(a, b, 80.0))
+        .collect();
+        let refs: Vec<&Rule> = one.iter().collect();
+        assert_eq!(cluster(&refs)[0].gutters.len(), 3);
     }
 
     #[test]
