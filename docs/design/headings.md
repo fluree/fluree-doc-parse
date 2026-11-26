@@ -30,6 +30,29 @@ its note, ranks with the other 10pt bold heads, not below them. A sentence
 that opens on a bold name and runs on unbracketed keeps the weight of the
 rest of its line.
 
+Slant and face rank too. At one size, weight and case, an italic heading
+and an upright one are two levels, and so are two faces whose x-heights
+differ by 8% or more. PLOS sets its sections in Helvetica Bold, its
+subsections in Minion Bold and the level under those in Minion Bold
+Italic, all at 12pt; Helvetica's x-height is 0.55 of the size and Minion's
+0.465. The x-height is measured on upright lines only, since a turned
+glyph's box is its width, so one face embedded twice under two names
+measures the same.
+
+Which of two such variants is the level above comes from the page: a
+heading set directly over another, with nothing between, heads it. A 10-K
+sets `Item 1. Business` in bold italic directly over `General` in bold, so
+there italic is above. Without that evidence, upright heads italic and the
+taller face heads the shorter.
+
+A variant takes a level of its own only when it sets two headings or more,
+or one set directly over a heading it heads. One italic line among bold
+heads is as likely a word set in italic, such as a species' name ending a
+bold line. A variant also needs a level to spare. Past six, levels fold
+together, and a level for a variant would fold two sizes into one instead.
+A drug label's product-table titles would fold into the column labels a
+size below them.
+
 A title must be four characters or more to be read as one on its shape
 alone. Shorter lines are a word or two of a sentence, a page's letter, or
 `No`. An acronym of two or three capitals on a line of its own (`FCC` over a

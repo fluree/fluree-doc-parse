@@ -153,7 +153,19 @@ pub struct Line {
     /// where the fact is still visible — the text reads `95 Ibid.` either
     /// way.
     pub opens_with_script: bool,
+    /// Set in italic: most of its letters drawn in an italic face.
+    pub italic: bool,
+    /// The height of its lowercase letters without ascenders or descenders
+    /// (`a`, `e`, `o`, `x`), as a share of its size: the median over those
+    /// letters, where it has two or more. Two faces at one size set it apart
+    /// (Helvetica's 0.52 against Minion's 0.44), and so tell one level of
+    /// heading from another where the size, the weight and the slant are
+    /// all the same.
+    pub x_height: Option<f32>,
 }
+
+/// Lowercase letters that rise to the x-height and no further.
+const X_HEIGHT_LETTERS: &str = "acemnorsuvwxz";
 
 impl Line {
     pub fn is_horizontal(&self) -> bool {
@@ -2629,6 +2641,26 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         .find(|g| g.bbox.is_some())
         .is_some_and(|g| g.font_size as f64 <= font_size as f64 * SCRIPT_SIZE_RATIO);
 
+    let lettered = idxs
+        .iter()
+        .map(|&i| &glyphs[i])
+        .filter(|g| g.bbox.is_some() && g.text.chars().any(char::is_alphabetic));
+    let (letters, slanted) = lettered.fold((0, 0), |(n, k), g| (n + 1, k + usize::from(g.italic)));
+    let italic = slanted * 2 > letters;
+    let mut heights: Vec<f32> = idxs
+        .iter()
+        .map(|&i| &glyphs[i])
+        .filter(|g| g.font_size > 0.0)
+        .filter(|g| {
+            let mut cs = g.text.chars();
+            matches!((cs.next(), cs.next()), (Some(c), None) if X_HEIGHT_LETTERS.contains(c))
+        })
+        .filter_map(|g| g.bbox.map(|b| ((b.y1 - b.y0) as f32) / g.font_size))
+        .collect();
+    heights.sort_by(f32::total_cmp);
+    // Measured upright only: a turned glyph's box is its width.
+    let x_height = (bucket == 0 && heights.len() >= 2).then(|| heights[heights.len() / 2]);
+
     Some(Line {
         text,
         bbox,
@@ -2639,6 +2671,8 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         bold,
         opens_bold,
         opens_with_script,
+        italic,
+        x_height,
     })
 }
 
@@ -2660,6 +2694,7 @@ mod tests {
             rotation_deg: rot,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         }
@@ -2770,6 +2805,7 @@ mod tests {
             .enumerate()
             .map(|(k, c)| Glyph {
                 weight,
+                italic: false,
                 ..g(&c.to_string(), x + 5.0 * k as f64, 0.0, 5.0, 0.0)
             })
             .collect()
@@ -2882,6 +2918,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: size,
             weight: None,
+            italic: false,
             advance: Some(size as f64 * 0.5),
             draw_index: 0,
         }
@@ -3289,6 +3326,7 @@ mod tests {
                     rotation_deg: -90.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: Some(6.0),
                     draw_index: i,
                 }
@@ -3324,6 +3362,7 @@ mod tests {
                     rotation_deg: 90.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: Some(6.0),
                     draw_index: glyphs.len(),
                 });
@@ -4064,6 +4103,8 @@ mod tests {
             font_size: size,
             bold: false,
             opens_with_script: false,
+            italic: false,
+            x_height: None,
             opens_bold: false,
         }
     }

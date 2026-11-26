@@ -39,6 +39,10 @@ pub struct Glyph {
     /// declares one. Bold is the most common heading cue after size, and
     /// without it headings set at body size in a bold face are invisible.
     pub weight: Option<u32>,
+    /// Set in an italic or oblique face, as the font's name or descriptor
+    /// says. At a heading's size and weight, italic sets a level below
+    /// upright (`Materials` over `Sense of Humour Scale`).
+    pub italic: bool,
     /// Index in the draw order. Faux-bold overprint shows up as consecutive
     /// glyphs with identical text and near-identical boxes.
     pub draw_index: usize,

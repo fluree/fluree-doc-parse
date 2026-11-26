@@ -3628,6 +3628,7 @@ mod tests {
             page: 0,
             rotation_deg: 0.0,
             weight: None,
+            italic: false,
             draw_index: 0,
         }
     }

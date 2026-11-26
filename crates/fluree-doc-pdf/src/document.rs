@@ -6000,6 +6000,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         };
@@ -6032,6 +6033,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 8.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: i,
         };
@@ -6893,6 +6895,8 @@ mod tests {
             font_size: 10.0,
             bold: false,
             opens_with_script: false,
+            italic: false,
+            x_height: None,
             opens_bold: false,
         }
     }
@@ -6998,6 +7002,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 8.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: i,
         };
@@ -7321,6 +7326,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index,
         };
@@ -7401,6 +7407,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         };

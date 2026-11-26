@@ -253,6 +253,8 @@ struct Collector {
     faces: crate::faces::Faces,
     /// The weight each font's glyphs are read at, once found.
     weights: std::collections::HashMap<u128, Option<u32>>,
+    /// Whether each font is italic, by the interpreter's key for it.
+    italics: std::collections::HashMap<u128, bool>,
     /// The document's image probes so far; see [`Probes`].
     probes: Probes,
 }
@@ -983,6 +985,17 @@ impl<'a> Device<'a> for Collector {
             }),
             _ => None,
         };
+        // Italic as the font's dictionary says, else as its program's name
+        // does.
+        let italic = match glyph {
+            HGlyph::Outline(o) => *self.italics.entry(o.font_cache_key()).or_insert_with(|| {
+                self.faces.get(o.font_cache_key()).is_some_and(|f| f.italic)
+                    || o.font_data()
+                        .and_then(|f| f.postscript_name)
+                        .is_some_and(|n| crate::faces::named_italic(&n))
+            }),
+            _ => false,
+        };
         // Ink density, for the faces no weight is stated for. Measured
         // here because the transformed outline is already being built for the
         // bounding box, and is not available anywhere later.
@@ -1057,6 +1070,7 @@ impl<'a> Device<'a> for Collector {
             rotation_deg,
             font_size,
             weight,
+            italic,
             advance,
             draw_index,
         });
@@ -1800,6 +1814,7 @@ pub fn extract_bytes_with(
     let mut unread: Vec<(usize, usize, String, kurbo::BezPath)> = Vec::new();
     let mut faces = crate::faces::Faces::default();
     let mut weights = std::collections::HashMap::new();
+    let mut italics = std::collections::HashMap::new();
     let mut probes = Probes {
         off: !options.probe_images,
         ..Probes::default()
@@ -1828,6 +1843,7 @@ pub fn extract_bytes_with(
             cased: Vec::new(),
             faces: std::mem::take(&mut faces),
             weights: std::mem::take(&mut weights),
+            italics: std::mem::take(&mut italics),
             probes: std::mem::take(&mut probes),
             page_box: BBox {
                 x0: 0.0,
@@ -1855,6 +1871,7 @@ pub fn extract_bytes_with(
         letters = std::mem::take(&mut dev.letters);
         faces = std::mem::take(&mut dev.faces);
         weights = std::mem::take(&mut dev.weights);
+        italics = std::mem::take(&mut dev.italics);
         probes = std::mem::take(&mut dev.probes);
         probes.settle(&pdf);
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
@@ -2224,6 +2241,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 12.0,
             weight: None,
+            italic: false,
             advance: boxed.then_some(6.67),
             draw_index: 0,
         };
@@ -2249,6 +2267,7 @@ mod tests {
                 rotation_deg: 0.0,
                 font_size: 10.0,
                 weight: None,
+                italic: false,
                 advance: None,
                 draw_index: i,
             })
@@ -2452,6 +2471,7 @@ mod actual_text_tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: Some(5.0),
             draw_index: 0,
         }
@@ -2488,6 +2508,7 @@ mod actual_text_tests {
             cased: Vec::new(),
             faces: Default::default(),
             weights: Default::default(),
+            italics: Default::default(),
             probes: Probes::default(),
         };
         c.speak(Spoken {
@@ -2537,6 +2558,7 @@ mod actual_text_tests {
             cased: Vec::new(),
             faces: Default::default(),
             weights: Default::default(),
+            italics: Default::default(),
             probes: Probes::default(),
         };
         for &(start, end, said) in spans {
@@ -2614,6 +2636,7 @@ mod actual_text_tests {
             cased: Vec::new(),
             faces: Default::default(),
             weights: Default::default(),
+            italics: Default::default(),
             probes: Probes::default(),
         }
     }

@@ -2929,6 +2929,8 @@ mod tests {
             font_size: fs,
             bold: false,
             opens_with_script: false,
+            italic: false,
+            x_height: None,
             opens_bold: false,
         }
     }
