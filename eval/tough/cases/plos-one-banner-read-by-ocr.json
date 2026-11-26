@@ -7,7 +7,8 @@
     "about": "PLOS ONE article (CC BY). Its first page sets the journal's `PLOS ONE` banner as a picture over the article's title; an OCR engine reads the banner's words, set larger than the title."
   },
   "notes": [
-    "2026-11-26: the banner's words, read by OCR in its picture, were the document's title, and the article's title was text. The stored reading is the built-in engine's of the banner's crop on page 1: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`."
+    "2026-11-26: the banner's words, read by OCR in its picture, were the document's title, and the article's title was text. The stored reading is the built-in engine's of the banner's crop on page 1: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`.",
+    "2026-11-26 (#455): a title is a `doco:Title` only where it is sure, its evidence naming how (`metadata`, `outline`, `type`); the title's checks look for the type, not the evidence."
   ],
   "checks": [
     {
@@ -16,7 +17,7 @@
       "issue": "The journal's banner read by OCR was the document's title.",
       "element": {
         "text": "PLOS ONE",
-        "evidence": "title"
+        "type": "doco:Title"
       },
       "count": 0
     },
@@ -26,7 +27,7 @@
       "issue": "The article's title was a paragraph under the banner.",
       "element": {
         "text": "Application of machine learning algorithms for multiparametric MRI-based evaluation of murine colitis",
-        "evidence": "title"
+        "type": "doco:Title"
       }
     }
   ]

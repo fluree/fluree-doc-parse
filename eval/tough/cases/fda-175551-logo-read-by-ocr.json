@@ -7,7 +7,8 @@
     "about": "FDA laboratory method (Contains Nonbinding Recommendations). Its first page sets the agency's logo as a picture over the text; an OCR engine reads `FDA U.S. FOOD & DRUG` / `ADMINISTRATION` in it, set larger than any line of the page's own text."
   },
   "notes": [
-    "2026-11-26: the logo's words, read by OCR in its picture, were the document's title. The stored reading is the built-in engine's (PP-OCRv6 small) of the logo's crop: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`."
+    "2026-11-26: the logo's words, read by OCR in its picture, were the document's title. The stored reading is the built-in engine's (PP-OCRv6 small) of the logo's crop: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`.",
+    "2026-11-26 (#455): a title is a `doco:Title` only where it is sure, its evidence naming how (`metadata`, `outline`, `type`); the title's checks look for the type, not the evidence."
   ],
   "checks": [
     {
@@ -16,7 +17,7 @@
       "issue": "The logo's words read by OCR were the document's title.",
       "element": {
         "text": "FDA U.S. FOOD & DRUG",
-        "evidence": "title"
+        "type": "doco:Title"
       },
       "count": 0
     },
