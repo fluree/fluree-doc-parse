@@ -581,7 +581,106 @@ fn place(
             })
         })
         .collect();
-    Ok(placed)
+    Ok(without_marks(placed))
+}
+
+/// `placed` without the marks an engine took for letters: a letter alone,
+/// one it is unsure of (under [`WEAK_CONFIDENCE`]), with no word of its
+/// size beside it, in a script the reading's other words hardly use. A page
+/// read whole is read with its pictograms, and an engine whose alphabet
+/// holds Chinese reads an icon's frame as a character set alone (`月` for a
+/// document icon at 0.52, `口`, `日`) on a page printed in English. Laid on
+/// the page, the mark is a line of text the page never printed, opening the
+/// column it stands in. A letter of the page's own script stays, however
+/// unsure: a panel's number, a diagram's callout, a Chinese table's cell.
+/// So does a word with no confidence stated, or one among the words of its
+/// line.
+fn without_marks(placed: Vec<Option<Placed>>) -> Vec<Option<Placed>> {
+    // The reading's letters, Chinese, Japanese and Korean apart from the
+    // rest.
+    let (mut cjk, mut other) = (0usize, 0usize);
+    for c in placed.iter().flatten().flat_map(|w| w.text.chars()) {
+        if is_cjk(c) {
+            cjk += 1;
+        } else if c.is_alphabetic() {
+            other += 1;
+        }
+    }
+    let foreign = |c: char| {
+        let same = if is_cjk(c) {
+            cjk
+        } else if c.is_alphabetic() {
+            other
+        } else {
+            return false;
+        };
+        // Its own letter apart.
+        let (same, total) = (same - 1, cjk + other - 1);
+        total >= MIN_SCRIPT_LETTERS && same as f64 <= FOREIGN_SHARE * total as f64
+    };
+    let mark: Vec<bool> = placed
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            w.as_ref().is_some_and(|w| {
+                let mut letters = w.text.chars().filter(|c| !c.is_whitespace());
+                let one = match (letters.next(), letters.next()) {
+                    (Some(c), None) => Some(c),
+                    _ => None,
+                };
+                one.is_some_and(foreign)
+                    && w.conf.is_some_and(|c| c < WEAK_CONFIDENCE)
+                    && !placed
+                        .iter()
+                        .enumerate()
+                        .any(|(j, v)| j != i && v.as_ref().is_some_and(|v| line_mates(w, v)))
+            })
+        })
+        .collect();
+    placed
+        .into_iter()
+        .zip(mark)
+        .map(|(w, mark)| w.filter(|_| !mark))
+        .collect()
+}
+
+/// Fewest letters a reading holds besides a mark for its script to be
+/// known.
+const MIN_SCRIPT_LETTERS: usize = 20;
+
+/// Most share of a reading's other letters a mark's script may have for it
+/// to be foreign there: one letter in ten.
+const FOREIGN_SHARE: f64 = 0.1;
+
+/// Whether `v` stands beside `w` on one line, as words of a line do: of
+/// a height within twice the other's, level with it to half the taller
+/// one's height across its baseline, and no more than that height apart
+/// along it.
+fn line_mates(w: &Placed, v: &Placed) -> bool {
+    let frame = |q: &[(f64, f64); 4]| {
+        let len = (q[1].0 - q[0].0).hypot(q[1].1 - q[0].1);
+        let height = (q[3].0 - q[0].0).hypot(q[3].1 - q[0].1);
+        let centre = (
+            q.iter().map(|p| p.0).sum::<f64>() / 4.0,
+            q.iter().map(|p| p.1).sum::<f64>() / 4.0,
+        );
+        (len, height, centre)
+    };
+    let (wl, wh, wc) = frame(&w.quad);
+    let (vl, vh, vc) = frame(&v.quad);
+    let (short, tall) = (wh.min(vh), wh.max(vh));
+    if !(short > 0.0 && tall <= 2.0 * short && wl > 0.0) {
+        return false;
+    }
+    // Along the word's baseline, and across it.
+    let along = (
+        (w.quad[1].0 - w.quad[0].0) / wl,
+        (w.quad[1].1 - w.quad[0].1) / wl,
+    );
+    let (dx, dy) = (vc.0 - wc.0, vc.1 - wc.1);
+    let ahead = dx * along.0 + dy * along.1;
+    let across = -dx * along.1 + dy * along.0;
+    across.abs() <= 0.5 * tall && ahead.abs() - (wl + vl) * 0.5 <= tall
 }
 
 /// Whether an image of aspect `read` (width over height) is the crop of
@@ -2664,6 +2763,86 @@ mod tests {
         );
         assert_eq!((r[0].taken, r[0].dropped), (1, 1));
         assert_eq!(text_of(&doc.pages[0]), "REFHolder");
+    }
+
+    #[test]
+    fn a_mark_the_engine_took_for_a_letter_is_not_laid() {
+        // A poster read whole: an icon over a column's banner read as a
+        // Chinese character the engine is unsure of, another beside a line
+        // of smaller text, a panel's number read sure, a diagram's callout
+        // letter read unsure, and a letter it is unsure of among the words
+        // of its line.
+        let at = |text: &str, b: [f64; 4], conf: f64| OcrWord {
+            conf: Some(conf),
+            ..word(text, b)
+        };
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
+        };
+        let r = inject(
+            &mut doc,
+            &[(
+                0,
+                Crop::Page,
+                px(vec![
+                    at("月", [700.0, 100.0, 760.0, 160.0], 0.52),
+                    at("BUT COPYRIGHT DOESN'T", [600.0, 200.0, 900.0, 224.0], 0.99),
+                    at("6", [600.0, 300.0, 630.0, 340.0], 0.99),
+                    at("Some", [600.0, 400.0, 660.0, 420.0], 0.98),
+                    at("a", [668.0, 404.0, 680.0, 420.0], 0.6),
+                    at("text", [688.0, 400.0, 740.0, 420.0], 0.98),
+                    at("日", [500.0, 500.0, 560.0, 588.0], 0.71),
+                    at("domain are free", [580.0, 530.0, 900.0, 545.0], 0.99),
+                    at("E", [300.0, 700.0, 320.0, 724.0], 0.6),
+                ]),
+            )],
+        );
+        assert_eq!((r[0].taken, r[0].dropped), (7, 2));
+        let text = text_of(&doc.pages[0]);
+        assert!(!text.contains('月') && !text.contains('日'), "{text}");
+        assert!(text.contains('6') && text.contains("Some a text"), "{text}");
+        assert!(text.contains('E'), "{text}");
+
+        // On a page read in Chinese, a character alone is the page's own,
+        // however unsure: a table's `是` keeps its cell.
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
+        };
+        let r = inject(
+            &mut doc,
+            &[(
+                0,
+                Crop::Page,
+                px(vec![
+                    at(
+                        "第一章 国家统计局发布的数据",
+                        [100.0, 100.0, 700.0, 130.0],
+                        0.98,
+                    ),
+                    at(
+                        "各地区生产总值与人口统计年鉴",
+                        [100.0, 200.0, 700.0, 230.0],
+                        0.97,
+                    ),
+                    at("是", [900.0, 400.0, 930.0, 430.0], 0.7),
+                ]),
+            )],
+        );
+        assert_eq!((r[0].taken, r[0].dropped), (3, 0));
+
+        // An engine that states no confidence leaves nothing to judge.
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
+        };
+        let unstated = OcrWord {
+            conf: None,
+            ..word("月", [700.0, 100.0, 760.0, 160.0])
+        };
+        let r = inject(&mut doc, &[(0, Crop::Page, px(vec![unstated]))]);
+        assert_eq!((r[0].taken, r[0].dropped), (1, 0));
     }
 
     #[test]
