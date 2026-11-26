@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "rohm-bd9e100fj-datasheet-ja.pdf",
+    "url": "https://fscdn.rohm.com/jp/products/databook/datasheet/ic/power/switching_regulator/bd9e100fj-lb-j.pdf",
+    "sha256": "46246a1b64d27ba8ac60996400de25ba072c35b0dadbb90957519a347282e4c3",
+    "about": "ROHM BD9E100FJ-LB datasheet (Japanese). Page 23 gives board-layout rules as items opened by the katakana middle dot, some opening in Latin letters (`・PCB`, `・SW`)."
+  },
+  "checks": [
+    {
+      "id": "middle-dot-items",
+      "found": "2026-11-26",
+      "issue": "The katakana middle dot was no bullet: the layout rules ran together in one paragraph.",
+      "list": {"holds": [
+        "PCB 上に使用していないエリアがある場合は、IC や周辺部品の放熱を助けるためノードの銅箔プレーンを配置してください。",
+        "FB、COMP につながるラインは、SW のノードとは可能な限り離してください。"
+      ]}
+    }
+  ]
+}
