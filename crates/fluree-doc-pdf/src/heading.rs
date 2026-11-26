@@ -1086,6 +1086,59 @@ fn starts_like_list_item(text: &str) -> bool {
     )
 }
 
+/// A list item's label opening the line: a lowercase letter or a roman
+/// numeral in brackets or closed by one (`a)`, `(a)`, `b.`, `(iv)`).
+fn item_label(text: &str) -> bool {
+    let Some(w) = text.split_whitespace().next() else {
+        return false;
+    };
+    let closed = w.ends_with(')') || w.ends_with('.');
+    let inner = w.trim_start_matches('(').trim_end_matches([')', '.']);
+    let letter = inner.chars().count() == 1 && inner.chars().all(|c| c.is_ascii_lowercase());
+    let roman =
+        (1..=4).contains(&inner.len()) && inner.chars().all(|c| matches!(c, 'i' | 'v' | 'x'));
+    closed && (letter || roman)
+}
+
+/// The block opens a list's item: a marker, a bullet, or a lettered label.
+fn opens_an_item(b: &Block) -> bool {
+    let t = b.text();
+    b.marker.is_some() || starts_like_list_item(&t) || item_label(&t)
+}
+
+/// Fewest words in a list's lead-in, its section number aside: a heading
+/// may close on a colon in a word or two (`Requirements:`), and a clause
+/// introducing a list runs longer (`Inspectors may also:`).
+const MIN_LEAD_IN_WORDS: usize = 3;
+
+/// Numbered block `i` introduces the list under it: a clause closing on a
+/// colon, with a list's item set directly under it (`1) Use automated
+/// mechanisms to:` over `a) Document proposed changes…`; `72 A designer is
+/// an organisation or individual, who:` over `(a) prepares or modifies a
+/// design…`). It is the list's lead-in, not a section at its number's
+/// depth. Only the number is overruled: a bold line closing on a colon
+/// over bullets is a poster's heading as often as a lead-in (`As a
+/// boater:`), and its weight is judged as any other's.
+fn leads_in_a_list(page: &[Block], i: usize, text: &str) -> bool {
+    let t = text.trim_end();
+    if !t.ends_with(':') {
+        return false;
+    }
+    let skip = usize::from(numbering_depth(t).is_some());
+    let words: Vec<&str> = t.split_whitespace().skip(skip).collect();
+    // In sentence case, as a clause is set: half its words after the first
+    // in lowercase. A step's title in title case heads its step
+    // (`9.4.3. Evaluate the Calibration Curve for Each Compound:`).
+    let lower = words
+        .iter()
+        .skip(1)
+        .filter(|w| w.starts_with(|c: char| c.is_lowercase()))
+        .count();
+    words.len() >= MIN_LEAD_IN_WORDS
+        && lower * 2 >= words.len() - 1
+        && directly_below(page, i).is_some_and(|k| opens_an_item(&page[k]))
+}
+
 fn style_of(b: &Block) -> Style {
     let caps = {
         let t = b.text();
@@ -1785,6 +1838,7 @@ pub fn detect_with_body(
                     continue;
                 }
                 if b.marker.is_some()
+                    || leads_in_a_list(blocks, block_idx, &text)
                     || !bare_numbering_is_corroborated(&text, b, body)
                     || coded(&text)
                     || (page_is_coded && has_bare_number_label(&text))
@@ -3942,6 +3996,82 @@ mod tests {
         assert!(beside_a_label(&page, 1) && named_value(&page[1].text()));
         // A step's label beside the step before it is no value.
         assert!(!named_value("STEP 4:"));
+    }
+
+    #[test]
+    fn a_lead_in_closing_on_a_colon_over_its_list_is_no_heading() {
+        let page = vec![
+            placed(
+                "1) Use automated mechanisms to:",
+                10.0,
+                72.0,
+                100.0,
+                300.0,
+                true,
+            ),
+            placed(
+                "a) Document proposed changes to the system;",
+                10.0,
+                90.0,
+                114.0,
+                400.0,
+                false,
+            ),
+            placed(
+                "72 A designer is an organisation or individual, who:",
+                10.0,
+                72.0,
+                200.0,
+                400.0,
+                false,
+            ),
+            placed(
+                "(a) prepares or modifies a design;",
+                10.0,
+                90.0,
+                214.0,
+                400.0,
+                false,
+            ),
+            // A heading closing on a colon in a word or two stays one.
+            placed("2.3 Requirements:", 10.0, 72.0, 300.0, 200.0, true),
+            placed("(a) annually;", 10.0, 90.0, 314.0, 200.0, false),
+            // A clause over prose, or over an address, introduces no list.
+            placed(
+                "Notifications should be made to:",
+                10.0,
+                72.0,
+                400.0,
+                300.0,
+                true,
+            ),
+            placed(
+                "Rail Accident Investigation Branch",
+                10.0,
+                114.0,
+                414.0,
+                300.0,
+                false,
+            ),
+        ];
+        assert!(leads_in_a_list(&page, 0, &page[0].text()));
+        assert!(leads_in_a_list(&page, 2, &page[2].text()));
+        assert!(!leads_in_a_list(&page, 4, &page[4].text()));
+        let titled = vec![
+            placed(
+                "9.4.3. Evaluate the Calibration Curve for Each Compound:",
+                10.0,
+                72.0,
+                100.0,
+                400.0,
+                true,
+            ),
+            placed("a) Plot the response;", 10.0, 90.0, 114.0, 300.0, false),
+        ];
+        assert!(!leads_in_a_list(&titled, 0, &titled[0].text()));
+        assert!(!leads_in_a_list(&page, 6, &page[6].text()));
+        assert!(item_label("a)") && item_label("(iv) text") && item_label("b. text"));
+        assert!(!item_label("e.g. text") && !item_label("A) text") && !item_label("Results"));
     }
 
     #[test]
