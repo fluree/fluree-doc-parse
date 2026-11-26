@@ -4372,7 +4372,7 @@ pub fn doubt_on_page_with(page: usize, kinds: &[(&str, &str)], template: &[bool]
     let kinds: Vec<(&str, &str, bool)> = kinds
         .iter()
         .enumerate()
-        .filter(|(_, (_, e))| !matches!(*e, "route" | "table-confidence" | "table-missing"))
+        .filter(|(_, (_, e))| !matches!(*e, "route" | "table-confidence"))
         .map(|(i, (k, e))| (*k, *e, template.get(i).copied().unwrap_or(false)))
         .collect();
     let elements = kinds.len();
@@ -6774,7 +6774,6 @@ mod tests {
         let mut anchored = plain.clone();
         anchored.push(("doco:Figure", "route"));
         anchored.push(("doco:Figure", "table-confidence"));
-        anchored.push(("doco:Figure", "table-missing"));
         assert_eq!(doubt(&plain), doubt(&anchored));
         assert!(doubt(&plain).is_some(), "three of five is doubtful");
     }

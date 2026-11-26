@@ -1,20 +1,20 @@
 # Environment variables
 
-## Tier wiring
+## Modes and readers
 
 Each has an equivalent flag on [`fdoc convert`](../cli/convert.md); the flag
-wins where both are set. See [Wiring the escalation
-tiers](../integration/escalation-tiers.md).
+wins where both are set. See [Modes](../getting-started/modes.md) and [Model
+readings](../integration/escalation-tiers.md).
 
 | variable | flag | supplies |
 |---|---|---|
-| `FDOC_TITLE_BOXES` | `--layout-boxes` | layout-detector sidecars (tier 2) |
-| `FDOC_TIER_RESULTS` | `--tier-results` | model readings of crops (tier 4) |
+| `FDOC_MODE` | `--mode` | the mode: `deterministic`, `ocr` or `vlm`, over the config's `mode` |
+| `FDOC_TIER_RESULTS` | `--tier-results` | model readings of crops; asks for `vlm` |
 | `FDOC_ESCALATE_COLUMNS` | `escalation.on_column_doubt` | also escalate pages whose columns the segmentation cannot represent, or with `0` do not — see below |
-| `FDOC_STRUCTURE_RESULTS` | `--structure-results` | table-structure readings (tier 3/5) |
+| `FDOC_STRUCTURE_RESULTS` | `--structure-results` | table-structure readings |
 | `FDOC_VLM_ANCHORS` | `--emit-anchors` | emit `[[VLM:…]]` tokens; with a reader, keep the ones it did not answer — see [Anchors](../integration/anchors.md#interaction-with---tier-results) |
-| `FDOC_OCR_WORDS` | `--ocr-words` | OCR word readings, read as glyphs before analysis |
-| `FDOC_OCR` | `--ocr` | the built-in OCR engine to read pixels with (`oar-ocr`) |
+| `FDOC_OCR_WORDS` | `--ocr-words` | OCR word readings, read as glyphs before analysis; asks for `ocr` |
+| `FDOC_OCR` | `--ocr` | the built-in OCR engine to read pixels with (`oar-ocr`); asks for `ocr` |
 | `FDOC_OCR_MODELS` | `--models` | the OCR assets directory |
 | `FDOC_HOME` | — | where the per-user [config](../cli/config.md) lives, overriding the platform default |
 
@@ -23,17 +23,11 @@ string, enables them. `FDOC_ESCALATE_COLUMNS` is the one exception: `0`,
 `false`, `off` or `no`, trimmed and in any case, turn it off.
 
 ```bash
-FDOC_TITLE_BOXES=./layout \
 FDOC_STRUCTURE_RESULTS=./structure \
 FDOC_TIER_RESULTS=./vlm \
+FDOC_OCR_MODELS=~/assets/ocr \
 fdoc convert report.pdf -f doco
 ```
-
-## Behavior
-
-| variable | effect |
-|---|---|
-| `FDOC_INSERT_TABLES` | emit tables a detector found where the grid pass found none. Measured net-negative against benchmark ground truth, which rarely transcribes them — but a completeness-first deployment may want them |
 
 ## Diagnostics
 

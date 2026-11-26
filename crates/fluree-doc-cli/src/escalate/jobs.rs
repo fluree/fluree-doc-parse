@@ -12,11 +12,9 @@
 //! cached benchmark scores describe a pipeline nobody runs. `render-routed`
 //! writes the vetoed tables too, for the structure reader, and names them
 //! apart ([`to_render`]).
-//! What the CLI adds is its hints: the layout detector's table boxes, from
-//! sidecar files, and whether column doubt escalates.
+//! What the CLI adds is its hint: whether column doubt escalates.
 
 use crate::commands::common::TierConfig;
-use crate::commands::dev::layout_tables;
 use fluree_doc_pdf::arbiter::TierBackend;
 use fluree_doc_pdf::document::Analysis;
 use fluree_doc_pdf::escalate::{CropHints, CropJobs, PageReasons};
@@ -72,23 +70,11 @@ pub(crate) fn to_render(
 }
 
 /// The hints a document's crops are chosen and prompted with, from `tiers`
-/// whichever command asks, so none can choose another crop set: the tables
-/// the layout detector boxed on each page, read from its `layout_boxes`,
-/// and column doubt when [`escalates_columns`].
-pub(crate) fn hints(doc: &Document, stem: &str, tiers: &TierConfig) -> CropHints {
+/// whichever command asks, so none can choose another crop set: column
+/// doubt when [`escalates_columns`].
+pub(crate) fn hints(tiers: &TierConfig) -> CropHints {
     CropHints {
         on_column_doubt: escalates_columns(tiers),
-        layout_tables: doc
-            .pages
-            .iter()
-            .map(|p| {
-                (
-                    p.index,
-                    layout_tables(tiers.layout_boxes.as_deref(), stem, p.index),
-                )
-            })
-            .filter(|(_, boxes)| !boxes.is_empty())
-            .collect(),
         regions_apart: false,
     }
 }

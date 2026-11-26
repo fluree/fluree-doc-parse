@@ -56,7 +56,7 @@ Four line kinds, and they answer different questions:
 
 `ROUTE`, `TABLE`, `HEADING` and `FIGURE` escalate on their own evidence once a
 reader is configured. `CROPS` is what they and the table anchors would send
-— the crops `convert --escalate` pays for, those `dev render-routed` writes
+— the crops `convert` in mode `vlm` pays for, those `dev render-routed` writes
 less the tables the structure readings (`FDOC_STRUCTURE_RESULTS`) veto, the
 number a consumer's cap is measured against, printed before anything is
 paid for. It is taken from the [anchors](../integration/anchors.md) of the
@@ -84,7 +84,7 @@ That default is a measurement rather than caution — see
 page still parses; it reads across its panels instead of down them. Once the
 configuration escalates them (or `FDOC_ESCALATE_COLUMNS` does for one run),
 the hint is not printed and `CROPS` counts each such page, read whole, as
-`convert --escalate` reads it; when the config file did it, a note on stderr
+`convert` in mode `vlm` reads it; when the config file did it, a note on stderr
 says which file. `FDOC_ESCALATE_COLUMNS=0` turns it off for one run whatever
 the file says, and the hint then says that instead:
 `COLUMN pages are kept off for this run by FDOC_ESCALATE_COLUMNS=0`.
@@ -132,5 +132,5 @@ configured. `triage` reports what *would* escalate, which is what makes it the
 cheap look before you spend — `fdoc convert` is where the reading happens, in
 the same command, once a provider is set up. The crops it counts are the ones
 `fdoc convert` would read, chosen by the same selection. See
-[`fdoc config`](config.md) and [Wiring the escalation
-tiers](../integration/escalation-tiers.md).
+[`fdoc config`](config.md) and [Model
+readings](../integration/escalation-tiers.md).

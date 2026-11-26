@@ -101,8 +101,8 @@ by 2 for the default 2× render and they land where they belong.
 ## When there is nothing to read
 
 Most PDFs have no AcroForm at all and produce `[]`. That includes scanned
-forms, where the "fields" are ink on an image and the only route is [a model
-tier](../integration/escalation-tiers.md) over the rendered page. `fdoc
+forms, where the "fields" are ink on an image and the only route is OCR or [a model
+reading](../integration/escalation-tiers.md) over the rendered page. `fdoc
 triage` will have already told you such a page is `Scanned`.
 
 ```bash

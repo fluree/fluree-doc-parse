@@ -8,3 +8,4 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub(crate) mod escalate;
+pub mod mode;

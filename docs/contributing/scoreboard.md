@@ -108,15 +108,11 @@ cargo build --release --manifest-path <repo>/Cargo.toml
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
   uv run python src/run.py --engine fluree-doc-parse --force
 
-# tier 2, the layout detector alone, from the committed cache
+# the full cascade, from committed caches, no GPU and no API key; mode vlm
+# builds on ocr, so it needs the OCR assets
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
-FDOC_TITLE_BOXES=<repo>/eval/layout-cache \
-  uv run python src/run.py --engine fluree-doc-parse-cascade --force
-
-# the full cascade, from committed caches, no GPU and no API key
-FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
-FDOC_TITLE_BOXES=<repo>/eval/layout-cache \
 FDOC_TIER_RESULTS=<repo>/eval/cascade-cache \
+FDOC_OCR_MODELS=<assets>/ocr \
   uv run python src/run.py --engine fluree-doc-parse-cascade --force
 ```
 
@@ -220,8 +216,16 @@ nobody pays for them twice.
   refuse) refused most of the pages and gave back the gains the whole-page
   reading earns (1.459 over the six heading-doubt documents, five of six
   better). The model's reading replaces the doubt page whole.
+- **The layout detector** (PP-DocLayoutV3 boxes, read from files). It earned
+  0.908607 against a deterministic 0.901319 when it promoted missed titles,
+  demoted captions and inferred grids, and added tables the grid missed.
+  Measured again on main 3aacd7d, it is worth nothing: −0.00026 under the
+  model readings and −0.00019 under OCR. Its last wins were two documents
+  (162, 080), its losses two where it promoted a running header (199, 200).
+  Its flag, its variable and its code are gone; `eval/layout-cache` keeps
+  the boxes.
 - **A separate table-structure model, in either role.** As the reading source
-  it scores 0.892130, below the layout boxes alone. As a corroboration veto
+  it scores 0.892130, below the layout boxes alone did. As a corroboration veto
   over the deep reader it scores 0.927005, below not having it. It earned its
   keep against a coarser table detector; agreeing with a grid stopped being
   evidence once the grid got better. The arbiter's second-opinion slot is
@@ -299,8 +303,7 @@ still used — silently, and it inflates the score. That has now happened twice.
 The check is two commands and a diff:
 
 ```bash
-FDOC_TITLE_BOXES=eval/layout-cache FDOC_ESCALATE_COLUMNS=0 \
-  fdoc dev render-routed <bench>/pdfs /tmp/crops
+FDOC_ESCALATE_COLUMNS=0 fdoc dev render-routed <bench>/pdfs /tmp/crops
 diff <(ls /tmp/crops/*.png | xargs -n1 basename | sed 's/\.png$//' | sort) \
      <(ls eval/cascade-cache/*.json | xargs -n1 basename | sed 's/\.json$//' \
        | grep -v '^_' | sort)

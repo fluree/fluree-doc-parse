@@ -5,7 +5,7 @@
 - [Getting started](getting-started/README.md)
   - [Install](getting-started/install.md)
   - [Quickstart](getting-started/quickstart.md)
-  - [The tier model](getting-started/tiers.md)
+  - [Modes](getting-started/modes.md)
   - [Using fluree-doc-parse as a Rust library](getting-started/rust-library.md)
 
 - [Concepts](concepts/README.md)
@@ -40,7 +40,7 @@
   - [completions](cli/completions.md)
 
 - [Integration](integration/README.md)
-  - [Wiring the escalation tiers](integration/escalation-tiers.md)
+  - [Model readings](integration/escalation-tiers.md)
   - [Sidecar formats](integration/sidecar-formats.md)
   - [Anchors](integration/anchors.md)
   - [Loading into a Fluree ledger](integration/ledger-ingest.md)

@@ -30,6 +30,10 @@ pub const HOME_ENV: &str = "FDOC_HOME";
 /// missing, not handed a parse error.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Config {
+    /// What a run may use beyond the document: `deterministic`, `ocr` or
+    /// `vlm` ([`crate::mode`]). Unset is `deterministic`.
+    #[serde(default)]
+    pub mode: Option<crate::mode::Mode>,
     #[serde(default)]
     pub escalation: Escalation,
     #[serde(default)]
@@ -376,17 +380,18 @@ fn restrict(path: &Path, mode: u32) -> Result<(), String> {
 
 /// The commented starting point `fdoc config init` writes.
 pub const TEMPLATE: &str = r#"# fluree-doc-parse configuration.
-#
-# Only the deep reader is configured here. Everything else about a parse is
-# deterministic and takes no settings.
-#
-# With no provider set, `fdoc convert` never leaves the deterministic tier and
-# never reaches the network. Setting one is what turns escalation on.
+
+# What a run may use beyond the document, each mode building on the one
+# before:
+#   deterministic  the document alone; nothing leaves the machine (default)
+#   ocr            and the built-in OCR engine, on pages and regions whose
+#                  text is pixels; needs [ocr] models
+#   vlm            and a model reader, for what OCR cannot do; needs [ocr]
+#                  models and a provider below
+# `--mode` and FDOC_MODE override it per run.
+# mode = "deterministic"
 
 [escalation]
-# Run the configured reader when no flag says otherwise. `--no-escalate`
-# overrides this per run; set it false to make `--escalate` the opt-in.
-enabled = true
 
 # The only provider this build implements.
 # provider = "gemini"

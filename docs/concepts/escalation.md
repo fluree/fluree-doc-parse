@@ -68,8 +68,8 @@ floor](#the-completeness-floor).
 
 ## The three-way veto
 
-Tier 5 adds a third independent reader, and with three opinions the rule
-becomes majority rather than deference:
+Table-structure readings add a third independent reader, and with three
+opinions the rule becomes majority rather than deference:
 
 ```
 grid geometry  ×  table-structure model  ×  VLM
@@ -82,20 +82,6 @@ evaluated. Its marginal value is now small — +0.000319 over the same stack
 without the veto — because the readings it arbitrates got better. See
 [the scoreboard](../contributing/scoreboard.md) for the current rung-by-rung
 numbers.
-
-## Promotion-only for headings
-
-Layout-detector arbitration (tier 2) can promote one of our short prose blocks
-to a `doco:SectionTitle` where the detector saw a title box, but it never
-demotes on the detector's word alone. The asymmetry is a cost calculation: a
-detector false positive costs one split section, while doing nothing costs the
-status quo.
-
-The one demotion allowed is *corroborated*: a heading of ours sitting inside a
-figure, chart or table title box is caption-like, and becomes a
-`doco:Paragraph` with `evidence: "layout-demoted"`. Demoting on our own
-judgement alone costs more than it gains; requiring a second independent
-reading confines it to blocks both readers call float furniture.
 
 ## Templates are not doubt
 
@@ -128,8 +114,8 @@ templated tables it is fifteen hundred crops to confirm what the rules already
 say, and a reading per table stops being earned.
 
 So past thirty-two drawn grids in one document, ruled grids no longer anchor,
-in doubt or not. What still does: an inferred grid in doubt, a table a layout
-detector saw that no grid covers, and a page the router sent.
+in doubt or not. What still does: an inferred grid in doubt, and a page the
+router sent.
 On the 819-page chart this takes the crop count from 1,351 to 21. The
 evaluation corpus has no document with more than three tables, so it cannot
 measure this either way.
@@ -176,8 +162,8 @@ fdoc triage report.pdf     # per-page verdicts and the signals behind them
 fdoc triage ./corpus/      # the escalation rate over a directory
 ```
 
-See [`fdoc triage`](../cli/triage.md) and, to actually run the tiers,
-[Wiring the escalation tiers](../integration/escalation-tiers.md).
+See [`fdoc triage`](../cli/triage.md), [modes](../getting-started/modes.md)
+and, to run the models yourself, [Model readings](../integration/escalation-tiers.md).
 
 ## The completeness floor
 

@@ -13,7 +13,7 @@ Working recipes for the things people actually do with a parsed document.
 
 For loading the graph into a ledger, see
 [Loading into a Fluree ledger](../integration/ledger-ingest.md). For running
-the model tiers, [Wiring the escalation tiers](../integration/escalation-tiers.md).
+the models yourself, [Model readings](../integration/escalation-tiers.md).
 
 ## Calling it from any language
 

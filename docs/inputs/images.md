@@ -1,9 +1,9 @@
 # Images
 
 ```bash
-fdoc convert scan.png  -f doco --ocr oar-ocr --models ~/assets/ocr
+fdoc convert scan.png  -f doco --mode ocr --models ~/assets/ocr
 fdoc convert page.jpg  -f md   --ocr-words words/
-fdoc convert fax.tiff  -f text                     # with a model configured
+fdoc convert fax.tiff  -f text                     # in mode vlm, set up in the config
 ```
 
 PNG, JPEG and TIFF (classic and BigTIFF), read as **one page of pixels**.
@@ -16,8 +16,8 @@ by an OCR engine, or by the deep reader, and without either the honest output
 is nothing:
 
 ```
-note: image/png carries no text layer, so only a model can read it
-      run `fdoc config gemini --credentials <key.json>` to enable one
+note: image/png carries no text layer, so only OCR or a model can read it
+      give --mode ocr --models DIR to read it on this machine, or --mode vlm with a model reader (`fdoc config gemini`)
 ```
 
 That message matters more here than anywhere else, because an empty document
@@ -26,7 +26,7 @@ is otherwise indistinguishable from a blank image. See
 
 ## Read by OCR
 
-With the built-in engine (`--ocr`, see [`fdoc convert`](../cli/convert.md#ocr))
+With the built-in engine (mode `ocr`, see [`fdoc convert`](../cli/convert.md#ocr))
 or the words an engine wrote (`--ocr-words`, the file `<stem>_p0_full.json`, or
 `<stem>.json` as `fdoc ocr` names the words of an image file), the image's page
 is **upright** — a phone photo's EXIF orientation applied — and the engine's
@@ -39,7 +39,7 @@ image's crop, `<stem>_p0_full.png`: the image upright, at its own resolution
 `near_blank`. [`fdoc ocr`](../cli/ocr.md) reads it, or the image file itself.
 Either way the words land where `convert` reads them.
 
-Where OCR reads nothing, and a model is configured, the model reads the image
+Where OCR reads nothing, in mode `vlm`, the model reads the image
 as it would without OCR: words for other files only, a reading with no word,
 or an image too large to decode. Not with `--tier-results`: the readings
 given there are the model's, spliced over what OCR made of the image.
@@ -56,7 +56,7 @@ In a library, `fluree_doc_image::elements(bytes, &engine)` does all of it, and
 
 ## Read by a model
 
-Without OCR, an image becomes a single page carrying itself and no glyphs,
+Without OCR words, an image becomes a single page carrying itself and no glyphs,
 which is what makes [the router](../design/router.md) send it to a reader, as
 it sends a scanned PDF page (an image with no glyphs at all is the router's
 `NearBlank`, the reason an unread image is listed with). It then takes the

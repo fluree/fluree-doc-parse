@@ -72,6 +72,6 @@ number that prices a deployment. See [`fdoc triage`](../cli/triage.md).
 
 - [Examples](../examples/README.md) — calling it from Python or Node, and
   recipes for chunking, highlighting, tables and batch runs
-- [The tier model](tiers.md) — what escalation buys and what it costs
+- [Modes](modes.md) — deterministic, ocr and vlm: what each buys and what it costs
 - [Output formats](../formats/README.md) — the capability matrix
 - [`fdoc convert`](../cli/convert.md) — every flag

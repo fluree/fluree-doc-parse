@@ -143,18 +143,23 @@ pub(crate) fn open_engine(
     Err("this build has no OCR engine (built without the `ocr` feature); use --ocr-words".into())
 }
 
-/// The engine `convert` reads with, if any: `--ocr` over `FDOC_OCR` over the
-/// config's `ocr.engine`, and likewise `--models`, `FDOC_OCR_MODELS`,
-/// `ocr.models`. An engine named without its assets is an error, not a
-/// silent deterministic run.
+/// The engine `convert` reads with, where its mode reads pixels (`wants`):
+/// the engine `--ocr` names, else `FDOC_OCR`, else the config's
+/// `ocr.engine`, else `oar-ocr`; its assets from `--models`, else
+/// `FDOC_OCR_MODELS`, else `ocr.models`. An engine wanted without its
+/// assets is an error, not a silent deterministic run.
 pub(crate) fn engine_for_convert(
+    wants: bool,
     flag: Option<OcrEngineName>,
     models: Option<&Path>,
     max_megapixels: Option<f64>,
     config: &crate::config::Ocr,
 ) -> Result<Option<Arc<dyn OcrEngine>>, String> {
-    let named = match flag {
-        Some(n) => Some(n),
+    if !wants {
+        return Ok(None);
+    }
+    let name = match flag {
+        Some(n) => n,
         // An empty engine or assets variable is an unset one: the config's
         // setting, if any, applies.
         None => match std::env::var("FDOC_OCR")
@@ -162,12 +167,9 @@ pub(crate) fn engine_for_convert(
             .filter(|s| !s.trim().is_empty())
             .or_else(|| config.engine.clone())
         {
-            None => None,
-            Some(s) => Some(parse_engine(&s)?),
+            None => OcrEngineName::OarOcr,
+            Some(s) => parse_engine(&s)?,
         },
-    };
-    let Some(name) = named else {
-        return Ok(None);
     };
     let dir = models_dir(models, config)
         .ok_or("an OCR engine needs its assets: --models DIR (or FDOC_OCR_MODELS, or ocr.models in the config)")?;
@@ -279,7 +281,7 @@ fn parse_engine(s: &str) -> Result<OcrEngineName, String> {
     }
 }
 
-fn models_dir(flag: Option<&Path>, config: &crate::config::Ocr) -> Option<PathBuf> {
+pub(crate) fn models_dir(flag: Option<&Path>, config: &crate::config::Ocr) -> Option<PathBuf> {
     flag.map(Path::to_path_buf)
         .or_else(|| {
             std::env::var_os("FDOC_OCR_MODELS")
@@ -578,7 +580,7 @@ mod tests {
         if std::env::var_os("FDOC_OCR_MODELS").is_some() {
             return;
         }
-        let e = engine_for_convert(Some(OcrEngineName::OarOcr), None, None, &config)
+        let e = engine_for_convert(true, Some(OcrEngineName::OarOcr), None, None, &config)
             .err()
             .unwrap();
         assert!(e.contains("--models"), "{e}");

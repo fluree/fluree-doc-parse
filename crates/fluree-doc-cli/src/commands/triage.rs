@@ -15,7 +15,7 @@ pub(crate) fn priced(
     stem: &str,
     tiers: &crate::commands::common::TierConfig,
 ) -> (usize, fluree_doc_pdf::escalate::PageReasons) {
-    let hints = crate::escalate::jobs::hints(extracted, stem, tiers);
+    let hints = crate::escalate::jobs::hints(tiers);
     let structure = crate::commands::common::structure_backend(tiers.structure_results.as_deref());
     let (jobs, reasons) = crate::escalate::jobs::at_anchors(
         extracted,
@@ -40,7 +40,7 @@ pub(crate) fn priced(
 /// router's cost model is the whole point: a routed page costs seconds of GPU
 /// against milliseconds here, so the route *rate* is printed with the same
 /// prominence as the decisions.
-pub fn run(path: &Path) -> i32 {
+pub fn run(path: &Path, mode: Option<crate::mode::Mode>) -> i32 {
     let files: Vec<PathBuf> = if path.is_dir() {
         // Routing is a property of a rendered page, so this is PDF-only.
         // Directory expansion now yields every readable format, and a deck
@@ -63,7 +63,21 @@ pub fn run(path: &Path) -> i32 {
     let mut heading_doubt = 0usize;
     // Once per run: what the config file says about escalation changes the
     // crops `CROPS` counts, as it changes the ones `convert` sends.
-    let tiers = crate::commands::common::TierConfig::configured();
+    // The mode decided as `convert` decides it, said so the counts are read
+    // against it.
+    let mut tiers = crate::commands::common::TierConfig::from_env();
+    let flags = crate::commands::common::ModeFlags {
+        mode,
+        plans_only: true,
+        ..Default::default()
+    };
+    match tiers.resolve_mode(&flags, false, false) {
+        Ok(r) => eprintln!("mode: {} (from {})", r.mode, r.source),
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    }
     let mut whole_for_columns = 0usize;
     for f in &files {
         let t0 = std::time::Instant::now();
@@ -133,7 +147,7 @@ pub fn run(path: &Path) -> i32 {
                 let extracted = d.clone();
                 // Anchors on, so the crop count below is the one a reader
                 // would be handed. Heading doubt does not count them.
-                let mut ropts = opts_for(f);
+                let mut ropts = opts_for();
                 ropts.emit_anchors = true;
                 let a = fluree_doc_pdf::document::analyze_with(&mut d, &ol, &ropts);
                 doubt = a.suspect_headings.clone();

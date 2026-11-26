@@ -90,8 +90,8 @@ fdoc dev gaps report.pdf                    # where is the word-split threshold?
 fdoc dev pair report.pdf "ab"               # what gap does this pair actually have?
 ```
 
-`render-routed` is also how you produce the crops a model tier reads — see
-[Wiring the escalation tiers](../integration/escalation-tiers.md). With
+`render-routed` is also how you produce the crops a model reads — see
+[Model readings](../integration/escalation-tiers.md). With
 `FDOC_STRUCTURE_RESULTS` set, it still writes the table crops those
 structure readings veto, for the structure reader, and marks them
 `"vetoed": true` in the manifest: a run that always passes those structure

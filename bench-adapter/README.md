@@ -11,8 +11,8 @@ The model-tier splicing that used to live in `pdf_parser_fluree_hybrid.py` is
 now implemented in `fluree-doc-pdf::arbiter`; the hybrid engine is exercised
 by pointing the `fdoc` binary at reading caches:
 
-    FDOC_TITLE_BOXES=<layout-cache> \
     FDOC_TIER_RESULTS=<vlm-cache> \
+    FDOC_OCR_MODELS=<ocr-assets> \
     FDOC_STRUCTURE_RESULTS=<structure-cache> \
     fdoc convert document.pdf --format md --md-links text --no-escalate
 

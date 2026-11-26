@@ -69,14 +69,30 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         None => None,
     };
     let mut cfg = TierConfig::from_env_with(
-        args.layout_boxes.as_deref(),
         args.tier_results.as_deref(),
         args.structure_results.as_deref(),
         args.ocr_words.as_deref(),
         args.emit_anchors,
     );
     // Once per invocation, not once per document.
-    cfg.resolve_escalation(args.escalate, args.no_escalate, quiet);
+    let flags = common::ModeFlags {
+        mode: args.mode,
+        escalate: args.escalate,
+        no_escalate: args.no_escalate,
+        ocr: args.ocr.is_some(),
+        models: args.models.as_deref(),
+        ocr_words: args.ocr_words.is_some(),
+        tier_results: args.tier_results.is_some(),
+        emit_anchors: args.emit_anchors,
+        plans_only: false,
+    };
+    let mode = match cfg.resolve_mode(&flags, verbose, quiet) {
+        Ok(r) => r.mode,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
     cfg.verbose = verbose;
     // A flag beats the environment: `--ocr` given on the command line reads
     // the pixels, whatever `FDOC_OCR_WORDS` holds (the two flags together are
@@ -94,6 +110,7 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     // config names, as `--tier-results` wins over a configured model.
     if cfg.ocr_words.is_none() {
         match crate::commands::ocr::engine_for_convert(
+            mode >= crate::mode::Mode::Ocr,
             args.ocr,
             args.models.as_deref(),
             args.ocr_max_megapixels,
@@ -108,7 +125,7 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     }
     if args.models.is_some() && cfg.ocr.is_none() && !quiet {
         eprintln!(
-            "warning: --models names an OCR engine's assets, but no engine reads with them (--ocr)"
+            "warning: --models names the OCR engine's assets, but the mode is {mode}: give --mode ocr to read with them"
         );
     }
     let cfg = &cfg;
@@ -604,7 +621,7 @@ fn convert_image(
     }
     if elements.is_empty() && !quiet {
         eprintln!(
-            "note: {} carries no text layer, so only a model can read it",
+            "note: {} carries no text layer, so only OCR or a model can read it",
             format.mime()
         );
         eprintln!(
@@ -614,7 +631,7 @@ fn convert_image(
             } else if cfg.escalate {
                 "the reader returned nothing for it"
             } else {
-                "run `fdoc config gemini --credentials <key.json>` to enable one"
+                "give --mode ocr --models DIR to read it on this machine, or --mode vlm with a model reader (`fdoc config gemini`)"
             }
         );
     }
@@ -826,7 +843,7 @@ fn ocr_image(
         }
     };
     report_ocr(stem, flag, &injected, cfg.verbose, quiet);
-    let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for(stem));
+    let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for());
     // Readings someone already has (`--tier-results`, `--structure-results`)
     // replace what OCR made of the page, as on a PDF page.
     let page_text: Vec<Vec<String>> = doc
@@ -854,7 +871,16 @@ fn ocr_image(
             folio: None,
         })
         .collect();
-    let unread = fluree_doc_pdf::unread_pages(&doc, &a.elements);
+    // A model's reading of the whole image read it, however short, as where
+    // no OCR ran (`convert_image`).
+    let unread: Vec<_> = fluree_doc_pdf::unread_pages(&doc, &a.elements)
+        .into_iter()
+        .filter(|u| {
+            !a.elements.iter().any(|e| {
+                e.page == u.index && e.evidence == "page-tier" && !e.text.trim().is_empty()
+            })
+        })
+        .collect();
     let read_something = unread.is_empty();
     let mut notes = fluree_doc_model::Notes {
         unread,
@@ -1047,7 +1073,7 @@ fn convert_bytes(
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))
         .map_err(|e| format!("parse: {e:?}"))?;
     let ol = outline::extract(&raw);
-    let opts = cfg.options_for(stem);
+    let opts = cfg.options_for();
     // Images are probed for the router, which runs for escalation, for the
     // anchors and sidecars analysis routes for, and for OCR words, which go
     // only where it sends a reader. The images too small to route are
@@ -1119,7 +1145,6 @@ fn convert_bytes(
     let read_here = cfg.escalate && cfg.tier_results.is_none();
     let extracted = read_here.then(|| doc.clone());
     let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts);
-    common::arbitrate_layout_titles(cfg.layout_boxes.as_deref(), stem, &mut a.elements);
     // The page's own text, so the arbiter can ask whether an escalated
     // reading says anything the page does not.
     let page_text: Vec<Vec<String>> = doc
@@ -1253,7 +1278,7 @@ fn read_in_run(
         &fluree_doc_pdf::escalate::CropHints,
     ) -> Result<fluree_doc_pdf::escalate::Readings, String>,
 ) -> Result<(), String> {
-    let hints = crate::escalate::jobs::hints(extracted, stem, cfg);
+    let hints = crate::escalate::jobs::hints(cfg);
     // A table the structure readings veto keeps its grid whatever the model
     // reads, so reading it would be paid for and thrown away, and take the
     // place of a crop under `escalation.max_crops`. One backend for the
@@ -1476,7 +1501,7 @@ mod tests {
         };
         let extracted = page_with_a_raster_region();
         let mut doc = extracted.clone();
-        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for());
         let page_text = vec![fluree_doc_pdf::fidelity::page_lines(&doc.pages[0].glyphs)];
         read_in_run(
             &mut a,
@@ -1627,7 +1652,7 @@ mod tests {
         };
         let extracted = page_with_faux_bold_over_a_region();
         let mut doc = extracted.clone();
-        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for());
         let page_text = vec![fluree_doc_pdf::fidelity::page_lines(&doc.pages[0].glyphs)];
         read_in_run(
             &mut a,
@@ -1682,7 +1707,7 @@ mod tests {
         let rendered = {
             let options = fluree_doc_pdf::document::AnalyzeOptions {
                 emit_anchors: true,
-                ..TierConfig::default().options_for("doc")
+                ..TierConfig::default().options_for()
             };
             let a = fluree_doc_pdf::document::analyze_with(&mut extracted.clone(), &[], &options);
             let (jobs, _, vetoed) =
@@ -1690,10 +1715,9 @@ mod tests {
             assert!(vetoed.is_empty());
             jobs
         };
-        let planned =
-            fluree_doc_pdf::escalate::plan(&extracted, &[], &cfg.options_for("doc"), &hints);
+        let planned = fluree_doc_pdf::escalate::plan(&extracted, &[], &cfg.options_for(), &hints);
         let mut doc = extracted.clone();
-        let a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+        let a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for());
         let anchors: Vec<(String, f64)> = a
             .elements
             .iter()
@@ -1732,7 +1756,7 @@ mod tests {
         };
         let extracted = page_with_faux_bold_over_a_region();
         let mut doc = extracted.clone();
-        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for());
         let priced = crate::commands::triage::priced(&extracted, &a, "doc", &cfg).0;
         let mut read = 0;
         read_in_run(&mut a, &extracted, &cfg, "doc", &[], None, |jobs, _| {
@@ -1803,7 +1827,7 @@ mod tests {
         cfg.config.escalation.max_crops = 1;
         let extracted = a_scan_after_a_page_read_whole_for_its_region();
         let mut doc = extracted.clone();
-        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for());
         assert!(matches!(
             fluree_doc_pdf::route::decide(&extracted.pages[0]).0,
             fluree_doc_pdf::route::Route::VlmRegions(_)
@@ -1833,10 +1857,10 @@ mod tests {
             &[],
             &fluree_doc_pdf::document::AnalyzeOptions {
                 emit_anchors: true,
-                ..cfg.options_for("doc")
+                ..cfg.options_for()
             },
         );
-        let hints = crate::escalate::jobs::hints(&extracted, "doc", &cfg);
+        let hints = crate::escalate::jobs::hints(&cfg);
         let (jobs, reasons, _) =
             crate::escalate::jobs::to_render(&extracted, &a, "doc", &hints, None);
         assert_eq!(jobs, [(0, None), (1, None)]);
@@ -1909,8 +1933,7 @@ mod tests {
             cfg.config.escalation.on_column_doubt = on_column_doubt;
             let extracted = page_in_column_doubt();
             let mut doc = extracted.clone();
-            let mut a =
-                fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+            let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for());
             assert!(
                 fluree_doc_pdf::document::column_doubt(&extracted.pages[0], &a).is_some(),
                 "the page is in column doubt"
@@ -2064,7 +2087,7 @@ mod tests {
             let mut a = fluree_doc_pdf::document::analyze_with(
                 &mut extracted.clone(),
                 &[],
-                &cfg.options_for("doc"),
+                &cfg.options_for(),
             );
             a.elements = an_anchored_grid();
             let mut asked = Vec::new();
@@ -2116,7 +2139,7 @@ mod tests {
             let mut a = fluree_doc_pdf::document::analyze_with(
                 &mut extracted.clone(),
                 &[],
-                &cfg.options_for("doc"),
+                &cfg.options_for(),
             );
             a.elements = an_anchored_grid();
             crate::commands::triage::priced(&extracted, &a, "doc", &cfg).0
@@ -2137,13 +2160,10 @@ mod tests {
             ..Default::default()
         };
         let extracted = page_of_prose();
-        let mut a = fluree_doc_pdf::document::analyze_with(
-            &mut extracted.clone(),
-            &[],
-            &cfg.options_for("doc"),
-        );
+        let mut a =
+            fluree_doc_pdf::document::analyze_with(&mut extracted.clone(), &[], &cfg.options_for());
         a.elements = an_anchored_grid();
-        let hints = crate::escalate::jobs::hints(&extracted, "doc", &cfg);
+        let hints = crate::escalate::jobs::hints(&cfg);
         let names = |jobs: &fluree_doc_pdf::escalate::CropJobs| -> Vec<String> {
             jobs.iter()
                 .flat_map(|(page, regions)| {

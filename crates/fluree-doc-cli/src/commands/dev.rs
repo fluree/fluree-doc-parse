@@ -341,7 +341,7 @@ pub(crate) fn furn(pdf: &Path) {
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone())).expect("parse");
     let ol = outline::extract(&raw);
     let mut doc = fluree_doc_pdf::extract_bytes(data).expect("extract");
-    let a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts_for(pdf));
+    let a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts_for());
     // Group by (kind, text) so every distinct piece of furniture is visible -
     // reporting one example per kind hid the watermark behind the footer.
     let mut seen: std::collections::BTreeMap<(String, String), usize> = Default::default();
@@ -492,7 +492,7 @@ pub(crate) fn links(pdf: &Path) {
     }
     let mut doc = fluree_doc_pdf::extract_bytes(data).expect("extract");
     let ol = fluree_doc_pdf::outline::extract(&raw);
-    let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts_for(pdf));
+    let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts_for());
     fluree_doc_pdf::link::attach(&mut a.elements, &links, &doc.pages);
     let resolved: usize = a
         .elements
@@ -1081,79 +1081,8 @@ pub(crate) fn glyphs(path: &Path, page: usize, y0: Option<f64>, y1: Option<f64>)
     }
 }
 
-/// Confidence below which a layout detector's box is not worth acting on.
-const LAYOUT_TABLE_SCORE: f64 = 0.6;
-
-/// Share of a detected table that must fall inside a crop before the crop is
-/// called a table crop. A region clipping a table's corner is not one.
-const HINT_CONTAINMENT: f64 = 0.6;
-
-/// The layout detector's table boxes for one page, in PDF points.
-///
-/// Sidecars are written at [`VLM_RENDER_SCALE`], so their coordinates are
-/// halved back to page space here. Absent directory, absent file and
-/// unparseable file all mean the same thing — no boxes — because every
-/// caller treats the detector as an optional second opinion.
-pub(crate) fn layout_tables(
-    dir: Option<&Path>,
-    stem: &str,
-    page: usize,
-) -> Vec<fluree_doc_pdf::geom::BBox> {
-    let Some(dir) = dir else {
-        return Vec::new();
-    };
-    let sidecar = dir.join(format!("{stem}_p{page}_page.json"));
-    let Ok(txt) = std::fs::read_to_string(&sidecar) else {
-        return Vec::new();
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) else {
-        return Vec::new();
-    };
-    let sc = f64::from(VLM_RENDER_SCALE);
-    v.as_array()
-        .into_iter()
-        .flatten()
-        .filter(|lb| {
-            lb["label"].as_str() == Some("table")
-                && lb["score"].as_f64().unwrap_or(0.0) >= LAYOUT_TABLE_SCORE
-        })
-        .filter_map(|lb| {
-            let c: Vec<f64> = lb["box"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_f64)
-                .collect();
-            (c.len() == 4).then(|| fluree_doc_pdf::geom::BBox {
-                x0: c[0] / sc,
-                y0: c[1] / sc,
-                x1: c[2] / sc,
-                y1: c[3] / sc,
-            })
-        })
-        .collect()
-}
-
-/// Does `crop` hold most of a table the layout detector found?
-///
-/// The routing triggers know a region is unreadable but not what it is, and
-/// a model asked to decide for itself gets it wrong on exactly the tables
-/// that matter: grids the text layer could not read come back transcribed as
-/// one value per line and score TEDS 0.0, on pages where the detector already
-/// says "table" with 0.98 and 0.96 confidence. Passing that on costs nothing
-/// and replaces a guess with evidence.
-fn holds_a_table(crop: &fluree_doc_pdf::geom::BBox, tables: &[fluree_doc_pdf::geom::BBox]) -> bool {
-    tables.iter().any(|t| {
-        let ix = (crop.x1.min(t.x1) - crop.x0.max(t.x0)).max(0.0);
-        let iy = (crop.y1.min(t.y1) - crop.y0.max(t.y0)).max(0.0);
-        let area = (t.x1 - t.x0) * (t.y1 - t.y0);
-        area > 0.0 && ix * iy >= HINT_CONTAINMENT * area
-    })
-}
-
 /// The manifest record of the region crop `tag` on page `page`, cut to `b`:
-/// the `reason` its tag names, `table` when the layout detector boxed one of
-/// `detected` inside it, `vetoed` when the structure readings veto it
+/// the `reason` its tag names, `vetoed` when the structure readings veto it
 /// (`vetoed` lists `p{page}_{tag}`, as [`crate::escalate::jobs::to_render`]
 /// names them). A vetoed table keeps its reason, `table`: the veto says a
 /// deep reader need not read it, not why it was cut.
@@ -1162,13 +1091,11 @@ fn region_record(
     page: usize,
     tag: &str,
     b: &fluree_doc_pdf::geom::BBox,
-    detected: &[fluree_doc_pdf::geom::BBox],
     vetoed: &[String],
 ) -> serde_json::Value {
     serde_json::json!({
         "doc": stem, "page": page, "kind": "region", "png": format!("{stem}_p{page}_{tag}.png"),
         "bbox": [b.x0, b.y0, b.x1, b.y1],
-        "table": holds_a_table(b, detected),
         "reason": fluree_doc_pdf::escalate::CropReason::of_region_tag(tag)
             .expect("a region crop's tag")
             .as_str(),
@@ -1184,6 +1111,7 @@ pub(crate) fn render_routed(
     outdir: &Path,
     ocr_regions: bool,
     stored_resolution: bool,
+    mode: Option<crate::mode::Mode>,
 ) {
     use hayro_syntax::Pdf;
     use std::io::Write;
@@ -1198,8 +1126,19 @@ pub(crate) fn render_routed(
     let mut manifest =
         std::fs::File::create(outdir.join("manifest.jsonl")).expect("create manifest");
     let (mut n_pages, mut n_crops, mut n_media) = (0usize, 0usize, 0usize);
-    let tiers = crate::commands::common::TierConfig::configured();
-    let layout = tiers.layout_boxes.as_deref();
+    // The mode `convert` would read in: `ocr` and over read the small
+    // regions too, so their crops are rendered.
+    let mut tiers = crate::commands::common::TierConfig::from_env();
+    let flags = crate::commands::common::ModeFlags {
+        mode,
+        plans_only: true,
+        ..Default::default()
+    };
+    if let Err(e) = tiers.resolve_mode(&flags, false, false) {
+        eprintln!("error: {e}");
+        std::process::exit(2);
+    }
+    let ocr_regions = ocr_regions || tiers.mode >= crate::mode::Mode::Ocr;
     // Crops are named by stem: a second input of a stem already cropped
     // (`report.pdf` and `report.png`) would overwrite the first's crops and
     // take their readings.
@@ -1287,14 +1226,14 @@ pub(crate) fn render_routed(
         let stem = crate::commands::common::stem_of(f);
         let hints = fluree_doc_pdf::escalate::CropHints {
             regions_apart: ocr_regions,
-            ..crate::escalate::jobs::hints(&doc, stem, &tiers)
+            ..crate::escalate::jobs::hints(&tiers)
         };
         let analysis = fluree_doc_pdf::document::analyze_with(
             &mut doc.clone(),
             &fluree_doc_pdf::outline::extract(&pdf),
             &fluree_doc_pdf::document::AnalyzeOptions {
                 emit_anchors: true,
-                ..tiers.options_for(stem)
+                ..tiers.options_for()
             },
         );
         let (mut jobs, reasons, vetoed) = crate::escalate::jobs::to_render(
@@ -1460,8 +1399,7 @@ pub(crate) fn render_routed(
                 Some(b) => {
                     n_crops += 1;
                     let tag = crop.name.split_once('_').map_or("", |(_, t)| t);
-                    let detected = layout_tables(layout, stem, page_idx);
-                    let mut rec = region_record(stem, page_idx, tag, &b, &detected, &vetoed);
+                    let mut rec = region_record(stem, page_idx, tag, &b, &vetoed);
                     n_vetoed += usize::from(rec["vetoed"] == true);
                     if small.contains(&(page_idx, tag.to_string())) {
                         rec["reason"] = fluree_doc_pdf::escalate::CropReason::SmallRegion
@@ -1768,9 +1706,8 @@ pub(crate) fn render_crops(manifest: &Path, corpus: &Path, outdir: &Path) {
     }
 }
 
-/// Render every page of every document at the VLM scale — input for the
-/// layout-detector arbitration pass, which is cheap enough to run on all
-/// pages (no autoregressive decode, ~100ms each on GPU).
+/// Render every page of every document at the VLM scale: page images for a
+/// reader that runs outside `fdoc`.
 pub(crate) fn render_pages(path: &Path, outdir: &Path) {
     use hayro::vello_cpu::color::{AlphaColor, Srgb};
     use hayro::{render, RenderCache, RenderSettings};
@@ -1861,7 +1798,7 @@ pub(crate) fn timings(path: &Path, warmup: usize, runs: usize) {
                 .and_then(|d| hayro_syntax::Pdf::new(std::sync::Arc::new(d)).ok())
                 .map(|raw| outline::extract(&raw))
                 .unwrap_or_default();
-            let opts = opts_for(f);
+            let opts = opts_for();
             let t1 = Instant::now();
             let a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts);
             whole += t1.elapsed();
@@ -2003,22 +1940,16 @@ mod tests {
             y1: 80.0,
         };
         let vetoed = vec!["p3_t0".to_owned()];
-        let rec = region_record("doc", 3, "t0", &b, &[], &vetoed);
+        let rec = region_record("doc", 3, "t0", &b, &vetoed);
         assert_eq!(rec["vetoed"], true);
         // Vetoed, it is still cut for the table the grid does not trust.
         assert_eq!(rec["reason"], "table");
         assert_eq!(rec["png"], "doc_p3_t0.png");
         // The same tag on another page, and another tag on the same page,
         // are read.
-        assert_eq!(
-            region_record("doc", 2, "t0", &b, &[], &vetoed)["vetoed"],
-            false
-        );
-        assert_eq!(
-            region_record("doc", 3, "t1", &b, &[], &vetoed)["vetoed"],
-            false
-        );
-        assert_eq!(region_record("doc", 3, "t0", &b, &[], &[])["vetoed"], false);
+        assert_eq!(region_record("doc", 2, "t0", &b, &vetoed)["vetoed"], false);
+        assert_eq!(region_record("doc", 3, "t1", &b, &vetoed)["vetoed"], false);
+        assert_eq!(region_record("doc", 3, "t0", &b, &[])["vetoed"], false);
     }
 
     /// `render-routed` says how many vetoed table crops it wrote, and that

@@ -16,7 +16,7 @@ pub fn run(cli: Cli) -> i32 {
         Commands::Convert(args) => convert::run(&args, cli.verbose, cli.quiet),
         Commands::Ocr(args) => ocr::run(&args, cli.verbose, cli.quiet),
         Commands::Forms { pdf } => forms::run(&pdf),
-        Commands::Triage { path } => triage::run(&path),
+        Commands::Triage { path, mode } => triage::run(&path, mode),
         Commands::Config { command } => config_cmd::run(command),
         Commands::Render {
             path,
@@ -48,7 +48,7 @@ fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         out_dir: None,
         pages: None,
         jobs: 1,
-        layout_boxes: None,
+        mode: None,
         tier_results: None,
         structure_results: None,
         ocr_words: None,
@@ -97,7 +97,8 @@ fn run_dev(cmd: DevCommands) {
             out,
             ocr_regions,
             stored_resolution,
-        } => dev::render_routed(&path, &out, ocr_regions, stored_resolution),
+            mode,
+        } => dev::render_routed(&path, &out, ocr_regions, stored_resolution, mode),
         DevCommands::RenderCrops {
             manifest,
             corpus,

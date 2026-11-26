@@ -15,7 +15,7 @@ configure it — not in the sense that you cannot audit it.
 |---|---|
 | `rust` | the deterministic PDF engine |
 | `vlm` | spliced in from a model tier |
-| `ocr` | assembled by the deterministic engine from [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words) |
+| `ocr` | assembled by the deterministic engine from [OCR words](../integration/sidecar-formats.md#3-ocr-words----ocr-words) |
 | `markdown` / `html` / `docx` / `pptx` / `xlsx` / `vtt` / `srt` / `eml` / `msg` | the corresponding reader |
 
 So `provenance` answers "which reader", and for PDF specifically it
@@ -70,8 +70,7 @@ From the escalation path:
 | `route` | a routed region supplied this |
 | `page-tier` | the whole page escalated |
 | `table-confidence` | a table escalated because its reading is in doubt: structure that disagrees with itself, or a header other than one plain row |
-| `table-missing` | a detector found a table where the grid pass found none |
-| `layout-demoted` | a detector corroborated demoting this heading to prose |
+| `layout-demoted` | a grid read as no table (a drawing's labels, a chart's scales), kept as prose in its reading order |
 
 And from the declared formats: `markdown`, `text`, `html`, `docx`, `pptx`, `xlsx`, and
 `header` and `footer` for what a Word file's page header and footer hold. These are

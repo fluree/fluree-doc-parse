@@ -47,36 +47,33 @@ the same.
 | 17 | markitdown | 0.588504 | 0.8437 | 0.2729 | 0.0000 | 0.114 |
 | 18 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
 
-All three configurations place above every other engine. The deterministic
+All three modes place above every other engine. The deterministic
 one needs no model, no GPU and no API key, and is ahead of every other engine
 on its own. Reading the text set as pixels with the built-in OCR engine, still
 on CPU and with no key, adds 0.017. A vision-language model, called only for
 what OCR cannot settle, adds 0.009 more.
 
-By configuration:
+By [mode](../getting-started/modes.md):
 
-| configuration | adds | overall | s/doc, one process² | documents/s, 8 workers² |
+| mode | adds | overall | s/doc, one process² | documents/s, 8 workers² |
 |---|---|---|---|---|
-| deterministic (`--no-escalate`) | the text layer, its geometry and its drawing | 0.921118 | 0.007 | 571 |
-| OCR (`--ocr oar-ocr --models <dir> --no-escalate`) | the [built-in OCR engine](../cli/ocr.md), on CPU, for text set as pixels | 0.938328 | 0.356 | 9.9 |
-| VLM (OCR, with a [model provider](../cli/config.md#setting-up-google-vertex-ai) configured) | a vision-language model for the pages and regions OCR cannot settle | 0.946972 | 1.371¹ | 2.8 |
-
-Boxes from a layout detector, supplied as a sidecar, add nothing measurable
-on this corpus in any of the three configurations.
+| `deterministic` (the default) | the text layer, its geometry and its drawing | 0.921118 | 0.007 | 571 |
+| `ocr` (`--mode ocr --models <dir>`) | the [built-in OCR engine](../cli/ocr.md), on CPU, for text set as pixels | 0.938328 | 0.356 | 9.9 |
+| `vlm` (`--mode vlm --models <dir>`, with a [model provider](../cli/config.md#setting-up-google-vertex-ai) configured) | a vision-language model for the pages and regions OCR cannot settle | 0.946972 | 1.371¹ | 2.8 |
 
 ¹ The model is Gemini 3 Flash (`gemini-3-flash-preview`) on Google Vertex AI.
 39 of the 200 documents call it, with 42 crops between them: 19 raster regions
 OCR cannot settle, 11 tables whose header is in doubt, 6 pages laid out inside
 their drawings, 5 pages whose headings rest on type size alone, and 1
 near-blank page. Each of those documents takes about 5 s longer than in the
-OCR configuration; the other 161 read as they do there. A model's reading
-varies from run to run: two runs of this configuration scored 0.946972 and
+`ocr` mode; the other 161 read as they do there. A model's reading
+varies from run to run: two runs of this mode scored 0.946972 and
 0.948950, and the lower is quoted.
 
 ² One `fdoc convert <dir> -j 1` process over the 200 documents, its wall time
 divided by 200, on an Apple M4 Max. No process is started per document. The
 median of five runs (deterministic) or three (OCR) after a warm-up run, and
-one run (VLM, which is billed per crop). The last column is the same run with
+one run (`vlm`, which is billed per crop). The last column is the same run with
 `-j 8`.
 
 ³ The other engines' times are the harness's own: one process per document,
@@ -84,8 +81,8 @@ each process's start-up included.
 
 ## Reproducing it
 
-The deterministic and OCR scores need no GPU and no API key. The VLM score
-needs a model provider configured, and a run is billed per crop.
+The `deterministic` and `ocr` scores need no GPU and no API key. The `vlm`
+score needs a model provider configured, and a run is billed per crop.
 
 ```bash
 git clone https://github.com/opendataloader-project/opendataloader-bench
@@ -106,7 +103,7 @@ The adapter runs `fdoc convert <pdf> --format md --md-links text
 reference writes them, and no model is called. Set
 `FLUREE_DOC_MD_LINKS=inline` to score the default Markdown, links and all.
 
-Then, for the deterministic and OCR scores:
+Then, for the `deterministic` and `ocr` scores:
 
 ```bash
 cargo build --release --manifest-path <repo>/Cargo.toml
@@ -115,9 +112,9 @@ cargo build --release --manifest-path <repo>/Cargo.toml
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
   uv run python src/run.py --engine fluree-doc-parse --force
 
-# OCR, with the OCR engine's assets directory
+# ocr, with the OCR engine's assets directory
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
-FDOC_OCR=oar-ocr FDOC_OCR_MODELS=<assets> \
+FDOC_MODE=ocr FDOC_OCR_MODELS=<assets> \
   uv run python src/run.py --engine fluree-doc-parse --force
 ```
 
@@ -128,13 +125,13 @@ models and their runtime.
 disk. Per-document scores land in `prediction/<engine>/evaluation.json` under
 `documents[]`, and the headline is `metrics.score.overall_mean`.
 
-The adapter never calls a model, so the VLM score is taken from one
+The adapter never calls a model, so the `vlm` score is taken from one
 `fdoc convert` run over the corpus, scored by the harness's evaluator. With a
 provider configured:
 
 ```bash
 <repo>/target/release/fdoc convert pdfs --format md --md-links text \
-  --ocr oar-ocr --models <assets> \
+  --mode vlm --models <assets> \
   --out-dir prediction/fluree-doc-parse-vlm/markdown
 uv run python src/evaluator.py --engine fluree-doc-parse-vlm
 ```
@@ -152,7 +149,7 @@ State these whenever the scores are quoted.
   against this ground truth.
 - **There is no scanned or image-only PDF in the corpus** — which is the
   router's single most important signal, and therefore the least evidenced
-  part of what the OCR and VLM configurations decide. Also absent: broken CID fonts, Korean, filled forms,
+  part of what the `ocr` and `vlm` modes decide. Also absent: broken CID fonts, Korean, filled forms,
   multi-column newspapers, and financial statements with nested tables.
 - **MHS does not measure heading depth.** Its evaluator flattens the tree, so
   every ground-truth heading is a top-level one.
@@ -163,9 +160,15 @@ State these whenever the scores are quoted.
   error. See [Where our output differs from the
   reference](where-we-differ.md). The largest such difference, links, is
   left out of these scores by `--md-links text`; the default Markdown scores
-  0.0019 lower in the deterministic configuration.
+  0.0019 lower in `deterministic` mode.
 
-## Two rungs that were retired, with their numbers
+## Rungs that were retired, with their numbers
+
+A layout detector (PP-DocLayoutV3, its boxes supplied as sidecars) once lifted
+the deterministic reading from 0.901319 to 0.908607, promoting titles it had
+missed and settling which regions were tables. Measured again once the
+deterministic pass had caught up, it added nothing in any mode: −0.00026
+under the model's readings and −0.00019 under OCR. It has been removed.
 
 A separate table-structure model was measured in both roles it could hold. As
 the reading source it scored 0.892130, *below* the layout boxes alone; as a

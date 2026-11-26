@@ -14,14 +14,13 @@ changing the engine.
 The caches every rung reproduces from:
 
 ```
-eval/layout-cache/      layout-detector boxes
+eval/layout-cache/      layout-detector boxes (retired: no reader left)
 eval/structure-cache/   table-structure readings
 eval/vlm-cache/         VLM readings
 eval/cascade-cache/     the full cascade
 ```
 
 ```bash
-FDOC_TITLE_BOXES=eval/layout-cache \
 FDOC_STRUCTURE_RESULTS=eval/structure-cache \
 FDOC_TIER_RESULTS=eval/vlm-cache \
 fdoc convert document.pdf

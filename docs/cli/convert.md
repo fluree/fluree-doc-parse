@@ -29,39 +29,44 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--out-dir <DIR>` | write one output file per input into this directory |
 | `--pages <RANGES>` | restrict to 1-based pages: `3`, `1-5`, `1,4,9-12` |
 | `-j`, `--jobs <N>` | parallel workers for batch (`0` = one per core) |
+| `--mode <MODE>` | `deterministic` (the default), `ocr` or `vlm`: what the run may use beyond the document. See [Modes](../getting-started/modes.md). Env: `FDOC_MODE`; config: `mode` |
 | `--base-iri <IRI>` | what every node IRI minted by `-f doco` starts with (`<IRI>-element-3`). Default: `--doc-iri`, else `urn:fluree-doc-parse:<stem>-<first 12 hex digits of the SHA-256>`. One input only |
 | `--doc-iri <IRI>` | stamp `-f doco` nodes with `doc:sourceDocument`, the tag a re-extraction retracts by. One input only |
 | `--source-name <NAME>` | what `-f doco` records as the input's name, `doc:sourceName`. Default: the input's file name; none from stdin. One input only |
 | `--attachments <DIR>` | save each email's attachments under `DIR/<email name>/`, to convert on their own. See [Email](../inputs/email.md#attachments) |
-| `--layout-boxes <DIR>` | layout-detector sidecars. Env: `FDOC_TITLE_BOXES` |
-| `--tier-results <DIR>` | model-tier readings to splice. Env: `FDOC_TIER_RESULTS` |
+| `--tier-results <DIR>` | model readings to splice, in place of calling a model; asks for `vlm`. Env: `FDOC_TIER_RESULTS` |
 | `--structure-results <DIR>` | table-structure readings, for the [three-way veto](../concepts/escalation.md#the-three-way-veto) on a table reading from `--tier-results` or from a model called in the run; no table crop it vetoes is sent to the model. Env: `FDOC_STRUCTURE_RESULTS` |
-| `--ocr-words <DIR>` | OCR word readings, read as text on the pages and regions the router sends a reader. See [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words). Env: `FDOC_OCR_WORDS`, which an explicit `--ocr` overrides |
-| `--ocr <ENGINE>` | read those pages and regions with the built-in OCR engine, in this run: `oar-ocr`. Needs `--models`. Conflicts with `--ocr-words`. Env: `FDOC_OCR` |
+| `--ocr-words <DIR>` | OCR word readings, read as text on the pages and regions the router sends a reader, in place of the engine; asks for `ocr`. See [OCR words](../integration/sidecar-formats.md#3-ocr-words----ocr-words). Env: `FDOC_OCR_WORDS`, which an explicit `--ocr` overrides |
+| `--ocr <ENGINE>` | superseded by `--mode ocr`. Names the engine (`oar-ocr`) and asks for `ocr`. Conflicts with `--ocr-words`. Env: `FDOC_OCR` |
 | `--models <DIR>` | the OCR assets directory: the models and ONNX Runtime. Env: `FDOC_OCR_MODELS` |
 | `--ocr-max-megapixels <MPX>` | most megapixels the OCR engine reads in one pass (default 12.5); a larger image is read in overlapping strips ([how an image is sized](ocr.md#how-an-image-is-sized)). Env: `FDOC_OCR_MAX_MEGAPIXELS`; config: `ocr.max_megapixels` |
-| `--emit-anchors` | emit `[[VLM:…]]` tokens where escalated crops belong. With a reader (`--tier-results`, or a model called in the run), keep the ones it did not answer (a crop with no sidecar file, one `--pages` or `escalation.max_crops` left out), in every format, Markdown and text included; without it they are dropped. See [Anchors](../integration/anchors.md#interaction-with---tier-results). Env: `FDOC_VLM_ANCHORS` |
-| `--escalate` | read escalated pages with the configured model in this run |
-| `--no-escalate` | never call a model, whatever the config says |
+| `--emit-anchors` | emit `[[VLM:…]]` tokens where escalated crops belong; asks for `vlm`. With a reader (`--tier-results`, or a model called in the run), keep the ones it did not answer (a crop with no sidecar file, one `--pages` or `escalation.max_crops` left out), in every format, Markdown and text included; without it they are dropped. See [Anchors](../integration/anchors.md#interaction-with---tier-results). Env: `FDOC_VLM_ANCHORS` |
+| `--escalate` | superseded by `--mode vlm`, which it asks for |
+| `--no-escalate` | never call a model, whatever `FDOC_MODE` or the config says: `vlm` reads as `ocr`. Contradicts `--mode vlm` |
 
-The flags from `--layout-boxes` down wire the [escalation
-tiers](../integration/escalation-tiers.md); without them you get tier 1.
+Readings from files (`--tier-results`, `--structure-results`, `--ocr-words`)
+stand in for the readers that produce them; see [Model
+readings](../integration/escalation-tiers.md).
 
-## Escalation
+## Modes
 
-With a provider configured, `convert` escalates the pages that ask for it and
-splices the readings back — the whole loop, in this command. See
-[`fdoc config`](config.md) for the setup and the on/off rules.
+`--mode` says what the run may use beyond the document; see
+[Modes](../getting-started/modes.md). In `vlm`, with a provider configured,
+`convert` sends the pages and regions OCR cannot read well and splices the
+readings back: the whole loop, in this command. See [`fdoc config`](config.md)
+for the setup.
 
 ```bash
-fdoc convert report.pdf -f doco          # escalates once a provider is set
-fdoc convert report.pdf --no-escalate    # deterministic for this run
-fdoc convert report.pdf --escalate       # force it; warns if nothing is set up
+fdoc convert report.pdf -f doco                        # deterministic
+fdoc convert scan.pdf --mode ocr --models ~/assets/ocr
+fdoc convert scan.pdf --mode vlm                       # with the config set up
+fdoc convert scan.pdf --no-escalate                    # never a model call
 ```
 
-With nothing configured this never happens and no connection is opened.
-`--tier-results` takes precedence: it supplies readings you already have, so
-producing them again would be surprising.
+A mode whose needs are not met stops the run and says what to set; `-v`
+prints the mode and where it came from. `--tier-results` takes precedence over
+calling a model: it supplies readings you already have, so producing them
+again would be surprising.
 
 `--pages` narrows what is *read*, not only what is printed, so inspecting one
 page of a long document costs one crop rather than all of them.
@@ -73,10 +78,10 @@ read by an OCR engine before analysis, and their words go through the same
 layout pass as the text layer: paragraphs, tables and headings, each word with
 its box. There are two ways to give `convert` those words.
 
-**The built-in engine**, in one command:
+**The built-in engine**, in mode `ocr` (or `vlm`):
 
 ```bash
-fdoc convert scan.pdf --ocr oar-ocr --models ~/assets/ocr
+fdoc convert scan.pdf --mode ocr --models ~/assets/ocr
 ```
 
 The engine is PP-OCRv6 small through oar-ocr. Its models and ONNX Runtime are
@@ -85,12 +90,12 @@ against the hash `fdoc` was built with before it is loaded. Build that directory
 with `tools/ocr-assets/build.py`. The engine is loaded once per run and shared by
 every input and worker, when the first page or region is sent to it: a run
 whose documents carry their own text never checks or loads it, and costs what
-it costs without `--ocr`. An assets directory missing a file is refused at the
+it costs in `deterministic`. An assets directory missing a file is refused at the
 start. One whose files are not the ones this build loads is refused at the
 first reading: the error is said once, a PDF's or DOCX's pages and pictures
 are converted without OCR, an image file is not converted, and the run ends
-with status 2. Name it in the [config](config.md#ocr)
-and `--ocr` is no longer needed.
+with status 2. Set `mode = "ocr"` and `ocr.models` in the
+[config](config.md#ocr) and the flags are no longer needed.
 
 **Any other engine**, through files: render the crops, read them with your
 engine (or with [`fdoc ocr`](ocr.md)), then convert with the words:

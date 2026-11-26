@@ -32,13 +32,16 @@ nearly a third larger than that.)
 
 ## Requirements
 
-A Rust toolchain (2021 edition). That is the whole list for the deterministic
-tier, which is what runs unless you explicitly wire the model tiers.
+A Rust toolchain (2021 edition). That is the whole list for mode
+`deterministic`, the default.
 
-The model tiers are **not** part of this binary. `fdoc` consumes their output
-through files rather than calling them, so nothing here needs a GPU, a network
-or a Python runtime — see [Wiring the escalation
-tiers](../integration/escalation-tiers.md).
+Mode `ocr` also needs the OCR assets, a directory of models and ONNX Runtime
+built by a script in this repository ([the assets
+directory](../cli/ocr.md#the-assets-directory)). Mode `vlm` also needs a model
+reader: a Google Vertex AI key ([`fdoc config gemini`](../cli/config.md)), or
+readings produced by a model you run yourself and handed over as files
+([Model readings](../integration/escalation-tiers.md)). None of the three
+needs a GPU or a Python runtime; see [modes](modes.md).
 
 ## Shell completions
 

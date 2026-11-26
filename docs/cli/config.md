@@ -8,12 +8,13 @@ fdoc config init [--global]                      # write a commented template
 fdoc config set <key> <value>                    # one key at a time
 ```
 
-Only the deep reader is configured. Everything else about a parse is
-deterministic and takes no settings — that is what makes a parse reproducible
-on someone else's machine.
+The config says which [mode](../getting-started/modes.md) a run reads in, and
+sets up what the modes past `deterministic` need: the OCR assets and a model
+reader. Everything else about a parse is deterministic and takes no settings;
+that is what makes a parse reproducible on someone else's machine.
 
-**With nothing configured, `fdoc` never reaches the network.** Naming a
-provider is what turns escalation on.
+**With no `mode` set, `fdoc` reads deterministic and never reaches the
+network.** `mode = "vlm"` is what sends pages to a model.
 
 ## Setting up Google Vertex AI
 
@@ -28,9 +29,11 @@ fdoc config gemini --credentials ~/Downloads/sa-key.json
 ```
 escalation configured in /Users/you/.config/fluree-doc-parse/config.toml
   provider gemini, model gemini-3-flash-preview, project my-project
-
-`fdoc convert <pdf>` now escalates the pages that ask for it.
+  mode = "vlm": `fdoc convert <pdf>` sends a model what OCR cannot read
 ```
+
+It sets `mode = "vlm"`. `vlm` builds on `ocr`, so it also needs the OCR assets
+(`ocr.models`, below); the command says so when they are not set.
 
 The key is read and checked here rather than at the first request, so a wrong
 file is caught now and not halfway through a batch. The path is stored
@@ -56,8 +59,9 @@ Nearest first:
 ## The file
 
 ```toml
+mode = "vlm"
+
 [escalation]
-enabled = true
 provider = "gemini"
 model = "gemini-3-flash-preview"
 concurrency = 6
@@ -69,8 +73,8 @@ project = "my-project"          # optional; read from the key when absent
 
 | key | means |
 |---|---|
-| `enabled` | run the configured reader when no flag says otherwise |
-| `provider` | `gemini` is the one this build implements |
+| `mode` | `deterministic` (the default), `ocr` or `vlm`: see [modes](../getting-started/modes.md). `--mode` and `FDOC_MODE` override it |
+| `escalation.provider` | `gemini` is the one this build implements |
 | `model` | passed to the provider unchanged |
 | `concurrency` | crops read at once |
 | `on_column_doubt` | also escalate pages that read across their panels |
@@ -92,7 +96,7 @@ max_small_regions_per_page = 0
 
 | key | means |
 |---|---|
-| `engine` | the built-in engine `convert` reads pixels with; `oar-ocr` is the one this build has |
+| `engine` | the built-in engine that reads pixels in mode `ocr` and `vlm`; `oar-ocr`, the one this build has, is the default |
 | `models` | the OCR assets directory (models and ONNX Runtime) |
 | `threads` | ONNX Runtime threads per crop read (default 1: a batch runs one per worker) |
 | `max_megapixels` | most megapixels the engine reads in one pass (default 12.5, from 1 to 128): a page scanned at 300 dpi or a 12 Mpx photo is read whole, a larger image in overlapping strips, one too wide for them shrunk with a warning. A pass costs about 230 bytes a pixel while it is read ([how an image is sized](ocr.md#how-an-image-is-sized)) |
@@ -100,8 +104,9 @@ max_small_regions_per_page = 0
 | `max_crops` | most crops the engine reads in one document; past it pages read whole come first, then routed regions, then small ones, and a note names how many were left (default 1000, `0` for no limit). Separate from `escalation.max_crops`: a scanned page is one crop, and a model's 200 would leave page 201 of a long scan unread |
 | `max_small_regions_per_page` | most small regions (pictures too small for a model's call) the engine reads on one page, the largest first, and a note names how many were left (default `0`: every one is read). Routed regions and pages read whole are always read. Set it where a page's time must be bounded: a drawing's callouts or a paper's figure labels can make a hundred crops of one page, each read on its own. At 8, such a page reads in about a tenth of the time, and a corpus loses about 2.6% of its OCR'd lines, mostly callouts and labels, but some of them a drawing's notes or problems set as images |
 
-`--ocr`, `--models` and `--ocr-max-megapixels` override these per run, and
-`FDOC_OCR`, `FDOC_OCR_MODELS` and `FDOC_OCR_MAX_MEGAPIXELS` override the file. Unlike the model reader, OCR runs on the
+`--models` and `--ocr-max-megapixels` override these per run, and
+`FDOC_OCR_MODELS` and `FDOC_OCR_MAX_MEGAPIXELS` override the file. Naming an
+engine does not turn OCR on; the mode does (`mode = "ocr"`). Unlike the model reader, OCR runs on the
 machine and calls nothing outside it.
 
 ## Pages that read across their panels
@@ -138,7 +143,7 @@ fdoc config set escalation.on_column_doubt true
 ```
 
 `fdoc triage` and `fdoc dev render-routed` follow it too, so that they count
-and write the crops `convert --escalate` sends; each says on stderr when the
+and write the crops `convert` in mode `vlm` sends; each says on stderr when the
 file made it read pages whole. `FDOC_ESCALATE_COLUMNS=0` turns it off for one
 run, as a benchmark run that must not depend on the machine does.
 
@@ -165,29 +170,38 @@ fdoc config set escalation.max_crops 500
 Editing through `fdoc config set` preserves comments and any key this build
 does not recognise, so a file can be hand-written and machine-edited in turn.
 
-## Turning it on and off
+## Choosing the mode
 
 | you run | what happens |
 |---|---|
-| nothing configured | deterministic, silent, no network |
-| configured | escalates the pages that ask for it |
-| `--no-escalate` | deterministic, whatever the config says |
-| `--escalate`, nothing configured | **warns**, then parses deterministically |
-| `enabled = false` | `--escalate` becomes the opt-in |
+| no `mode`, no flag | `deterministic`: silent, no network |
+| `mode = "ocr"` | the OCR engine reads pages and regions whose text is pixels; an error if `ocr.models` is not set |
+| `mode = "vlm"` | and the model reads what OCR cannot; an error if the OCR assets or the provider are not set up |
+| `--mode <mode>` | that mode for this run, whatever the config says |
+| `--no-escalate` | no model is called: a `vlm` from the config reads as `ocr` |
 
-`--escalate` with no provider is not an error — the deterministic parse is
-still the right output — but it is never silent, because a batch run under a
-wrong assumption otherwise looks like a working one.
+A mode whose needs are not met stops the run and says what to set. It never
+reads in a lower mode instead, because a batch run under a wrong assumption
+otherwise looks like a working one:
 
 ```
-warning: --escalate was asked for but no provider is set
-         run `fdoc config gemini --credentials <key.json>` to set one up
-         parsing deterministically
+error: mode vlm (from the config's `mode`) builds on ocr, which needs the OCR assets: set --models DIR (or FDOC_OCR_MODELS, or ocr.models in the config), or read words from files with --ocr-words
 ```
 
-Two paths deliberately never escalate: `--tier-results` supplies readings
-someone already has, so paying to produce them again would be surprising; and
-the hidden `fdoc md` / `json` / `xhtml` forms, which scripts shell, so a
+A config that sets up a provider or an OCR engine but no `mode` no longer
+turns them on by itself. It reads `deterministic`, or the mode an input such
+as `--ocr` asks for, and says once what it leaves out:
+
+```
+note: the config sets up a model reader but no mode; reading deterministic. Set mode = "vlm" in the config, or give --mode vlm
+```
+
+`fdoc config show` prints the mode a run with no flags would read in, and
+where it came from.
+
+Two paths never call a model: `--tier-results` supplies readings someone
+already has, so paying to produce them again would be surprising; and the
+hidden `fdoc md` / `json` / `xhtml` forms, which scripts shell, so a
 configured key on the machine that runs one cannot change its output. The
 benchmark adapter passes `--no-escalate` for the same reason.
 
