@@ -239,6 +239,89 @@ stable — the same promise [`fdoc dev`](../cli/dev.md) makes about its output.
 `extract` and `glyph` are private; their types (`Document`, `Page`,
 `ExtractError`, `Glyph`) are re-exported at the crate root.
 
+## Upgrading
+
+What a caller of these crates has to change, by the work that changed it,
+and what replaces each call removed or changed. No public struct is
+`#[non_exhaustive]`, and most have every field public, so each field one
+gains breaks a caller building it with a struct literal: build
+`DocoOptions`, `Notes` and `escalate::CropHints` with
+`..Default::default()`, as the example above does, rather than field by
+field. `Page` and `ImagePlacement` have no `Default`: a literal of either,
+a test's page, names every field. Read the other structs below rather than
+build them.
+
+### The OCR engine, its crops and bare images (#17 to #21)
+
+- `escalate::render_crops(pdf, jobs)` is now
+  `render_crops(pdf, doc, jobs)`. It renders at the model scale as before,
+  and cuts each region where it shows on the page as displayed, mapped from
+  the frame `doc` reads the page in. That is the frame of the jobs
+  `escalate::crops_for` and `crops_for_with` return, so a caller of either
+  passes the document it analysed: `render_crops(&pdf, &doc, &jobs)`. The
+  old call cut a region of a page read turned (`/Rotate`, or text drawn
+  sideways) in the wrong frame, and it came out blank or not at all.
+  `render_crops_displayed(pdf, jobs)` cuts each region where it says, as
+  the old call did, for regions already in the display frame, as a
+  `doc:bbox` in the graph is. On an upright page the two cut the same
+  crops.
+- `image::as_document(bytes)` is gone: `fluree_doc_image::header(bytes)`
+  reads the image's size, upright, and whether it is one bit deep, and
+  `image::page_of(width, height, bitonal)` builds the one-page document.
+  `as_document` sized an image as stored, its EXIF orientation ignored;
+  `image::dimensions` still gives that size. `fluree_doc_image::read` and
+  `elements` decode and read an image with an engine in one call.
+- `Page` gains `ocr`, what an OCR reading added to the page (`None` for a
+  page none was injected into); `ImagePlacement` gains `ppi`, `bitonal` and
+  `grid`; `escalate::CropHints` gains `regions_apart`.
+- `escalate::CROP_MARGIN` is defined in `route` and re-exported where it
+  was. `UnreadPage::reason` gains `OcrSparse`, a page an OCR reading read
+  whole that still holds next to no text, and `LaterPage`, a page after
+  the first of a multi-page image file.
+- `escalate::CropReason` gains `SmallRegion`, a raster region too small
+  for a model's call that an OCR engine still reads, and `EmbeddedImage`,
+  an image a document places in its flow. The enum is not
+  `#[non_exhaustive]`: a `match` over it needs an arm for each, or `_`.
+- New: `ocr` (`inject`, `mark_provenance`, `read_pages`, `ocr_jobs`, the
+  word format), `route::ocr_regions`, `escalate::CropScale`, `crop_scale`
+  and `for_each_crop_of`, the crate `fluree-doc-vision` (`OcrEngine`,
+  `oar::OarEngine`), the crate `fluree-doc-image`, and
+  `fluree_doc_docx::parse_with_ocr` and `parse_with_media`.
+
+### Regions nothing read
+
+- `fluree_doc_pdf::Page` gains `routing`, what the router made of the page
+  once faux bold counts once and an overlaid watermark is out (`None` until
+  `analyze_with` or an OCR reading keeps it; `Page::routing()`
+  decides it when absent, `Page::keep_routing()` keeps it), and `warnings`,
+  what the PDF interpreter reported while reading it. A `Page` literal needs
+  both. `ImagePlacement` gains `key`, what the image shows (`None` when not
+  known, or when its box shows more or less than the image: a glyph, a path
+  or another image overlapping it, a clip cutting it). Its `texty` is an
+  `Option<bool>`: `None` when extraction did not probe the image
+  (`ExtractOptions::probe_images` off, `extract_bytes_with`).
+- `fluree_doc_model::DocoOptions` and `Notes` gain `unread_regions` and
+  `warnings`. `Notes` is no longer `Eq`, only `PartialEq`: a region's box is
+  floating-point.
+- New: `fluree_doc_pdf::unread_regions` and `parse_warnings`, which fill
+  them; `route::Routing`, `route::Declined`, `route::declined_regions` (and
+  `_for`, `_numbered`), `route::ocr_regions_for`; `ocr::copies`,
+  `ocr::with_copies`, `ocr::MIN_PICTURE_CONFIDENCE` and
+  `MIN_FRAGMENTS_CONFIDENCE`; `fluree_doc_vision::texty::lines_of_text`.
+- Changed behaviour: `doc:unreadPages` calls a page that is one large
+  image with next to no text layer `Scanned`, where it was `NearBlank`; the
+  graph gains `doc:unreadRegions` (`Region`, `Small`, `NotTexty`,
+  `Unprobed`) and `doc:parseWarnings`. `fdoc convert` decodes no image
+  unless it escalates, reads with OCR, emits anchors, reads layout
+  sidecars or is given `--probe-images`.
+- New in this release, nothing to change from main: `ocr::ocr_jobs` and
+  `ocr::read_pages` read the small texty regions after the routed ones, and
+  an image drawn again at its size, with nothing else in its box, once; a
+  reading of words from files should go through `ocr::with_copies` before
+  `ocr::inject`, or the copies stay unread. `inject` sets aside a region's
+  reading that is noise, and a reading with a score outside 0-1 has no
+  confidence.
+
 ## Errors
 
 `extract_file` and `extract_bytes` return `Result<Document, ExtractError>`.

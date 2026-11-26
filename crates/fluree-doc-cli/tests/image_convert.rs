@@ -136,6 +136,35 @@ fn a_short_reading_reads_the_image() {
 }
 
 #[test]
+fn a_short_reading_reads_the_image_ocr_read_nothing_of() {
+    // OCR found no word; a reading of the whole image then read it, however
+    // short, as it does without OCR.
+    let dir = scratch("short-ocr");
+    let input = dir.join("stamp.jpg");
+    std::fs::write(&input, jpeg(None)).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let none = serde_json::json!({ "coords": "px", "width": 300, "height": 100, "words": [] });
+    std::fs::write(words.join("stamp_p0_full.json"), none.to_string()).unwrap();
+    let tiers = dir.join("tiers");
+    std::fs::create_dir_all(&tiers).unwrap();
+    tier_reading(&tiers, "stamp", "PAID");
+    let out = convert(
+        &input,
+        &[
+            "--ocr-words",
+            words.to_str().unwrap(),
+            "--tier-results",
+            tiers.to_str().unwrap(),
+        ],
+    );
+    let text = out.to_string();
+    assert!(text.contains("PAID"), "{text}");
+    assert!(document(&out).get("doc:unreadPages").is_none(), "{text}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_page_reading_replaces_ocr_on_an_image() {
     // OCR words and a page reading of the same image: the reading wins, as
     // on a PDF page.
@@ -480,5 +509,6 @@ fn an_image_ocr_read_nothing_of_is_reported_missing_without_a_model() {
         .unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("This output is missing it"), "{err}");
+    assert!(err.contains("warning: scan: fluree-doc-parse:"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }

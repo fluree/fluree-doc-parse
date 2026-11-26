@@ -86,6 +86,8 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:sourceName` | `foaf:Document` | what the caller calls the input: its file name, or `--source-name` |
 | `doc:pages` | `foaf:Document` | JSON literal: `[{pageIndex, width, height, folio?}]`, PDF units as displayed; `folio` is the printed page number where there is one |
 | `doc:unreadPages` | `foaf:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
+| `doc:unreadRegions` | `foaf:Document` | JSON literal: `[{pageIndex, bbox, reason}]` — raster regions of otherwise read pages nothing transcribed; `bbox` as `doc:bbox`; `reason` `Region` (routed), `Small` or `NotTexty` (declined by the router), `Unprobed` (not examined: the run decoded no image, or none that small) |
+| `doc:parseWarnings` | `foaf:Document` | JSON literal: `[{pageIndex, kind, count}]` — what the PDF interpreter reported, once per page and kind: `ImageDecodeFailure` |
 | `doc:runningText` | `foaf:Document` | JSON literal: the header/footer text stripped from the body |
 | `doc:attachments` | `foaf:Document` | JSON literal: `[{filename?, contentType, size, sha256, inline?}]`, the files the document carries |
 | `dcterms:title` | `foaf:Document` | the title the file declares: a PDF's `/Title`, an Office file's `dc:title`, an HTML `<title>`, an email's subject |

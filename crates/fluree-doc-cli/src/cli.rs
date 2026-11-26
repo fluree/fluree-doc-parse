@@ -267,6 +267,17 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub emit_anchors: bool,
 
+    /// Decode the images to tell those holding text from pictures, without
+    /// reading them
+    ///
+    /// Escalation, OCR and the anchors probe the images already. A plain
+    /// run does not, and reports each image the text layer does not cover
+    /// as not examined (`Unprobed` in `doc:unreadRegions`); with this flag
+    /// it reports them as the router sees them (`Region`, `Small`,
+    /// `NotTexty`). The decode is most of what an image costs.
+    #[arg(long)]
+    pub probe_images: bool,
+
     /// What every node IRI minted by `--format doco` starts with, as
     /// `<IRI>-element-3` (default: the `--doc-iri`, else
     /// `urn:fluree-doc-parse:<stem>-<first 12 hex digits of the SHA-256>`).
@@ -295,6 +306,16 @@ pub struct ConvertArgs {
     /// Never call a model, whatever the config says
     #[arg(long)]
     pub no_escalate: bool,
+
+    /// Fail a PDF that yields nothing: no text, and no page or region
+    /// reported unread
+    ///
+    /// Such a PDF is warned about either way: a damaged file (a broken
+    /// page tree, a flipped byte) reads exactly like a blank one, or one
+    /// whose text is drawn as vector outlines. With this
+    /// flag it counts as a failed input, and the exit status is non-zero.
+    #[arg(long)]
+    pub strict: bool,
 
     /// Save each email's attachments under DIR/<email stem>/, to convert
     /// on their own

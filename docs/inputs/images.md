@@ -36,7 +36,7 @@ element with its `doc:bbox`, marked `provenance: "ocr"`.
 For an outside engine, [`fdoc dev render-routed`](../cli/dev.md) writes the
 image's crop, `<stem>_p0_full.png`: the image upright, at its own resolution
 (`scale` 1), drawn over white where it is transparent, with the reason
-`near_blank`. [`fdoc ocr`](../cli/ocr.md) reads it, or the image file itself.
+`scanned`. [`fdoc ocr`](../cli/ocr.md) reads it, or the image file itself.
 Either way the words land where `convert` reads them.
 
 Where OCR reads nothing, and a model is configured, the model reads the image
@@ -59,7 +59,7 @@ In a library, `fluree_doc_image::elements(bytes, &engine)` does all of it, and
 Without OCR, an image becomes a single page carrying itself and no glyphs,
 which is what makes [the router](../design/router.md) send it to a reader, as
 it sends a scanned PDF page (an image with no glyphs at all is the router's
-`NearBlank`, the reason an unread image is listed with). It then takes the
+`Scanned`, the reason an unread image is listed with). It then takes the
 same page-tier path, with the same arbitration and the same output shape. No
 rule anywhere downstream knows an image is different.
 

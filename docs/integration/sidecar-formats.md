@@ -192,12 +192,14 @@ region. The router sends a model only those over a
 tenth of the page, a price rather than a property of the pixels: an OCR
 engine is cheap per pixel, and a capture an inch high still holds a date. So
 OCR reads them all, the routed ones first, numbered as the router numbers
-them (`r0`, `r1`, …), then the small ones after them: a model's `r1` and an
-engine's `r1` are the same region. `render-routed --ocr-regions` crops the
-small ones too, with the reason `small_region`. Only a run that reads with an
-engine (`--ocr`, `--ocr-words`, `--ocr-regions`) decodes the small images to
-tell which hold text: without one nothing would read them, and they are most
-of what probing a document's images costs.
+them (`r0`, `r1`, …), then the small ones after them: a model's `r1` and
+an engine's `r1` are the same region. `render-routed --ocr-regions` crops
+the small ones too, with the reason `small_region`. Only a run that reads
+with an engine (`--ocr`, `--ocr-words`, `--ocr-regions`) decodes the small
+images to tell which hold text: without one nothing would read them, and
+they are most of what probing a document's images costs. An image the pixel
+probe does not take for text is no unread region: nothing reads it, and an
+`r{i}` reading names none.
 
 A whole-page reading for any other page is refused with a warning, so the
 text layer of a born-digital page is never replaced by a reading of it — a
@@ -266,8 +268,10 @@ past OCR is a decision of its own. Such a page is not reported unread unless
 its text stays under the floor every page is held to (40 characters): then it
 is listed in `doc:unreadPages` as `OcrSparse`, with a warning on stderr, since
 an engine that gave two words for a dense scan has not read it. A reading
-that took no word reads nothing: the page
-stays as it was, routed and reported unread. So does a whole-page reading
+that took no word reads nothing: the page or region stays as it was, routed
+and reported unread (in
+[`doc:unreadPages`](../formats/doco.md#pages-nothing-read) or
+[`doc:unreadRegions`](../formats/doco.md#regions-nothing-read)). So does a whole-page reading
 most of whose words land nowhere: it is refused. When a page has both a
 `full` reading and `r{i}` readings, the whole-page one is taken first, and a
 region reading is refused where the whole-page one took words in its region

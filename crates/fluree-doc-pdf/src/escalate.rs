@@ -605,14 +605,18 @@ fn select(
             list.sort_by_key(|(tag, _)| tag[1..].parse::<usize>().unwrap_or(usize::MAX));
         }
     }
-    for p in &doc.pages {
+    // Routed as the analysis routes, and as the unread pages are judged
+    // ([`crate::document::region_routes`]): a page is asked for whole where
+    // it is reported unread.
+    let routes = crate::document::region_routes(doc);
+    for (p, route) in doc.pages.iter().zip(&routes) {
         // What an OCR reading already read is not asked for again. A region
         // keeps its number either way, so a crop named before the reading
         // still names the same region.
-        match crate::route::decide(p).0 {
+        match route {
             Route::Vlm(r) => {
                 jobs.push((p.index, None));
-                reasons.insert(p.index, CropReason::from(r));
+                reasons.insert(p.index, CropReason::from(*r));
             }
             route if at_anchors => match anchored.remove(&p.index) {
                 // What an OCR reading already read is not asked for again.
@@ -1447,15 +1451,17 @@ mod tests {
             images: if scanned {
                 vec![crate::extract::ImagePlacement {
                     bbox,
-                    texty: true,
+                    texty: Some(true),
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
+                    key: None,
                 }]
             } else {
                 Vec::new()
             },
             rules: Vec::new(),
+            routing: None,
             fills: Vec::new(),
             dots: Vec::new(),
             traces: Vec::new(),
@@ -1464,6 +1470,7 @@ mod tests {
             height: 800.0,
             rotation: 0,
             ocr: None,
+            warnings: Vec::new(),
         }
     }
 
@@ -1506,8 +1513,8 @@ mod tests {
         };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[1]);
         assert_eq!(jobs.len(), 2, "the blank scan and the doubt page: {jobs:?}");
-        // No glyph at all under a full-page image: the router's near-blank.
-        assert_eq!(reasons.get(&0), Some(&CropReason::NearBlank));
+        // No glyph at all under a full-page image: a scan.
+        assert_eq!(reasons.get(&0), Some(&CropReason::Scanned));
         assert_eq!(reasons.get(&1), Some(&CropReason::FigureDoubt));
         assert_eq!(reasons.get(&2), None);
         assert_eq!(CropReason::FigureDoubt.as_str(), "figure_doubt");
@@ -1545,13 +1552,27 @@ mod tests {
 
     #[test]
     fn each_router_verdict_names_its_reason() {
+        // A logo alone on a sheet: an image under half the page, no glyph.
+        let mut logo = page(3, 0, true);
+        logo.images[0].bbox = BBox {
+            x0: 250.0,
+            y0: 350.0,
+            x1: 350.0,
+            y1: 450.0,
+        };
         let doc = Document {
-            pages: vec![page(0, 0, true), page(1, 50, true), broken_page(2, 300)],
+            pages: vec![
+                page(0, 0, true),
+                page(1, 50, true),
+                broken_page(2, 300),
+                logo,
+            ],
         };
         let (_, reasons) = reasons_with_doubts(&doc, &[]);
-        assert_eq!(reasons.get(&0), Some(&CropReason::NearBlank));
+        assert_eq!(reasons.get(&0), Some(&CropReason::Scanned));
         assert_eq!(reasons.get(&1), Some(&CropReason::Scanned));
         assert_eq!(reasons.get(&2), Some(&CropReason::BrokenText));
+        assert_eq!(reasons.get(&3), Some(&CropReason::NearBlank));
     }
 
     #[test]
@@ -1674,10 +1695,11 @@ mod tests {
                 x1: 550.0,
                 y1: 300.0,
             },
-            texty: true,
+            texty: Some(true),
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         }];
         assert!(matches!(
             crate::route::decide(&p).0,
@@ -1694,10 +1716,11 @@ mod tests {
         let mut p = page(0, 0, false);
         p.images = vec![crate::extract::ImagePlacement {
             bbox: b,
-            texty: true,
+            texty: Some(true),
             ppi,
             bitonal,
             grid: (1000, 1000),
+            key: None,
         }];
         p
     }
@@ -1789,10 +1812,11 @@ mod tests {
                     x1: 600.0,
                     y1: 800.0,
                 },
-                texty: false,
+                texty: Some(false),
                 ppi: Some(200.0),
                 bitonal: true,
                 grid: (1000, 1000),
+                key: None,
             },
         );
         assert_eq!(crop_scale(&p, Some(&shot), CropScale::Stored), 4.0);
@@ -1880,10 +1904,11 @@ mod tests {
                 x1: 550.0,
                 y1: 300.0,
             },
-            texty: true,
+            texty: Some(true),
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         }];
         let doc = Document { pages: vec![p] };
         let (jobs, _) = reasons_with_doubts(&doc, &[]);
@@ -1908,10 +1933,11 @@ mod tests {
                 x1: 550.0,
                 y1: 300.0,
             },
-            texty: true,
+            texty: Some(true),
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         }];
         let doc = Document { pages: vec![p] };
         let mut copy = doc.clone();
@@ -1947,10 +1973,11 @@ mod tests {
                 x1: 550.0,
                 y1: 300.0,
             },
-            texty: true,
+            texty: Some(true),
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         }];
         let doc = Document {
             pages: vec![p, page(1, 500, false)],
@@ -2065,10 +2092,11 @@ mod tests {
                 x1: 600.0,
                 y1: 500.0,
             },
-            texty: true,
+            texty: Some(true),
             grid: (1000, 1000),
             ppi: None,
             bitonal: false,
+            key: None,
         });
         for line in 0..6 {
             for (i, c) in "LABELTEXTS".chars().enumerate() {
@@ -2124,8 +2152,9 @@ mod tests {
         assert!(!analysis.elements.iter().any(|e| e.evidence == "route"));
         let jobs = crops_at_anchors(&extracted, &analysis, &CropHints::default());
         assert_eq!(jobs, [(0, None)]);
-        // Read for the pixels of its regions, it says so: the manifest of
-        // `dev render-routed` asks every whole page its reason.
+        // A scan once its label counts once, to the plan as to the analysis
+        // ([`crate::document::region_routes`]), and said so: the manifest
+        // of `dev render-routed` asks every whole page its reason.
         let (planned, reasons) = plan_explained(
             &extracted,
             &[],
@@ -2133,14 +2162,13 @@ mod tests {
             &CropHints::default(),
         );
         assert_eq!(planned, [(0, None)]);
-        assert_eq!(reasons.get(&0), Some(&CropReason::Region));
+        assert_eq!(reasons.get(&0), Some(&CropReason::Scanned));
     }
 
-    /// Under a budget, that whole page ranks with the regions it is read in
-    /// place of, by the reason the selection gave it: after a scan, before a
-    /// table.
+    /// Under a budget, that whole page ranks as the scan every reader takes
+    /// it for: before a region and a table, and among scans by its place.
     #[test]
-    fn a_page_read_whole_for_its_regions_ranks_with_them() {
+    fn a_page_that_reads_as_a_scan_once_cleaned_ranks_as_one() {
         let doc = Document {
             pages: vec![
                 page_that_reads_as_a_scan_once_cleaned(),
@@ -2155,7 +2183,7 @@ mod tests {
         let (kept, dropped) = within_budget(jobs, &reasons, 1);
         assert_eq!((kept, dropped), (vec![(0, None)], 1));
         let (kept, dropped) = within_budget(planned, &reasons, 1);
-        assert_eq!((kept, dropped), (vec![(2, None)], 1), "the scan first");
+        assert_eq!((kept, dropped), (vec![(0, None)], 1), "two scans, by place");
     }
 
     /// A page with half of its text over a texty image, the image under a
@@ -2171,10 +2199,11 @@ mod tests {
                 x1: 550.0,
                 y1: 400.0,
             },
-            texty: true,
+            texty: Some(true),
             grid: (1000, 1000),
             ppi: None,
             bitonal: false,
+            key: None,
         });
         for (i, c) in "LABELTEXTS".chars().enumerate() {
             for pass in 0..2 {
@@ -2250,10 +2279,11 @@ mod tests {
                 x1: 550.0,
                 y1: 300.0,
             },
-            texty: true,
+            texty: Some(true),
             grid: (1000, 1000),
             ppi: None,
             bitonal: false,
+            key: None,
         }];
         let mut cleaned = page_that_reads_as_a_scan_once_cleaned();
         cleaned.index = 2;
@@ -2274,7 +2304,7 @@ mod tests {
         for p in whole {
             assert!(reasons.contains_key(&p), "page {p}: {reasons:?}");
         }
-        assert_eq!(reasons.get(&2), Some(&CropReason::Region));
+        assert_eq!(reasons.get(&2), Some(&CropReason::Scanned));
         assert!(!reasons.contains_key(&3), "region crops carry their tag");
     }
 
@@ -2290,10 +2320,11 @@ mod tests {
                 x1: 550.0,
                 y1: y0 + 150.0,
             },
-            texty: true,
+            texty: Some(true),
             grid: (1000, 1000),
             ppi: None,
             bitonal: false,
+            key: None,
         };
         p.images = vec![image(550.0), image(150.0)];
         let doc = Document { pages: vec![p] };

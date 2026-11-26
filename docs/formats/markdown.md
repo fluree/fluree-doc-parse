@@ -103,13 +103,32 @@ A page carrying content the output does not hold gets a comment:
 
 ```html
 <!-- fluree-doc-parse: page 1 carries content no reader transcribed
-     (NearBlank). This output is missing it. -->
+     (Scanned). This output is missing it. -->
 ```
 
-A comment rather than text, so extracting text from this file does not read a
-sentence this library wrote as though the document had said it. The
-machine-readable form is [`doc:unreadPages`](doco.md). Escalating the page
-clears it.
+So does a raster region of a page otherwise read — a screenshot pasted into
+prose — with its page and its box, in PDF units, top-left origin:
+
+```html
+<!-- fluree-doc-parse: 1 raster region carries content no reader
+     transcribed: page 3 at 56,582,556,732. This output is missing it. -->
+```
+
+A plain run decodes no image (see
+[`Unprobed`](doco.md#regions-nothing-read)), so it cannot tell a screenshot
+from a photograph; it says how many images it did not examine, by page:
+
+```html
+<!-- fluree-doc-parse: 2 images on pages 1, 4 were not examined: a parse
+     that probes images (--probe-images, or OCR) can tell whether they hold text. -->
+```
+
+One comment says all of these when there are several. A comment rather than text, so
+extracting text from this file does not read a sentence this library wrote
+as though the document had said it. The machine-readable forms are
+[`doc:unreadPages`](doco.md#pages-nothing-read) and
+[`doc:unreadRegions`](doco.md#regions-nothing-read). Escalating the page or
+the region, or reading it by OCR, clears it.
 
 ## What it loses
 

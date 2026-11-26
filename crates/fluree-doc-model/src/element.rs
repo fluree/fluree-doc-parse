@@ -444,6 +444,60 @@ pub struct UnreadPage {
     pub reason: String,
 }
 
+/// A raster region of a page whose content nothing read.
+///
+/// The page-level [`UnreadPage`] cannot say this: a page of prose with a
+/// screenshot or a scanned table pasted into it has plenty of text, so it is
+/// never an unread page, and the region's content is simply absent. The
+/// router lists such a region for a reader; when none reads it (no OCR, no
+/// model reading of the region or of its whole page), it is reported here,
+/// with its box, so a consumer can crop it, read it, or at least know the
+/// output is missing it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct UnreadRegion {
+    /// 0-based physical page, the same space as [`Element::page`].
+    #[serde(rename = "pageIndex")]
+    pub page: usize,
+    /// Where on the page, in the same frame and the same `"x0,y0,x1,y1"`
+    /// form as an element's `doc:bbox`: PDF units, top-left origin, the
+    /// page as displayed.
+    #[serde(serialize_with = "bbox_string")]
+    pub bbox: crate::geom::BBox,
+    /// `Region`: a raster region the text layer does not cover, large
+    /// enough for the router to send a model. Or one the router declined,
+    /// listed so a caller can decide: `Small`, whose pixels look like text
+    /// but which covers under a tenth of the page, half an inch or more on
+    /// its longer side;
+    /// `NotTexty`, a tenth of the page or more whose pixels the probe did
+    /// not take for text (a photograph, a chart). An OCR engine reads the
+    /// first, nothing reads the second. Only `Region` is warned about.
+    pub reason: String,
+}
+
+/// Something the source's parser reported while reading a page.
+///
+/// A PDF interpreter that cannot decode an image still places it, so the
+/// page looks exactly like one whose image decoded and held nothing to
+/// read; only the parser knows the difference. Listed once per page and
+/// kind, with how many times it was reported there.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ParseWarning {
+    /// 0-based physical page, the same space as [`Element::page`].
+    #[serde(rename = "pageIndex")]
+    pub page: usize,
+    /// As the parser names it: `ImageDecodeFailure`, an image it could not
+    /// decode. Any other kind is passed on as named; the PDF interpreter
+    /// also declares `UnsupportedFont`, but the version used never reports
+    /// it.
+    pub kind: String,
+    pub count: usize,
+}
+
+/// A box as `doc:bbox` writes it, so one parser reads both.
+fn bbox_string<S: serde::Serializer>(b: &crate::geom::BBox, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&format!("{:.2},{:.2},{:.2},{:.2}", b.x0, b.y0, b.x1, b.y1))
+}
+
 /// What a document says about itself: its title, who made it, and when.
 ///
 /// Declared, never inferred: a PDF's Info dictionary, an Office file's core
@@ -590,10 +644,15 @@ pub struct Attachment {
 /// Facts about a document that are not elements of it.
 ///
 /// Additive: the emitters take this where they can carry it, and their
-/// existing signatures stay valid with an empty one.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// existing signatures stay valid with an empty one. Not `Eq`: a region's
+/// box is floating-point.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Notes {
     pub unread: Vec<UnreadPage>,
+    /// Raster regions of pages otherwise read, which nothing read.
+    pub unread_regions: Vec<UnreadRegion>,
+    /// What the parser reported while reading the pages.
+    pub warnings: Vec<ParseWarning>,
     /// Running header and footer text, kept once because it identifies the
     /// document even though it is noise inside the body.
     pub running_text: Vec<String>,
@@ -604,6 +663,8 @@ pub struct Notes {
 impl Notes {
     pub fn is_empty(&self) -> bool {
         self.unread.is_empty()
+            && self.unread_regions.is_empty()
+            && self.warnings.is_empty()
             && self.running_text.is_empty()
             && self.info.is_empty()
             && self.attachments.is_empty()
@@ -613,23 +674,101 @@ impl Notes {
     /// wrong. Deliberately prose: it ends up in a comment, and a comment
     /// nobody understands is not a warning.
     pub fn summary(&self) -> Option<String> {
-        if self.unread.is_empty() {
-            return None;
+        let mut said: Vec<String> = Vec::new();
+        if !self.unread.is_empty() {
+            let mut pages: Vec<usize> = self.unread.iter().map(|u| u.index + 1).collect();
+            pages.sort_unstable();
+            pages.dedup();
+            let mut reasons: Vec<&str> = self.unread.iter().map(|u| u.reason.as_str()).collect();
+            reasons.sort_unstable();
+            reasons.dedup();
+            said.push(format!(
+                "page{} {} carr{} content no reader transcribed ({})",
+                if pages.len() == 1 { "" } else { "s" },
+                page_runs(&pages),
+                if pages.len() == 1 { "ies" } else { "y" },
+                reasons.join(", ")
+            ));
         }
-        let mut pages: Vec<usize> = self.unread.iter().map(|u| u.index + 1).collect();
-        pages.sort_unstable();
-        pages.dedup();
-        let mut reasons: Vec<&str> = self.unread.iter().map(|u| u.reason.as_str()).collect();
-        reasons.sort_unstable();
-        reasons.dedup();
-        Some(format!(
-            "fluree-doc-parse: page{} {} carr{} content no reader transcribed ({}). \
-             This output is missing it.",
-            if pages.len() == 1 { "" } else { "s" },
-            page_runs(&pages),
-            if pages.len() == 1 { "ies" } else { "y" },
-            reasons.join(", ")
-        ))
+        // Only the regions the router sent a reader to: one it declined is a
+        // logo or a photograph as often as content, listed in
+        // `doc:unreadRegions` for a caller to judge, not warned about.
+        let mut regions: Vec<&UnreadRegion> = self
+            .unread_regions
+            .iter()
+            .filter(|r| r.reason == "Region")
+            .collect();
+        if !regions.is_empty() {
+            // Each with its page (1-based, as above) and its box, to the
+            // unit: enough to find it on the page, and the exact box is in
+            // `doc:unreadRegions`.
+            regions.sort_by(|a, b| {
+                (a.page, a.bbox.y0, a.bbox.x0)
+                    .partial_cmp(&(b.page, b.bbox.y0, b.bbox.x0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let at: Vec<String> = regions
+                .iter()
+                .map(|r| {
+                    let b = r.bbox;
+                    format!(
+                        "page {} at {:.0},{:.0},{:.0},{:.0}",
+                        r.page + 1,
+                        b.x0,
+                        b.y0,
+                        b.x1,
+                        b.y1
+                    )
+                })
+                .collect();
+            let one = at.len() == 1;
+            let verb = match (said.is_empty(), one) {
+                (true, true) => "carries content no reader transcribed",
+                (true, false) => "carry content no reader transcribed",
+                (false, true) => "does too",
+                (false, false) => "do too",
+            };
+            said.push(format!(
+                "{} raster region{} {verb}: {}",
+                at.len(),
+                if one { "" } else { "s" },
+                at.join("; ")
+            ));
+        }
+        // Images no pixel of which was looked at: a capture of text and a
+        // logo alike. Said once, by page, not each with its box: they are
+        // as often decoration as content, and the boxes are in
+        // `doc:unreadRegions`.
+        let mut unprobed: Vec<usize> = self
+            .unread_regions
+            .iter()
+            .filter(|r| r.reason == "Unprobed")
+            .map(|r| r.page + 1)
+            .collect();
+        let images = unprobed.len();
+        unprobed.sort_unstable();
+        unprobed.dedup();
+        let unexamined = (images > 0).then(|| {
+            format!(
+                "{images} image{} on page{} {} {} not examined: a parse that \
+                 probes images (--probe-images, or OCR) can tell whether {} text",
+                if images == 1 { "" } else { "s" },
+                if unprobed.len() == 1 { "" } else { "s" },
+                page_runs(&unprobed),
+                if images == 1 { "was" } else { "were" },
+                if images == 1 { "it holds" } else { "they hold" },
+            )
+        });
+        match (said.is_empty(), unexamined) {
+            (true, None) => None,
+            (true, Some(u)) => Some(format!("fluree-doc-parse: {u}.")),
+            (false, u) => Some(format!(
+                "fluree-doc-parse: {}. This output is missing it.{}",
+                said.join(". "),
+                u.map(|u| format!(" {}{}.", u[..1].to_uppercase(), &u[1..]))
+                    .unwrap_or_default()
+            )),
+        }
     }
 }
 

@@ -331,6 +331,7 @@ mod tests {
             glyphs,
             images: Vec::new(),
             rules: Vec::new(),
+            routing: None,
             fills: Vec::new(),
             dots: Vec::new(),
             traces: Vec::new(),
@@ -339,6 +340,7 @@ mod tests {
             height: 792.0,
             rotation: 0,
             ocr: None,
+            warnings: Vec::new(),
         }
     }
 

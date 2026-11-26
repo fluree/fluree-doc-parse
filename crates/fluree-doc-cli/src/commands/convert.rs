@@ -522,7 +522,7 @@ fn convert_image(
         match ocr_image(&data, header, src, cfg, quiet) {
             Ok(read) if read.read_something || !model_after => {
                 if let (Some(note), false) = (read.notes.summary(), quiet) {
-                    eprintln!("warning: {note}");
+                    eprintln!("warning: {stem}: {note}");
                 }
                 return Ok(render(&read.elements, src, args, read.sizes, &read.notes));
             }
@@ -954,6 +954,8 @@ fn render(
                 doc_iri: args.doc_iri.clone(),
                 pages,
                 unread: notes.unread.clone(),
+                unread_regions: notes.unread_regions.clone(),
+                warnings: notes.warnings.clone(),
                 running_text: notes.running_text.clone(),
                 info: notes.info.clone(),
                 attachments: notes.attachments.clone(),
@@ -1013,17 +1015,24 @@ fn convert_bytes(
         .map_err(|e| format!("parse: {e:?}"))?;
     let ol = outline::extract(&raw);
     let opts = cfg.options_for(stem);
-    // Images are probed for the router, which runs for escalation, for the
-    // anchors and sidecars analysis routes for, and for OCR words, which go
-    // only where it sends a reader. The images too small to route are
-    // probed only for OCR, which reads the texty ones: without it nothing
-    // would, and they are most of the decode. A deterministic parse has no
-    // use for any.
+    // Images are probed for whatever reads their pixels' verdict: the
+    // router, when it runs for escalation or for the anchors and sidecars
+    // analysis routes for; OCR words, which go only where it sends a reader;
+    // an OCR engine; and a caller who asks for the verdicts
+    // (`--probe-images`). The images too small to route are probed only
+    // for OCR, which reads the texty ones, and for that caller: without
+    // them nothing would read those, and they are most of the decode. A
+    // deterministic parse decodes none, and reports each image the text
+    // layer does not cover as not examined
+    // ([`fluree_doc_pdf::route::Declined::Unprobed`]).
     let ocr = cfg.ocr_words.is_some() || cfg.ocr.is_some();
     let mut eopts = ExtractOptions::default();
-    eopts.probe_images =
-        cfg.escalate || ocr || fluree_doc_pdf::document::routing_is_consulted(&opts);
-    eopts.probe_small_images = ocr;
+    eopts.probe_images = args.probe_images
+        || cfg.escalate
+        || ocr
+        || opts.emit_anchors
+        || opts.layout_prefix.is_some();
+    eopts.probe_small_images = ocr || args.probe_images;
     let mut doc = extract_bytes_with(data, &eopts).map_err(|e| format!("extract: {e}"))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
@@ -1057,6 +1066,10 @@ fn convert_bytes(
         if let Some(keep) = pages {
             readings.retain(|(page, _, _)| keep.contains(page));
         }
+        // A region showing what an earlier one shows has no crop of its own
+        // to read (`render-routed --ocr-regions` cuts it once): it takes the
+        // earlier one's reading, as `--ocr` gives it.
+        let readings = fluree_doc_pdf::ocr::with_copies(&doc, pages, readings);
         let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
         report_ocr(stem, "--ocr-words", &injected, cfg.verbose, quiet);
         injected
@@ -1148,10 +1161,20 @@ fn convert_bytes(
             }
         })
         .collect();
-    // After the tiers: a page is unread only once whatever was going to read
-    // it has run.
+    // After the tiers: a page or a region is unread only once whatever was
+    // going to read it has run. Only on the pages asked for: one left out
+    // was not read because nobody asked, which the output need not say.
+    let asked = |page: usize| pages.is_none_or(|keep| keep.contains(&page));
+    let mut unread = fluree_doc_pdf::unread_pages(&doc, &a.elements);
+    unread.retain(|u| asked(u.index));
+    let mut unread_regions = fluree_doc_pdf::unread_regions(&doc, &a.elements);
+    unread_regions.retain(|u| asked(u.page));
+    let mut warnings = fluree_doc_pdf::parse_warnings(&doc);
+    warnings.retain(|w| asked(w.page));
     let notes = fluree_doc_model::Notes {
-        unread: fluree_doc_pdf::unread_pages(&doc, &a.elements),
+        unread,
+        unread_regions,
+        warnings,
         // A page number identifies nothing, bare or as `Page 3 of 15`; the
         // rest of the running block is the document's own name for itself.
         running_text: a
@@ -1164,9 +1187,103 @@ fn convert_bytes(
         ..Default::default()
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
-        eprintln!("warning: {note}");
+        eprintln!("warning: {stem}: {note}");
+    }
+    if !quiet {
+        for line in parse_warning_lines(&notes.warnings) {
+            eprintln!("warning: {stem}: {line}");
+        }
+    }
+    let asked_pages = doc.pages.iter().filter(|p| asked(p.index)).count();
+    if let Some(why) = read_nothing(doc.pages.len(), asked_pages, &a.elements, &notes) {
+        if args.strict {
+            return Err(why);
+        }
+        if !quiet {
+            eprintln!("warning: {stem}: {why}");
+        }
     }
     Ok(render(&a.elements, src, args, sizes, &notes))
+}
+
+/// How many pages a parser warning names on stderr; `doc:parseWarnings`
+/// lists them all.
+const LISTED_PAGES: usize = 10;
+
+/// One line per kind of parser warning, naming its pages (1-based, the
+/// first [`LISTED_PAGES`] of them) and what it costs the output.
+fn parse_warning_lines(warnings: &[fluree_doc_model::ParseWarning]) -> Vec<String> {
+    let mut kinds: Vec<&str> = warnings.iter().map(|w| w.kind.as_str()).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    kinds
+        .into_iter()
+        .map(|kind| {
+            let all: Vec<usize> = warnings
+                .iter()
+                .filter(|w| w.kind == kind)
+                .map(|w| w.page + 1)
+                .collect();
+            let mut pages: Vec<String> = all
+                .iter()
+                .take(LISTED_PAGES)
+                .map(usize::to_string)
+                .collect();
+            if all.len() > LISTED_PAGES {
+                pages.push(format!("and {} more", all.len() - LISTED_PAGES));
+            }
+            let what = match kind {
+                "ImageDecodeFailure" => "an image could not be decoded; what it shows is missing",
+                // Any other kind the interpreter may name (it declares
+                // `UnsupportedFont`, but never reports it).
+                _ => "the parser reported a problem",
+            };
+            format!(
+                "{kind} on page{} {}: {what}",
+                if all.len() == 1 { "" } else { "s" },
+                pages.join(", ")
+            )
+        })
+        .collect()
+}
+
+/// Why a PDF's output holds nothing at all, when it does: no element, and
+/// nothing reported unread.
+///
+/// Every page the router can tell carries content is reported unread when
+/// nothing read it, so an output that is empty *and* reports nothing is a
+/// document with no text layer and no image: blank, its text drawn as
+/// vector outlines (the router does not count drawing operations), or one
+/// the parser could not open properly: a page tree that loops or nests
+/// past what the parser follows, or a reference one flipped bit broke, all
+/// come out as a valid, empty document. They cannot be told apart from
+/// here, and a batch must not take any of them for a successful parse in
+/// silence.
+///
+/// `pages` is the document's page count, `asked` how many of them `--pages`
+/// kept. A selection that keeps none of them read nothing either: page
+/// numbers past the end of a document, in a batch, must not pass in silence.
+fn read_nothing(
+    pages: usize,
+    asked: usize,
+    elements: &[Element],
+    notes: &fluree_doc_model::Notes,
+) -> Option<String> {
+    if !elements.is_empty() || !notes.unread.is_empty() || !notes.unread_regions.is_empty() {
+        return None;
+    }
+    Some(match (pages, asked) {
+        (0, _) => "nothing was read: no page was found (the file may be damaged)".into(),
+        (n, 0) => format!(
+            "nothing was read: --pages selects none of its {n} page{}",
+            if n == 1 { "" } else { "s" }
+        ),
+        (_, n) => format!(
+            "nothing was read: {n} page{} with no text layer and no image \
+             (blank, drawn as vector outlines, or damaged)",
+            if n == 1 { "" } else { "s" }
+        ),
+    })
 }
 
 /// Take the crops the analysis asks for, have `read` read them, and splice
@@ -1329,6 +1446,35 @@ fn parse_page(s: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_warnings_read_as_one_line_a_kind() {
+        let w = |page, kind: &str| fluree_doc_model::ParseWarning {
+            page,
+            kind: kind.into(),
+            count: 1,
+        };
+        let lines = parse_warning_lines(&[
+            w(2, "ImageDecodeFailure"),
+            w(0, "UnsupportedFont"),
+            w(4, "ImageDecodeFailure"),
+        ]);
+        assert_eq!(
+            lines,
+            [
+                "ImageDecodeFailure on pages 3, 5: an image could not be decoded; what it shows is missing",
+                "UnsupportedFont on page 1: the parser reported a problem",
+            ]
+        );
+        // A long document names its first pages, and counts the rest.
+        let many: Vec<_> = (0..13).map(|p| w(p, "ImageDecodeFailure")).collect();
+        let line = &parse_warning_lines(&many)[0];
+        assert!(
+            line.contains("pages 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, and 3 more:"),
+            "{line}"
+        );
+        assert!(parse_warning_lines(&[]).is_empty());
+    }
 
     #[test]
     fn colliding_stems_get_disambiguated() {
@@ -1736,12 +1882,11 @@ mod tests {
         doc
     }
 
-    /// Under `escalation.max_crops`, a page a live run reads whole in place
-    /// of its region ranks with routed regions, after a scan, by the reason
-    /// it was chosen for: routed again as analysed, it would read as a scan
-    /// and come first.
+    /// Under `escalation.max_crops`, a page that routes a region as drawn and
+    /// reads as a scan once its faux-bold label counts once ranks as the scan
+    /// every reader takes it for: two scans, the earlier first.
     #[test]
-    fn under_the_ceiling_a_page_read_for_its_region_comes_after_a_scan() {
+    fn under_the_ceiling_a_page_that_reads_as_a_scan_once_cleaned_ranks_as_one() {
         let mut cfg = TierConfig {
             escalate: true,
             ..Default::default()
@@ -1764,13 +1909,13 @@ mod tests {
             Ok(fluree_doc_pdf::escalate::Readings::default())
         })
         .expect("a stand-in reader does not fail");
-        assert_eq!(asked, [(1, None)], "the scan, not the region's page");
+        assert_eq!(asked, [(0, None)], "two scans, by place");
     }
 
     /// `dev render-routed` writes a reason for every whole page it writes:
-    /// a page read whole in place of its region gives the region's.
+    /// a page that reads as a scan once its label counts once gives that.
     #[test]
-    fn render_routed_gives_a_page_read_for_its_region_that_reason() {
+    fn render_routed_gives_a_page_that_reads_as_a_scan_that_reason() {
         let cfg = TierConfig::default();
         let extracted = a_scan_after_a_page_read_whole_for_its_region();
         let mut doc = extracted.clone();
@@ -1790,7 +1935,7 @@ mod tests {
             .iter()
             .map(|(page, _)| reasons.get(page).expect("a reason").as_str())
             .collect();
-        assert_eq!(named, ["region", "near_blank"]);
+        assert_eq!(named, ["scanned", "near_blank"]);
     }
 
     /// A page of prose in three panels under a full-width header: a page-wide

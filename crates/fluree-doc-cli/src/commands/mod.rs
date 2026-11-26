@@ -56,6 +56,7 @@ fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         models: None,
         ocr_max_megapixels: None,
         emit_anchors: false,
+        probe_images: false,
         base_iri: None,
         doc_iri: None,
         source_name: None,
@@ -65,6 +66,7 @@ fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         // a configured key on the machine that ran one must not be able to
         // change it.
         no_escalate: true,
+        strict: false,
         attachments: None,
     }
 }

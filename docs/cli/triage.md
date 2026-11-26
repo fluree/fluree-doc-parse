@@ -37,11 +37,18 @@ worth measuring before sizing anything.
 |---|---|
 | `Deterministic` | the text layer is readable; no escalation |
 | `Scanned` | the page is pixels — few or no glyphs against high image coverage |
-| `NearBlank` | too little content to judge from the text layer |
+| `NearBlank` | next to no glyphs and a small image (under half the page): a logo on a separator sheet, a signature |
 | `BrokenText` | glyphs resolve to unusable Unicode (broken CID fonts) |
 | `Regions(n)` | `n` raster regions the text layer does not cover |
 | `Fragmented` | a table's detected columns disagree with themselves |
 | `MergedRows` | a table's rows do not segment cleanly |
+
+A routed page or region that no reader then reads is not silently dropped
+from `fdoc convert`'s output: a page is listed in
+[`doc:unreadPages`](../formats/doco.md#pages-nothing-read) under its verdict,
+each of a `Regions(n)` page's regions in
+[`doc:unreadRegions`](../formats/doco.md#regions-nothing-read) with its box,
+and both are named in a warning on stderr.
 
 Four line kinds, and they answer different questions:
 

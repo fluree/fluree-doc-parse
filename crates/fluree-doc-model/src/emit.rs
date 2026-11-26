@@ -1073,6 +1073,108 @@ mod tests {
         assert!(s.contains("NearBlank, Scanned"), "{s}");
     }
 
+    #[test]
+    fn an_unread_region_is_declared_with_its_page_and_box() {
+        use crate::element::{Notes, UnreadPage, UnreadRegion};
+        use crate::geom::BBox;
+        let region = |page, y0| UnreadRegion {
+            page,
+            bbox: BBox {
+                x0: 56.0,
+                y0,
+                x1: 556.4,
+                y1: y0 + 150.0,
+            },
+            reason: "Region".into(),
+        };
+        let one = Notes {
+            unread_regions: vec![region(2, 582.0)],
+            ..Default::default()
+        };
+        assert!(!one.is_empty());
+        assert_eq!(
+            one.summary().as_deref(),
+            Some(
+                "fluree-doc-parse: 1 raster region carries content no reader \
+                 transcribed: page 3 at 56,582,556,732. This output is missing it."
+            )
+        );
+        let e = para("Review memo", vec![]);
+        let x = to_xhtml_with(std::slice::from_ref(&e), &one);
+        assert!(x.contains("<!-- fluree-doc-parse: 1 raster region"), "{x}");
+        assert!(to_markdown_with(&[e], &one).contains("page 3 at 56,582,556,732"));
+
+        // A region the router declined is listed, not warned about.
+        let declined = Notes {
+            unread_regions: vec![UnreadRegion {
+                reason: "Small".into(),
+                ..region(0, 40.0)
+            }],
+            ..Default::default()
+        };
+        assert_eq!(declined.summary(), None);
+        let mixed = Notes {
+            unread_regions: vec![
+                UnreadRegion {
+                    reason: "NotTexty".into(),
+                    ..region(0, 40.0)
+                },
+                region(2, 582.0),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(mixed.summary(), one.summary());
+
+        // Images not examined are said once, by page, after what is missing.
+        let unprobed = |page| UnreadRegion {
+            reason: "Unprobed".into(),
+            ..region(page, 40.0)
+        };
+        let alone = Notes {
+            unread_regions: vec![unprobed(4), unprobed(0), unprobed(1)],
+            ..Default::default()
+        };
+        assert_eq!(
+            alone.summary().as_deref(),
+            Some(
+                "fluree-doc-parse: 3 images on pages 1–2, 5 were not examined: a parse \
+                 that probes images (--probe-images, or OCR) can tell whether they hold text."
+            )
+        );
+        let after = Notes {
+            unread_regions: vec![unprobed(0), region(2, 582.0)],
+            ..Default::default()
+        };
+        assert_eq!(
+            after.summary().as_deref(),
+            Some(
+                "fluree-doc-parse: 1 raster region carries content no reader \
+                 transcribed: page 3 at 56,582,556,732. This output is missing it. \
+                 1 image on page 1 was not examined: a parse that probes images \
+                 (--probe-images, or OCR) can tell whether it holds text."
+            )
+        );
+
+        // Listed in page order, then down the page; after unread pages.
+        let both = Notes {
+            unread: vec![UnreadPage {
+                index: 0,
+                reason: "Scanned".into(),
+            }],
+            unread_regions: vec![region(4, 300.0), region(2, 582.0), region(2, 100.0)],
+            ..Default::default()
+        };
+        let s = both.summary().unwrap();
+        assert!(
+            s.contains(
+                "page 1 carries content no reader transcribed (Scanned). \
+                 3 raster regions do too: page 3 at 56,100,556,250; \
+                 page 3 at 56,582,556,732; page 5 at 56,300,556,450."
+            ),
+            "{s}"
+        );
+    }
+
     fn turn(text: &str, speaker: Option<&str>, start_ms: u64) -> Element {
         let mut e = para(text, vec![]);
         e.turn = Some(Turn {

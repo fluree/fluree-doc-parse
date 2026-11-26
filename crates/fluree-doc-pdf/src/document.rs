@@ -3409,18 +3409,6 @@ fn timed<T>(slot: &mut std::time::Duration, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// Does anything downstream read the routing verdict?
-///
-/// Only two things do: layout-table arbitration, which needs the sidecars,
-/// and the splice anchors, which are env-gated. A pure deterministic run
-/// reads neither, and [`crate::route::decide`] is not free — it scans every
-/// glyph, rasterises image coverage onto a grid, and tests glyph containment
-/// once per candidate region. Computing a verdict nobody consumes is the
-/// clearest kind of waste, even where the corpus is too noisy to time it.
-pub fn routing_is_consulted(opts: &AnalyzeOptions) -> bool {
-    opts.emit_anchors || opts.layout_prefix.is_some()
-}
-
 /// Text that is dot leaders alone: a run of
 /// [`crate::textgrid::LEADER_DOTS`] dots or more, spaced or not, and nothing
 /// else.
@@ -3754,7 +3742,7 @@ pub fn analyze(raw: &mut RawDoc, outline: &[OutlineItem]) -> Analysis {
 pub fn region_routes(doc: &RawDoc) -> Vec<crate::route::Route> {
     routing_pages(doc)
         .iter()
-        .map(|p| crate::route::decide(p).0)
+        .map(|p| p.routing().route.clone())
         .collect()
 }
 
@@ -3793,25 +3781,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         crate::watermark::strip_overlaid(&mut raw.pages)
     });
     // Routed here, after the two cleanings that take glyphs off an image and
-    // before any other: the page an OCR reading numbers its regions on
-    // ([`region_routes`]), so a region's anchor and its reading carry one
-    // name. `Deterministic` is the right stand-in when nobody asks: both
-    // consumers act only on `VlmRegions`, and both are unreachable in the
-    // configurations that skip the call.
-    let routes: Vec<crate::route::Route> = raw
-        .pages
-        .iter()
-        .map(|p| {
-            timed(&mut timings.routing, || {
-                if routing_is_consulted(opts) {
-                    crate::route::decide(p).0
-                } else {
-                    crate::route::Route::Deterministic
-                }
-            })
-        })
-        .collect();
-    for (p, route) in raw.pages.iter_mut().zip(routes) {
+    // before any other, and kept on the page for whatever reads it after
+    // this: the page an OCR reading numbers its regions on
+    // ([`routing_pages`]), which kept its routing first when it read one, so
+    // a region's anchor, its crop, its reading and its report carry one name.
+    for p in raw.pages.iter_mut() {
+        timed(&mut timings.routing, || p.keep_routing());
+    }
+    for p in raw.pages.iter_mut() {
         // Before anything reads the geometry: a designer's baseline grid is
         // drawn with the same primitive a table's ruling is, and every
         // consumer of `rules` — grids, column rulers, row banding — would
@@ -3832,6 +3809,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // The page's glyphs are final from here: each grid's cells are read
         // from them once.
         let _cells = crate::cells::pin(&p.glyphs);
+        let route = p.routing().route.clone();
 
         // Tables first: a grid's glyphs must not also become paragraphs.
         // Two readings of the page's ruling, judged after trimming: a
@@ -6893,6 +6871,8 @@ mod tests {
                 height: 800.0,
                 rotation: 0,
                 ocr: None,
+                routing: None,
+                warnings: Vec::new(),
             };
             (grid, page)
         };
@@ -7223,6 +7203,155 @@ mod tests {
     }
 
     const XS: [f64; 4] = [72.0, 180.0, 368.0, 595.0];
+
+    /// One letter, 6 units wide, on the baseline `y` (the frame's y grows
+    /// down the page), the `i`th the page draws.
+    fn letter(c: char, x: f64, y: f64, i: usize) -> Glyph {
+        Glyph {
+            text: c.to_string(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: y - 8.0,
+                x1: x + 6.0,
+                y1: y + 2.0,
+            }),
+            page: 0,
+            origin: (x, y),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            italic: false,
+            advance: Some(6.0),
+            draw_index: i,
+        }
+    }
+
+    #[test]
+    fn a_caption_drawn_twice_over_a_capture_is_one_caption_to_every_reader() {
+        // Prose, then capture A with a caption drawn twice over it (26
+        // glyphs as drawn, enough to say the text layer covers it), then
+        // capture B with nothing over it. Once the caption counts once, A
+        // holds 13 glyphs, a glyph void: A is r0, B r1, for the analysis and
+        // its anchors, the crops, and an OCR reading alike.
+        let a = BBox {
+            x0: 56.0,
+            y0: 262.0,
+            x1: 556.0,
+            y1: 412.0,
+        };
+        let b = BBox {
+            x0: 56.0,
+            y0: 582.0,
+            x1: 556.0,
+            y1: 732.0,
+        };
+        let mut glyphs = Vec::new();
+        for line in 0..4 {
+            for (k, c) in "The account review and the record".chars().enumerate() {
+                let i = glyphs.len();
+                glyphs.push(letter(
+                    c,
+                    56.0 + 6.0 * k as f64,
+                    40.0 + 14.0 * line as f64,
+                    i,
+                ));
+            }
+        }
+        for _ in 0..2 {
+            for (k, c) in "Figure 1 data".chars().enumerate() {
+                let i = glyphs.len();
+                glyphs.push(letter(c, 100.0 + 6.0 * k as f64, 342.0, i));
+            }
+        }
+        let capture = |bbox| crate::extract::ImagePlacement {
+            bbox,
+            texty: Some(true),
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+            key: None,
+        };
+        let mut page = crate::image::page_of(612, 792, false).pages.remove(0);
+        page.glyphs = glyphs;
+        page.images = vec![capture(a), capture(b)];
+        assert_eq!(
+            crate::route::decide(&page).0,
+            crate::route::Route::VlmRegions(vec![b]),
+            "as drawn, the caption covers A"
+        );
+        let mut raw = RawDoc { pages: vec![page] };
+        let both = crate::route::Route::VlmRegions(vec![a, b]);
+        // What an OCR reading numbers its regions by, before the analysis.
+        assert_eq!(region_routes(&raw), vec![both.clone()]);
+        let opts = AnalyzeOptions {
+            emit_anchors: true,
+            ..Default::default()
+        };
+        let analysis = analyze_with(&mut raw, &[], &opts);
+        assert_eq!(raw.pages[0].routing().route, both);
+        let anchors: Vec<(&str, Option<BBox>)> = analysis
+            .elements
+            .iter()
+            .filter(|e| e.text.starts_with("[[VLM"))
+            .map(|e| (e.text.as_str(), e.bbox))
+            .collect();
+        assert_eq!(
+            anchors,
+            vec![("[[VLM:p0:r0]]", Some(a)), ("[[VLM:p0:r1]]", Some(b))]
+        );
+        // The crops asked for from the page analysed, under the same names.
+        #[cfg(feature = "render")]
+        assert_eq!(
+            crate::escalate::crops_for(&raw, &analysis, false),
+            vec![(0, Some(vec![("r0".to_string(), a), ("r1".to_string(), b)]))]
+        );
+        // Analysed again, the page keeps its routing.
+        analyze_with(&mut raw, &[], &opts);
+        assert_eq!(raw.pages[0].routing().route, both);
+    }
+
+    #[test]
+    fn a_page_analysed_is_judged_unread_as_its_crops_are_chosen() {
+        // A small logo and a line drawn twice, as a producer drawing bold
+        // may: 24 glyphs as drawn, a page of text; 12 once the bold counts
+        // once, near-blank. Unread is judged as the crops are chosen, on the
+        // page as the analysis routes it.
+        let mut glyphs = Vec::new();
+        for _ in 0..2 {
+            for (k, c) in "CONFIDENTIAL".chars().enumerate() {
+                let i = glyphs.len();
+                glyphs.push(letter(c, 100.0 + 6.0 * k as f64, 400.0, i));
+            }
+        }
+        let mut page = crate::image::page_of(612, 792, false).pages.remove(0);
+        page.glyphs = glyphs;
+        page.images = vec![crate::extract::ImagePlacement {
+            bbox: BBox {
+                x0: 56.0,
+                y0: 40.0,
+                x1: 120.0,
+                y1: 80.0,
+            },
+            texty: Some(false),
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+            key: None,
+        }];
+        assert_eq!(
+            crate::route::decide(&page).0,
+            crate::route::Route::Deterministic
+        );
+        let mut raw = RawDoc { pages: vec![page] };
+        let near_blank = crate::route::Route::Vlm(crate::route::Reason::NearBlank);
+        // As the crops are chosen, before the analysis.
+        assert_eq!(region_routes(&raw), vec![near_blank.clone()]);
+        let analysis = analyze(&mut raw, &[]);
+        assert_eq!(raw.pages[0].routing().route, near_blank);
+        let unread = crate::unread_pages(&raw, &analysis.elements);
+        assert_eq!(unread.len(), 1, "{unread:?}");
+        assert_eq!(unread[0].reason, "NearBlank");
+    }
 
     fn grid(rows: &[&[&str]]) -> Vec<Vec<String>> {
         rows.iter()

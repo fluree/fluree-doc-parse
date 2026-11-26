@@ -427,7 +427,7 @@ pub(crate) fn ocr_readings(
     let mut out = Vec::new();
     // Numbered as the analysis's anchors and crops are.
     for p in &fluree_doc_pdf::document::routing_pages(doc) {
-        // Small regions too: an engine reads what a model call would not pay for.
+        // The regions no model is sent too: an engine reads them all.
         let regions = fluree_doc_pdf::route::ocr_regions(p).len();
         let crops = std::iter::once(Crop::Page).chain((0..regions).map(Crop::Region));
         for crop in crops {
