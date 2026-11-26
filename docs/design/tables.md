@@ -558,6 +558,48 @@ Both rules read only lines of labels of a few words each. A line of prose
 beside a chart's ticks (`the influence of idiosyncratic or temporary`) is no
 line of labels, and adds no column.
 
+## An item several lines tall
+
+An invoice sets an item's figures on its first line, and its codes, notes and
+the kind of its tax on the lines under it (`FSN:`, a product code, `WID:`, and
+`CST` under `14.50%`). Where the table rules every row, those lines are the
+item's own: a rule over the item, one under its last line, none between.
+
+A rule here runs across most of the table's width. A rule drawn a cell at a
+time counts as one where its pieces touch. A statement's underlines, with a
+gutter between each, don't count, though the piece under a wide stub can run
+across most of the table alone.
+
+- **A row ruled off on its own.** A band between two rules that opens on a
+  line of two figures or more is one row, however many lines it holds, when
+  all of these hold:
+  - each further line follows the one above it a line's gap apart, and the
+    closing rule sits just under the last;
+  - each chunk on them sits under one of the first line's cells: starting
+    where that cell starts and ending short of the next, or within its
+    extent;
+  - none of them sets a figure, or a dash for none (`(—)`), under one of the
+    first line's figures;
+  - the band above it or below it opens on a line of figures too;
+  - no band in the table holds two lines with a figure in one column.
+
+  The last two say that the rules part every row. Where they part groups of
+  rows, a label under a row in its band names the rows after it (`Financed
+  by` under `Employed capital`), and a journal table's body between its header
+  rule and its foot holds many rows. In both cases every line stays as it
+  reads.
+- **A run of figure rows** takes up to two lines of labels between its rows.
+  It takes more where they are a row's own, ruled off with it: two figures or
+  more on the row, a rule over it, a rule under its last line and none
+  between, each chunk under one of its cells. Labels under a statement's row,
+  ruled off from nothing, name the rows after it, and three of them still end
+  the run.
+
+Before these rules, alignment read the item's lines with the address lines
+over the header as one table of two columns. They also make whole the wrapped
+labels and descriptions of tables ruled row by row (`Number of devices that
+can / be connected in parallel to / increase the power rating, units`).
+
 ## A shaded header band over a table read from its text
 
 A table can set its header as a band of shaded cells at its top, under a rule
