@@ -134,6 +134,213 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
+/// Whether a document's information title says anything: not empty, not a
+/// file's name (`report.docx`, `BMFG1411_Updated.pdf`), not a placeholder
+/// (`Untitled`, `(anonymous)`, `Microsoft Word - draft3.doc`) and not a
+/// typesetter's job name (`pone.0005054 1..10`).
+pub(crate) fn meaningful_title(meta: &str) -> bool {
+    let m = meta.trim().to_lowercase();
+    let file = m
+        .split(|c: char| !c.is_alphanumeric() && c != '.')
+        .any(|w| {
+            [
+                ".doc", ".docx", ".pdf", ".md", ".ppt", ".pptx", ".xls", ".xlsx", ".indd", ".tex",
+                ".rtf", ".txt", ".dvi", ".ps",
+            ]
+            .iter()
+            .any(|ext| w.ends_with(ext) && w.len() > ext.len())
+        });
+    let placeholder = [
+        "untitled",
+        "anonymous",
+        "microsoft word",
+        "microsoft powerpoint",
+    ]
+    .iter()
+    .any(|p| m.contains(p));
+    let job = m.contains("..");
+    let lettered = m
+        .split(|c: char| !c.is_alphabetic())
+        .any(|w| w.chars().count() >= 3);
+    !m.is_empty() && !file && !placeholder && !job && lettered
+}
+
+/// Words too common to tell two titles apart.
+const TITLE_STOPWORDS: &[&str] = &[
+    "the", "a", "an", "of", "and", "for", "to", "in", "on", "at", "by", "with", "le", "la", "les",
+    "de", "des", "du", "et", "der", "die", "das", "und",
+];
+
+/// A title's words, folded: letters and figures, lowercase, accents kept,
+/// with the commonest words left out.
+fn title_words(t: &str) -> Vec<String> {
+    t.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .filter(|w| !TITLE_STOPWORDS.contains(&w.as_str()))
+        .collect()
+}
+
+/// Whether `text` is a part of the title `meta` names: two words or more,
+/// nearly all of them among `meta`'s. A title's first line, where the file
+/// states the whole of it (`Vascular disease as a cause of death`).
+pub(crate) fn part_of_title(meta: &str, text: &str) -> bool {
+    let (a, b) = (title_words(text), title_words(meta));
+    let b: std::collections::HashSet<&String> = b.iter().collect();
+    let a: std::collections::HashSet<&String> = a.iter().collect();
+    let shared = a.iter().filter(|w| b.contains(*w)).count();
+    shared >= 2 && shared as f64 >= a.len() as f64 * TITLE_WORDS_WITHIN
+}
+
+/// Whether `text` is the title `meta` names: their words alike (a share of
+/// 0.6 of all their words), or `text`'s words nearly all among `meta`'s and
+/// covering half of them or more (`WD Gold® Enterprise Class SATA HDD` in
+/// `Data Sheet: WD Gold Enterprise Class SATA HDD`). Half is the most a
+/// title's date or a heading's fragment covers: `September 20, 2023` of
+/// `Transcript of Chair Powell's Press Conference -- September 20, 2023`,
+/// `Minutes of the` of `Minutes of the Federal Open Market Committee,
+/// December 17-18, 2024`.
+pub(crate) fn names_title(meta: &str, text: &str) -> bool {
+    let (a, b) = (title_words(text), title_words(meta));
+    let (sa, sb): (
+        std::collections::HashSet<&String>,
+        std::collections::HashSet<&String>,
+    ) = (a.iter().collect(), b.iter().collect());
+    if sa.is_empty() || sb.is_empty() {
+        return false;
+    }
+    let shared = sa.intersection(&sb).count();
+    let alike = shared as f64 / sa.union(&sb).count() as f64 >= TITLE_WORDS_ALIKE;
+    let within = shared >= 2 && shared as f64 >= sa.len() as f64 * TITLE_WORDS_WITHIN;
+    let covering = shared as f64 >= sb.len() as f64 * TITLE_WORDS_COVER;
+    alike || (within && covering)
+}
+
+/// Share of all their words two titles must share to be alike.
+const TITLE_WORDS_ALIKE: f64 = 0.6;
+/// Share of its own words a title must share with the one it is read as.
+const TITLE_WORDS_WITHIN: f64 = 0.9;
+/// Share of the stated title's words a title must cover.
+const TITLE_WORDS_COVER: f64 = 0.5;
+
+/// Words a section is named by, in a document of any kind: a page that
+/// opens on one opens on a section, not on the document's title.
+const SECTION_NAMES: &[&str] = &[
+    "contents",
+    "table of contents",
+    "introduction",
+    "abstract",
+    "rationale",
+    "summary",
+    "executive summary",
+    "overview",
+    "background",
+    "preface",
+    "foreword",
+    "acknowledgements",
+    "acknowledgments",
+    "references",
+    "bibliography",
+    "version history",
+    "revision history",
+    "purpose",
+    "scope",
+    "glossary",
+    "index",
+    "conclusion",
+    "conclusions",
+    "methods",
+    "results",
+    "discussion",
+    "appendix",
+];
+
+/// Why a line taken for the document's title, on its type alone, is in
+/// doubt: what a title is not. `None` where nothing doubts it.
+///
+/// - A date (`September 20, 2023` over a transcript).
+/// - A section's number or name (`5. The dynamics`, `1. PURPOSE`,
+///   `Introduction`, `Table of Contents`): a page that opens on a section.
+/// - A section carried on (`NOTES … (Continued)`).
+/// - A lead-in closing on its colon.
+/// - One word: a journal's or a company's mark (`materials`, `FOMC`,
+///   `LAPP`).
+/// - A company's name, closing on its form (`Hanvaro Semiconductor Co.,
+///   Ltd.`, `CVS PHARMACY, INC`, `FLUREE, PBC`): a letterhead's.
+pub(crate) fn title_doubt(text: &str) -> Option<&'static str> {
+    let t = text.trim();
+    let lower = t.to_lowercase();
+    let bare: String = lower
+        .chars()
+        .filter(|c| c.is_alphabetic() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    // A date, or a meeting's days: a month's name and figures alone
+    // (`December 10–11, 2019`).
+    let dated = t.split_whitespace().any(month_name)
+        && t.split(|c: char| c.is_whitespace() || "–-,".contains(c))
+            .filter(|w| !w.is_empty())
+            .all(|w| month_name(w) || w.chars().all(|c| c.is_ascii_digit()));
+    if date_text(t) || dated {
+        return Some("date");
+    }
+    if numbering_depth(t).is_some() {
+        return Some("numbered");
+    }
+    // A division's label, alone or over its title on one line (`PART II`,
+    // `Chapter 3`, `Item 8. Consolidated Financial Statements`): a part of
+    // a document, opening its page.
+    let mut words = t.split_whitespace();
+    let divided = match (words.next(), words.next()) {
+        (Some(w), Some(n)) => {
+            let w = w.to_lowercase();
+            let n = n.trim_end_matches(['.', ':']);
+            (DIVISION_WORDS.contains(&w.as_str()) || w == "item")
+                && !n.is_empty()
+                && ((n.chars().all(|c| c.is_ascii_digit()) && n.len() <= 3)
+                    || is_roman(&n.to_ascii_uppercase())
+                    || (n.chars().count() == 1 && n.chars().all(char::is_alphabetic)))
+        }
+        _ => false,
+    };
+    if divided {
+        return Some("division");
+    }
+    if SECTION_NAMES.contains(&bare.as_str()) {
+        return Some("section-name");
+    }
+    if lower.contains("(continued)") || lower.ends_with("continued") {
+        return Some("continued");
+    }
+    if t.ends_with(':') {
+        return Some("lead-in");
+    }
+    if !t.contains(char::is_whitespace) {
+        return Some("one-word");
+    }
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let forms = [
+        "inc",
+        "llc",
+        "ltd",
+        "corporation",
+        "corp",
+        "pbc",
+        "plc",
+        "gmbh",
+        "subsidiaries",
+    ];
+    if tokens.last().is_some_and(|w| forms.contains(w)) {
+        return Some("company");
+    }
+    None
+}
+
 /// Whether a block's text is a title the outline declares, as the outline
 /// match in [`detect`] reads one.
 pub fn outline_names(outline: &[OutlineItem]) -> impl Fn(&str) -> bool {
@@ -821,13 +1028,19 @@ const NAME_PARTICLES: &[&str] = &[
 ];
 
 /// Marks set after an author's name to point to their affiliation or to
-/// the corresponding author: `1`, `2,3`, `*`, `†`.
+/// the corresponding author: `1`, `2,3`, `*`, `†`, and the same numbers
+/// written raised (`¹,²`).
 fn affiliation_mark(c: char) -> bool {
-    c.is_ascii_digit()
+    figure(c)
         || matches!(
             c,
             '*' | '\u{2020}' | '\u{2021}' | '\u{00A7}' | '\u{00B6}' | ',' | '\u{262F}' | '\u{204E}'
         )
+}
+
+/// A figure, set on the line or raised: `2`, `²`.
+fn figure(c: char) -> bool {
+    c.is_ascii_digit() || fluree_doc_model::marks::raised_figure(c).is_some()
 }
 
 /// A line of an article's authors: people's names, each of two to four
@@ -842,9 +1055,12 @@ fn byline(t: &str) -> bool {
     let mut names = 0;
     let mut marked = false;
     let mut strong = false;
+    // Names are listed with commas and `and`, or set apart by a middle
+    // dot (`Michail Hadjipantelis¹ · Onur Son²`).
     let units = t
         .replace(" and ", ", ")
         .replace(" & ", ", ")
+        .replace(" \u{00B7} ", ", ")
         .replace(';', ",");
     for unit in units.split(", ") {
         let unit = unit.trim();
@@ -895,7 +1111,7 @@ fn byline(t: &str) -> bool {
             // A number past two figures is no affiliation's.
             if marks
                 .split(',')
-                .any(|m| m.trim_matches(|c: char| !c.is_ascii_digit()).len() > 2)
+                .any(|m| m.chars().filter(|&c| figure(c)).count() > 2)
             {
                 return false;
             }
@@ -909,8 +1125,8 @@ fn byline(t: &str) -> bool {
 /// symbol for the corresponding author (`2*`), or a list of affiliations
 /// (`1,2`). A symbol alone is as often a note's (`Posted Transactions*`).
 fn strong_mark(marks: &str) -> bool {
-    let digits = marks.chars().any(|c| c.is_ascii_digit());
-    let symbol = marks.chars().any(|c| !c.is_ascii_digit() && c != ',');
+    let digits = marks.chars().any(figure);
+    let symbol = marks.chars().any(|c| !figure(c) && c != ',');
     (digits && symbol) || marks.trim_matches(',').contains(',')
 }
 
@@ -1032,6 +1248,28 @@ fn phone_number(tokens: &[&str]) -> bool {
 /// keep their abbreviating dot, and a title ending in a full stop (`CHAPTER 1.`)
 /// has nothing after it and is untouched.
 fn runs_into_prose(text: &str) -> bool {
+    // A stop with a note's number raised on it, and more after: a sentence
+    // ended there (`low.³ Corporate earnings remained strong`). No
+    // abbreviation carries a note, so its word may be short.
+    let chars: Vec<char> = text.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if !matches!(c, '.' | '?' | '!') {
+            continue;
+        }
+        let raised = chars[i + 1..]
+            .iter()
+            .take_while(|&&r| fluree_doc_model::marks::raised_figure(r).is_some() || r == ',')
+            .count();
+        let figures = chars[i + 1..i + 1 + raised]
+            .iter()
+            .any(|&r| fluree_doc_model::marks::raised_figure(r).is_some());
+        if figures && chars.get(i + 1 + raised) == Some(&' ') {
+            let rest: String = chars[i + 1 + raised..].iter().collect();
+            if rest.split_whitespace().count() >= 2 {
+                return true;
+            }
+        }
+    }
     let bytes = text.as_bytes();
     for (i, w) in bytes.windows(2).enumerate() {
         if !matches!(w[0], b'.' | b'?' | b'!') || w[1] != b' ' {
@@ -1122,7 +1360,9 @@ pub(crate) fn is_toc_marker(text: &str) -> bool {
 /// diamonds of the dingbat fonts are set before headings as often as before
 /// items, as an annotation guideline marks each of its subsections
 /// `❖ Gene`, `❖ Disease`. Those the heading pass decides as it would any
-/// block; a block it leaves is still a list item.
+/// block; a block it leaves is still a list item. The hollow bullets are a
+/// list's second level, as a slide sets its sub-points `○ Custom landing
+/// pages` under `●` items.
 fn starts_like_list_item(text: &str) -> bool {
     matches!(
         text.chars().next(),
@@ -1130,7 +1370,12 @@ fn starts_like_list_item(text: &str) -> bool {
             '\u{2022}' // •
                 | '\u{F0B7}' // the Symbol font's •, as Word maps it
                 | '\u{25A0}' // ■
+                | '\u{25AA}' // ▪
+                | '\u{25A1}' // □
+                | '\u{25AB}' // ▫
                 | '\u{25CF}' // ●
+                | '\u{25CB}' // ○
+                | '\u{25E6}' // ◦
                 | '\u{2751}' // ❑
                 | '\u{2752}' // ❒
                 | '-'
@@ -1239,7 +1484,9 @@ pub fn body_font_size(pages: &[Vec<Block>]) -> f32 {
 /// nothing left once drawings are set aside, every block counts.
 pub fn body_font_size_outside(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 {
     let by_lines = body_font_size_by_lines(pages, drawn);
-    let is_drawn = |p: usize, i: usize| drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true);
+    let is_drawn = |p: usize, i: usize| {
+        drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true) || from_picture(&pages[p][i])
+    };
     // Running prose set larger than the size most lines are set in is the
     // body, and the many short lines under it are a chart's or a table's:
     // its labels, its axis's values, its cells, whether or not the chart
@@ -1305,7 +1552,11 @@ fn prose_body_size(pages: &[Vec<Block>], is_drawn: &dyn Fn(usize, usize) -> bool
 /// [`body_font_size_outside`] by lines alone: the size most of the
 /// blocks' lines are set in.
 fn body_font_size_by_lines(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 {
-    let is_drawn = |p: usize, i: usize| drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true);
+    // A drawing's text, and a picture's an OCR engine read, are no measure
+    // of the body: a chart's labels by the dozen, a logo.
+    let is_drawn = |p: usize, i: usize| {
+        drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true) || from_picture(&pages[p][i])
+    };
     let mut hist: HashMap<i32, usize> = HashMap::new();
     for (p, blocks) in pages.iter().enumerate() {
         for (i, b) in blocks.iter().enumerate() {
@@ -1603,7 +1854,11 @@ pub fn detect_with_body(
     };
 
     let document_title = pages.first().and_then(|blocks| {
-        let largest = blocks.iter().map(|b| b.font_size).fold(0.0_f32, f32::max);
+        let largest = blocks
+            .iter()
+            .filter(|b| !from_picture(b))
+            .map(|b| b.font_size)
+            .fold(0.0_f32, f32::max);
         // The page's largest type, set for display: an article's title, which
         // may run over four or five lines (`An internal deletion in MTH1
         // enables growth on glucose of pyruvate-decarboxylase negative, …`).
@@ -1620,6 +1875,9 @@ pub fn detect_with_body(
             }
         };
         let candidate = |i: usize, b: &Block| -> bool {
+            if from_picture(b) {
+                return false;
+            }
             let text = b.text();
             // At most three lines, or a few words to a line, as a cover
             // stacks its title: `PROCAT / SISTEMA DE / AISLAMIENTO
@@ -1843,7 +2101,7 @@ pub fn detect_with_body(
             }
             // A field parted from a list of fields is a label and its
             // value, no section's title.
-            if b.field {
+            if b.field || from_picture(b) {
                 continue;
             }
             let text = b.text();
@@ -2102,6 +2360,15 @@ pub fn detect_with_body(
     drop_kickers(&mut out, pages, document_title);
     normalize_levels(&mut out, pages);
     out
+}
+
+/// Text an OCR engine read in a picture set on a page that has text of its
+/// own: the picture's, as a drawing's labels are, and never the page's
+/// heading or its title, however large it is set. A logo's `LAW LIBRARY`
+/// over a report's title, a funder's `Co-funded by the European Union`, a
+/// callout in a photograph. A page read whole is the page's text.
+fn from_picture(b: &Block) -> bool {
+    b.ocr() == Some(crate::glyph::OcrSource::Region)
 }
 
 /// Block `i` heads prose as a heading does: set apart from the text above
@@ -4146,6 +4413,26 @@ mod tests {
     use crate::geom::BBox;
     use crate::line::Line;
 
+    #[test]
+    fn a_line_opening_with_a_plain_bullet_is_a_list_item() {
+        for t in [
+            "• One",
+            "● One",
+            "○ Custom landing pages",
+            "◦ A sub-point",
+            "▪ One",
+            "□ Tick here",
+            "❑ Peg rack",
+            "– A dash",
+        ] {
+            assert!(starts_like_list_item(t), "{t}");
+        }
+        // The dingbats set before headings as often as before items.
+        for t in ["❖ Gene", "➢ Scope", "Results"] {
+            assert!(!starts_like_list_item(t), "{t}");
+        }
+    }
+
     fn blk(text: &str, fs: f32, lines: usize) -> Block {
         let l = Line {
             text: text.into(),
@@ -4162,6 +4449,7 @@ mod tests {
             bold: false,
             opens_with_script: false,
             italic: false,
+            ocr: None,
             x_height: None,
             compounds: Vec::new(),
             opens_bold: false,
@@ -4798,6 +5086,9 @@ mod tests {
             "Ann B. Lee 1,2, Bo Chen3",
             "3,4, Cy D. Wu5\u{2021}, Ed F. Ng1\u{2021}",
             "Fay Gu and Hal Ito *",
+            // Their marks written raised, the names set apart by dots.
+            "Ann Lee¹,², Bo Chen² and Cy Wu¹",
+            "Ann Lee¹ · Bo Chen2 · Cy Wu¹",
         ] {
             assert!(byline(t), "{t}");
         }
@@ -4811,6 +5102,8 @@ mod tests {
             "Supplementary Figure 1",
             "Terms and Conditions",
             "Ann Lee",
+            "Study²",
+            "Wind · Solar · Storage",
         ] {
             assert!(!byline(t), "{t}");
         }
@@ -5749,6 +6042,11 @@ mod tests {
         assert!(runs_into_prose(
             "Results on data contamination. To show the in-"
         ));
+        // A note's number raised on the stop: the sentence ended there,
+        // however short its last word.
+        assert!(runs_into_prose(
+            "low.³ Corporate earnings remained strong through 2023."
+        ));
     }
 
     #[test]
@@ -5759,6 +6057,8 @@ mod tests {
         assert!(!runs_into_prose("Results vs. Baseline Methods"));
         assert!(!runs_into_prose("See Fig. 3 for details"));
         assert!(!runs_into_prose("Method of Doe et al. Revisited"));
+        // A heading's own note, at its end.
+        assert!(!runs_into_prose("Introduction.¹"));
     }
 
     #[test]
@@ -6164,6 +6464,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         let run = |n: usize, size: f32, weight: u32| (0..n).map(move |_| glyph("a", size, weight));
         // A form: its lines and figures in regular type, read as tables,
@@ -6289,6 +6590,123 @@ mod tests {
         assert!(found(true));
         // Alone in its style, it is held to a title's length.
         assert!(!found(false));
+    }
+
+    #[test]
+    fn a_title_in_doubt_is_no_documents_title() {
+        // What a document's title is not.
+        for (t, why) in [
+            ("September 20, 2023", "date"),
+            ("December 10–11, 2019", "date"),
+            ("5. The dynamics", "numbered"),
+            ("1. PURPOSE", "numbered"),
+            ("Table of Contents", "section-name"),
+            ("Introduction", "section-name"),
+            (
+                "NOTES TO CONSOLIDATED FINANCIAL STATEMENTS — (Continued)",
+                "continued",
+            ),
+            (
+                "The following table summarizes capitalized costs:",
+                "lead-in",
+            ),
+            ("materials", "one-word"),
+            ("Hanvaro Semiconductor Co., Ltd.", "company"),
+            ("CVS PHARMACY, INC", "company"),
+            ("PART II", "division"),
+            ("Item 8. Consolidated Financial Statements", "division"),
+        ] {
+            assert_eq!(title_doubt(t), Some(why), "{t}");
+        }
+        // What one is.
+        for t in [
+            "Restrictions on Land Ownership by Foreigners in Selected Jurisdictions",
+            "120 V~ Multi-Location 3-Wire Fluorescent Smart Dimmer",
+            "POWER OF ATTORNEY",
+            "The Beige Book",
+            "2019 EQUITY INCENTIVE PLAN",
+        ] {
+            assert_eq!(title_doubt(t), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn a_files_own_title_names_its_title() {
+        assert!(meaningful_title("Monetary Policy Report, July 2026"));
+        for m in [
+            "report.docx",
+            "Microsoft Word - 100710.docx",
+            "pone.0005054 1..10",
+            "(anonymous)",
+            "Untitled",
+        ] {
+            assert!(!meaningful_title(m), "{m}");
+        }
+        let meta = "Data Sheet: WD Gold Enterprise Class SATA HDD";
+        assert!(names_title(meta, "WD Gold® Enterprise Class SATA HDD"));
+        // A title's date, or a fragment of it, covers too little of it.
+        let meta = "Transcript of Chair Powell's Press Conference -- September 20, 2023";
+        assert!(!names_title(meta, "September 20, 2023"));
+        assert!(names_title(
+            meta,
+            "Transcript of Chair Powell’s Press Conference"
+        ));
+        assert!(!names_title(
+            "Minutes of the Federal Open Market Committee, December 17-18, 2024",
+            "Minutes of the"
+        ));
+        // A title's first line, where the file states the whole of it.
+        let meta = "Vascular disease as a cause of death in patients with severe disability";
+        assert!(part_of_title(meta, "Vascular disease as a cause of death"));
+        assert!(!part_of_title(meta, "materials"));
+        assert!(
+            names_title("Beige Book - October 18, 2023", "The Beige Book")
+                || part_of_title("Beige Book - October 18, 2023", "The Beige Book")
+        );
+    }
+
+    #[test]
+    fn a_pictures_ocr_text_is_no_heading_and_no_measure_of_the_body() {
+        use crate::glyph::OcrSource;
+        let read = |mut b: Block, source: OcrSource| {
+            for l in &mut b.lines {
+                l.ocr = Some(source);
+            }
+            b
+        };
+        let body = || {
+            let mut b = blk(
+                "the report's prose runs on across its measure here",
+                10.0,
+                3,
+            );
+            b.bbox.y0 = 200.0;
+            b.bbox.y1 = 236.0;
+            b
+        };
+        let title = at("Restrictions on Land Ownership", 18.0, 120.0, false);
+        // A logo read in its picture, set larger than the title.
+        let logo = read(at("LAW LIBRARY", 30.0, 40.0, false), OcrSource::Region);
+        let page = vec![logo.clone(), title.clone(), body()];
+        let hs = detect_with_body(&[page], &[], 10.0, None);
+        assert!(hs.iter().all(|h| h.text != "LAW LIBRARY"), "{hs:?}");
+        assert!(
+            hs.iter().any(
+                |h| h.text == "Restrictions on Land Ownership" && h.evidence == Evidence::Title
+            ),
+            "{hs:?}"
+        );
+        // Read on a page read whole, the same line is the page's.
+        let scanned = read(at("LAW LIBRARY", 30.0, 40.0, false), OcrSource::Page);
+        let hs = detect_with_body(&[vec![scanned, title, body()]], &[], 10.0, None);
+        assert!(hs.iter().any(|h| h.text == "LAW LIBRARY"), "{hs:?}");
+        // A chart's labels read in its picture, many and small, do not set
+        // the body.
+        let mut blocks: Vec<Block> = (0..40)
+            .map(|_| read(blk("Convenience", 6.0, 1), OcrSource::Region))
+            .collect();
+        blocks.push(blk("the page's own two lines of text", 10.0, 2));
+        assert_eq!(body_font_size(&[blocks]), 10.0);
     }
 
     #[test]

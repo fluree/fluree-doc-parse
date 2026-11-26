@@ -226,6 +226,7 @@ pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
             rotation: 0,
             ocr: None,
         }],
+        title: None,
     }
 }
 

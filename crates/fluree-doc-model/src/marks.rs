@@ -155,6 +155,32 @@ pub fn note_mark(text_before: &str, mark: &str) -> bool {
     held.contains(char::is_alphanumeric) && !function && !operand && !formula(held)
 }
 
+/// The figure a raised digit stands for: `5` for `⁵`. A raised digit is a
+/// power's or a note's number set apart from the word it follows, so a pass
+/// that reads words reads it as no letter of the word (Unicode counts it
+/// alphanumeric), and one that matches figures matches it as its figure.
+pub fn raised_figure(c: char) -> Option<char> {
+    match c {
+        '\u{2070}' => Some('0'),
+        '\u{00B9}' => Some('1'),
+        '\u{00B2}' => Some('2'),
+        '\u{00B3}' => Some('3'),
+        '\u{2074}'..='\u{2079}' => char::from_u32(c as u32 - 0x2074 + '4' as u32),
+        _ => None,
+    }
+}
+
+/// Is `mark`, a note's mark, a number: one or a list of them (`5`, `2,3`),
+/// perhaps closing on a bracket of its own (`1)`). It is written raised
+/// after its word, as a power is (`countries.⁵`, `series¹⁾`); a note's
+/// letters and signs are not, since Unicode has no full raised alphabet.
+pub fn note_number(mark: &str) -> bool {
+    let mark = mark.trim();
+    let numbered = mark.strip_suffix(')').unwrap_or(mark);
+    numbered.chars().any(|c| c.is_ascii_digit())
+        && numbered.chars().all(|c| c.is_ascii_digit() || c == ',')
+}
+
 /// Is `mark`, set raised right after `text_before`, the square or cube of
 /// the unit of length the text ends with? `m²`, `26m²`, `5 cm³`, and the
 /// Spanish square foot in `1000 PIES²` and `LB/PIES²`. Or the square of
@@ -345,6 +371,24 @@ fn ordinal_of(number: &str, ending: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_raised_digit_stands_for_its_figure() {
+        let figures: String = "⁰¹²³⁴⁵⁶⁷⁸⁹".chars().filter_map(raised_figure).collect();
+        assert_eq!(figures, "0123456789");
+        assert_eq!(raised_figure('5'), None);
+        assert_eq!(raised_figure('ⁿ'), None);
+    }
+
+    #[test]
+    fn a_notes_number_is_written_raised_and_its_letter_is_not() {
+        for m in ["5", "12", "2,3", "1)"] {
+            assert!(note_number(m), "{m}");
+        }
+        for m in ["a", "e,f", "*", "†", "1a", ")", ","] {
+            assert!(!note_number(m), "{m}");
+        }
+    }
 
     #[test]
     fn a_mark_after_a_word_is_a_note() {

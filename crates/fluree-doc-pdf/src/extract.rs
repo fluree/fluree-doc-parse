@@ -230,6 +230,10 @@ impl Page {
 #[derive(Clone)]
 pub struct Document {
     pub pages: Vec<Page>,
+    /// The title the file's information dictionary states (`/Title`), as
+    /// written: what the document is called by whoever made the file, and
+    /// often stale or a file's name.
+    pub title: Option<String>,
 }
 
 impl Document {
@@ -1167,6 +1171,7 @@ impl<'a> Device<'a> for Collector {
             italic,
             advance,
             draw_index,
+            ocr: None,
         });
     }
 }
@@ -2002,7 +2007,10 @@ pub fn extract_bytes_with(
         }
     }
 
-    Ok(Document { pages })
+    Ok(Document {
+        pages,
+        title: crate::info::read(&pdf).title,
+    })
 }
 
 /// Whether an image stream is coded by a filter that only codes one bit per
@@ -2362,6 +2370,7 @@ mod tests {
             italic: false,
             advance: boxed.then_some(6.67),
             draw_index: 0,
+            ocr: None,
         };
         let mut g = vec![
             glyph("o", 57.76, true),
@@ -2388,6 +2397,7 @@ mod tests {
                 italic: false,
                 advance: None,
                 draw_index: i,
+                ocr: None,
             })
             .collect();
         Page {
@@ -2593,6 +2603,7 @@ mod actual_text_tests {
             italic: false,
             advance: Some(5.0),
             draw_index: 0,
+            ocr: None,
         }
     }
 

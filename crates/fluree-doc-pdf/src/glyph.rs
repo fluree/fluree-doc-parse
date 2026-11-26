@@ -46,6 +46,19 @@ pub struct Glyph {
     /// Index in the draw order. Faux-bold overprint shows up as consecutive
     /// glyphs with identical text and near-identical boxes.
     pub draw_index: usize,
+    /// Read by an OCR engine, and where: `None` for a glyph the file draws.
+    pub ocr: Option<OcrSource>,
+}
+
+/// Where an OCR engine read a glyph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OcrSource {
+    /// A page read whole: a scan, or a page whose text is drawn as shapes.
+    /// Its words are the page's text.
+    Page,
+    /// A region routed out of a page that has text of its own: a picture
+    /// set on the page. Its words are the picture's.
+    Region,
 }
 
 impl Glyph {

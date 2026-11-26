@@ -9,7 +9,8 @@
     "2026-11-23: the photos' figure regions walked across the page, and 80 of its 87 elements were typed doco:Figure, the side-heads among them (#50).",
     "2026-11-24 (#81): the callouts on the chair photos still reached up over the page title and the heading set over them, and down over the key set under them. Numbered callouts drawn on a photograph now take only their own marks.",
     "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
-    "2026-11-24 (#115): the side-head level with the chair drawing's top, and `Benefits` off its corner, were typed as the drawing's labels: one taken as a label, the other inside the box around the labels."
+    "2026-11-24 (#115): the side-head level with the chair drawing's top, and `Benefits` off its corner, were typed as the drawing's labels: one taken as a label, the other inside the box around the labels.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -48,9 +49,7 @@
       "id": "page-title-over-the-photo",
       "found": "2026-11-23",
       "issue": "The page title `Aeron® Chair`, above that heading, was typed as a label of the callouts.",
-      "section": {
-        "title": "Aeron® Chair"
-      }
+      "element": {"type": "doco:Title", "text": "Aeron® Chair"}
     },
     {
       "id": "key-under-the-photo",

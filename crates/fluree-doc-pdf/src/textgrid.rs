@@ -817,6 +817,44 @@ fn items_over_totals<'a>(
     ))
 }
 
+/// Where a block of totals starts among a band's lines, `band.len()` where
+/// none ends them: the lines under the last line with the most cells, to
+/// the band's end, each with half as many cells or fewer, ending in an
+/// amount, its labels set over the items' figures (`Total HT :` under the
+/// unit prices), and nothing to the band's left (`left_of`). Not a second
+/// table's rows running on beside the first's, whose labels stand over the
+/// first's labels, nor rows labelled at the margin.
+fn totals_block(band: &[&Line], left_of: impl Fn(&Line) -> bool) -> usize {
+    let most = band.iter().map(|l| l.chunks.len()).max().unwrap_or(0);
+    let Some(last) = band.iter().rposition(|l| l.chunks.len() == most) else {
+        return band.len();
+    };
+    let figures: Vec<&Chunk> = band[..=last]
+        .iter()
+        .filter(|l| l.chunks.len() == most)
+        .flat_map(|l| l.chunks.iter())
+        .filter(|c| is_figure(&c.text) && !is_year(&c.text))
+        .collect();
+    let among_figures = |c: &Chunk| figures.iter().any(|f| c.x0 < f.x1 && f.x0 < c.x1);
+    let block = band[last + 1..]
+        .iter()
+        .take_while(|l| {
+            l.chunks.len() * 2 <= most
+                && !left_of(l)
+                && l.chunks.split_last().is_some_and(|(amount, labels)| {
+                    is_figure(&amount.text)
+                        && !is_year(&amount.text)
+                        && labels.iter().all(among_figures)
+                })
+        })
+        .count();
+    if block > 0 && last + 1 + block == band.len() {
+        last + 1
+    } else {
+        band.len()
+    }
+}
+
 /// A line that sits in the table's columns: each chunk within one column.
 fn fits(cols: &[(f64, f64)], l: &Line) -> bool {
     !cols.is_empty() && l.chunks.iter().all(|c| covered(cols, c).len() <= 1)
@@ -1254,10 +1292,21 @@ fn read_beside(
     lefts.sort_by(f64::total_cmp);
     // Only a region of figures alone lacks its labels: where the region's
     // rows start with a label, its rules already cover the label column.
-    let starts_with_figures = {
-        let firsts: Vec<bool> = all
+    // A block of totals under the items casts no vote, as it casts none on
+    // the columns (`items_over_totals`): an invoice labels its items at the
+    // margin and its totals within the figures' columns (`Total HT : |
+    // 46,68 €` under `P.U. HT`), and three totals outvoted three items. See
+    // [`totals_block`].
+    let band: Vec<&Line> = all.iter().filter(|l| in_band(l)).collect();
+    let left_of = |l: &Line| {
+        l.chunks
             .iter()
-            .filter(|l| in_band(l))
+            .any(|c| c.x1 <= region.x0 + fs && c.x0 < region.x0 - fs)
+    };
+    let totals_from = totals_block(&band, left_of);
+    let starts_with_figures = {
+        let firsts: Vec<bool> = band[..totals_from]
+            .iter()
             .filter_map(|l| {
                 l.chunks
                     .iter()
@@ -4387,6 +4436,107 @@ mod tests {
     }
 
     #[test]
+    fn a_block_of_totals_is_labelled_over_the_items_figures() {
+        let at = |rows: &[&[(&str, f64)]]| -> Vec<Line> {
+            let mut gl = Vec::new();
+            for (k, row) in rows.iter().enumerate() {
+                for (t, x) in row.iter() {
+                    gl.extend(set(t, *x, 60.0 + 20.0 * k as f64));
+                }
+            }
+            lines(&gl)
+        };
+        let none_left = |_: &Line| false;
+        // Items labelled at the margin with a quantity, a price and an
+        // amount, then two totals labelled under the price.
+        let invoice = at(&[
+            &[
+                ("Proof", 20.0),
+                ("1", 300.0),
+                ("0.75", 380.0),
+                ("0.75", 470.0),
+            ],
+            &[
+                ("Paper", 20.0),
+                ("0", 300.0),
+                ("3.50", 380.0),
+                ("0.00", 470.0),
+            ],
+            &[("Net :", 380.0), ("46.68", 470.0)],
+            &[("VAT :", 380.0), ("9.34", 470.0)],
+        ]);
+        let band: Vec<&Line> = invoice.iter().collect();
+        assert_eq!(totals_block(&band, none_left), 2);
+        // A second table's rows running on beside the first's end, their
+        // labels over its labels: no totals.
+        let beside = at(&[
+            &[("12", 200.0), ("Trucks", 317.0), ("45.8", 474.0)],
+            &[("16", 200.0), ("Buses", 317.0), ("22.3", 474.0)],
+            &[("Penta", 317.0), ("3.42", 474.0)],
+            &[("Group", 317.0), ("65.7", 474.0)],
+        ]);
+        let band: Vec<&Line> = beside.iter().collect();
+        assert_eq!(totals_block(&band, none_left), band.len());
+        // Lines labelled at the band's left are rows, not its totals.
+        let band: Vec<&Line> = invoice.iter().collect();
+        assert_eq!(totals_block(&band, |_: &Line| true), band.len());
+    }
+
+    #[test]
+    fn totals_labelled_among_the_figures_leave_the_items_their_labels() {
+        // Items labelled at the margin, their figures far right, then as
+        // many totals labelled within the figures' columns.
+        let mut gl = Vec::new();
+        for (t, x) in [
+            ("Item", 20.0),
+            ("Qty", 300.0),
+            ("Price", 380.0),
+            ("Amount", 470.0),
+        ] {
+            gl.extend(set(t, x, 40.0));
+        }
+        let items = [
+            ("Listing for the week", "1", "45.93", "45.93"),
+            ("Proof copy by mail", "1", "0.75", "0.75"),
+            ("Paper proof by mail", "0", "3.50", "0.00"),
+        ];
+        let mut y = 60.0;
+        for (label, qty, price, amount) in items {
+            gl.extend(set(label, 20.0, y));
+            gl.extend(set(qty, 300.0, y));
+            gl.extend(set(price, 380.0, y));
+            gl.extend(set(amount, 470.0, y));
+            y += 20.0;
+        }
+        for (label, amount) in [
+            ("Net :", "46.68"),
+            ("VAT 20% :", "9.34"),
+            ("Total :", "56.02"),
+        ] {
+            gl.extend(set(label, 380.0, y));
+            gl.extend(set(amount, 470.0, y));
+            y += 20.0;
+        }
+        let region = BBox {
+            x0: 300.0,
+            y0: 52.0,
+            x1: 500.0,
+            y1: y,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        let g = grids.first().expect("a table");
+        assert!(
+            g.bbox.x0 <= 20.0,
+            "the labels are its first column: {:?}",
+            g.bbox
+        );
+        let texts = g.layout.as_deref().unwrap().texts(&gl, g.cols());
+        assert!(texts.iter().any(|t| t == "Proof copy by mail"), "{texts:?}");
+        // The totals keep their labels where they are set, under the price.
+        assert!(texts.iter().any(|t| t == "VAT 20% :"), "{texts:?}");
+    }
+
+    #[test]
     fn an_items_further_lines_keep_its_figures_run() {
         // Three lines under the item, more than a run's label lines, each
         // starting where one of the item's cells does or within one, ruled
@@ -5203,6 +5353,7 @@ mod tests {
                     italic: false,
                     advance: Some(5.5),
                     draw_index: 0,
+                    ocr: None,
                 }
             })
             .collect()

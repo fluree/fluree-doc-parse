@@ -320,6 +320,7 @@ mod tests {
                     italic: false,
                     advance: Some(step),
                     draw_index: 0,
+                    ocr: None,
                 }
             })
             .collect()
