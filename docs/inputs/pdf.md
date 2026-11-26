@@ -457,6 +457,25 @@ sat 5pt from its baseline, and cut the description in three around it. A
 title stacked in a margin, read line by line with the column beside it, is
 put back together as one block, its number and its words in whatever
 weight: `III. Regulatory cholesterol`. Display type is never a list marker.
+
+**Side labels.** A form sets labels in its margin a step larger than the text
+beside them, such as Form 1040's `Sign` / `Here` at 12pt beside a 6.9pt
+declaration. The gutter after such a label is measured in the text's size
+when all of these hold:
+- the label is a word or three of letters;
+- it is set a fifth or more larger than the text;
+- the text beside it goes on in a column of its own, its next line starting
+  where it starts.
+
+Measured in the label's size, `Sign` was read into the declaration and
+`Here` stood alone. A label's lines read apart in two cells of the page
+join again as one label (`Sign Here`, `Third Party Designee`, `Acceptable
+Means of Compliance`). They must be one-line blocks at one size and one left
+edge, one under the other, set over the page's text, with smaller text
+beside them. These stay as they were:
+- a clause's number set apart (`12.3`), read as a marker;
+- a speaker's name before the speech, its next line under the name;
+- a field's label before its value (`Title: Member`).
 Nor is a number set beside another number, such as a chart's tick labels
 side by side (`2.4−` beside `2.6−`): a list's number opens an item that
 says more than a number. Taken for markers, the years under a chart's bars

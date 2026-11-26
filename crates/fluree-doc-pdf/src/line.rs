@@ -641,10 +641,14 @@ fn assemble_walled(glyphs: &[Glyph], walls: &[BBox]) -> Vec<Line> {
             // the body text's size, as the baseline is ([`shares_baseline`]):
             // a margin title's last letter stood 40pt from the column beside
             // it, under 1.5 of its own ems and nearly four of the column's
-            // (`Regulatory the three arms of the State`). Measured from the
-            // last glyph that put ink down, past an explicit space, and past
-            // a sign raised on the word: a title's `®` is the word's, and
-            // the title goes on after it at the title's size.
+            // (`Regulatory the three arms of the State`). So it is after a
+            // label of a word or three set a step over the text beside it: a
+            // form's 12pt side label `Sign` stood 39pt from the 6.9pt
+            // declaration and was read into it, its second line `Here` left
+            // alone. Measured from the last glyph that put ink down, past an
+            // explicit space, and past a sign raised on the word: a title's
+            // `®` is the word's, and the title goes on after it at the
+            // title's size.
             let display_gap = cur
                 .iter()
                 .rev()
@@ -658,7 +662,24 @@ fn assemble_walled(glyphs: &[Glyph], walls: &[BBox]) -> Vec<Line> {
                         (Some(ba), Some(bb)) => adv.start(&bb) - adv.end(&ba),
                         _ => return false,
                     };
-                    big >= small * DISPLAY_RATIO && gap > small * BLOCK_GAP_RATIO
+                    // The text beside a side label goes on in a column of
+                    // its own, its later lines starting where it starts: a
+                    // speaker's line or a field's value runs on under its
+                    // label.
+                    let column = || {
+                        let Some(start) = b.bbox.map(|bb| adv.start(&bb)) else {
+                            return false;
+                        };
+                        let own = cluster_of.get(&i);
+                        spans
+                            .iter()
+                            .enumerate()
+                            .any(|(c, sp)| Some(&c) != own && (sp.0 - start).abs() <= small * 0.5)
+                    };
+                    let label = a.font_size > b.font_size && side_label(&cur, glyphs) && column();
+                    gap > small * BLOCK_GAP_RATIO
+                        && (big >= small * DISPLAY_RATIO
+                            || (big >= small * MIXED_SIZE_RATIO && label))
                 });
             // A run read after the line it is set behind: a cluster of glyphs
             // on a baseline near this one that lies wholly before where the
@@ -893,6 +914,37 @@ fn label_display(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> {
             None => Some(l),
         })
         .collect()
+}
+
+/// Size ratio from which a label is set a step over the text beside it, and
+/// a gutter after it is measured in the text's size: a form's side label
+/// (`Third Party` at 10pt beside 8pt text). Within one size, a script,
+/// small capitals or a figure's label differ less.
+const MIXED_SIZE_RATIO: f64 = 1.2;
+
+/// Most words in a side label read on a line before its gutter.
+const MAX_LABEL_WORDS: usize = 3;
+
+/// The line so far is a side label: a word or three, of letters. A
+/// clause's number set apart from its text (`12.3`, `(a)`, `2`) is the
+/// marker pass's to read, and a rule or a separator (`|`) is no label.
+fn side_label(cur: &[usize], glyphs: &[Glyph]) -> bool {
+    let mut words = 0;
+    let mut inside = false;
+    let mut letters = 0;
+    for &j in cur {
+        let t = &glyphs[j].text;
+        if t.chars().any(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        letters += t.chars().filter(|c| c.is_alphabetic()).count();
+        let ink = !t.trim().is_empty();
+        if ink && !inside {
+            words += 1;
+        }
+        inside = ink;
+    }
+    words <= MAX_LABEL_WORDS && letters >= 2
 }
 
 /// Size ratio from which the larger of two glyphs is display type beside
@@ -2975,6 +3027,47 @@ mod tests {
         v.extend(sized_word("the", 306.6, 171.2, 10.5));
         let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
         assert_eq!(texts.len(), 2, "{texts:?}");
+    }
+
+    #[test]
+    fn a_side_label_stops_at_the_smaller_text_beside_it() {
+        // A 12pt label, a space, and 7pt text 12pt on, past one and a half
+        // of its ems: with the text's next line starting where it starts,
+        // the label hangs in its margin.
+        let space = |x: f64| Glyph {
+            bbox: None,
+            text: " ".into(),
+            ..sized(" ", x, 100.0, 12.0)
+        };
+        let row = |label: &str, next_x: f64| {
+            let mut v = sized_word(label, 36.0, 100.0, 12.0);
+            v.push(space(60.0));
+            v.extend(sized_word("Under", 72.0, 100.0, 7.0));
+            v.extend(sized_word("belief", next_x, 109.0, 7.0));
+            assemble(&v)
+                .into_iter()
+                .map(|l| l.text)
+                .collect::<Vec<String>>()
+        };
+        let texts = row("Sign", 72.0);
+        assert!(texts.iter().any(|t| t == "Sign"), "{texts:?}");
+        // A speaker's name before the speech, its next line under the name
+        // at the margin: one line.
+        let texts = row("LEE.", 36.0);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("LEE.") && t.contains("Under")),
+            "{texts:?}"
+        );
+        // A clause's number set apart is no label: the marker pass reads it.
+        let texts = row("12.3", 72.0);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("12.3") && t.contains("Under")),
+            "{texts:?}"
+        );
     }
 
     #[test]
