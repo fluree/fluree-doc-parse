@@ -5084,6 +5084,7 @@ mod tests {
                 native("The assembly drawing lists every part.", 40.0, 40.0),
                 images,
             )],
+            title: None,
         };
         let count = |jobs: &OcrJobs| {
             jobs.iter()
