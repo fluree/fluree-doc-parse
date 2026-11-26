@@ -753,7 +753,12 @@ page's maker, not what the drawing shows. The lines it runs on from go with
 it, such as the company and street over `1-800-…` and `www.…` set under a
 logo. The rectangle
 around a drawing and its labels is not part of the figure. A paragraph or
-heading inside it that was not taken as a label keeps its type.
+heading inside it that was not taken as a label keeps its type. Nor is a
+paragraph of the page's prose ever a figure's, taken or not: set at the
+body's size, over two lines or more, saying more than fifteen words, and no
+caption or note. Drawings grouped across a column, or a page of product
+panels, can enclose the text between them; that text, and a heading set
+flush over it, stay in the reading flow. A box diagram's steps are its own.
 
 **A frame drawn round a drawing bounds its figure.** A wiring diagram set in
 a box, with its labels in the box's margins (`Line / Hot` left of the
@@ -836,6 +841,18 @@ letters, with no words but units and a dimension's notes (`TYP`, `MAX`).
 The drawing is a figure, and the callouts and view names around it are its
 labels. A table drawn over a drawing, ruled at its rows and columns and
 mostly filled, stays a table.
+
+**A chart's scale beside prose.** Where a chart stands in one column and
+the page's prose in the next, the prose's lines and the chart's scale can
+line up into what looks like a table (`spending have deteriorated. Business
+| 18.0`). Such a grid is no table: one column of it holds two numbers or more,
+each level with a horizontal stroke that ends beside it (an axis's tick, or
+a gridline's end), and one other column holds lines of running prose, with
+nothing else beside them but columns of a word or a few (the chart's
+legend). The prose is read back into its paragraphs, and the scale stays
+with the chart. A table's figures stand between its rules, never level with
+a stroke's end. A grid of a chart's own labels beside its scale, with no
+prose in it, is kept as it is.
 No grid is read across the edge of a box drawn round a drawing, a box
 holding three shapes or more: a diagram's wire labels inside the box and a
 note in the column beside it stand on the same baselines, and read as rows

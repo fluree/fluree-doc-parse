@@ -1675,7 +1675,7 @@ pub fn reassign_between(
 const CAPTION_GAP: f64 = 2.5;
 
 /// `Note:`, `Notes:`, `Source:`, `Sources:`: a figure's note, under it.
-fn note_label(text: &str) -> bool {
+pub(crate) fn note_label(text: &str) -> bool {
     let first = text
         .split_whitespace()
         .next()
