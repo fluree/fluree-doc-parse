@@ -2089,10 +2089,10 @@ fn heading_key(t: &str) -> String {
 ///   Employment and Earnings across Demographic Groups`, `Developments
 ///   Related to Financial Stability (continued)` after `Box 3. Developments
 ///   Related to Financial Stability`, `Wiring Diagrams (continued)`).
-/// - **Repeated:** it repeats, on a later page and word for word, the
-///   nearest heading at its level or above, with no heading at that level
-///   between: a page's title set over each page a section fills (`PACKAGE
-///   OPTION ADDENDUM`), a release line over each page of a table set.
+/// - **Repeated:** it opens its page and repeats, word for word, the
+///   nearest heading at its level or above on an earlier page: a page's
+///   title set over each page a section fills (`PACKAGE OPTION ADDENDUM`),
+///   a release line over each page of a table set.
 fn read_continued_heads(elements: &mut [Element]) {
     let title = |e: &Element| e.kind == "doco:SectionTitle";
     let mut demote = Vec::new();
@@ -2120,8 +2120,17 @@ fn read_continued_heads(elements: &mut [Element]) {
             .filter(|k| title(&elements[*k]) && !demote.contains(k))
             .map(|k| &elements[k])
             .find(|o| o.level.unwrap_or(6) <= level);
+        // And it opens its page's body, a continued heading or another
+        // before it at most: a section begun on its page under a name an
+        // earlier one shares (a handbook's templates, each titled
+        // `IMPORTANT INFORMATION ABOUT YOUR DRINKING WATER` under its own
+        // label) is a section of its own.
+        let opens_page = (0..i)
+            .rev()
+            .take_while(|k| elements[*k].page == e.page)
+            .all(|k| demote.contains(&k));
         if let Some(o) = nearest {
-            if o.page < e.page && heading_key(&o.text) == heading_key(&e.text) {
+            if opens_page && o.page < e.page && heading_key(&o.text) == heading_key(&e.text) {
                 demote.push(i);
             }
         }
@@ -7412,6 +7421,10 @@ mod tests {
             head("Labor Markets", 6, 3),
             // A continuation of nothing read before: the excerpt's start.
             head("Notes (continued)", 7, 2),
+            // Templates sharing a title, each under its own label.
+            head("IMPORTANT INFORMATION", 8, 1),
+            at("doco:Paragraph", "Template 3-2", 9, None),
+            head("IMPORTANT INFORMATION", 9, 1),
         ];
         read_continued_heads(&mut els);
         let kinds: Vec<(&str, &str)> = els
@@ -7426,7 +7439,7 @@ mod tests {
             } else {
                 "doco:SectionTitle"
             };
-            if *t != "PACKAGE OPTION ADDENDUM" {
+            if *t != "PACKAGE OPTION ADDENDUM" && *t != "Template 3-2" {
                 assert_eq!(*kind, want, "{t}");
             }
         }
