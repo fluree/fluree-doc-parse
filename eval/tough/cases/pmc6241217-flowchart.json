@@ -6,7 +6,8 @@
     "about": "PMC6241217, a cohort study of lung cancer patients. Page 3 sets its study population's flowchart (boxes of a step and its count, joined by lines) over `Table 1`, whose caption and stub labels stand just under it. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
   },
   "notes": [
-    "2026-11-25: the flowchart was found as no drawing; each box was a paragraph of the page's."
+    "2026-11-25: the flowchart was found as no drawing; each box was a paragraph of the page's.",
+    "2026-11-26 (#391): the boxes set side by side were read line by line across the row, and the exclusion box, set off the first box lower down at its left, before the box it leaves."
   ],
   "checks": [
     {
@@ -35,6 +36,24 @@
         "type": "doco:Paragraph",
         "text": "Table 1: ICD-9-CM codes used to identify comorbidity."
       }
+    },
+    {
+      "id": "boxes-side-by-side-read-each-whole",
+      "found": "2026-11-26",
+      "issue": "#391: `With comorbidity` / `Without comorbidity` / `(N=44,770)` / `(N=57,006)`: the two boxes read across.",
+      "text": "With comorbidity (N=44,770) Without comorbidity (N=57,006)"
+    },
+    {
+      "id": "box-lines-read-together",
+      "found": "2026-11-26",
+      "issue": "#391: as above, for the two boxes under them.",
+      "text": "38,608 patients died during study period 48,382 patients died during study period"
+    },
+    {
+      "id": "branch-after-the-box-it-leaves",
+      "found": "2026-11-26",
+      "issue": "#391: the exclusion box read before the box it branches from.",
+      "text": "Lung cancer patients during 1995-2010 (N=233,821) Exclusion criteria:"
     }
   ]
 }

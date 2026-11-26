@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "pmc4967591.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4967591/",
+    "sha256": "bcd4c3e817e6125ffc94abd2e6ae828c4ba2a022bb6e629b9b30ad37b19827b7",
+    "about": "PMC4967591, International Journal of Clinical Oncology 2016, enzalutamide in Japanese patients. Table 7's caption, beside the table's head on page 9, breaks `treatment-emergent` at its hyphen; the article sets `treatment-emergent` whole in its text."
+  },
+  "notes": [
+    "2026-11-26 (#398): the caption's two lines were parted by the table's head beside them. Read together, the line break's hyphen was dropped as a word break's."
+  ],
+  "checks": [
+    {
+      "id": "table-7-caption-whole",
+      "found": "2026-11-26",
+      "issue": "#398: `Table 7 Serious treatment-` and `emergent adverse events …` were two paragraphs; joined, `treatmentemergent`.",
+      "text": "Table 7 Serious treatment-emergent adverse events (with an incidence of ≥2 events in the study)"
+    }
+  ]
+}
