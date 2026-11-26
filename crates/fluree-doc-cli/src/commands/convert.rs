@@ -49,6 +49,17 @@ impl<'a> Source<'a> {
 }
 
 pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
+    let status = convert(args, verbose, quiet);
+    // An engine opened on its first read that could not open ends the run
+    // as one refused before it started did, whatever was converted.
+    if status == 0 && crate::commands::ocr::engine_failed() {
+        2
+    } else {
+        status
+    }
+}
+
+fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     let pages = match args.pages.as_deref().map(parse_pages) {
         Some(Ok(set)) => Some(set),
         Some(Err(e)) => {

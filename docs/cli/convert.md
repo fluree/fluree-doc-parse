@@ -83,8 +83,14 @@ The engine is PP-OCRv6 small through oar-ocr. Its models and ONNX Runtime are
 not compiled into `fdoc`: they are read from the assets directory, each checked
 against the hash `fdoc` was built with before it is loaded. Build that directory
 with `tools/ocr-assets/build.py`. The engine is loaded once per run and shared by
-every input and worker. Name it in the [config](config.md#ocr) and `--ocr` is
-no longer needed.
+every input and worker, when the first page or region is sent to it: a run
+whose documents carry their own text never checks or loads it, and costs what
+it costs without `--ocr`. An assets directory missing a file is refused at the
+start. One whose files are not the ones this build loads is refused at the
+first reading: the error is said once, a PDF's or DOCX's pages and pictures
+are converted without OCR, an image file is not converted, and the run ends
+with status 2. Name it in the [config](config.md#ocr)
+and `--ocr` is no longer needed.
 
 **Any other engine**, through files: render the crops, read them with your
 engine (or with [`fdoc ocr`](ocr.md)), then convert with the words:
