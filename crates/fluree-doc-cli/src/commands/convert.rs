@@ -975,6 +975,15 @@ pub(crate) fn ocr_cap_note(stem: &str, max: usize, capped: usize) -> String {
 
 /// One stderr line per OCR reading set aside, and with `--verbose` one per
 /// reading taken.
+/// Name, with `-v`, each crop an engine read but left to the model.
+fn report_left(stem: &str, flag: &str, left: &[(String, &'static str)], verbose: bool) {
+    if verbose {
+        for (crop, why) in left {
+            eprintln!("ocr: {stem}_{crop}: left to the model: {why} ({flag})");
+        }
+    }
+}
+
 fn report_ocr(
     stem: &str,
     flag: &str,
@@ -1028,18 +1037,23 @@ fn convert_bytes(
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.
+    // Where a model reads too, in this run or from its readings, a reading
+    // that is not enough on its own is left to it.
+    let modelled = cfg.escalate || cfg.tier_results.is_some();
     let injected = if let Some(engine) = &cfg.ocr {
         let max = cfg.config.ocr.max_crops();
         // At the stored resolution of what is under each crop (#11): an
         // engine reads small text a 2× render loses.
-        let pass = fluree_doc_pdf::ocr::read_pages(
+        let pass = fluree_doc_pdf::ocr::read_pages_leaving(
             &mut doc,
             &raw,
             engine.0.as_ref(),
             pages,
             fluree_doc_pdf::escalate::CropScale::Stored,
             max,
+            modelled,
         );
+        report_left(stem, "--ocr", &pass.left, cfg.verbose);
         for (crop, e) in &pass.failed {
             if !quiet {
                 eprintln!("warning: --ocr: {stem}_{crop}: {e}");
@@ -1056,6 +1070,10 @@ fn convert_bytes(
         let mut readings = common::ocr_readings(dir, stem, &doc, quiet);
         if let Some(keep) = pages {
             readings.retain(|(page, _, _)| keep.contains(page));
+        }
+        if modelled {
+            let left = fluree_doc_pdf::ocr::leave(&doc, &mut readings);
+            report_left(stem, "--ocr-words", &left, cfg.verbose);
         }
         let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
         report_ocr(stem, "--ocr-words", &injected, cfg.verbose, quiet);
