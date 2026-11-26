@@ -2689,6 +2689,20 @@ fn find_figures(
             &figures,
         );
         figures.extend(barred);
+        let tables: Vec<crate::geom::BBox> = layouts
+            .get(pi)
+            .map(|l| l.grids.iter().map(|g| g.bbox).collect())
+            .unwrap_or_default();
+        let diagrams = figure::box_diagrams(
+            &page.fills,
+            &page.rules,
+            &page.glyphs,
+            pi,
+            (page.width, page.height),
+            &tables,
+            &figures,
+        );
+        figures.extend(diagrams);
         // A dimension drawing whose lines made a ruled grid of its callouts:
         // the drawing its loose callouts and view names are labels of.
         if let Some(layout) = layouts.get(pi) {

@@ -659,6 +659,16 @@ from its text:
   length and hold their text, its figures step unevenly, and its columns of
   cells end, piece after piece, at the same rows across the table, where a
   stacked bar's few pieces end at their values.
+- A box diagram, a flowchart's steps or a system's blocks, is three boxes
+  or more, each holding a label, standing apart and joined by two
+  connectors or more: a line or an arrow crossing the gap between two boxes
+  where they face each other. Its labels are the ones set in its boxes, with
+  its banner and side tabs standing against it and a caption over or under
+  it; a panel of text beside it stays the page's. A table is no diagram: a
+  box holds a label, not a row of figures; a band as wide as the page is a
+  table's shaded row; a table's group underline runs along its header
+  cells' edge rather than across a gap; and no box lies within a table
+  already found. A table's caption under a diagram stays its table's.
 - A form's fields are no drawing's shapes: an empty box a line or two high,
   under or after its label's colon (`Job Name:`, set at the text's size, not
   a title's), and the boxes in line with it at its height. The box that

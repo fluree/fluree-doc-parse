@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "pmc6241217.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6241217/",
+    "sha256": "394e97dc6b5afc413ada7c321101469aecd88c341ab477c925274453ac378ed5",
+    "about": "PMC6241217, a cohort study of lung cancer patients. Page 3 sets its study population's flowchart (boxes of a step and its count, joined by lines) over `Table 1`, whose caption and stub labels stand just under it. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25: the flowchart was found as no drawing; each box was a paragraph of the page's."
+  ],
+  "checks": [
+    {
+      "id": "cohort-box-is-the-diagrams",
+      "found": "2026-11-25",
+      "issue": "Each box of the flowchart was a paragraph.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Lung cancer cohort selected in this study (N=101,776)"
+      }
+    },
+    {
+      "id": "caption-is-the-diagrams",
+      "found": "2026-11-25",
+      "issue": "As above, for the flowchart's caption.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Figure 1: Flowchart of study population selection."
+      }
+    },
+    {
+      "id": "table-caption-stays-the-tables",
+      "found": "2026-11-25",
+      "issue": "The table's caption under the flowchart is no label of the flowchart's.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Table 1: ICD-9-CM codes used to identify comorbidity."
+      }
+    }
+  ]
+}
