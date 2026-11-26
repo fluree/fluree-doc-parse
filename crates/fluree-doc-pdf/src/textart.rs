@@ -775,6 +775,7 @@ mod tests {
             italic: false,
             advance: Some(ADV),
             draw_index: idx,
+            ocr: None,
         }
     }
 

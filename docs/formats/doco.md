@@ -453,8 +453,9 @@ holds is one hop:
   "po:contains": [ "…-element-3", "…-element-4", "…-table-5" ] }
 ```
 
-A title the file declares for itself — Word's Title style, a deck's title
-slide — is a `doco:Title`, and the document node's header in the same way:
+A document's own title — Word's Title style, a deck's title slide, a PDF's
+title read off its first page — is a `doco:Title`, and the document node's
+header in the same way:
 
 ```json
 { "@type": "foaf:Document",
@@ -464,10 +465,16 @@ slide — is a `doco:Title`, and the document node's header in the same way:
 { "@id": "…-element-2", "@type": "doco:Title", "nif:isString": "Annual Report" }
 ```
 
-It opens no section: what follows it up to the first heading is the body's.
-A document has one title, so a second reads as a top-level heading. A PDF
-declares no title on its pages, so its graph has none: a title guessed from
-the largest line would be a reading of the page, and stays a heading.
+It opens no section: what follows it up to the first heading is the body's,
+and the sections start at level 1. A document has one title, so a second
+reads as a top-level heading. A PDF's title is read off its first page, and
+is a `doco:Title` only where it is sure. Its `doc:evidence` says how: the
+file's own title names it (`metadata`), a bookmark does (`outline`), or its
+type sets it apart and nothing doubts it (`type`). A line in doubt (a date, a
+section's name or number, a company's name, a journal's mark) stays a
+level-1 `doco:SectionTitle`, and the document has no `doco:Title`: no title is
+better than a wrong one. Its `dcterms:title` stays what the file's
+information dictionary says.
 
 `po:contains` is a set, as JSON-LD arrays are. Reading order is
 `nif:beginIndex`, which every node holding text carries; DoCO's own

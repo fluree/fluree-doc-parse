@@ -1,0 +1,24 @@
+{
+  "document": {
+    "file": "ti-lm358.pdf",
+    "url": "https://www.ti.com/lit/ds/symlink/lm358.pdf",
+    "sha256": "8277dff7b89138c63b3582d37f378065a1dea3cae5ed1e2926ddc2779eb7e3a2",
+    "about": "TI LM358 data sheet. Its revision history lists each revision's changes as bullets, a dot leader running each out to its page number."
+  },
+  "notes": [
+    "2026-11-26: alignment lined the bullets and their items up as two columns, and the revision's changes from W to Y read as a table, `• | Updated the numbering format …`, under the revision's head as its header row."
+  ],
+  "checks": [
+    {
+      "id": "revision-changes-a-list",
+      "found": "2026-11-26",
+      "issue": "a bulleted list read as a two-column table of its bullets and items.",
+      "list": {
+        "holds": [
+          "Updated the numbering format for tables, figures, and cross-references throughout the document.................1",
+          "Added SOT23-8 (DDF) package information throughout data sheet.................................................................1"
+        ]
+      }
+    }
+  ]
+}

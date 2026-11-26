@@ -468,6 +468,137 @@ struct TableFrame {
     bold: bool,
 }
 
+/// What a heading element's id opens with until elements are numbered,
+/// then its page and block: `\0h3:12`. A NUL opens no id an element
+/// is given.
+const HEADING_BLOCK: &str = "\0h";
+
+/// Most characters a line taken for the document's title in place of the
+/// one first read may hold.
+const MAX_TITLE_CHARS: usize = 200;
+
+/// A field's line: a short label, its colon, and a code after it, figures
+/// and no word (`Amazon.com order number: 114-0619372-9653019`). Its code
+/// can name a file as its title does, and it is no title. A title with a
+/// colon of its own goes on in words (`Dehydrobrachylaenolide: an
+/// eudesmane-type sesquiterpene lactone`).
+fn field_line(text: &str) -> bool {
+    text.split_once(':').is_some_and(|(label, value)| {
+        let coded = value.chars().any(|c| c.is_ascii_digit())
+            && !value
+                .split(|c: char| !c.is_alphabetic())
+                .any(|w| w.chars().count() > MAX_CODE_LETTERS);
+        coded && label.split_whitespace().count() <= MAX_FIELD_LABEL_WORDS
+    })
+}
+
+/// Most letters a run of a code holds (`KP`, `USD`): a longer run is a word.
+const MAX_CODE_LETTERS: usize = 3;
+
+/// Most words a field's label runs to.
+const MAX_FIELD_LABEL_WORDS: usize = 4;
+
+/// The document's title, emitted as a `doco:Title` only where it is sure:
+/// a wrong title becomes what consumers index the document by, and no
+/// title is better than a wrong one. DoCO holds a title as the document's
+/// header, apart from the sections, as a Word document's title and a deck's
+/// are held. The title is read as a heading until here, for the passes
+/// above that weigh headings by it.
+///
+/// Sure, by its evidence:
+/// - `metadata`: the file's own title (`/Title`) names it.
+/// - `outline`: a bookmark at the outline's first depth names it.
+/// - `type`: set apart as the page's title by its type, and nothing doubts
+///   it ([`heading::title_doubt`]).
+///
+/// Where the file's title names another heading on the first page and not
+/// the line taken, that heading is the title: a journal's mark (`materials`)
+/// set larger than the article's title, a pharmacy's name over a drug's
+/// label. A line in doubt stays a level-1 heading.
+fn settle_title(
+    elements: &mut [Element],
+    meta: Option<&str>,
+    outline: &[OutlineItem],
+    size: impl Fn(&Element) -> Option<f32>,
+) {
+    let meta = meta.filter(|m| heading::meaningful_title(m));
+    let bookmarked = |text: &str| {
+        let top = outline.iter().map(|o| o.level).min().unwrap_or(1);
+        outline
+            .iter()
+            .filter(|o| o.level == top)
+            .any(|o| heading::names_title(&o.title, text) && heading::names_title(text, &o.title))
+    };
+    let debug = std::env::var_os("FDOC_TITLE_DEBUG").is_some();
+    for i in 0..elements.len() {
+        if elements[i].kind != "doco:SectionTitle" || elements[i].evidence != "title" {
+            continue;
+        }
+        let text = elements[i].text.clone();
+        let doubt = heading::title_doubt(&text);
+        // A date is no title, whatever names it: a meeting's transcript
+        // states its days in its title too.
+        let dated = doubt == Some("date");
+        let mut decision: (&str, &'static str) = ("keep", "type");
+        if !dated && meta.is_some_and(|m| heading::names_title(m, &text)) {
+            decision = ("keep", "metadata");
+        } else if !dated && bookmarked(&text) {
+            decision = ("keep", "outline");
+        } else if !dated && meta.is_some_and(|m| heading::part_of_title(m, &text)) {
+            decision = ("keep", "metadata");
+        } else {
+            // A line of the first page the file's title names instead: a
+            // heading, or a short paragraph set as the title is.
+            let named = meta.and_then(|m| {
+                (0..elements.len()).find(|&k| {
+                    k != i
+                        && elements[k].page == elements[i].page
+                        && matches!(
+                            elements[k].kind.as_str(),
+                            "doco:SectionTitle" | "doco:Paragraph"
+                        )
+                        && elements[k].text.chars().count() <= MAX_TITLE_CHARS
+                        && !field_line(&elements[k].text)
+                        && heading::names_title(m, &elements[k].text)
+                })
+            });
+            match named {
+                Some(k) => {
+                    decision = ("swap", "metadata");
+                    let e = &mut elements[k];
+                    e.kind = "doco:Title".into();
+                    e.level = None;
+                    e.evidence = "metadata";
+                }
+                None => {
+                    if let Some(why) = doubt {
+                        decision = ("doubt", why);
+                    }
+                }
+            }
+        }
+        if debug {
+            eprintln!(
+                "TITLE\t{}\t{}\t{:.2}\t{}\t{}",
+                decision.0,
+                decision.1,
+                size(&elements[i]).unwrap_or(0.0),
+                text,
+                meta.unwrap_or("")
+            );
+        }
+        let e = &mut elements[i];
+        if decision.0 == "keep" {
+            e.kind = "doco:Title".into();
+            e.level = None;
+            e.evidence = decision.1;
+        } else {
+            e.evidence = "font-size";
+            e.level = Some(1);
+        }
+    }
+}
+
 /// How far apart, in points, two parts' column edges may be drawn and still
 /// be one table's columns. A table the page break splits is drawn by one
 /// layout on both pages, so its edges agree to within a rule's stroke.
@@ -1781,7 +1912,7 @@ const PROSE_WORDS: usize = 5;
 const PROSE_LOWER: f64 = 0.6;
 
 /// Does the cell read as a line of prose?
-fn prose_line(text: &str) -> bool {
+pub(crate) fn prose_line(text: &str) -> bool {
     let words: Vec<&str> = text.split_whitespace().collect();
     let lower = words
         .iter()
@@ -2819,7 +2950,8 @@ fn nested_grids(g: &Grid, page: &crate::extract::Page) -> Vec<(Grid, usize, usiz
 }
 
 /// A grid's first column holds nothing but list markers (`a)`, `2.`, `(iii)`,
-/// `•`), at least two of them: an enumerated list read as a table.
+/// any bullet [`block::is_bullet`] knows, a dash), at least two of them: an
+/// enumerated list read as a table.
 fn is_marker_list(cells: &[String], cols: usize) -> bool {
     if cols < 2 {
         return false;
@@ -2832,12 +2964,42 @@ fn is_marker_list(cells: &[String], cols: usize) -> bool {
         .collect();
     let marker = |t: &str| {
         let body = t.trim_start_matches('(').trim_end_matches(['.', ')']);
-        matches!(t, "•" | "◦" | "▪" | "-" | "–" | "*")
+        let mut chars = t.chars();
+        let bullet = chars.next().is_some_and(block::is_bullet) && chars.next().is_none();
+        bullet
+            || matches!(t, "-" | "–" | "*")
             || (t != body
                 && (1..=4).contains(&body.chars().count())
                 && body.chars().all(|c| c.is_ascii_alphanumeric()))
     };
     firsts.len() >= 2 && firsts.iter().all(|t| marker(t))
+}
+
+/// A grid read from alignment that is a bulleted list: two columns, its
+/// bullets and its items ([`is_marker_list`]), with at most one first row of
+/// other text over them, a heading or a running head set level with the
+/// list. Its bullets line up down the page as a column does, and each item's
+/// text beside them as another.
+///
+/// Bullets only, each marker one character. A numbered or lettered list read
+/// back as prose sets each item as a numbered line, and a numbered line of
+/// one item reads as a numbered section: a contract's `(b) "Board" means the
+/// Board of Directors.` became a heading, and a report's list of its key
+/// audit matters, `1. Measurement of shares`, repeated the numbered heads it
+/// lists and cost them their numbering. Read as a table, those stay apart.
+fn lists_its_rows(g: &Grid, glyphs: &[Glyph]) -> bool {
+    if g.cols() != 2 {
+        return false;
+    }
+    let cells = g.cell_texts(glyphs);
+    let bulleted = |cells: &[String]| {
+        is_marker_list(cells, 2)
+            && cells
+                .iter()
+                .step_by(2)
+                .all(|t| t.trim().chars().count() <= 1)
+    };
+    bulleted(&cells) || (g.rows() >= 3 && bulleted(&cells[2..]))
 }
 
 /// Run the pipeline over an already-extracted document.
@@ -2863,6 +3025,39 @@ pub struct AnalyzeOptions {
 /// Drawn grids a document may hold before a reading per table stops being
 /// earned; see the table-confidence anchors in [`analyze_with`].
 const TRUSTED_RULING_TABLES: usize = 32;
+
+/// Whether a model's reading of `table` is worth asking for: its header is
+/// in doubt, or its structure disagrees with itself (`suspect`, from
+/// [`table::suspect_tables`]: fragments of one ruled region that disagree on
+/// their columns, or rows merged into one).
+///
+/// A header is in doubt where it is anything but one plain row: no header
+/// read at all, a header of two rows or more, a cell spanning rows or
+/// columns, a banner over a group of rows, or a row restating the header
+/// further down. That is where our reading of a table is weakest (which rows
+/// head it, what each label spans), and where a reading's spans say what a
+/// grid of cells cannot.
+///
+/// A table with one plain header row, drawn or inferred, gains nothing a
+/// reading can add, and the reading replaces it whenever their shapes
+/// differ ([`crate::arbiter::reading_wins`]), so a reading that merges two
+/// columns, drops a row or takes a caption in costs the table. Measured over
+/// the benchmark's 39 documents whose tables were read by a model, with two
+/// readers (a live gemini-3-flash run and the older cached readings): on the
+/// 30 with only plain headers, readings made 11 documents worse and 5 better
+/// (summed −0.16; cached −0.36). On the 9 with a header in doubt they made 7
+/// better and none worse (+0.55; cached +0.45). Drawn against inferred does
+/// not separate the two: drawn grids with spanned headers were among the
+/// largest gains, and inferred grids with plain headers among the largest
+/// losses.
+fn table_in_doubt(table: &Element, suspect: bool) -> bool {
+    suspect
+        || table.header_rows != Some(1)
+        || table.merged_down.is_some()
+        || table.merged_left.is_some()
+        || table.sub_headers.is_some()
+        || table.restated_headers.is_some()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GridSource {
@@ -4412,6 +4607,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 && !grids.iter().any(|o| overlap_area(&o.bbox, &g.bbox) > 0.0)
                 && !table::reads_as_prose(g, &prose)
                 && !table::walled_in(&g.bbox, &walls)
+                && !lists_its_rows(g, &prose)
         });
         // Field lists set without rules, found between the page's gutters
         // where a row across the page holds more than a label and its
@@ -4656,7 +4852,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     let drawings: Vec<furniture::Drawing> = raw
         .pages
         .iter()
-        .map(|p| furniture::Drawing {
+        .zip(&layouts)
+        .map(|(p, lay)| furniture::Drawing {
+            tables: lay.grids.iter().map(|g| g.bbox).collect(),
             shapes: p
                 .fills
                 .iter()
@@ -5056,6 +5254,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     let mut is_heading: std::collections::HashMap<(usize, usize), (usize, Evidence)> =
         Default::default();
     let mut form_text: std::collections::HashSet<(usize, usize)> = Default::default();
+    let level_info: std::collections::HashMap<(usize, usize), heading::LevelInfo> = headings
+        .iter()
+        .map(|h| ((h.page, h.block_index), h.level_info()))
+        .collect();
     for h in &headings {
         is_heading.insert((h.page, h.block_index), (h.level, h.evidence));
         if h.form_text {
@@ -5071,6 +5273,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         .count();
 
     let mut n = 0usize;
+    // Each heading's block, by its element's id.
+    let mut heading_block: std::collections::HashMap<String, (usize, usize)> = Default::default();
     let mut tables = 0usize;
     // Each table's column edges and whether it opens with a styled row,
     // for joining a table the page break split.
@@ -5258,6 +5462,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 bbox: Some(b.bbox),
                 level,
                 figure: figure_of,
+                // A heading names its block until elements are numbered,
+                // for its level to be settled once the passes below have
+                // read some headings as text.
+                id: if kind == "doco:SectionTitle" {
+                    format!("{HEADING_BLOCK}{pi}:{block_idx}")
+                } else {
+                    String::new()
+                },
                 ..Element::new(kind, text, "rust", evidence)
             });
         }
@@ -5266,6 +5478,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let mut table_elements = Vec::new();
         let layout = &layouts[pi];
         debug_assert_eq!(layout.grid_sources.len(), layout.grids.len());
+        // Which grids, read as tables, are in doubt: those anchor for a
+        // reading below.
+        let mut in_doubt = vec![false; layout.grids.len()];
         for (gi, g) in layout.grids.iter().enumerate() {
             // A running string leaks into a table only where the table
             // reaches its row: a grid takes its glyphs before furniture is
@@ -5854,6 +6069,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .then_some(merges.continues_left),
                 ..Element::new("doco:Table", text, "rust", "rules")
             });
+            in_doubt[gi] = table_elements.last().is_some_and(|t| {
+                table_in_doubt(
+                    t,
+                    suspect_tables
+                        .iter()
+                        .any(|s| s.page == pi && s.bbox.intersects(&g.bbox)),
+                )
+            });
             frames.push(TableFrame {
                 page: pi,
                 bbox: g.bbox,
@@ -5874,36 +6097,29 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 tables += 1;
             }
         }
-        // Table-confidence anchors: a grid whose structure was *inferred* from
-        // alignment rather than read from drawn rules has guessed column
-        // boundaries, and the calibration against the benchmark's TEDS
-        // component was unambiguous — every deterministic win came from a
-        // ruled grid, every large loss from an inferred one. The anchor sits
-        // immediately above its table so the hybrid adapter can replace the
-        // pipe rows with the VLM's reading of the same region; the pure
-        // engine's output is untouched.
+        // Table-confidence anchors: a table whose reading is in doubt
+        // ([`table_in_doubt`]) anchors for a model's reading of its crop. The
+        // anchor sits immediately above its table so the hybrid adapter can
+        // replace the pipe rows with the VLM's reading of the same region;
+        // the pure engine's output is untouched. A grid read as no table
+        // (demoted, or a drawing's labels) has none to replace and does not
+        // anchor.
         if opts.emit_anchors {
             for (ti, g) in layout.grids.iter().enumerate() {
-                if layout.demoted_tables[ti] {
+                if layout.demoted_tables[ti] || !in_doubt[ti] {
                     continue;
                 }
                 // A document with this many drawn grids is a chart or a
                 // ledger built from one template, and its ruling is the
                 // template's: a reading per table would cost a reading per
                 // page of an 800-page record to confirm what the rules
-                // already say. Escalation is earned per table by an
-                // inferred structure or a disagreeing one, not by count.
+                // already say. Escalation is earned per table by a header
+                // in doubt or a disagreeing structure, not by count.
                 if layout.grid_sources[ti] == GridSource::Ruled
                     && ruled_tables > TRUSTED_RULING_TABLES
                 {
                     continue;
                 }
-                // Ruled grids anchor too since the structure arbiter arrived:
-                // when the VLM's shape agrees (the common case for drawn
-                // grids) the anchor drops and nothing changes; when it
-                // disagrees, a drawn grid was still trimmed or banded wrongly
-                // and the pixels win. The arbiter is what makes this safe --
-                // naive replacement measured catastrophic (TEDS 0.850->0.761).
                 let mut bbox = g.bbox;
                 bbox.y0 -= 0.01; // order the anchor just before its table
                 bbox.y1 = bbox.y0;
@@ -5965,7 +6181,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
         for mut element in interleave_tables(page_elements, table_elements) {
             n += 1;
-            element.id = format!("elem-{n:05}");
+            let id = format!("elem-{n:05}");
+            if let Some(block) = element
+                .id
+                .strip_prefix(HEADING_BLOCK)
+                .and_then(|r| r.split_once(':'))
+                .and_then(|(p, b)| Some((p.parse::<usize>().ok()?, b.parse::<usize>().ok()?)))
+            {
+                heading_block.insert(id.clone(), block);
+            }
+            element.id = id;
             elements.push(element);
         }
     }
@@ -5979,6 +6204,27 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     read_entry_lists(&mut elements);
     read_contents_rows(&mut elements);
     read_continued_heads(&mut elements);
+    // The levels of the headings that stand, each against those open above
+    // it: a pass above may have read a heading as text.
+    {
+        let at: Vec<usize> = (0..elements.len())
+            .filter(|&i| elements[i].kind == "doco:SectionTitle")
+            .collect();
+        let hs: Vec<(Option<&heading::LevelInfo>, usize)> = at
+            .iter()
+            .map(|&i| {
+                let e = &elements[i];
+                (
+                    heading_block.get(&e.id).and_then(|k| level_info.get(k)),
+                    e.level.unwrap_or(1),
+                )
+            })
+            .collect();
+        let levels = heading::settle_levels(&hs);
+        for (i, level) in at.into_iter().zip(levels) {
+            elements[i].level = Some(level);
+        }
+    }
     settle_cell_breaks(
         &mut elements,
         flat_lines
@@ -6051,6 +6297,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             e.text = e.text.split_whitespace().collect::<Vec<_>>().join(" ");
         }
     }
+    settle_title(&mut elements, raw.title.as_deref(), outline, |e| {
+        heading_block
+            .get(&e.id)
+            .map(|&(p, b)| blocks_per_page[p][b].font_size / body_font.max(1.0))
+    });
     Analysis {
         elements,
         suspect_headings,
@@ -6097,7 +6348,13 @@ fn settle_cell_breaks<'a>(elements: &mut [Element], lines: impl Iterator<Item = 
     if !elements.iter().any(marked) {
         return;
     }
-    let is_word_char = |c: char| c.is_alphanumeric() || c == '-' || c == brk;
+    // A raised figure after a word is a note's number, no letter of the
+    // word: `consoli-` over `dated²` is `consolidated`.
+    let is_word_char = |c: char| {
+        (c.is_alphanumeric() && fluree_doc_model::marks::raised_figure(c).is_none())
+            || c == '-'
+            || c == brk
+    };
     let mut words: HashSet<String> = HashSet::new();
     let mut witness = |text: &str| {
         for w in text.split(|c: char| !is_word_char(c)) {
@@ -6676,6 +6933,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         let prose = [text(60.0, 200.0), text(320.0, 200.0)];
         // A full-width table's rule under its last row.
@@ -6762,6 +7020,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         let spread = |x0: f64, x1: f64| spread_runs(&g, &[ink(x0, x1)], &rows, &left)[4];
         // Narrow and centred, as before.
@@ -6795,6 +7054,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: i,
+            ocr: None,
         };
         // A grid whose first column is `first` wide; the band over the rest
         // of it, the rule at the first column's edge running up through it.
@@ -7127,6 +7387,8 @@ mod tests {
             format!("long{brk}term"),
             format!("Un{brk}employ{brk}ment"),
             format!("Wid{brk}gets"),
+            // A note's number raised after the word is no part of it.
+            format!("consoli{brk}dated²"),
         ]];
         let text = cells[0].join(" | ");
         let mut elements = vec![
@@ -7141,6 +7403,7 @@ mod tests {
             "Fluorescent Dimmer",
             "a long-term lease",
             "UNEMPLOYMENT RATE",
+            "consolidated figures",
         ];
         settle_cell_breaks(&mut elements, lines.into_iter());
         assert_eq!(
@@ -7153,11 +7416,13 @@ mod tests {
                 "Unemployment",
                 // Printed nowhere else: the hyphen stays, as it was.
                 "Wid-gets",
+                "consolidated²",
             ]
         );
         assert_eq!(
             elements[1].text,
-            "3-wire Fluorescent Ballasts | 20 Ballasts | long-term | Unemployment | Wid-gets"
+            "3-wire Fluorescent Ballasts | 20 Ballasts | long-term | Unemployment | Wid-gets \
+             | consolidated²"
         );
     }
 
@@ -7221,6 +7486,7 @@ mod tests {
             italic: false,
             advance: Some(6.0),
             draw_index: i,
+            ocr: None,
         }
     }
 
@@ -7277,7 +7543,10 @@ mod tests {
             crate::route::Route::VlmRegions(vec![b]),
             "as drawn, the caption covers A"
         );
-        let mut raw = RawDoc { pages: vec![page] };
+        let mut raw = RawDoc {
+            pages: vec![page],
+            title: None,
+        };
         let both = crate::route::Route::VlmRegions(vec![a, b]);
         // What an OCR reading numbers its regions by, before the analysis.
         assert_eq!(region_routes(&raw), vec![both.clone()]);
@@ -7340,7 +7609,10 @@ mod tests {
             crate::route::decide(&page).0,
             crate::route::Route::Deterministic
         );
-        let mut raw = RawDoc { pages: vec![page] };
+        let mut raw = RawDoc {
+            pages: vec![page],
+            title: None,
+        };
         let near_blank = crate::route::Route::Vlm(crate::route::Reason::NearBlank);
         // As the crops are chosen, before the analysis.
         assert_eq!(region_routes(&raw), vec![near_blank.clone()]);
@@ -7526,6 +7798,48 @@ mod tests {
     }
 
     #[test]
+    fn a_tables_reading_is_in_doubt_unless_one_plain_row_heads_it() {
+        let plain = Element {
+            cells: Some(grid(&[&["Name", "Count"], &["alpha", "12"]])),
+            header_rows: Some(1),
+            ..Element::new("doco:Table", "Name | Count\nalpha | 12", "rust", "rules")
+        };
+        assert!(!table_in_doubt(&plain, false));
+        // Its structure disagreeing with itself puts it in doubt whatever
+        // heads it.
+        assert!(table_in_doubt(&plain, true));
+        let flags = Some(vec![false, true, false, false]);
+        for doubted in [
+            Element {
+                header_rows: Some(0),
+                ..plain.clone()
+            },
+            Element {
+                header_rows: Some(2),
+                ..plain.clone()
+            },
+            Element {
+                merged_down: flags.clone(),
+                ..plain.clone()
+            },
+            Element {
+                merged_left: flags,
+                ..plain.clone()
+            },
+            Element {
+                sub_headers: Some(vec![1]),
+                ..plain.clone()
+            },
+            Element {
+                restated_headers: Some(vec![1]),
+                ..plain.clone()
+            },
+        ] {
+            assert!(table_in_doubt(&doubted, false), "{doubted:?}");
+        }
+    }
+
+    #[test]
     fn a_lettered_list_read_as_a_table_is_a_list() {
         let cells = |rows: &[[&str; 2]]| -> Vec<String> {
             rows.iter().flatten().map(|c| c.to_string()).collect()
@@ -7545,6 +7859,19 @@ mod tests {
             2
         ));
         assert!(is_marker_list(&cells(&[["•", "One."], ["•", "Two."]]), 2));
+        // Every bullet a list item opens with, not only the commonest.
+        for bullet in ["●", "■", "○", "➢", "\u{F0B7}"] {
+            assert!(
+                is_marker_list(&cells(&[[bullet, "One."], [bullet, "Two."]]), 2),
+                "{bullet}"
+            );
+        }
+        // A column of one letter or sign is no column of bullets.
+        assert!(!is_marker_list(&cells(&[["x", "One."], ["x", "Two."]]), 2));
+        assert!(!is_marker_list(
+            &cells(&[["●●", "One."], ["●●", "Two."]]),
+            2
+        ));
         // A table with labels in its first column is a table.
         let table = [["Added cation", "Relative size"], ["K+", ""], ["Na+", ""]];
         assert!(!is_marker_list(&cells(&table), 2));
@@ -7557,6 +7884,91 @@ mod tests {
             &cells(&[["a)", "Only one."], ["", "More text."]]),
             2
         ));
+    }
+
+    /// A grid read from alignment, `rows` of cells in columns 100 pt wide
+    /// and rows 20 pt tall, and the glyphs in it, a word each.
+    fn aligned_grid(rows: &[&[&str]]) -> (Grid, Vec<Glyph>) {
+        let cols = rows[0].len();
+        let xs: Vec<f64> = (0..=cols).map(|c| c as f64 * 100.0).collect();
+        let ys: Vec<f64> = (0..=rows.len()).map(|r| r as f64 * 20.0).collect();
+        let mut glyphs = Vec::new();
+        for (r, row) in rows.iter().enumerate() {
+            for (c, word) in row.iter().enumerate() {
+                let (x, y) = (c as f64 * 100.0 + 5.0, r as f64 * 20.0 + 14.0);
+                glyphs.push(Glyph {
+                    text: (*word).into(),
+                    bbox: Some(BBox {
+                        x0: x,
+                        y0: y - 8.0,
+                        x1: x + 6.0 * word.chars().count() as f64,
+                        y1: y,
+                    }),
+                    page: 0,
+                    origin: (x, y),
+                    rotation_deg: 0.0,
+                    font_size: 8.0,
+                    weight: None,
+                    italic: false,
+                    advance: None,
+                    draw_index: glyphs.len(),
+                    ocr: None,
+                });
+            }
+        }
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: xs[cols],
+                y1: ys[rows.len()],
+            },
+            xs,
+            ys,
+        };
+        (grid, glyphs)
+    }
+
+    #[test]
+    fn a_bulleted_list_lined_up_as_a_table_is_a_list() {
+        // Its bullets, and its items beside them.
+        let (g, glyphs) = aligned_grid(&[&["•", "Pipettes"], &["•", "Rack"], &["•", "Tray"]]);
+        assert!(lists_its_rows(&g, &glyphs));
+        // Under a line set level with it: a running head, a heading.
+        let (g, glyphs) = aligned_grid(&[
+            &["COLLEGE", "BIO181"],
+            &["●", "Pipettes"],
+            &["●", "Rack"],
+            &["●", "Tray"],
+        ]);
+        assert!(lists_its_rows(&g, &glyphs));
+        // A numbered or lettered list stays as it was read: its items, read
+        // back as prose, would be numbered lines.
+        let (g, glyphs) = aligned_grid(&[&["1.", "Thaw."], &["2.", "Mix."], &["3.", "Spin."]]);
+        assert!(!lists_its_rows(&g, &glyphs));
+        let (g, glyphs) = aligned_grid(&[&["(a)", "Board"], &["(b)", "Code"], &["(c)", "Holder"]]);
+        assert!(!lists_its_rows(&g, &glyphs));
+        // Two rows of other text over the markers head a table.
+        let (g, glyphs) = aligned_grid(&[
+            &["Step", "Action"],
+            &["When", "Done"],
+            &["•", "Rack"],
+            &["•", "Tray"],
+        ]);
+        assert!(!lists_its_rows(&g, &glyphs));
+        // A third column is more than a list's items: numbered rows of a
+        // table.
+        let (g, glyphs) = aligned_grid(&[
+            &["1.", "Widget", "4.50"],
+            &["2.", "Gadget", "3.10"],
+            &["3.", "Sprocket", "1.25"],
+        ]);
+        assert!(!lists_its_rows(&g, &glyphs));
+        // Labels down the first column are a table's.
+        let (g, glyphs) = aligned_grid(&[&["Width", "40"], &["Depth", "25"], &["Height", "90"]]);
+        assert!(!lists_its_rows(&g, &glyphs));
     }
 
     #[test]
@@ -7807,6 +8219,7 @@ mod tests {
             bold: false,
             opens_with_script: false,
             italic: false,
+            ocr: None,
             x_height: None,
             compounds: Vec::new(),
             opens_bold: false,
@@ -7828,6 +8241,92 @@ mod tests {
                 if table { "rules" } else { "layout" },
             )
         }
+    }
+
+    #[test]
+    fn the_title_is_the_documents_only_where_it_is_sure() {
+        let at = |kind: &str, text: &str, evidence: &'static str| Element {
+            page: 0,
+            level: (kind == "doco:SectionTitle").then_some(1),
+            ..Element::new(kind, text, "rust", evidence)
+        };
+        let settle = |mut els: Vec<Element>, meta: Option<&str>| {
+            settle_title(&mut els, meta, &[], |_| None);
+            els.into_iter()
+                .map(|e| (e.kind, e.text, e.evidence))
+                .collect::<Vec<_>>()
+        };
+        // The file's own title names it.
+        let els = settle(
+            vec![at("doco:SectionTitle", "Monetary Policy Report", "title")],
+            Some("Monetary Policy Report, July 2026"),
+        );
+        assert_eq!(
+            els[0],
+            (
+                "doco:Title".into(),
+                "Monetary Policy Report".into(),
+                "metadata"
+            )
+        );
+        // Set apart by its type, nothing doubting it.
+        let els = settle(
+            vec![at(
+                "doco:SectionTitle",
+                "Pipette Performance Data Sheet",
+                "title",
+            )],
+            None,
+        );
+        assert_eq!(els[0].2, "type");
+        // A date is no title: a heading the file's title names is.
+        let els = settle(
+            vec![
+                at(
+                    "doco:SectionTitle",
+                    "Transcript of Chair Powell's Press Conference",
+                    "bold",
+                ),
+                at("doco:SectionTitle", "September 20, 2023", "title"),
+            ],
+            Some("Transcript of Chair Powell's Press Conference -- September 20, 2023"),
+        );
+        assert_eq!(els[0].0, "doco:Title");
+        assert_eq!(
+            (els[1].0.as_str(), els[1].2),
+            ("doco:SectionTitle", "font-size")
+        );
+        // A field's line is no title, though the file's title names its value.
+        let els = settle(
+            vec![
+                at(
+                    "doco:SectionTitle",
+                    "Final Details for Order #114-0619372-9653019",
+                    "title",
+                ),
+                at(
+                    "doco:Paragraph",
+                    "Amazon.com order number: 114-0619372-9653019",
+                    "layout",
+                ),
+            ],
+            Some("Amazon.com - Order 114-0619372-9653019"),
+        );
+        assert_eq!(els[0].0, "doco:Title");
+        assert_eq!(els[1].0, "doco:Paragraph");
+        // A company's name in doubt stays a heading, and no title is read.
+        let els = settle(
+            vec![at(
+                "doco:SectionTitle",
+                "Hanvaro Semiconductor Co., Ltd.",
+                "title",
+            )],
+            None,
+        );
+        assert_eq!(
+            (els[0].0.as_str(), els[0].2),
+            ("doco:SectionTitle", "font-size")
+        );
     }
 
     #[test]
@@ -7988,6 +8487,7 @@ mod tests {
                     italic: false,
                     advance: None,
                     draw_index: glyphs.len(),
+                    ocr: None,
                 });
                 at += width + 3.0;
             }
@@ -8073,6 +8573,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: i,
+            ocr: None,
         };
         let grid = |xs: Vec<f64>, ys: Vec<f64>| Grid {
             layout: None,
@@ -8397,6 +8898,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index,
+            ocr: None,
         };
         let prose = glyphs_outside_grids(&[glyph(10.0, 1), glyph(110.0, 2)], &[grid]);
         assert_eq!(prose.len(), 1);
@@ -8478,6 +8980,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         assert!(prefer_aligned_over_ruled(&[ruled], &[aligned], &[glyph]));
     }

@@ -49,12 +49,18 @@ Roughly in order of how often you will see them:
 | `font-size` | heading detected by size rarity |
 | `numbering` | heading detected by a section-numbering pattern |
 | `outline` | the PDF bookmark tree named this heading |
-| `title` | the document-title heuristic on page 1 |
+| `metadata` | a PDF's `doco:Title` that the file's own title (`/Title`) names |
+| `type` | a PDF's `doco:Title` set apart as the first page's title by its type, nothing doubting it |
 | `header`, `footer` | a line repeated at the top or bottom of every page, kept once; see [furniture](../design/furniture.md#removed-from-the-body-kept-about-the-document) |
 
-The heading detectors form a ladder, tried in this order — `title`, `outline`,
-`numbering`, `bold`, `font-size` — each consulted only where the one before it
-declined. So the value tells you how far down that ladder a heading came from,
+A PDF's `doco:Title` carries `metadata`, `outline` or `type`: how sure it
+is. A line the first page sets as its title, but that a date, a section's
+name or number, a company's name or a mark makes doubtful, is a level-1
+`doco:SectionTitle` instead, and the document has no `doco:Title`.
+
+The heading detectors form a ladder, tried in this order — the title,
+`outline`, `numbering`, `bold`, `font-size` — each consulted only where the
+one before it declined. So the value tells you how far down that ladder a heading came from,
 and `font-size` is the weakest claim in the set.
 
 From the escalation path:
@@ -63,7 +69,7 @@ From the escalation path:
 |---|---|
 | `route` | a routed region supplied this |
 | `page-tier` | the whole page escalated |
-| `table-confidence` | a table escalated on self-disagreeing structure |
+| `table-confidence` | a table escalated because its reading is in doubt: structure that disagrees with itself, or a header other than one plain row |
 | `table-missing` | a detector found a table where the grid pass found none |
 | `layout-demoted` | a detector corroborated demoting this heading to prose |
 

@@ -50,6 +50,17 @@ impl<'a> Source<'a> {
 }
 
 pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
+    let status = convert(args, verbose, quiet);
+    // An engine opened on its first read that could not open ends the run
+    // as one refused before it started did, whatever was converted.
+    if status == 0 && crate::commands::ocr::engine_failed() {
+        2
+    } else {
+        status
+    }
+}
+
+fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     let pages = match args.pages.as_deref().map(parse_pages) {
         Some(Ok(set)) => Some(set),
         Some(Err(e)) => {
@@ -1693,6 +1704,12 @@ fn render(
 }
 
 /// The note when a document has more OCR crops than `ocr.max_crops`.
+pub(crate) fn ocr_crowded_note(stem: &str, small: usize, crowded: usize) -> String {
+    format!(
+        "note: --ocr: {stem}: leaving {crowded} small region(s) unread on crowded pages (the {small} largest on a page are read) — raise `ocr.max_small_regions_per_page` (0 for no limit) to read them all"
+    )
+}
+
 pub(crate) fn ocr_cap_note(stem: &str, max: usize, capped: usize) -> String {
     format!(
         "note: --ocr: {stem}: reading {max} crops and leaving {capped} unread (pages read whole first, then routed regions, then small ones) — raise `ocr.max_crops` (0 for no limit) to read them all"
@@ -1701,6 +1718,24 @@ pub(crate) fn ocr_cap_note(stem: &str, max: usize, capped: usize) -> String {
 
 /// One stderr line per OCR reading set aside, and with `--verbose` one per
 /// reading taken.
+/// Name, with `-v`, each crop an engine read but left to the model.
+fn report_left(stem: &str, flag: &str, left: &[(String, &'static str)], verbose: bool) {
+    if verbose {
+        for (crop, why) in left {
+            eprintln!("ocr: {stem}_{crop}: left to the model: {why} ({flag})");
+        }
+    }
+}
+
+/// Name, with `-v`, each crop whose reading was set aside as artwork.
+fn report_set_aside(stem: &str, flag: &str, aside: &[String], verbose: bool) {
+    if verbose {
+        for crop in aside {
+            eprintln!("ocr: {stem}_{crop}: set aside: the engine is unsure of it ({flag})");
+        }
+    }
+}
+
 fn report_ocr(
     stem: &str,
     flag: &str,
@@ -1761,20 +1796,30 @@ fn convert_bytes(
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.
+    // Where a model reads too, in this run or from its readings, a reading
+    // that is not enough on its own is left to it.
+    let modelled = cfg.escalate || cfg.tier_results.is_some();
     // With the words of each sidecar reading, those scored outside 0-1, by
     // page and crop: warned of once the readings listed are known (below).
     let (injected, scores) = if let Some(engine) = &cfg.ocr {
         let max = cfg.config.ocr.max_crops();
         // At the stored resolution of what is under each crop (#11): an
         // engine reads small text a 2× render loses.
-        let pass = fluree_doc_pdf::ocr::read_pages(
+        let small = cfg.config.ocr.max_small_regions_per_page();
+        let pass = fluree_doc_pdf::ocr::read_pages_leaving(
             &mut doc,
             &raw,
             engine.0.as_ref(),
             pages,
             fluree_doc_pdf::escalate::CropScale::Stored,
-            max,
+            (max, small),
+            modelled,
         );
+        if pass.crowded > 0 && !quiet {
+            eprintln!("{}", ocr_crowded_note(stem, small, pass.crowded));
+        }
+        report_left(stem, "--ocr", &pass.left, cfg.verbose);
+        report_set_aside(stem, "--ocr", &pass.set_aside, cfg.verbose);
         for (crop, e) in &pass.failed {
             if !quiet {
                 eprintln!("warning: --ocr: {stem}_{crop}: {e}");
@@ -1795,7 +1840,13 @@ fn convert_bytes(
         // A region showing what an earlier one shows has no crop of its own
         // to read (`render-routed --ocr-regions` cuts it once): it takes the
         // earlier one's reading, as `--ocr` gives it.
-        let readings = fluree_doc_pdf::ocr::with_copies(&doc, pages, readings);
+        let mut readings = fluree_doc_pdf::ocr::with_copies(&doc, pages, readings);
+        if modelled {
+            let left = fluree_doc_pdf::ocr::leave(&doc, &mut readings);
+            report_left(stem, "--ocr-words", &left, cfg.verbose);
+        }
+        let aside = fluree_doc_pdf::ocr::set_aside_unsure(&doc, &mut readings);
+        report_set_aside(stem, "--ocr-words", &aside, cfg.verbose);
         let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
         let scores = readings
             .iter()
@@ -2350,6 +2401,7 @@ mod tests {
                     weight: None,
                     italic: false,
                     draw_index,
+                    ocr: None,
                 });
             }
         }
@@ -2451,6 +2503,7 @@ mod tests {
                     weight: None,
                     italic: false,
                     draw_index,
+                    ocr: None,
                 });
             }
         }
@@ -2683,6 +2736,7 @@ mod tests {
                         weight: None,
                         italic: false,
                         draw_index,
+                        ocr: None,
                     });
                 }
             }
@@ -2782,6 +2836,7 @@ mod tests {
                 weight: None,
                 italic: false,
                 draw_index,
+                ocr: None,
             });
         };
         for row in 0..7 {

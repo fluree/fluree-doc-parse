@@ -817,6 +817,44 @@ fn items_over_totals<'a>(
     ))
 }
 
+/// Where a block of totals starts among a band's lines, `band.len()` where
+/// none ends them: the lines under the last line with the most cells, to
+/// the band's end, each with half as many cells or fewer, ending in an
+/// amount, its labels set over the items' figures (`Total HT :` under the
+/// unit prices), and nothing to the band's left (`left_of`). Not a second
+/// table's rows running on beside the first's, whose labels stand over the
+/// first's labels, nor rows labelled at the margin.
+fn totals_block(band: &[&Line], left_of: impl Fn(&Line) -> bool) -> usize {
+    let most = band.iter().map(|l| l.chunks.len()).max().unwrap_or(0);
+    let Some(last) = band.iter().rposition(|l| l.chunks.len() == most) else {
+        return band.len();
+    };
+    let figures: Vec<&Chunk> = band[..=last]
+        .iter()
+        .filter(|l| l.chunks.len() == most)
+        .flat_map(|l| l.chunks.iter())
+        .filter(|c| is_figure(&c.text) && !is_year(&c.text))
+        .collect();
+    let among_figures = |c: &Chunk| figures.iter().any(|f| c.x0 < f.x1 && f.x0 < c.x1);
+    let block = band[last + 1..]
+        .iter()
+        .take_while(|l| {
+            l.chunks.len() * 2 <= most
+                && !left_of(l)
+                && l.chunks.split_last().is_some_and(|(amount, labels)| {
+                    is_figure(&amount.text)
+                        && !is_year(&amount.text)
+                        && labels.iter().all(among_figures)
+                })
+        })
+        .count();
+    if block > 0 && last + 1 + block == band.len() {
+        last + 1
+    } else {
+        band.len()
+    }
+}
+
 /// A line that sits in the table's columns: each chunk within one column.
 fn fits(cols: &[(f64, f64)], l: &Line) -> bool {
     !cols.is_empty() && l.chunks.iter().all(|c| covered(cols, c).len() <= 1)
@@ -1254,10 +1292,21 @@ fn read_beside(
     lefts.sort_by(f64::total_cmp);
     // Only a region of figures alone lacks its labels: where the region's
     // rows start with a label, its rules already cover the label column.
-    let starts_with_figures = {
-        let firsts: Vec<bool> = all
+    // A block of totals under the items casts no vote, as it casts none on
+    // the columns (`items_over_totals`): an invoice labels its items at the
+    // margin and its totals within the figures' columns (`Total HT : |
+    // 46,68 €` under `P.U. HT`), and three totals outvoted three items. See
+    // [`totals_block`].
+    let band: Vec<&Line> = all.iter().filter(|l| in_band(l)).collect();
+    let left_of = |l: &Line| {
+        l.chunks
             .iter()
-            .filter(|l| in_band(l))
+            .any(|c| c.x1 <= region.x0 + fs && c.x0 < region.x0 - fs)
+    };
+    let totals_from = totals_block(&band, left_of);
+    let starts_with_figures = {
+        let firsts: Vec<bool> = band[..totals_from]
+            .iter()
             .filter_map(|l| {
                 l.chunks
                     .iter()
@@ -1449,6 +1498,16 @@ fn read_beside(
         let ls: Vec<&Line> = band.iter().map(|&i| &clipped[i]).collect();
         running_columns(&cols0, &ls)
     };
+    // Each line that carries on a row ruled off on its own.
+    let ruled_on = {
+        let ls: Vec<&Line> = band.iter().map(|&i| &clipped[i]).collect();
+        let on = ruled_rows(&cols0, &band_edges(rules, x0, x1), &ls);
+        let mut all = vec![false; clipped.len()];
+        for (k, &i) in band.iter().enumerate() {
+            all[i] = on[k];
+        }
+        all
+    };
     // Runs of value rows, up to three label lines between them.
     let mut runs: Vec<(usize, usize)> = Vec::new();
     let mut k = 0;
@@ -1475,6 +1534,7 @@ fn read_beside(
                 break;
             }
             if value_row(l)
+                || ruled_on[band[j]]
                 || ruled_row(l, &clipped[band[j - 1]])
                 || carries_on(
                     &cols0,
@@ -1554,6 +1614,7 @@ fn read_beside(
                 break;
             }
             if value_row(next)
+                || ruled_on[last + 1]
                 || ruled_row(next, &clipped[last])
                 || carries_on(
                     &cols0,
@@ -1959,6 +2020,175 @@ fn continues(l: &Line, n: &Line) -> bool {
         return false;
     };
     runs_on(a, b)
+}
+
+/// Rules across most of a table's width, `x0..x1` ([`BAND_RULE_SPAN`]): the
+/// edges of its ruled bands, down the page. A rule drawn a cell at a time is
+/// one rule where its pieces touch; the underlines of a statement's figures,
+/// a gutter between each, are not.
+fn band_edges(rules: &[Rule], x0: f64, x1: f64) -> Vec<f64> {
+    let mut hs: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    hs.sort_by(|a, b| a.axis_pos().total_cmp(&b.axis_pos()));
+    let mut levels: Vec<(f64, Vec<(f64, f64)>)> = Vec::new();
+    for r in hs {
+        match levels.last_mut() {
+            Some((axis, pieces)) if r.axis_pos() - *axis <= 1.0 => {
+                pieces.push((r.bbox.x0, r.bbox.x1))
+            }
+            _ => levels.push((r.axis_pos(), vec![(r.bbox.x0, r.bbox.x1)])),
+        }
+    }
+    let mut ys = Vec::new();
+    for (axis, mut pieces) in levels {
+        pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut stretches: Vec<(f64, f64)> = Vec::new();
+        for (a, b) in pieces {
+            match stretches.last_mut() {
+                Some((_, hi)) if a <= *hi + 1.0 => *hi = hi.max(b),
+                _ => stretches.push((a, b)),
+            }
+        }
+        if stretches
+            .iter()
+            .any(|&(a, b)| b.min(x1) - a.max(x0) >= BAND_RULE_SPAN * (x1 - x0))
+        {
+            ys.push(axis);
+        }
+    }
+    ys
+}
+
+/// Each chunk of `l` set under one of `row`'s cells: starting where the
+/// cell starts and ending short of the next, or within the cell's extent, to
+/// half the type's size (`FSN:` under an item's name, `CST` under `14.50%`).
+fn under_cells(row: &Line, l: &Line) -> bool {
+    let slack = row.fs * 0.5;
+    l.chunks.iter().all(|c| {
+        row.chunks.iter().enumerate().any(|(t, a)| {
+            let next = row.chunks.get(t + 1).map_or(f64::MAX, |n| n.x0);
+            ((c.x0 - a.x0).abs() <= slack && c.x1 < next)
+                || (c.x0 >= a.x0 - slack && c.x1 <= a.x1 + slack)
+        })
+    })
+}
+
+/// Rows ruled off on their own, several lines tall: for each of `lines`,
+/// whether it carries on the row above it inside one band between two rules
+/// across the table (`edges`, [`band_edges`]). The band opens on the row's
+/// first line, a line of figures past the stub, and a rule closes it; none of
+/// its further lines sets a figure under one of those. An item's codes and
+/// notes under its name, the kind of a tax under its rate (`CST` under
+/// `14.50%`), all drawn between the rules round the item's row.
+///
+/// Only where the rules part every row: where any band holds two lines with
+/// a figure in one column, the rules part groups of rows, or a journal
+/// table's header from its body, and a line under a row in its band may name
+/// the rows after it (`Financed by` under `Employed capital`). Then every
+/// line stays as it reads.
+fn ruled_rows(cols: &[(f64, f64)], edges: &[f64], lines: &[&Line]) -> Vec<bool> {
+    let mut out = vec![false; lines.len()];
+    // A figure, or a dash for none, bracketed or not (`(—)` under `91`).
+    let figure = |c: &Chunk| {
+        let t = c.text.trim();
+        let bare = t
+            .strip_prefix('(')
+            .and_then(|t| t.strip_suffix(')'))
+            .unwrap_or(t);
+        (is_figure(t) || is_figure(bare)) && !is_year(t)
+    };
+    let figures_in = |l: &Line| -> Vec<usize> {
+        l.chunks
+            .iter()
+            .filter(|c| figure(c))
+            .filter_map(|c| column_of(cols, c))
+            .filter(|&k| k > 0)
+            .collect()
+    };
+    let mut held: Vec<(usize, usize)> = Vec::new(); // (band, column)
+    for l in lines {
+        let band = edges.iter().filter(|&&y| y <= l.y0 + 1.0).count();
+        let figs = figures_in(l);
+        if figs.iter().any(|&k| held.contains(&(band, k))) {
+            return out;
+        }
+        held.extend(figs.into_iter().map(|k| (band, k)));
+    }
+    for (i, first) in lines.iter().enumerate() {
+        let figured: Vec<usize> = first
+            .chunks
+            .iter()
+            .filter(|c| figure(c))
+            .filter_map(|c| column_of(cols, c))
+            .filter(|&k| k > 0)
+            .collect();
+        if figured.len() < 2 {
+            continue;
+        }
+        let Some(top) = edges
+            .iter()
+            .copied()
+            .filter(|&y| y <= first.y0 + 1.0)
+            .reduce(f64::max)
+        else {
+            continue;
+        };
+        if i > 0 && lines[i - 1].y1 > top + 1.0 {
+            continue;
+        }
+        let Some(bottom) = edges.iter().copied().find(|&y| y >= first.y1 - 1.0) else {
+            continue;
+        };
+        // A band beside it, the next one down or up, opens on a line of
+        // figures as well: the table is ruled row by row, not only round its
+        // header and its foot.
+        let opens_on_figures = |lo: f64, hi: f64| {
+            lines
+                .iter()
+                .find(|l| l.y0 >= lo - 1.0 && l.y1 <= hi + 1.0)
+                .is_some_and(|l| has_figures(cols, l))
+        };
+        let below = edges
+            .iter()
+            .copied()
+            .find(|&y| y > bottom + 1.0)
+            .is_some_and(|next| opens_on_figures(bottom, next));
+        let above = edges
+            .iter()
+            .copied()
+            .filter(|&y| y < top - 1.0)
+            .reduce(f64::max)
+            .is_some_and(|prev| opens_on_figures(prev, top));
+        if !below && !above {
+            continue;
+        }
+        let inside: Vec<usize> = (i + 1..lines.len())
+            .take_while(|&k| lines[k].y1 <= bottom + 1.0)
+            .collect();
+        let under = |l: &Line| {
+            l.chunks
+                .iter()
+                .any(|c| figure(c) && column_of(cols, c).is_some_and(|k| figured.contains(&k)))
+        };
+        // The row's lines, one under the next a line's gap apart, the rule
+        // just under the last, each set under the row's cells: a band left
+        // open under a total, over the page's paragraphs down to the next
+        // table's rule, is no row.
+        let gap = first.fs;
+        let close = inside.iter().all(|&k| lines[k].y0 - lines[k - 1].y1 <= gap)
+            && inside
+                .last()
+                .is_some_and(|&k| bottom - lines[k].y1 <= 2.0 * gap)
+            && inside.iter().all(|&k| under_cells(first, lines[k]));
+        if close && inside.iter().all(|&k| !under(lines[k])) {
+            for k in inside {
+                out[k] = true;
+            }
+        }
+    }
+    out
 }
 
 /// A line that carries on the cells of the line above it, in columns that
@@ -2835,6 +3065,7 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         d <= b.fs * WRAP_LEADING && d < pitch * 0.85
     };
     let running = running_columns(&cols, &body);
+    let ruled_on = ruled_rows(&cols, &band_edges(rules, x0, x1), &body);
     let mut body_rows: Vec<(Vec<&Line>, bool)> = Vec::new(); // (lines, section)
     let mut restated_rows: Vec<usize> = Vec::new();
     let mut i = 0;
@@ -2857,6 +3088,12 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                 i += 1;
             }
             body_rows.push((ls, true));
+            continue;
+        }
+        // A further line of a row ruled off on its own.
+        if ruled_on[i] && body_rows.last().is_some_and(|(_, section)| !section) {
+            body_rows.last_mut().unwrap().0.push(l);
+            i += 1;
             continue;
         }
         if label_only(l) {
@@ -3896,8 +4133,34 @@ pub fn figure_runs(lines: &[Line], rules: &[Rule], taken: &[BBox]) -> Vec<BBox> 
         }
         let mut j = i;
         let mut k = i + 1;
-        // Up to two lines of labels between rows of figures.
-        while k < lines.len() && k <= j + 3 {
+        // Up to two lines of labels between rows of figures, or more where
+        // they are the row's own, ruled off with it (an item's codes and
+        // notes under its name): a rule across the row's reach over it, one
+        // under its last line and none between, and each chunk on those
+        // lines under one of the row's cells ([`under_cells`]). Labels under
+        // a statement's row name the rows after it, and no rule parts them
+        // from those.
+        let ruled_off = |j: usize, k: usize| {
+            let row = &lines[j];
+            let figs = row
+                .chunks
+                .iter()
+                .filter(|c| is_figure(&c.text) && !is_year(&c.text))
+                .count();
+            let (r0, r1) = row
+                .chunks
+                .iter()
+                .fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.x0), b.max(c.x1)));
+            let edges = band_edges(rules, r0, r1);
+            let between = |hi: f64, lo: f64| edges.iter().any(|&y| y >= hi - 1.0 && y <= lo + 1.0);
+            let over = j == 0 || between(lines[j - 1].y1, row.y0);
+            figs >= 2
+                && over
+                && !between(row.y1, lines[k - 1].y0)
+                && between(lines[k - 1].y1, lines[k].y0)
+                && lines[j + 1..k].iter().all(|l| under_cells(row, l))
+        };
+        while k < lines.len() && (k <= j + 3 || ruled_off(j, k)) {
             let (above, next) = (&lines[k - 1], &lines[k]);
             let reach = |l: &Line| {
                 l.chunks
@@ -4104,6 +4367,282 @@ mod tests {
             let lay = g.layout.as_deref().expect("read from its text");
             assert!(lay.restated_headers.is_empty(), "{lay:?}");
         }
+    }
+
+    /// An invoice's item over its column totals: the item's figures on its
+    /// first line, then its `further` lines (stub, title, tax columns) a
+    /// line's pitch apart, then the totals set a little further down.
+    fn item_over_totals(further: &[[&str; 3]]) -> Vec<Glyph> {
+        let xs = [20.0, 110.0, 300.0, 340.0, 400.0, 450.0, 500.0];
+        let mut gl = Vec::new();
+        for (k, t) in ["Product", "Title", "Qty", "Price", "Tax(%)", "Tax", "Total"]
+            .iter()
+            .enumerate()
+        {
+            gl.extend(set(t, xs[k], 40.0));
+        }
+        for (k, t) in [
+            "Widget",
+            "Steel bracket",
+            "1",
+            "278.61",
+            "14.50%",
+            "40.39",
+            "319.00",
+        ]
+        .iter()
+        .enumerate()
+        {
+            gl.extend(set(t, xs[k], 60.0));
+        }
+        let mut y = 72.0;
+        for [stub, title, tax] in further {
+            for (t, x) in [(stub, xs[0]), (title, xs[1]), (tax, xs[4])] {
+                if !t.is_empty() {
+                    gl.extend(set(t, x, y));
+                }
+            }
+            y += 12.0;
+        }
+        for (t, x) in [
+            ("Total", 250.0),
+            ("1", xs[2]),
+            ("278.61", xs[3]),
+            ("40.39", xs[5]),
+            ("319.00", xs[6]),
+        ] {
+            gl.extend(set(t, x, y + 14.0));
+        }
+        gl
+    }
+
+    const ITEM_LINES: [[&str; 3]; 3] = [
+        ["SKU:", "zinc plated", "CST"],
+        ["AB12CD34", "Price includes a discount", ""],
+        ["ID: 7741", "", ""],
+    ];
+
+    fn across(x0: f64, x1: f64, y: f64) -> Rule {
+        Rule {
+            bbox: BBox {
+                x0,
+                y0: y - 0.25,
+                x1,
+                y1: y + 0.25,
+            },
+            orientation: Orientation::Horizontal,
+            page: 0,
+        }
+    }
+
+    #[test]
+    fn a_block_of_totals_is_labelled_over_the_items_figures() {
+        let at = |rows: &[&[(&str, f64)]]| -> Vec<Line> {
+            let mut gl = Vec::new();
+            for (k, row) in rows.iter().enumerate() {
+                for (t, x) in row.iter() {
+                    gl.extend(set(t, *x, 60.0 + 20.0 * k as f64));
+                }
+            }
+            lines(&gl)
+        };
+        let none_left = |_: &Line| false;
+        // Items labelled at the margin with a quantity, a price and an
+        // amount, then two totals labelled under the price.
+        let invoice = at(&[
+            &[
+                ("Proof", 20.0),
+                ("1", 300.0),
+                ("0.75", 380.0),
+                ("0.75", 470.0),
+            ],
+            &[
+                ("Paper", 20.0),
+                ("0", 300.0),
+                ("3.50", 380.0),
+                ("0.00", 470.0),
+            ],
+            &[("Net :", 380.0), ("46.68", 470.0)],
+            &[("VAT :", 380.0), ("9.34", 470.0)],
+        ]);
+        let band: Vec<&Line> = invoice.iter().collect();
+        assert_eq!(totals_block(&band, none_left), 2);
+        // A second table's rows running on beside the first's end, their
+        // labels over its labels: no totals.
+        let beside = at(&[
+            &[("12", 200.0), ("Trucks", 317.0), ("45.8", 474.0)],
+            &[("16", 200.0), ("Buses", 317.0), ("22.3", 474.0)],
+            &[("Penta", 317.0), ("3.42", 474.0)],
+            &[("Group", 317.0), ("65.7", 474.0)],
+        ]);
+        let band: Vec<&Line> = beside.iter().collect();
+        assert_eq!(totals_block(&band, none_left), band.len());
+        // Lines labelled at the band's left are rows, not its totals.
+        let band: Vec<&Line> = invoice.iter().collect();
+        assert_eq!(totals_block(&band, |_: &Line| true), band.len());
+    }
+
+    #[test]
+    fn totals_labelled_among_the_figures_leave_the_items_their_labels() {
+        // Items labelled at the margin, their figures far right, then as
+        // many totals labelled within the figures' columns.
+        let mut gl = Vec::new();
+        for (t, x) in [
+            ("Item", 20.0),
+            ("Qty", 300.0),
+            ("Price", 380.0),
+            ("Amount", 470.0),
+        ] {
+            gl.extend(set(t, x, 40.0));
+        }
+        let items = [
+            ("Listing for the week", "1", "45.93", "45.93"),
+            ("Proof copy by mail", "1", "0.75", "0.75"),
+            ("Paper proof by mail", "0", "3.50", "0.00"),
+        ];
+        let mut y = 60.0;
+        for (label, qty, price, amount) in items {
+            gl.extend(set(label, 20.0, y));
+            gl.extend(set(qty, 300.0, y));
+            gl.extend(set(price, 380.0, y));
+            gl.extend(set(amount, 470.0, y));
+            y += 20.0;
+        }
+        for (label, amount) in [
+            ("Net :", "46.68"),
+            ("VAT 20% :", "9.34"),
+            ("Total :", "56.02"),
+        ] {
+            gl.extend(set(label, 380.0, y));
+            gl.extend(set(amount, 470.0, y));
+            y += 20.0;
+        }
+        let region = BBox {
+            x0: 300.0,
+            y0: 52.0,
+            x1: 500.0,
+            y1: y,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        let g = grids.first().expect("a table");
+        assert!(
+            g.bbox.x0 <= 20.0,
+            "the labels are its first column: {:?}",
+            g.bbox
+        );
+        let texts = g.layout.as_deref().unwrap().texts(&gl, g.cols());
+        assert!(texts.iter().any(|t| t == "Proof copy by mail"), "{texts:?}");
+        // The totals keep their labels where they are set, under the price.
+        assert!(texts.iter().any(|t| t == "VAT 20% :"), "{texts:?}");
+    }
+
+    #[test]
+    fn an_items_further_lines_keep_its_figures_run() {
+        // Three lines under the item, more than a run's label lines, each
+        // starting where one of the item's cells does or within one, ruled
+        // off with the item: a rule over it and one under its last line.
+        let gl = item_over_totals(&ITEM_LINES);
+        let ruled = [across(15.0, 560.0, 46.0), across(15.0, 560.0, 104.0)];
+        let runs = figure_runs(&lines(&gl), &ruled, &[]);
+        assert!(
+            runs.iter().any(|r| r.y0 <= 52.0 && r.y1 >= 110.0),
+            "{runs:?}"
+        );
+        // With no rule under them they are labels, as a statement sets them
+        // over the rows they name, and three are more than a run takes.
+        let runs = figure_runs(&lines(&gl), &ruled[..1], &[]);
+        assert!(
+            !runs.iter().any(|r| r.y0 <= 52.0 && r.y1 >= 110.0),
+            "{runs:?}"
+        );
+        // Lines of prose across the figures' columns end the run.
+        let prose = "The goods are delivered free to the address given above";
+        let gl = item_over_totals(&[[prose, "", ""]; 3]);
+        let runs = figure_runs(&lines(&gl), &ruled, &[]);
+        assert!(
+            !runs.iter().any(|r| r.y0 <= 52.0 && r.y1 >= 110.0),
+            "{runs:?}"
+        );
+    }
+
+    #[test]
+    fn a_row_ruled_off_on_its_own_keeps_its_further_lines() {
+        let gl = item_over_totals(&ITEM_LINES);
+        // Rules over and under the header, the item's rule drawn a cell at a
+        // time past the stub, and the totals' rule.
+        let mut rules = vec![across(15.0, 560.0, 28.0), across(15.0, 560.0, 46.0)];
+        for w in [105.0, 295.0, 335.0, 395.0, 445.0, 495.0, 560.0].windows(2) {
+            rules.push(across(w[0], w[1], 104.0));
+        }
+        rules.push(across(15.0, 560.0, 126.0));
+        let region = BBox {
+            x0: 10.0,
+            y0: 52.0,
+            x1: 570.0,
+            y1: 122.0,
+        };
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert!(
+            texts.iter().any(|t| t == "Widget SKU: AB12CD34 ID: 7741"),
+            "{texts:?}"
+        );
+        assert!(texts.iter().any(|t| t == "14.50% CST"), "{texts:?}");
+        // The header, the item and its totals.
+        assert_eq!(grids[0].rows(), 3, "{texts:?}");
+    }
+
+    #[test]
+    fn a_band_holding_two_rows_of_figures_keeps_them_apart() {
+        // A journal table's body between its header rule and its foot: the
+        // label between two rows is not the first row's.
+        let xs = [20.0, 180.0, 240.0];
+        let mut gl = Vec::new();
+        for (y, row) in [
+            (60.0, ["Alpha", "1.2", "3.4"]),
+            (72.0, ["Treated", "", ""]),
+            (84.0, ["Beta", "5.6", "7.8"]),
+            (96.0, ["Gamma", "2.1", "0.9"]),
+        ] {
+            for (k, t) in row.iter().enumerate() {
+                if !t.is_empty() {
+                    gl.extend(set(t, xs[k], y));
+                }
+            }
+        }
+        let rules = [
+            across(15.0, 290.0, 28.0),
+            across(15.0, 290.0, 46.0),
+            across(15.0, 290.0, 102.0),
+        ];
+        let ls = lines(&gl);
+        let body: Vec<&Line> = ls.iter().collect();
+        let cols = columns(&body, 10.0, 300.0);
+        let on = ruled_rows(&cols, &band_edges(&rules, 10.0, 300.0), &body);
+        assert!(on.iter().all(|&b| !b), "{on:?}");
+        // Ruled in groups, the label under a row in its band names the rows
+        // after it: a rule under `Alpha` and its label, none between `Beta`
+        // and `Gamma`.
+        let rules = [
+            across(15.0, 290.0, 28.0),
+            across(15.0, 290.0, 46.0),
+            across(15.0, 290.0, 75.0),
+            across(15.0, 290.0, 102.0),
+        ];
+        let on = ruled_rows(&cols, &band_edges(&rules, 10.0, 300.0), &body);
+        assert!(on.iter().all(|&b| !b), "{on:?}");
+        // Ruled under every row, the line under `Alpha` in its band is its
+        // own.
+        let rules = [
+            across(15.0, 290.0, 28.0),
+            across(15.0, 290.0, 46.0),
+            across(15.0, 290.0, 75.0),
+            across(15.0, 290.0, 87.0),
+            across(15.0, 290.0, 102.0),
+        ];
+        let on = ruled_rows(&cols, &band_edges(&rules, 10.0, 300.0), &body);
+        assert_eq!(on, vec![false, true, false, false]);
     }
 
     #[test]
@@ -4814,6 +5353,7 @@ mod tests {
                     italic: false,
                     advance: Some(5.5),
                     draw_index: 0,
+                    ocr: None,
                 }
             })
             .collect()

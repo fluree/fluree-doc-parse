@@ -1,0 +1,104 @@
+{
+ "id": "pasted-1.screenshot-192",
+ "base": "pasted-1",
+ "profile": "pasted-192",
+ "dpi": 192,
+ "text_layer": true,
+ "screenshot": [
+  72,
+  552.0,
+  372.0,
+  702
+ ],
+ "facts": [
+  {
+   "text": "Bramble & Finch Ltd",
+   "kind": "name",
+   "where": "page"
+  },
+  {
+   "text": "+1 555 312 1178",
+   "kind": "id",
+   "where": "page"
+  },
+  {
+   "text": "October 23, 2026",
+   "kind": "date",
+   "where": "page"
+  },
+  {
+   "text": "Jordan Specimen",
+   "kind": "name",
+   "where": "page"
+  },
+  {
+   "text": "77 Station Avenue",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "Brookfield, VT 05004",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "PX-8574-28735",
+   "kind": "id",
+   "where": "page"
+  },
+  {
+   "text": "4,059.31",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "April 27, 2026",
+   "kind": "date",
+   "where": "page"
+  },
+  {
+   "text": "Please quote the reference above in any correspondence",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "can also set up a payment plan on request",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "Quinn Mockford",
+   "kind": "name",
+   "where": "page"
+  },
+  {
+   "text": "Screenshot of the order as it appears in the customer portal.",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "ORD-883331",
+   "kind": "id",
+   "where": "pixels"
+  },
+  {
+   "text": "Jordan Demo",
+   "kind": "name",
+   "where": "pixels"
+  },
+  {
+   "text": "3,449.14",
+   "kind": "amount",
+   "where": "pixels"
+  },
+  {
+   "text": "Delivered to depot",
+   "kind": "phrase",
+   "where": "pixels"
+  }
+ ],
+ "headings": [
+  "Bramble & Finch Ltd",
+  "Quinn Mockford"
+ ]
+}

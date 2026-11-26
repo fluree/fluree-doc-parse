@@ -7,7 +7,8 @@
   },
   "notes": [
     "2026-11-24 (#176): a raised sign in a display title broke the title's line at the sign: the `®` 19pt up on 32pt type, or a `™` whose following space was set at the title's size.",
-    "2026-11-24: rewritten for page 2's restated title read as running text (#170). Page 1's title, its sign and the line under it, is the one SectionTitle that names the product."
+    "2026-11-24: rewritten for page 2's restated title read as running text (#170). Page 1's title, its sign and the line under it, is the one SectionTitle that names the product.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -15,10 +16,16 @@
       "found": "2026-11-24",
       "issue": "The `™` after `Symmetry` was a paragraph of its own.",
       "element": {
-        "type": "doco:SectionTitle",
+        "type": "doco:Title",
         "text": "Emerald® Symmetry™ Interior Acrylic Matte"
       },
       "count": 1
+    },
+    {
+      "id": "trademark-stays-in-title-no-section",
+      "found": "2026-11-26",
+      "issue": "The title heads no section of its own as well: once, as the document's title.",
+      "no_section": "Emerald® Symmetry™ Interior Acrylic Matte"
     },
     {
       "id": "no-lone-trademark",

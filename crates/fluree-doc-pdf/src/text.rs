@@ -67,8 +67,17 @@ fn looks_like_degree(c: char) -> bool {
 pub(crate) fn degrees(chars: &mut [char]) {
     let read: Vec<char> = chars.to_vec();
     let solid = |c: &&char| !c.is_whitespace();
+    let raised = |j: Option<usize>| {
+        j.and_then(|j| read.get(j))
+            .is_some_and(|&c| fluree_doc_model::marks::raised_figure(c).is_some())
+    };
     for (i, c) in chars.iter_mut().enumerate() {
         if !looks_like_degree(*c) {
+            continue;
+        }
+        // A raised zero beside another raised figure is a figure of that
+        // number, a power's or a note's (`10¹⁰`, `agents.¹⁰ Finally`).
+        if *c == '\u{2070}' && (raised(i.checked_sub(1)) || raised(Some(i + 1))) {
             continue;
         }
         let next = read[i + 1..].iter().find(solid).copied();
@@ -277,6 +286,12 @@ mod tests {
             "1º lugar, Nº 5, 10⁰, x˚y"
         );
         assert!(!normalize("x˚y").contains('\u{030A}'));
+        // A raised zero beside another raised figure is that number's,
+        // whatever capital follows: a note's `¹⁰`, a power's `10¹⁰`.
+        assert_eq!(
+            normalize("two agents.¹⁰ Finally, 10¹⁰ Fe"),
+            "two agents.¹⁰ Finally, 10¹⁰ Fe"
+        );
     }
 
     #[test]

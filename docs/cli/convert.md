@@ -85,8 +85,14 @@ The engine is PP-OCRv6 small through oar-ocr. Its models and ONNX Runtime are
 not compiled into `fdoc`: they are read from the assets directory, each checked
 against the hash `fdoc` was built with before it is loaded. Build that directory
 with `tools/ocr-assets/build.py`. The engine is loaded once per run and shared by
-every input and worker. Name it in the [config](config.md#ocr) and `--ocr` is
-no longer needed.
+every input and worker, when the first page or region is sent to it: a run
+whose documents carry their own text never checks or loads it, and costs what
+it costs without `--ocr`. An assets directory missing a file is refused at the
+start. One whose files are not the ones this build loads is refused at the
+first reading: the error is said once, a PDF's or DOCX's pages and pictures
+are converted without OCR, an image file is not converted, and the run ends
+with status 2. Name it in the [config](config.md#ocr)
+and `--ocr` is no longer needed.
 
 PP-OCRv6 small has no page orientation model, and the pipeline turns every
 line at least 1.5 times as tall as wide a quarter counter-clockwise before
@@ -180,7 +186,23 @@ the page whose pixels the probe takes for text; an OCR engine reads the
 small ones too, and nothing reads one the probe does not take for text (a
 photograph, a chart). Born-digital text is never
 replaced. With a model reader configured as well, it reads what OCR does not:
-pages in doubt about their structure, and tables.
+pages in doubt about their structure, and tables. It also reads what OCR read
+but cannot give whole, in place of OCR's reading:
+- a page whose text is all pixels;
+- a reading the engine is unsure of (under 0.90 confidence, averaged over 20
+  characters or more);
+- pictures that hold as much text as the page's own layer;
+- a table in a picture (three rows or more of three boxes or more).
+
+The small regions only an engine reads stay its own. `-v` names each crop left
+to the model and why.
+
+A picture's reading that the engine is unsure of (under 0.90), on a page with
+text of its own, is set aside, model or no model. It is lettering drawn into
+artwork, a logo's or a seal's texture, a photo's grain read as words, and laid
+on the page it would be text the page never printed. A whole page's reading,
+or the regions of a page with no text layer, are kept however unsure: they are
+all the text there is.
 
 `fdoc` built without the `ocr` feature has no engine and still reads
 `--ocr-words`.

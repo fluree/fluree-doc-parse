@@ -1,0 +1,84 @@
+{
+ "id": "invoice-1.clean-300",
+ "base": "invoice-1",
+ "profile": "clean-300",
+ "dpi": 300,
+ "text_layer": false,
+ "facts": [
+  {
+   "text": "INV-2026753",
+   "kind": "id",
+   "where": "page"
+  },
+  {
+   "text": "2026-10-24",
+   "kind": "date",
+   "where": "page"
+  },
+  {
+   "text": "Avery Demo",
+   "kind": "name",
+   "where": "page"
+  },
+  {
+   "text": "868 Station Avenue",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "Cable organiser kit",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "320.37",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "Desk lamp, LED",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "430.40",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "Archive boxes, pack of 10",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "929.39",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "2,526.87",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "202.14",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "2,729.01",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "Payment is due within thirty days.",
+   "kind": "phrase",
+   "where": "page"
+  }
+ ],
+ "headings": [
+  "Harrow Office Supply",
+  "INVOICE",
+  "Bill to:"
+ ]
+}
