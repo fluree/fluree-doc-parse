@@ -1479,6 +1479,7 @@ fn read_beside(
                 || carries_on(
                     &cols0,
                     &running,
+                    j.checked_sub(2).map(|k| &clipped[band[k]]),
                     &clipped[band[j - 1]],
                     l,
                     band.get(j + 1).map(|&n| &clipped[n]),
@@ -1557,6 +1558,7 @@ fn read_beside(
                 || carries_on(
                     &cols0,
                     &running,
+                    last.checked_sub(1).map(|k| &clipped[k]),
                     &clipped[last],
                     next,
                     clipped.get(last + 2),
@@ -1976,9 +1978,14 @@ fn continues(l: &Line, n: &Line) -> bool {
 /// row pitch parts rows. So a wrapped cell's second line that starts afresh
 /// carries on its cell (`Gallinarum Pullorum` over `CDC1983 67`), where a
 /// label naming the rows under it sits as near to them.
+///
+/// Or a row's cells, two or more, wrapped together, the stub's among them: under a row of
+/// amounts and set as tight under it, no amount on the line, each chunk
+/// within its column's cell above (`Fund Act` beside `F.Y. 2017-18`).
 fn carries_on(
     cols: &[(f64, f64)],
     running: &[bool],
+    before: Option<&Line>,
     above: &Line,
     l: &Line,
     below: Option<&Line>,
@@ -1989,30 +1996,63 @@ fn carries_on(
     // both sides, not labels about a drawing.
     let figured = |ln: &Line| ln.chunks.iter().any(|c| is_figure(&c.text));
     let between_rows = l.chunks.len() == 1 && figured(above) && below.is_some_and(figured);
+    // Or a row's cells, two or more, wrapped together onto the next line,
+    // the stub's label among them (`Fund Act` under `Employee Provident`,
+    // beside `F.Y. 2017-18` under `F.Y. 2006-07 to F.Y. 2007-08,`). One
+    // label alone on a line (a total's, a band's title) is its own row.
+    // Under a row of
+    // amounts, no amount on it, each of its chunks within the line of the
+    // row's cell in its column, and set tighter under the row than the
+    // lines around them are set apart ([`TIGHT_WRAP`]): the next under it,
+    // the row under the line before it (`before`). A group's label under a
+    // row stands a row's pitch below it (`Investments` under `Tangible
+    // assets`).
+    // An amount: a figure with no letters, or with its currency's code
+    // (`CHF 382.00`); a period's `F.Y. 2017-18` is a cell's words.
+    let amount = |c: &Chunk| {
+        let t = c.text.trim();
+        let code = |w: &str| w.len() == 3 && w.chars().all(|ch| ch.is_ascii_uppercase());
+        is_figure(t)
+            && (!t.chars().any(char::is_alphabetic)
+                || t.split_once(' ').is_some_and(|(a, b)| code(a) || code(b)))
+    };
+    let wrapped_row = l.chunks.len() >= 2
+        && above.chunks.iter().any(amount)
+        && below.is_some_and(|n| d * TIGHT_WRAP < n.base - l.base)
+        && before.is_none_or(|p| d * TIGHT_WRAP < above.base - p.base)
+        && l.chunks.iter().all(|c| {
+            !amount(c)
+                && column_of(cols, c).is_some_and(|k| {
+                    !running.get(k).copied().unwrap_or(false)
+                        && cell_in(cols, above, k)
+                            .is_some_and(|a| c.x0 >= a.x0 - fs * 0.5 && c.x1 <= a.x1 + fs * 0.5)
+                })
+        });
     d > 0.0
         && d <= fs * NEXT_LINE
         && !l.chunks.is_empty()
         && fits(cols, l)
-        && l.chunks.iter().all(|c| {
-            let Some(k) = column_of(cols, c).filter(|&k| k > 0) else {
-                return false;
-            };
-            !running.get(k).copied().unwrap_or(false)
-                && !is_figure(&c.text)
-                && cell_in(cols, above, k).is_some_and(|a| {
-                    // Within the cell's first line, which the wrap filled.
-                    let under = c.x0 >= a.x0 - fs * 0.5 && c.x1 <= a.x1 + fs * 0.5;
-                    let tight = between_rows
-                        && under
-                        && below.and_then(|n| cell_in(cols, n, k)).is_some_and(|n| {
-                            let up = c.y0 - a.y0;
-                            up > 0.0 && up * TIGHT_WRAP < n.y0 - c.y0
-                        });
-                    // A wrapped name: the cell above holds words.
-                    let named = !is_figure(&a.text) && a.text.chars().any(char::is_alphabetic);
-                    runs_on(a, c) || (named && (tight || qualifies(a, c)))
-                })
-        })
+        && (wrapped_row
+            || l.chunks.iter().all(|c| {
+                let Some(k) = column_of(cols, c).filter(|&k| k > 0) else {
+                    return false;
+                };
+                !running.get(k).copied().unwrap_or(false)
+                    && !is_figure(&c.text)
+                    && cell_in(cols, above, k).is_some_and(|a| {
+                        // Within the cell's first line, which the wrap filled.
+                        let under = c.x0 >= a.x0 - fs * 0.5 && c.x1 <= a.x1 + fs * 0.5;
+                        let tight = between_rows
+                            && under
+                            && below.and_then(|n| cell_in(cols, n, k)).is_some_and(|n| {
+                                let up = c.y0 - a.y0;
+                                up > 0.0 && up * TIGHT_WRAP < n.y0 - c.y0
+                            });
+                        // A wrapped name: the cell above holds words.
+                        let named = !is_figure(&a.text) && a.text.chars().any(char::is_alphabetic);
+                        runs_on(a, c) || (named && (tight || qualifies(a, c)))
+                    })
+            }))
 }
 
 /// Whether a cell's line `b` is a qualifier of the cell above, `a`: a
@@ -2861,6 +2901,7 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                 && carries_on(
                     &cols,
                     &running,
+                    i.checked_sub(2).and_then(|k| body.get(k)).copied(),
                     prev.last().unwrap(),
                     l,
                     body.get(i + 1).copied(),
@@ -4063,6 +4104,56 @@ mod tests {
             let lay = g.layout.as_deref().expect("read from its text");
             assert!(lay.restated_headers.is_empty(), "{lay:?}");
         }
+    }
+
+    #[test]
+    fn a_rows_cells_wrapped_together_onto_a_tight_line_stay_its_own() {
+        // A row's stub and period each wrapped onto a second line, set
+        // tighter under the row than the next row is under it: the row's
+        // own cells, not a row.
+        let xs = [20.0, 150.0, 260.0, 400.0, 460.0];
+        let mut gl = Vec::new();
+        let mut row = |cells: [&str; 5], y: f64| {
+            for (k, t) in cells.iter().enumerate() {
+                if !t.is_empty() {
+                    gl.extend(set(t, xs[k], y));
+                }
+            }
+        };
+        row(
+            ["Wages Act", "High Court", "F.Y. 2002-03", "2.73", "2.59"],
+            40.0,
+        );
+        row(
+            [
+                "Employee Fund",
+                "High Court",
+                "F.Y. 2006-07 to",
+                "0.46",
+                "0.46",
+            ],
+            60.0,
+        );
+        row(["Act", "", "F.Y. 2017-18", "", ""], 71.0);
+        row(["", "Commission", "F.Y. 2017-18", "1.18", "0.47"], 91.0);
+        row(
+            ["Cess Act", "Tribunal", "F.Y. 2012-13", "0.68", "0.12"],
+            111.0,
+        );
+        let region = BBox {
+            x0: 10.0,
+            y0: 30.0,
+            x1: 520.0,
+            y1: 115.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert!(!grids.is_empty(), "{grids:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert!(texts.iter().any(|t| t == "Employee Fund Act"), "{texts:?}");
+        assert!(
+            texts.iter().any(|t| t == "F.Y. 2006-07 to F.Y. 2017-18"),
+            "{texts:?}"
+        );
     }
 
     #[test]

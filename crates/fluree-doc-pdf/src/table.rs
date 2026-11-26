@@ -1089,7 +1089,32 @@ impl Grid {
         // the labels' column open. A label on each side of them is two
         // rows' labels, not one span (`Japanese yen` over `Total`); a stub
         // head over a header's underlined groups, its text on one side
-        // alone, still spans.
+        // alone, still spans. Not a cell boxed across the boundary, a
+        // vertical on each of its column's edges running through it: no
+        // rule closes under it, and it spans its rows whatever the rules
+        // beside it are drawn in (a datasheet's cells, each bordered a cell
+        // at a time, `Min | Typ | Max` ruled apart under a condition
+        // wrapped over two rows of them).
+        // A vertical on the edge, above the boundary and below it: one
+        // rule through it, or a row's border meeting the next row's there.
+        let through = |x: f64, y: f64| {
+            let on_edge = |r: &&Rule| {
+                r.orientation == Orientation::Vertical
+                    && (r.axis_pos() - x).abs() <= EDGE_TOLERANCE * 2.0
+            };
+            let tol = EDGE_TOLERANCE * 2.0;
+            rules
+                .iter()
+                .filter(on_edge)
+                .any(|r| r.bbox.y0 < y - tol && r.bbox.y1 >= y - tol)
+                && rules
+                    .iter()
+                    .filter(on_edge)
+                    .any(|r| r.bbox.y1 > y + tol && r.bbox.y0 <= y + tol)
+        };
+        let boxed = |k: usize, c: usize| {
+            through(self.xs[c], self.ys[k]) && through(self.xs[c + 1], self.ys[k])
+        };
         let underlined: Vec<usize> = (1..rows)
             .filter(|&k| merges.continues_above[k * cols..(k + 1) * cols].contains(&true))
             .filter(|&k| cluster(&on(k)).iter().any(|l| !l.gutters.is_empty()))
@@ -1104,7 +1129,8 @@ impl Grid {
             };
             for k in underlined {
                 for i in k * cols..(k + 1) * cols {
-                    if merges.continues_above[i] && held(i) && held(i - cols) {
+                    if merges.continues_above[i] && held(i) && held(i - cols) && !boxed(k, i % cols)
+                    {
                         merges.continues_above[i] = false;
                     }
                 }
@@ -11286,6 +11312,98 @@ mod tests {
         let mut m = g.merges(&rules, &[]);
         g.text_merges(&glyphs, &rules, &mut m);
         assert!(m.continues_above.iter().all(|x| !x));
+    }
+
+    #[test]
+    fn a_boxed_cell_over_rows_ruled_in_pieces_spans_them() {
+        // A boxed table: a label and its condition wrapped over a group of
+        // two rows whose values are ruled apart a cell at a time, the
+        // label's cells left open. The table's verticals box its cells, so
+        // each of those is one cell spanning both rows.
+        let xs = vec![72.0, 200.0, 300.0, 360.0, 420.0, 480.0, 540.0];
+        let ys = vec![100.0, 120.0, 140.0, 160.0, 180.0];
+        let mut glyphs = Vec::new();
+        let mut put = |text: &str, x: f64, baseline: f64| {
+            let mut cx = x;
+            for ch in text.chars() {
+                glyphs.push(crate::glyph::Glyph {
+                    text: ch.to_string(),
+                    bbox: (ch != ' ').then_some(BBox {
+                        x0: cx,
+                        y0: baseline - 7.0,
+                        x1: cx + 4.5,
+                        y1: baseline + 2.0,
+                    }),
+                    page: 0,
+                    origin: (cx, baseline),
+                    rotation_deg: 0.0,
+                    font_size: 9.0,
+                    weight: None,
+                    italic: false,
+                    advance: Some(5.0),
+                    draw_index: 0,
+                });
+                cx += 5.0;
+            }
+        };
+        for (t, x) in [
+            ("Parameter", 80.0),
+            ("Condition", 205.0),
+            ("Min", 305.0),
+            ("Typ", 365.0),
+            ("Max", 425.0),
+            ("Unit", 485.0),
+        ] {
+            put(t, x, 114.0);
+        }
+        put("Operating", 80.0, 133.0);
+        put("range", 80.0, 147.0);
+        put("For temperatures", 205.0, 133.0);
+        put("below zero", 205.0, 147.0);
+        for (t, x) in [("-40", 305.0), ("25", 365.0), ("85", 425.0), ("C", 485.0)] {
+            put(t, x, 133.0);
+        }
+        for (t, x) in [("0", 305.0), ("100", 425.0), ("RH", 485.0)] {
+            put(t, x, 154.0);
+        }
+        put("Supply", 80.0, 174.0);
+        put("1.8", 365.0, 174.0);
+        put("uA", 485.0, 174.0);
+        let mut rules: Vec<Rule> = [100.0, 120.0, 160.0, 180.0]
+            .iter()
+            .map(|&y| h(72.0, 540.0, y))
+            .collect();
+        for (x0, x1) in [
+            (301.0, 359.0),
+            (361.0, 419.0),
+            (421.0, 479.0),
+            (481.0, 539.0),
+        ] {
+            rules.push(h(x0, x1, 140.0));
+        }
+        for &x in &xs {
+            rules.push(v(100.0, 180.0, x));
+        }
+        let g = Grid {
+            page: 0,
+            bbox: BBox {
+                x0: 72.0,
+                y0: 100.0,
+                x1: 540.0,
+                y1: 180.0,
+            },
+            xs,
+            ys,
+            layout: None,
+        };
+        let mut m = g.merges(&rules, &[]);
+        g.text_merges(&glyphs, &rules, &mut m);
+        let cols = 6;
+        assert!(m.continues_above[2 * cols], "the label spans its rows");
+        assert!(
+            m.continues_above[2 * cols + 1],
+            "the condition spans its rows"
+        );
     }
 
     /// The segmented-rule shape: horizontal rules drawn as one segment per
