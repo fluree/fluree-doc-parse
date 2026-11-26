@@ -480,6 +480,13 @@ title stacked in a margin, read line by line with the column beside it, is
 put back together as one block, its number and its words in whatever
 weight: `III. Regulatory cholesterol`. Display type is never a list marker.
 
+**Currency signs set apart.** A statement or an invoice may set a figure's
+currency sign in a column of its own, a little left of the figure:
+`Totaalbedrag  €  22,50`, a column of `$` beside a statement's amounts, a
+form's `£` before its box. Such a sign alone on its line is the figure's
+unit, never a list's bullet: it stays in the text, and the figure beside it
+is no list item.
+
 **Side labels.** A form sets labels in its margin a step larger than the text
 beside them, such as Form 1040's `Sign` / `Here` at 12pt beside a 6.9pt
 declaration. The gutter after such a label is measured in the text's size
