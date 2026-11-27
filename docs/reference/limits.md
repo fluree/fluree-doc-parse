@@ -329,6 +329,9 @@ it, and what it claims past what the part holds is let go once the part is
 read: a 9 KB `.docx` whose three main parts each declared 1.3 GB for 1 MB
 was refused under a 3 GB address space as though it were that large. The parts read beside the document (relationships, core
 properties, settings, notes, comments) have a bound of their own, 64 MiB.
+A document whose relationships pass it is refused, naming the part: read
+as none, its headers, notes and pictures were left out without a word.
+The core properties past it are read as saying nothing.
 
 What an `.xlsx` keeps of its parts while its sheets are read is spent as
 it is kept: each shared string, each cell style and each sheet the

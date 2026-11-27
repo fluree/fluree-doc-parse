@@ -98,7 +98,7 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
             // Charts live in their own parts; the slide only names a
             // relationship id, so resolve those before walking it.
             let mut by_id: HashMap<String, String> = HashMap::new();
-            for r in pkg.relationships(name) {
+            for r in pkg.relationships(name).map_err(PptxError::Zip)? {
                 if !r.is("chart") || r.external || by_id.contains_key(&r.id) {
                     continue;
                 }
@@ -134,9 +134,9 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
 /// A package without that list, or whose list names no part it holds, is
 /// read in the numeric order of its slide parts' names, where `slide10`
 /// comes after `slide2`.
-fn slide_parts(pkg: &mut Package<'_>, budget: &mut Budget) -> Result<Vec<String>, TooLarge> {
+fn slide_parts(pkg: &mut Package<'_>, budget: &mut Budget) -> Result<Vec<String>, PptxError> {
     let presentation = pkg.main_part("ppt/presentation.xml");
-    let rels = pkg.relationships(&presentation);
+    let rels = pkg.relationships(&presentation).map_err(PptxError::Zip)?;
     let names = pkg.part_names();
     // Each slide listed found in one lookup among the relationships, and
     // its part in one among the package's: a scan of each for every

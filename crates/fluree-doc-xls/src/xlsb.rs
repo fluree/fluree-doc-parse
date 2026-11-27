@@ -356,7 +356,7 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
         true => date_formats(&part(&mut pkg, "xl/styles.bin")?)?,
         false => Vec::new(),
     };
-    let rels = pkg.relationships(book);
+    let rels = pkg.relationships(book).map_err(XlsError::Package)?;
     // Each sheet's part by its relationship id, the first internal one
     // that has it: found in one lookup per sheet listed, where a scan of
     // every relationship for each made the listing's cost its square.

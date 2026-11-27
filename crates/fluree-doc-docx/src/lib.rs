@@ -151,7 +151,9 @@ pub fn parse_with_media(
     // Styles refine what a table's first row is and which paragraphs are
     // the title; a package without them, or with ones that do not parse,
     // still reads.
-    let styles = pkg.related(&main, "styles", "word/styles.xml");
+    let styles = pkg
+        .related(&main, "styles", "word/styles.xml")
+        .map_err(DocxError::Zip)?;
     let styles = pkg.read_within(&styles, &mut budget)?;
     let (header_styles, title_styles) = match &styles {
         Some(styles) => (header_row_styles(styles), title_styles(styles)),
@@ -159,7 +161,9 @@ pub fn parse_with_media(
     };
     // List numbering, which Word computes rather than stores; without the
     // part the document numbers nothing.
-    let numbering = pkg.related(&main, "numbering", "word/numbering.xml");
+    let numbering = pkg
+        .related(&main, "numbering", "word/numbering.xml")
+        .map_err(DocxError::Zip)?;
     let numbering = pkg.read_within(&numbering, &mut budget)?;
     let numbering = Numbering::new(numbering.as_deref(), styles.as_deref());
     let (body, figure_rids) =
@@ -174,12 +178,14 @@ pub fn parse_with_media(
         pkg.read_capped(part, fluree_doc_ooxml::MAX_XML_BYTES)
             .map_err(DocxError::Zip)
     };
-    let settings = pkg.related(&main, "settings", "word/settings.xml");
+    let settings = pkg
+        .related(&main, "settings", "word/settings.xml")
+        .map_err(DocxError::Zip)?;
     let settings_xml = aside(&mut pkg, &settings)?;
     let even_odd = settings_xml
         .as_deref()
         .is_some_and(|x| toggled_on(x, "evenAndOddHeaders"));
-    let rels = pkg.relationships(&main);
+    let rels = pkg.relationships(&main).map_err(DocxError::Zip)?;
     // Each header, footer and image the document names found in one lookup
     // among its relationships, not a scan of them all for each.
     let relations = fluree_doc_ooxml::Relations::new(&rels);
@@ -244,7 +250,9 @@ pub fn parse_with_media(
     // wants the body alone leaves them out.
     let mut notes = Vec::new();
     for kind in [&FOOTNOTES, &ENDNOTES, &COMMENTS] {
-        let part = pkg.related(&main, kind.rel, kind.fallback);
+        let part = pkg
+            .related(&main, kind.rel, kind.fallback)
+            .map_err(DocxError::Zip)?;
         let Some(part_xml) = aside(&mut pkg, &part)? else {
             continue;
         };

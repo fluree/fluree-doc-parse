@@ -178,7 +178,7 @@ pub fn parse_with_media(
     let workbook = pkg
         .read_within(&main, &mut budget)?
         .ok_or(XlsxError::NoWorkbook)?;
-    let rels = pkg.relationships(&main);
+    let rels = pkg.relationships(&main).map_err(XlsxError::Zip)?;
     let part = |name: &str, fallback: &str| {
         rels.iter()
             .find(|r| r.is(name) && !r.external)
@@ -232,6 +232,7 @@ pub fn parse_with_media(
         if let Some(rid) = &sheet.drawing {
             let drawing = pkg
                 .relationships(target)
+                .map_err(XlsxError::Zip)?
                 .into_iter()
                 .find(|r| r.id == *rid && !r.external)
                 .map(|r| r.target);
@@ -240,7 +241,7 @@ pub fn parse_with_media(
                 None => None,
             };
             if let Some((xml, part)) = xml.zip(drawing) {
-                let drawing_rels = pkg.relationships(&part);
+                let drawing_rels = pkg.relationships(&part).map_err(XlsxError::Zip)?;
                 let drawing_rels = Relations::new(&drawing_rels);
                 for pic in pictures(&xml, &mut budget)? {
                     budget.spend_elements(1)?;
