@@ -1352,9 +1352,14 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         // its sub-group (`Power Management` over `Average
                         // power requirements (W)`), joined from the top down
                         // as a stacked header's labels are.
+                        // A section runs on to the next band, or to a break the
+                        // table set between its groups (a blank row), where
+                        // the rows go on with no section over them.
+                        let breaks = e.section_breaks.as_deref().unwrap_or(&[]);
                         let section = (!subs.contains(&r))
                             .then(|| subs.iter().filter(|s| **s < r && **s >= n_header).max())
                             .flatten()
+                            .filter(|&&s| !breaks.iter().any(|&b| b > s && b <= r))
                             .map(|&s| {
                                 let mut top = s;
                                 while top > n_header && subs.contains(&(top - 1)) {
@@ -2350,6 +2355,34 @@ mod tests {
             "every row under it until the next"
         );
         assert!(cell("By wt").is_empty(), "the row itself is not data");
+    }
+
+    #[test]
+    fn a_section_ends_where_the_table_set_a_break_between_its_groups() {
+        let mut t = el("doco:Table", "", None);
+        t.id = "elem-00001".into();
+        let row = |a: &str, b: &str| vec![a.into(), b.into()];
+        t.cells = Some(vec![
+            row("Instrument", "GC 2010 Plus"),
+            row("Conditions", ""),
+            row("Carrier Gas", "Helium"),
+            row("Sampler", "AOC-5000"),
+            row("Injection Volume", "1000 µL"),
+        ]);
+        t.header_rows = Some(0);
+        t.sub_headers = Some(vec![1]);
+        t.section_breaks = Some(vec![3]);
+        let g = graph(&[t]);
+        let cell = |value: &str| -> Value {
+            g.iter()
+                .find(|n| n["doc:cellValue"] == value)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(cell("Helium")["doc:sectionLabel"], "Conditions");
+        assert!(cell("AOC-5000").get("doc:sectionLabel").is_none());
+        assert!(cell("1000 µL").get("doc:sectionLabel").is_none());
+        assert!(cell("GC 2010 Plus").get("doc:sectionLabel").is_none());
     }
 
     #[test]
