@@ -228,7 +228,12 @@ fn reference(elements: &[Element], format: Format) -> Vec<Unit> {
                         let p = &elements[i];
                         parts.push(Part::of(p, p.cells.as_ref().unwrap(), skip));
                     }
-                    out.extend(Unit::table(first, Table::joined(&parts)));
+                    let t = Table::joined(&parts);
+                    let t = match format {
+                        Format::Md => t.in_pipes(),
+                        Format::Xhtml => t,
+                    };
+                    out.extend(Unit::table(first, t));
                 } else if !e.text.trim().is_empty() {
                     // A model's table reading, already HTML: the writers
                     // pass it through, and it means what it reads as.
@@ -402,6 +407,29 @@ impl Table {
             .header_rows
             .map(|_| header.iter().take_while(|h| **h).count());
         canonical(grid, down, left, header_rows, sub_headers, restated)
+    }
+
+    /// As a Markdown pipe table says it. An empty header row is how a pipe
+    /// table says it has none, so a header row with nothing in it reads back
+    /// as no row and no header: there is nothing in it to lose.
+    fn in_pipes(mut self) -> Table {
+        let pipes = self.spans.is_empty() && self.sub_headers.is_empty();
+        if !pipes
+            || self.header_rows != Some(1)
+            || self.rows == 0
+            || self.cells[..self.cols].iter().any(|c| !c.is_empty())
+        {
+            return self;
+        }
+        self.cells.drain(..self.cols);
+        self.rows -= 1;
+        self.header_rows = Some(0);
+        self.restated = self
+            .restated
+            .iter()
+            .filter_map(|r| r.checked_sub(1))
+            .collect();
+        self
     }
 
     fn excerpt(&self) -> String {
