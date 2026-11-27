@@ -67,6 +67,9 @@ fn dispatch(cli: Cli) -> i32 {
             completions::run(shell);
             0
         }
+        Commands::Dev {
+            command: DevCommands::Conform { inputs, json },
+        } => dev::conform(&inputs, json),
         Commands::Dev { command } => {
             run_dev(command);
             0
@@ -78,7 +81,7 @@ fn dispatch(cli: Cli) -> i32 {
     }
 }
 
-fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
+pub(crate) fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
     ConvertArgs {
         inputs: vec![pdf],
         format,
@@ -136,6 +139,7 @@ fn run_dev(cmd: DevCommands) {
         DevCommands::Glyphs { pdf, page, y0, y1 } => dev::glyphs(&pdf, page, y0, y1),
         DevCommands::RenderPages { path, out } => dev::render_pages(&path, &out),
         DevCommands::Timings { path, warmup, runs } => dev::timings(&path, warmup, runs),
+        DevCommands::Conform { .. } => unreachable!("dispatched with its exit code"),
         DevCommands::RenderRouted {
             path,
             out,

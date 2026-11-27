@@ -1229,8 +1229,17 @@ fn parse_range(s: &str) -> Option<Range> {
 
 /// A number as Excel's General format shows it: an integer when it is one,
 /// otherwise the shortest decimal that reads back to the same value — which
-/// is how `6.7400000000000002` in the file is `6.74` on screen.
+/// is how `6.7400000000000002` in the file is `6.74` on screen. Fifteen
+/// significant figures at most, as the spreadsheet holds and shows a
+/// number: a computed value's last binary digits are not on screen, and
+/// `0.062432000000000015` (`6.2432000000000015E-2` in the file) is
+/// `0.062432`.
 pub fn format_general(v: f64) -> String {
+    let v = if v.is_finite() && v != 0.0 {
+        format!("{v:.14e}").parse().unwrap_or(v)
+    } else {
+        v
+    };
     if v.fract() == 0.0 && v.abs() < 1e15 {
         format!("{}", v as i64)
     } else {
@@ -2887,6 +2896,13 @@ mod tests {
         assert_eq!(format_general(-3.0), "-3");
         assert_eq!(format_general(0.5), "0.5");
         assert_eq!(format_general(1e-7), "0.0000001");
+        // A computed value's last binary digits: fifteen figures show.
+        assert_eq!(
+            format_general("6.2432000000000015E-2".parse().unwrap()),
+            "0.062432"
+        );
+        assert_eq!(format_general(0.1 + 0.2), "0.3");
+        assert_eq!(format_general(1.0 / 3.0), "0.333333333333333");
     }
 
     #[test]
