@@ -325,9 +325,9 @@ impl Row<'_> {
             return Ok(());
         }
         self.budget.spend_cells(self.empty as u64 + 1)?;
-        // A cell that holds text is a node of the output of its own.
-        self.budget.spend_elements(1)?;
-        self.budget.spend_text(field)?;
+        // A cell that holds text, at what the output makes of a record's:
+        // a node of its own in DoCO, a cell of its row in the others.
+        self.budget.spend_csv_cell_texts([field.as_str()])?;
         self.spent += self.empty as u64 + 1;
         self.fields
             .extend(std::iter::repeat_n(String::new(), self.empty));
@@ -527,6 +527,31 @@ mod tests {
 
     fn within(f: &str, nodes: u64, cells: u64, text: u64) -> Result<Vec<Element>, CsvError> {
         parse_within(f.as_bytes(), None, &mut budget(nodes, cells, text))
+    }
+
+    #[test]
+    fn a_cell_costs_what_its_output_makes_of_it() {
+        use fluree_doc_model::budget::{converting_to, Output};
+        // 70,000 records of ten fields, 4 MB: 700,000 cells. Each counted
+        // as a DoCO node, 4 KiB, they were refused whatever the output;
+        // Markdown and the text write each once in its row.
+        let mut f = (0..10)
+            .map(|c| format!("col{c}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        for i in 0..70_000 {
+            f.push_str(&format!(
+                "\n{i},Customer {i},{}.25,2024-01-02,Paris,FR,active,{},EUR,ok",
+                i % 1000,
+                i % 7
+            ));
+        }
+        for output in [Output::Flat, Output::Text] {
+            let e = converting_to(output, || parse(f.as_bytes())).unwrap();
+            assert_eq!(e[0].cells.as_ref().unwrap().len(), 70_001);
+        }
+        // DoCO writes each cell as a node of its own: still bounded.
+        assert!(matches!(parse(f.as_bytes()), Err(CsvError::TooLarge(_))));
     }
 
     #[test]

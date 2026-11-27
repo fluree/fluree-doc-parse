@@ -22,6 +22,13 @@
 //!   largest output (`doco`), so a document that spends the whole of
 //!   [`MAX_MEMORY`], however it mixes them, stays within a 4 GB address
 //!   space, with room for its input and a library's own copies.
+//!
+//! What an element costs depends on the output the document is converted
+//! to ([`Output`]): DoCO writes each element and each cell that holds text
+//! as a node of its own, where Markdown, XHTML and JSON write each once. A
+//! converter that knows its output says so around the reading
+//! ([`converting_to`]); a reader that is not told counts at DoCO's costs,
+//! the largest.
 //! * **Work**, in steps of a layout pass whose cost the file chooses (two
 //!   islands of cells compared, a glyph checked against those it may
 //!   overprint), at most [`MAX_WORK`]: a few seconds.
@@ -42,6 +49,122 @@ pub const MAX_WORK: u64 = 1 << 28;
 /// table's numeric cell, its typed value beside it, was measured at about
 /// 4 KiB less its slots), with no text of its own.
 pub const ELEMENT_BYTES: u64 = 4 << 10;
+
+/// What one element, or one table cell that holds text, costs at most when
+/// the output writes it once (Markdown, XHTML, JSON, the text): the
+/// reader's copy, which is most of it (an `.xlsx` cell was measured at
+/// about 750 B, an `.odt` paragraph, its XML tree, 1.25 KB), then the
+/// output's. A reader that counts a table cell's slots apart counts the
+/// cell at [`FLAT_CELL_BYTES`] instead ([`Budget::spend_text_cells`]).
+pub const FLAT_ELEMENT_BYTES: u64 = 2 << 10;
+
+/// What one table cell that holds text costs when the output writes it once,
+/// in its row (Markdown, XHTML, JSON, the text), beyond its slots
+/// ([`CELL_BYTES`]) and its text, which are counted apart
+/// ([`Budget::spend_text_cells`]);
+/// DoCO writes it as a node of its own, at [`ELEMENT_BYTES`]. A one-digit
+/// cell of an `.xlsx` sheet was measured at about 750 B in all, from the
+/// reader through Markdown, of which its slots and text count about 460 B:
+/// with this, 980 B. A `.csv` record's cell takes about 110 B (counted at
+/// [`CSV_CELL_BYTES`] instead), a Markdown table's 200 B with the parser's
+/// tree, an HTML table's 500 B with the page's.
+pub const FLAT_CELL_BYTES: u64 = 512;
+
+/// What a `.csv` record's cell that holds text costs when the output writes
+/// it once, beyond its slot and its text: the CSV reader keeps nothing but
+/// the cell's string, so a cell was measured, from the reader through the
+/// output, at about 100 B in all as Markdown and 216 B as the text (ten
+/// million one-digit cells, 0.99 and 2.16 GB), and 120 and 236 B with
+/// six-byte cells (a million records of five, 0.6 and 1.18 GB). Counted at
+/// [`FLAT_CELL_BYTES`], such a file of a million records was refused at
+/// four times what it takes; with this, a one-digit cell counts 268 B and
+/// a six-byte one 328 B, so the budget holds about 8 million of these, 1.6
+/// million records of five. DoCO writes it as a node of its own, at
+/// [`ELEMENT_BYTES`] (2.9 KB measured).
+pub const CSV_CELL_BYTES: u64 = 128;
+
+/// What a document is converted to, which sets what its elements cost.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Output {
+    /// The DoCO JSON-LD graph: each element and each cell that holds text a
+    /// node, a merged value copied into each cell it covers, each cell its
+    /// labels. The largest, and what a reader not told counts.
+    #[default]
+    Doco,
+    /// The text projection: a value merged down shown on each row.
+    Text,
+    /// Markdown, XHTML or flat JSON: each cell written once.
+    Flat,
+}
+
+impl Output {
+    /// What one element, or one table cell that holds text, costs.
+    pub fn element_bytes(self) -> u64 {
+        match self {
+            Output::Doco => ELEMENT_BYTES,
+            Output::Text | Output::Flat => FLAT_ELEMENT_BYTES,
+        }
+    }
+
+    /// What one table cell that holds text costs, its slot and its text
+    /// apart.
+    pub fn text_cell_bytes(self) -> u64 {
+        match self {
+            Output::Doco => ELEMENT_BYTES,
+            Output::Text | Output::Flat => FLAT_CELL_BYTES,
+        }
+    }
+
+    /// What one `.csv` record's cell that holds text costs, its slot and
+    /// its text apart ([`CSV_CELL_BYTES`]).
+    pub fn csv_cell_bytes(self) -> u64 {
+        match self {
+            Output::Doco => ELEMENT_BYTES,
+            Output::Text | Output::Flat => CSV_CELL_BYTES,
+        }
+    }
+}
+
+/// What a `.csv` record's cell that holds `text` costs at `output` beyond
+/// its slot ([`CELL_BYTES`]): nothing when it is empty, else
+/// [`Output::csv_cell_bytes`] and its text at [`text_cost`]. The CSV reader
+/// keeps nothing of a cell but its text, and a cell costs it a fraction of
+/// a sheet's.
+pub fn filled_csv_cell_bytes(output: Output, text: &str) -> u64 {
+    filled_at(output.csv_cell_bytes(), text)
+}
+
+fn filled_at(cell: u64, text: &str) -> u64 {
+    if text.is_empty() {
+        return 0;
+    }
+    cell.saturating_add(text_cost(text).saturating_mul(TEXT_BYTES))
+}
+
+thread_local! {
+    static OUTPUT: std::cell::Cell<Output> = const { std::cell::Cell::new(Output::Doco) };
+}
+
+/// Run `read` with each [`Budget::default`] made in it, on this thread,
+/// counting at `output`'s costs: a converter wraps the reading of a document
+/// in it once, and every reader's budget follows, without each taking the
+/// output as an argument.
+pub fn converting_to<R>(output: Output, read: impl FnOnce() -> R) -> R {
+    struct Restore(Output);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OUTPUT.with(|o| o.set(self.0));
+        }
+    }
+    let _restore = Restore(OUTPUT.with(|o| o.replace(output)));
+    read()
+}
+
+/// The output the budgets made on this thread count at: [`Output::Doco`]
+/// outside [`converting_to`].
+pub fn output() -> Output {
+    OUTPUT.with(std::cell::Cell::get)
+}
 
 /// What one cell slot costs at most: a table's cell, empty or not, its
 /// typed value, its merge flags, the copies of a cell a layout keeps (each
@@ -124,24 +247,33 @@ pub struct Budget {
     memory: u64,
     max_memory: u64,
     work: Meter,
+    output: Output,
 }
 
 impl Default for Budget {
-    /// [`MAX_MEMORY`] and [`MAX_WORK`].
+    /// [`MAX_MEMORY`] and [`MAX_WORK`], at the costs of the [`output`] the
+    /// document is converted to.
     fn default() -> Self {
-        Self::new(MAX_MEMORY, MAX_WORK)
+        Self::new(MAX_MEMORY, MAX_WORK).for_output(output())
     }
 }
 
 impl Budget {
-    /// A budget of `memory` estimated bytes and `work` steps; a test's
-    /// smaller one shows a bound without allocating up to it.
+    /// A budget of `memory` estimated bytes and `work` steps, at DoCO's
+    /// costs; a test's smaller one shows a bound without allocating up to
+    /// it.
     pub fn new(memory: u64, work: u64) -> Self {
         Self {
             memory: 0,
             max_memory: memory,
             work: Meter::new(work, "steps of layout"),
+            output: Output::Doco,
         }
+    }
+
+    /// This budget, counting at `output`'s costs.
+    pub fn for_output(self, output: Output) -> Self {
+        Self { output, ..self }
     }
 
     fn spend_memory(&mut self, what: &'static str, n: u64, each: u64) -> Result<(), TooLarge> {
@@ -159,7 +291,29 @@ impl Budget {
     /// Count `n` elements about to be made, or table cells that hold text,
     /// each a node of its own in the DoCO output.
     pub fn spend_elements(&mut self, n: u64) -> Result<(), TooLarge> {
-        self.spend_memory("elements", n, ELEMENT_BYTES)
+        self.spend_memory("elements", n, self.output.element_bytes())
+    }
+
+    /// Count `n` table cells that hold text about to be made: DoCO writes
+    /// each as a node of its own, at an element's cost; the others write it
+    /// once in its row, at [`FLAT_CELL_BYTES`]. Their slots and their text
+    /// are counted apart.
+    pub fn spend_text_cells(&mut self, n: u64) -> Result<(), TooLarge> {
+        self.spend_memory("elements", n, self.output.text_cell_bytes())
+    }
+
+    /// Count the `.csv` record's cells about to be made that hold `texts`,
+    /// beyond their slots, at [`filled_csv_cell_bytes`]: an empty one costs
+    /// nothing, one that holds text a record's cell and its text.
+    pub fn spend_csv_cell_texts<'a>(
+        &mut self,
+        texts: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), TooLarge> {
+        let output = self.output;
+        let n = texts.into_iter().fold(0u64, |n, t| {
+            n.saturating_add(filled_csv_cell_bytes(output, t))
+        });
+        self.spend_memory("cells", n, 1)
     }
 
     /// Count `n` cell slots about to be allocated: cells read, each copy of
@@ -261,6 +415,70 @@ mod tests {
         let mut b = Budget::new(6 * TEXT_BYTES, 0);
         b.spend_chars("yyyyyy".chars()).unwrap();
         assert!(b.spend_chars(['y']).is_err());
+    }
+
+    #[test]
+    fn what_an_element_costs_follows_the_output() {
+        let at = |output| Budget::new(ELEMENT_BYTES, 0).for_output(output);
+        // DoCO writes an element as a node: one fills the budget.
+        assert!(at(Output::Doco).spend_elements(2).is_err());
+        assert!(at(Output::Flat).spend_elements(2).is_ok());
+        assert!(at(Output::Text).spend_elements(2).is_ok());
+        assert!(at(Output::Flat).spend_elements(3).is_err());
+        // A table cell that holds text: a node for DoCO, a cell of a row,
+        // its slots and text counted apart, for the others.
+        let cells = |output| {
+            let mut b = Budget::new(MAX_MEMORY, 0).for_output(output);
+            b.spend_text_cells(3).unwrap();
+            b.memory / 3
+        };
+        assert_eq!(cells(Output::Doco), ELEMENT_BYTES);
+        assert_eq!(cells(Output::Flat), FLAT_CELL_BYTES);
+        assert_eq!(cells(Output::Text), FLAT_CELL_BYTES);
+        // A record's cell, with its text; an empty one costs nothing
+        // beyond its slot.
+        for output in [Output::Doco, Output::Flat, Output::Text] {
+            let cell = output.csv_cell_bytes();
+            assert_eq!(filled_csv_cell_bytes(output, "a&"), cell + 7 * TEXT_BYTES);
+            assert_eq!(filled_csv_cell_bytes(output, ""), 0);
+            let need = 2 * cell + 13 * TEXT_BYTES;
+            let mut b = Budget::new(need, 0).for_output(output);
+            b.spend_csv_cell_texts(["a&", "", "\u{1}"]).unwrap();
+            assert!(b.spend_csv_cell_texts([""]).is_ok());
+            assert!(b.spend_csv_cell_texts(["y"]).is_err());
+        }
+    }
+
+    #[test]
+    fn a_budget_counts_at_the_output_it_is_converted_to() {
+        let element = |b: &mut Budget| {
+            let before = b.memory;
+            b.spend_elements(1).unwrap();
+            b.memory - before
+        };
+        // Not told, at DoCO's costs.
+        assert_eq!(output(), Output::Doco);
+        assert_eq!(element(&mut Budget::default()), ELEMENT_BYTES);
+        let inner = converting_to(Output::Flat, || {
+            let flat = element(&mut Budget::default());
+            // Nested, the inner one wins and gives way again.
+            let text = converting_to(Output::Text, output);
+            (flat, text, output())
+        });
+        assert_eq!(inner, (FLAT_ELEMENT_BYTES, Output::Text, Output::Flat));
+        assert_eq!(output(), Output::Doco);
+        // Restored even when the reading panics.
+        let panicked = std::panic::catch_unwind(|| converting_to(Output::Flat, || panic!()));
+        assert!(panicked.is_err());
+        assert_eq!(output(), Output::Doco);
+        // On this thread only: another converts to its own.
+        converting_to(Output::Flat, || {
+            assert_eq!(std::thread::spawn(output).join().unwrap(), Output::Doco);
+        });
+        // A test's budget is DoCO's, whatever it is read in.
+        converting_to(Output::Flat, || {
+            assert_eq!(element(&mut Budget::new(MAX_MEMORY, 0)), ELEMENT_BYTES)
+        });
     }
 
     #[test]

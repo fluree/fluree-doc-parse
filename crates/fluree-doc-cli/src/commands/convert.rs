@@ -304,7 +304,33 @@ fn convert_path(
 
 /// Convert `data`, named by `path` (whose extension may say what it is),
 /// as the input `src`.
+///
+/// Every input is read through here, so here the readers are told the
+/// output: a document's budget counts what that output writes of it
+/// (`fluree_doc_model::budget::Output`), so a table too large for DoCO,
+/// which writes each cell as a node, still converts to Markdown.
 fn convert_source(
+    path: &Path,
+    data: Vec<u8>,
+    src: &Source,
+    cfg: &TierConfig,
+    args: &ConvertArgs,
+    pages: Option<&[usize]>,
+    quiet: bool,
+) -> Result<String, String> {
+    use fluree_doc_model::budget::{converting_to, Output};
+    let output = match args.format {
+        Format::Doco => Output::Doco,
+        Format::Text => Output::Text,
+        Format::Md | Format::Xhtml | Format::Json => Output::Flat,
+    };
+    converting_to(output, || {
+        read_source(path, data, src, cfg, args, pages, quiet)
+    })
+}
+
+/// [`convert_source`], within its output's budget.
+fn read_source(
     path: &Path,
     data: Vec<u8>,
     src: &Source,

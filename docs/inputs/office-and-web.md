@@ -382,6 +382,12 @@ flattened out of it. So this reader measures after all, but only shape.
   grid would pass about four million cells in all (cells set down a
   diagonal, touching each other, span the square of their number) is read
   as its cells' text, a paragraph each.
+- **Size.** A workbook's cells and their text are counted against the
+  memory one document may take, at what the output makes of each: a cell
+  that holds text is a node of its own in DoCO (4 KiB), a cell of its row in
+  Markdown, XHTML, JSON and the text (512 bytes). So a sheet of 50,000 rows
+  by 12 columns converts to Markdown, and is refused as DoCO. The same holds
+  for `.xls`, `.xlsb` and `.ods`, laid out alike.
 - **Values are the cached ones.** A formula's last computed value is what
   the file holds and what Excel shows; nothing is recalculated.
 - **A cell's text is what Excel shows.** A number is rendered through its

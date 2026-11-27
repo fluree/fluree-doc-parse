@@ -39,9 +39,14 @@ number, and `03/04/2026` a date only in one country's order, so a type would
 be a guess about the file rather than a fact in it. A workbook declares its
 types, and its tables carry them (see [XLSX](office-and-web.md#xlsx)).
 
-A table padded to more than 16 million cells is refused (`CsvError::TooLarge`)
-as it is read, before the cells past that bound are allocated: one very
-wide row over a million short ones would otherwise ask for a trillion. The
+The table's cells, its rows padded to the widest, and their text are
+counted against the memory one document may take as they are read, before
+they are allocated, and a table past it is refused (`CsvError::TooLarge`):
+one very wide row over a million short ones would otherwise ask for a
+trillion cells. A cell that holds text is counted at what the output makes
+of it: a node of its own in DoCO (4 KiB), a cell of its row in Markdown,
+XHTML, JSON and the text (128 bytes and its text). So 70,000 records of ten
+fields (4 MB) convert to Markdown and are refused as DoCO. The
 empty fields of a record are counted, not held, until one that holds
 something follows them, so a line of nothing but delimiters, which is no
 row, costs nothing however long it is.
