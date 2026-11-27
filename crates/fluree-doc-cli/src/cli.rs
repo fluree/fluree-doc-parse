@@ -166,6 +166,10 @@ pub enum Format {
     Doco,
     /// Plain-text projection; `doco` char offsets index into exactly this
     Text,
+    /// Projection conformance (dev): each format written, read back and
+    /// held to the element model; the violations as JSON
+    #[value(hide = true)]
+    Conform,
 }
 
 /// How `--format md` writes a link.
@@ -497,6 +501,16 @@ pub enum DevCommands {
         corpus: PathBuf,
         #[arg(default_value = "crops")]
         out: PathBuf,
+    },
+    /// Each format's projection read back and held to the element model:
+    /// violations by format and class (docs/design/conformance.md)
+    Conform {
+        /// Files or directories to check
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+        /// One JSON line per file, every violation listed
+        #[arg(long)]
+        json: bool,
     },
     /// Per-stage wall clock over a file or corpus, measured in one process
     Timings {

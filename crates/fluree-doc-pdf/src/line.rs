@@ -662,6 +662,9 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
 /// As [`assemble`], parting a row where a rule drawn up between two of its
 /// words stands: see [`part_at_walls`].
 fn assemble_walled(glyphs: &[Glyph], walls: &[BBox]) -> Vec<Line> {
+    // The first glyph of each run `reading_order` read after the run it was
+    // set over: a word of its own.
+    let mut run_starts: rustc_hash::FxHashSet<usize> = Default::default();
     let mut buckets: std::collections::BTreeMap<i32, Vec<usize>> = Default::default();
     for (i, g) in glyphs.iter().enumerate() {
         // Keep outline-less glyphs when they carry text. A space character has
@@ -719,10 +722,7 @@ fn assemble_walled(glyphs: &[Glyph], walls: &[BBox]) -> Vec<Line> {
         let (mut clusters, caps) = drop_caps(clusters, glyphs, adv);
         attach_scripts(&mut clusters, glyphs, vertical, adv);
         for c in &mut clusters {
-            c.sort_by(|&a, &b| {
-                let (oa, ob) = (glyphs[a].origin, glyphs[b].origin);
-                cmp(adv.at(oa), adv.at(ob))
-            });
+            run_starts.extend(reading_order(c, glyphs, adv));
         }
         // Each glyph's cluster, and each cluster's reach along the line.
         let mut cluster_of: rustc_hash::FxHashMap<usize, usize> = Default::default();
@@ -853,7 +853,7 @@ fn assemble_walled(glyphs: &[Glyph], walls: &[BBox]) -> Vec<Line> {
     // is derived from the whole column's gap distribution, not fixed.
     let ratio = adaptive_space_ratio(glyphs, &groups);
     for (idxs, bucket, _) in &groups {
-        if let Some(l) = build_line(glyphs, idxs, *bucket, ratio) {
+        if let Some(l) = build_line_parted(glyphs, idxs, *bucket, ratio, &run_starts) {
             lines.push(l);
         }
     }
@@ -1090,6 +1090,136 @@ const DISPLAY_RATIO: f64 = 2.5;
 fn joins_line(a: &Glyph, b: &Glyph, vertical: bool, adv: Advance) -> bool {
     shares_baseline(a, b, vertical)
         || (script_attached(a, b, vertical) && script_adjacent(a, b, adv))
+}
+
+/// How far into the run drawn before it a run may start and still be read
+/// after it, in its ems: a label's last word and its colon, a value set a
+/// little too far left.
+const OVERLAP_EMS: f64 = 1.5;
+
+/// How far at least: half an em, more than any kern pulls a letter back.
+const MIN_OVERLAP_EMS: f64 = 0.5;
+
+/// A line's glyphs in reading order: along the line, except where a run the
+/// page drew whole starts over the end of the run drawn just before it and
+/// goes on past it. Read by position, the two interleave a letter at a time:
+/// an invoice's `Montant du prélèvement :` with its `29.99 €` set a few
+/// points into it read `prélèvemen2t 9:.99 €`. The later run is read after
+/// the earlier one, whole. A run is glyphs drawn one after another, the pen
+/// never going back; a run starting inside the other (an accent drawn after
+/// its letter) or with it (a copy drawn twice for weight) is no such case,
+/// and runs apart are where position puts them anyway.
+///
+/// Returns the first glyph of each run so read.
+fn reading_order(c: &mut Vec<usize>, glyphs: &[Glyph], adv: Advance) -> Vec<usize> {
+    c.sort_by(|&a, &b| cmp(adv.at(glyphs[a].origin), adv.at(glyphs[b].origin)));
+    let mut starts = Vec::new();
+    if c.len() < 5 {
+        return starts;
+    }
+    let mut drawn = c.clone();
+    drawn.sort_unstable();
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut lo = 0;
+    for k in 1..drawn.len() {
+        let (p, q) = (&glyphs[drawn[k - 1]], &glyphs[drawn[k]]);
+        if drawn[k] != drawn[k - 1] + 1 || adv.at(q.origin) < adv.at(p.origin) {
+            runs.push((lo, k));
+            lo = k;
+        }
+    }
+    runs.push((lo, drawn.len()));
+    if runs.len() < 2 {
+        return starts;
+    }
+    let inked = |r: &[usize]| r.iter().filter(|&&i| glyphs[i].bbox.is_some()).count();
+    // The size most of the line is set at.
+    let body = {
+        let mut sizes: Vec<f32> = c
+            .iter()
+            .filter(|&&i| glyphs[i].bbox.is_some())
+            .map(|&i| glyphs[i].font_size)
+            .collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.get(sizes.len() / 2).copied().unwrap_or(0.0)
+    };
+    let pen_end = |i: usize| adv.at(glyphs[i].origin) + glyphs[i].advance.unwrap_or(0.0);
+    for w in runs.windows(2) {
+        let (a, b) = (&drawn[w[0].0..w[0].1], &drawn[w[1].0..w[1].1]);
+        if inked(a) < 3 || inked(b) < 2 {
+            continue;
+        }
+        // Type of one size: a run of scripts set over its base (`Rᵢⱼ`, a
+        // sum's limits) is mathematics' own placing, not a value set into
+        // a label.
+        let size_of = |i: usize| glyphs[i].font_size;
+        let tail: Vec<usize> = a
+            .iter()
+            .rev()
+            .filter(|&&i| glyphs[i].bbox.is_some())
+            .take(3)
+            .copied()
+            .collect();
+        // At the line's own size, too: two scripts' runs over one base
+        // (`N` with `inf` over `BN`) are of one size, the scripts'.
+        let one_size = b
+            .iter()
+            .chain(&tail)
+            .filter(|&&i| glyphs[i].bbox.is_some())
+            .all(|&i| same_size(size_of(i), size_of(b[0])))
+            && same_size(size_of(b[0]), body);
+        if !one_size {
+            continue;
+        }
+        let (a_start, a_end) = (adv.at(glyphs[a[0]].origin), pen_end(a[a.len() - 1]));
+        let (b_start, b_end) = (adv.at(glyphs[b[0]].origin), pen_end(b[b.len() - 1]));
+        let size = glyphs[b[0]].font_size.max(1.0) as f64;
+        // Set over the other's end by half an em at least: a kern, or a
+        // word set flush against the one before, is no overlap.
+        let over = a_end - b_start;
+        // And starting before the earlier run's last letter, so that
+        // position alone would interleave them: a run that only abuts the
+        // other is read right already.
+        let last = *a
+            .iter()
+            .rev()
+            .find(|&&i| glyphs[i].bbox.is_some())
+            .unwrap_or(&a[a.len() - 1]);
+        let first = *b
+            .iter()
+            .find(|&&i| glyphs[i].bbox.is_some())
+            .unwrap_or(&b[0]);
+        // Words and values meeting: the later run opens with a letter or a
+        // figure and the earlier one closes with one, or a label's colon or
+        // full stop. A mark set over a letter (`x̂`, `∉`), a bar or a bracket
+        // (`|k|`, `s⁽³⁾`), a sign kerned under its number (`3,0 %`) is the
+        // typesetting's own overlap.
+        // A spacing modifier letter (`ˆ`, `ˇ`) is a mark, letter or not.
+        let word = |i: usize, closing: bool| {
+            glyphs[i].text.chars().next().is_some_and(|ch| {
+                (ch.is_alphanumeric() && !('\u{2B0}'..='\u{2FF}').contains(&ch))
+                    || (closing && matches!(ch, ':' | '.'))
+            })
+        };
+        if !(b_start > a_start
+            && b_start < adv.at(glyphs[last].origin)
+            && over >= MIN_OVERLAP_EMS * size
+            && over <= OVERLAP_EMS * size
+            && b_end > a_end
+            && word(first, false)
+            && word(last, true))
+        {
+            continue;
+        }
+        c.retain(|i| !b.contains(i));
+        let at = c
+            .iter()
+            .position(|&i| i == a[a.len() - 1])
+            .map_or(c.len(), |p| p + 1);
+        c.splice(at..at, b.iter().copied());
+        starts.push(b[0]);
+    }
+    starts
 }
 
 /// Gap along the advance axis from the end of `a` to the start of `b`, in
@@ -1703,10 +1833,34 @@ fn part_at_gutters(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> 
             let gutter = b.x0 - a.x1 > size * GUTTER_GAP_RATIO
                 && column_starts_in(a.x1 + size, b.x0 - size)
                 && column_starts_in(b.x0 - 1.0, b.x0 + 1.0);
+            // Text past the gap set in another size and on another baseline
+            // is another block's, whatever runs across the gap: a picture's
+            // caption level with a paragraph's line beside it, the text
+            // under the picture running on across. A paragraph's line keeps
+            // one size and baseline across its widest space.
+            // Each side's text, not a note's mark raised at the end of the
+            // last word (`MACL-153M-XX²,³`): the largest glyph of the word
+            // either side of the gap.
+            let word = |run: &mut dyn Iterator<Item = &usize>| {
+                run.map(|&j| &glyphs[j])
+                    .skip_while(|g| g.bbox.is_none())
+                    .take_while(|g| g.bbox.is_some())
+                    .max_by(|a, b| a.font_size.total_cmp(&b.font_size))
+            };
+            let other_block = match (
+                word(&mut idxs[from..k].iter().rev()),
+                word(&mut idxs[k..].iter()),
+            ) {
+                (Some(last), Some(first)) => {
+                    (last.font_size - first.font_size).abs() as f64 > RESTYLED * size
+                        && (last.origin.1 - first.origin.1).abs() > RESTYLED * size
+                }
+                _ => false,
+            };
             if b.x0 - a.x1 > size * BLOCK_GAP_RATIO
                 && (!lone_label(glyphs, &idxs[from..k])
                     || heads_a_column(me, &idxs[from..k], &glyphs[*inked], next, size))
-                && (gutter || !crossed(me, a.x1, b.x0, size))
+                && (gutter || other_block || !crossed(me, a.x1, b.x0, size))
             {
                 cuts.push(k);
             }
@@ -2530,6 +2684,18 @@ impl Word {
 }
 
 fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -> Option<Line> {
+    build_line_parted(glyphs, idxs, bucket, space_ratio, &Default::default())
+}
+
+/// As [`build_line`], with the glyphs that start a run read after the run
+/// set before it (see `reading_order`): each opens a word.
+fn build_line_parted(
+    glyphs: &[Glyph],
+    idxs: &[usize],
+    bucket: i32,
+    space_ratio: f64,
+    run_starts: &rustc_hash::FxHashSet<usize>,
+) -> Option<Line> {
     if idxs.is_empty() {
         return None;
     }
@@ -2588,6 +2754,8 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     let mut bbox: Option<BBox> = None;
     let mut text = String::new();
     let mut prev_end: Option<f64> = None;
+    // Where the last inked glyph's pen stood along the line.
+    let mut prev_at: Option<f64> = None;
     let mut sizes: Vec<f32> = Vec::new();
     // A power being read: its size and baseline, and whether it is set in
     // superior figures, at the text's own size and baseline.
@@ -2671,9 +2839,14 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                         }
                     };
                     let after_cap = cap_head && text.chars().count() == 1;
+                    // The pen gone back more than half an em: a run read
+                    // after the one it was set over (see `reading_order`),
+                    // a word of its own.
+                    let back = run_starts.contains(&i)
+                        && prev_at.is_some_and(|p: f64| p > adv.at(g.origin));
                     if !both_cjk
                         && !after_cap
-                        && start - pe > g.font_size as f64 * ratio
+                        && (start - pe > g.font_size as f64 * ratio || back)
                         && !text.ends_with(' ')
                     {
                         text.push(' ');
@@ -2765,6 +2938,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     Some(a) => adv.at(g.origin) + a,
                     None => adv.end(&b),
                 });
+                prev_at = Some(adv.at(g.origin));
                 prev_size = Some(g.font_size);
                 prev_italic = g.italic;
                 bbox = Some(match bbox {
@@ -3427,6 +3601,43 @@ mod tests {
     }
 
     #[test]
+    fn a_value_set_over_its_labels_end_is_read_after_it() {
+        // `Amount:` at 8pt, 4pt a letter, its pen ending at 78; `29.99`
+        // drawn after it from 72, three-quarters of an em into it.
+        let mut v = sized_word("Amount:", 50.0, 100.0, 8.0);
+        v.extend(sized_word("29.99", 72.0, 100.0, 8.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert_eq!(texts, ["Amount: 29.99"]);
+    }
+
+    #[test]
+    fn overlaps_that_are_the_typesettings_own_keep_position_order() {
+        let moved = |v: &[Glyph]| {
+            let mut c: Vec<usize> = (0..v.len()).collect();
+            reading_order(&mut c, v, Advance::Right)
+        };
+        // Runs that only abut: position reads them right.
+        let mut v = sized_word("Amount:", 50.0, 100.0, 8.0);
+        v.extend(sized_word("29.99", 78.5, 100.0, 8.0));
+        assert!(moved(&v).is_empty());
+        // Two scripts' runs over one base, of one size, the scripts', the
+        // second set into the first.
+        let mut v = sized_word("Learning rate", 0.0, 100.0, 10.0);
+        v.extend(sized_word("inf", 68.0, 100.0, 6.0));
+        v.extend(sized_word("BNN", 70.0, 100.0, 6.0));
+        assert!(moved(&v).is_empty());
+        // A modifier letter over a figure, drawn after the word before it
+        // and set into its last letter.
+        let mut v = sized_word("vector", 50.0, 100.0, 8.0);
+        v.extend(sized_word("ˆ0", 68.0, 100.0, 8.0));
+        assert!(moved(&v).is_empty());
+        // A bar set over the end of the word before it.
+        let mut v = sized_word("value", 50.0, 100.0, 8.0);
+        v.extend(sized_word("|k|", 64.0, 100.0, 8.0));
+        assert!(moved(&v).is_empty());
+    }
+
+    #[test]
     fn an_empty_lines_spaces_beside_display_type_part_nothing() {
         // A 22pt title, the spaces of empty 11pt lines set at its first
         // letter on baselines a line above and below its own, and a 16pt
@@ -4086,6 +4297,34 @@ mod tests {
         ));
         let lines = assemble(&v);
         assert_eq!(lines.len(), 3, "{lines:?}");
+    }
+
+    #[test]
+    fn a_caption_set_smaller_past_a_gap_parts_from_the_line() {
+        // As above, but the text past the gap is a caption beside the line:
+        // set a size down, on a baseline of its own. The paragraph's lines
+        // running across say nothing of it.
+        let mut v = run_at("cccccccccccccccccccccccccccccccccccccccc", 0.0, -14.0, 0);
+        v.extend(run_at("aaaaaaaaaa", 0.0, 0.0, 50));
+        v.push(space(50.0, 60));
+        let mut caption = run_at("bbbbbbbbbbbbbbbbbbbbbbbbb", 75.0, 0.0, 61);
+        for gl in &mut caption {
+            gl.font_size *= 0.8;
+            gl.origin.1 += 2.5;
+            if let Some(b) = gl.bbox.as_mut() {
+                b.y0 += 2.5;
+                b.y1 += 2.5;
+            }
+        }
+        v.extend(caption);
+        v.extend(run_at(
+            "dddddddddddddddddddddddddddddddddddddddd",
+            0.0,
+            14.0,
+            90,
+        ));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 4, "{lines:?}");
     }
 
     #[test]

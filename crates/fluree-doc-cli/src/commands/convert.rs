@@ -531,7 +531,8 @@ fn convert_source(
     let output = match args.format {
         Format::Doco => Output::Doco,
         Format::Text => Output::Text,
-        Format::Md | Format::Xhtml | Format::Json => Output::Flat,
+        // Conformance writes Markdown and XHTML from the elements.
+        Format::Md | Format::Xhtml | Format::Json | Format::Conform => Output::Flat,
     };
     converting_to(output, || {
         read_source(path, data, src, cfg, args, pages, quiet)
@@ -2329,7 +2330,21 @@ fn render(
             fluree_doc_pdf::doco::to_doco(elements, &opts)
         }
         Format::Text => fluree_doc_pdf::doco::to_text(elements),
+        Format::Conform => {
+            serde_json::to_string(&fluree_doc_conform::conform(elements, notes)).unwrap()
+        }
     }
+}
+
+/// The conformance violations of one file as JSON: its elements read as
+/// `convert` reads them, deterministically, each format written from them
+/// and read back.
+pub(crate) fn conform_report(path: &Path) -> Result<String, String> {
+    let args = super::compat(path.to_path_buf(), Format::Conform);
+    let mut cfg = TierConfig::from_env_with(None, None, None, None, false);
+    cfg.resolve_escalation(false, true, true);
+    let slot = slots(std::slice::from_ref(&args.inputs[0])).remove(0);
+    convert_path(path, &slot, &cfg, &args, None, true)
 }
 
 /// The note when a document has more OCR crops than `ocr.max_crops`.
@@ -3145,6 +3160,7 @@ fn ext(format: Format) -> &'static str {
         Format::Json => "json",
         Format::Doco => "jsonld",
         Format::Text => "txt",
+        Format::Conform => "conform.json",
     }
 }
 
