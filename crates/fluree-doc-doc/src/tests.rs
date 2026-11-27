@@ -20,6 +20,10 @@ pub(crate) struct Stories<'a> {
     pub footnotes: Vec<&'a str>,
     pub comments: Vec<&'a str>,
     pub endnotes: Vec<&'a str>,
+    /// The headers' and footers' story, and the text boxes', which are not
+    /// read.
+    pub headers: Vec<&'a str>,
+    pub boxes: Vec<&'a str>,
 }
 
 /// A `.doc`: the main text in a one-byte piece, the notes in a two-byte
@@ -35,7 +39,8 @@ pub(crate) fn doc_with(s: &Stories<'_>, nfib: u16, flags: u16) -> Vec<u8> {
         main.push(if *mark == Mark::Plain { '\r' } else { '\u{7}' });
     }
     let (ftn, atn, edn) = (story(&s.footnotes), story(&s.comments), story(&s.endnotes));
-    let notes = format!("{ftn}{atn}{edn}");
+    let (hdd, txbx) = (story(&s.headers), story(&s.boxes));
+    let notes = format!("{ftn}{hdd}{atn}{edn}{txbx}");
     // Layout: FIB, then the notes (UTF-16) at 0x200, then the main text
     // (Windows-1252) after them, then the FKP on its own 512-byte page.
     let mut wd = vec![0u8; 0x200];
@@ -121,9 +126,17 @@ pub(crate) fn doc_with(s: &Stories<'_>, nfib: u16, flags: u16) -> Vec<u8> {
     put16(&mut wd, 2, nfib);
     put16(&mut wd, 0x0A, flags);
     let count = |s: &str| s.encode_utf16().count() as u32;
-    for (i, v) in [main_len, count(&ftn), 0, 0, count(&atn), count(&edn)]
-        .into_iter()
-        .enumerate()
+    for (i, v) in [
+        main_len,
+        count(&ftn),
+        count(&hdd),
+        0,
+        count(&atn),
+        count(&edn),
+        count(&txbx),
+    ]
+    .into_iter()
+    .enumerate()
     {
         put32(&mut wd, 0x40 + 4 * (3 + i), v);
     }
@@ -169,6 +182,8 @@ pub(crate) fn memo() -> Vec<u8> {
             footnotes: vec!["\u{2} Survey of Alex Sample."],
             comments: vec!["\u{5}Source?"],
             endnotes: vec!["\u{2} Method in the annex."],
+            headers: Vec::new(),
+            boxes: Vec::new(),
         },
         0x00C1,
         0x0200,
@@ -220,6 +235,8 @@ fn the_table_stream_is_the_one_the_fib_names() {
             footnotes: vec![],
             comments: vec![],
             endnotes: vec![],
+            headers: vec![],
+            boxes: vec![],
         },
         0x00C1,
         0,
@@ -234,6 +251,8 @@ fn old_encrypted_and_foreign_files_are_refused() {
         footnotes: vec![],
         comments: vec![],
         endnotes: vec![],
+        headers: vec![],
+        boxes: vec![],
     };
     assert!(matches!(
         parse(&doc_with(&s, 0x0065, 0x0200)),
@@ -403,6 +422,8 @@ fn a_tables_padding_is_spent_before_it_is_made() {
             footnotes: vec![],
             comments: vec![],
             endnotes: vec![],
+            headers: vec![],
+            boxes: vec![],
         },
         0x00C1,
         0x0200,
@@ -493,4 +514,162 @@ fn fields_show_their_results_however_they_nest_or_are_left_open() {
     let n = 1 << 20;
     let s = format!("{}{}\r", "\u{13}\u{14}".repeat(n), "x".repeat(n));
     assert_eq!(para_texts(&s)[0].len(), n);
+}
+
+/// The streams of a compound file, by name.
+fn streams_of(bytes: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut cf = cfb::CompoundFile::open(Cursor::new(bytes)).unwrap();
+    let names: Vec<String> = cf
+        .walk()
+        .filter(|e| e.is_stream())
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
+    names
+        .into_iter()
+        .map(|n| {
+            let mut v = Vec::new();
+            cf.open_stream(&n).unwrap().read_to_end(&mut v).unwrap();
+            (n, v)
+        })
+        .collect()
+}
+
+fn compound_of(streams: &std::collections::BTreeMap<String, Vec<u8>>) -> Vec<u8> {
+    let s: Vec<(&str, &[u8])> = streams
+        .iter()
+        .map(|(n, v)| (n.as_str(), v.as_slice()))
+        .collect();
+    compound(&s)
+}
+
+fn stories<'a>(main: &[&'a str]) -> Stories<'a> {
+    Stories {
+        main: main.iter().map(|p| (*p, Mark::Plain)).collect(),
+        footnotes: vec![],
+        comments: vec![],
+        endnotes: vec![],
+        headers: vec![],
+        boxes: vec![],
+    }
+}
+
+#[test]
+fn deleted_and_hidden_text_is_not_the_documents() {
+    // `Kept deleted shown hidden end.`: a tracked deletion and hidden text,
+    // marked in a CHPX FKP over the main text's bytes.
+    let doc = doc_with(
+        &stories(&["Kept deleted shown hidden end."]),
+        0x00C1,
+        0x0200,
+    );
+    let mut streams = streams_of(&doc);
+    let wd = streams.get_mut("/WordDocument").unwrap();
+    let at = |w: &[u8]| wd.windows(w.len()).position(|x| x == w).unwrap() as u32;
+    let (del, hid) = (at(b"deleted "), at(b"hidden "));
+    while !wd.len().is_multiple_of(512) {
+        wd.push(0);
+    }
+    let pn = (wd.len() / 512) as u32;
+    let mut page = vec![0u8; 512];
+    let fcs = [del, del + 8, hid, hid + 7];
+    for (i, fc) in fcs.iter().enumerate() {
+        page[4 * i..4 * i + 4].copy_from_slice(&fc.to_le_bytes());
+    }
+    // Three runs: deleted (`sprmCFRMarkDel`), plain, hidden
+    // (`sprmCFVanish`), their CHPXs at word offsets 200 and 210.
+    page[16..19].copy_from_slice(&[200, 0, 210]);
+    page[400..404].copy_from_slice(&[3, 0x00, 0x08, 1]);
+    page[420..424].copy_from_slice(&[3, 0x3C, 0x08, 1]);
+    page[511] = 3;
+    wd.extend(page);
+    let table = streams.get("/1Table").unwrap().len() as u32;
+    let wd = streams.get_mut("/WordDocument").unwrap();
+    wd[0x9A + 8 * 12..0x9A + 8 * 12 + 4].copy_from_slice(&table.to_le_bytes());
+    wd[0x9A + 8 * 12 + 4..0x9A + 8 * 12 + 8].copy_from_slice(&12u32.to_le_bytes());
+    let t = streams.get_mut("/1Table").unwrap();
+    for v in [fcs[0], fcs[3], pn] {
+        t.extend(v.to_le_bytes());
+    }
+    let els = parse(&compound_of(&streams)).unwrap();
+    assert_eq!(els[0].text, "Kept shown end.");
+}
+
+#[test]
+fn an_emoji_is_one_character_not_two_unknown_ones() {
+    // The notes are stored as UTF-16, where an emoji is a surrogate pair.
+    let mut s = stories(&["Party"]);
+    s.footnotes = vec!["\u{2} Cake \u{1F382} and \u{1F600}."];
+    let els = parse(&doc_with(&s, 0x00C1, 0x0200)).unwrap();
+    assert_eq!(els[1].text, "1 Cake \u{1F382} and \u{1F600}.");
+}
+
+#[test]
+fn the_summary_gives_title_and_author_and_what_is_not_read_is_said() {
+    let mut s = stories(&["Body"]);
+    s.headers = vec!["\u{3}", "Ref: QA-7"];
+    s.boxes = vec!["Boxed"];
+    let doc = doc_with(&s, 0x00C1, 0x0200);
+    // A property set: its header, one section, a code page (1252), the
+    // title as bytes and the author as UTF-16.
+    let title = b"Quarterly  report\0";
+    let author: Vec<u8> = "Alex Sample\0"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let props: Vec<(u32, Vec<u8>)> = vec![
+        (
+            1,
+            [2u32.to_le_bytes().to_vec(), 1252u32.to_le_bytes().to_vec()].concat(),
+        ),
+        (
+            2,
+            [
+                0x1Eu32.to_le_bytes().to_vec(),
+                (title.len() as u32).to_le_bytes().to_vec(),
+                title.to_vec(),
+            ]
+            .concat(),
+        ),
+        (
+            4,
+            [
+                0x1Fu32.to_le_bytes().to_vec(),
+                (author.len() as u32 / 2).to_le_bytes().to_vec(),
+                author,
+            ]
+            .concat(),
+        ),
+    ];
+    let mut section = Vec::new();
+    let mut body: Vec<u8> = Vec::new();
+    let head = 8 + 8 * props.len();
+    for (id, p) in &props {
+        section.extend(id.to_le_bytes());
+        section.extend(((head + body.len()) as u32).to_le_bytes());
+        body.extend(p);
+    }
+    let mut set = vec![0xFE, 0xFF, 0, 0];
+    set.extend([0u8; 20]);
+    set.extend(1u32.to_le_bytes());
+    set.extend([0u8; 16]);
+    set.extend(48u32.to_le_bytes());
+    set.extend(((head + body.len()) as u32).to_le_bytes());
+    set.extend((props.len() as u32).to_le_bytes());
+    set.extend(section);
+    set.extend(body);
+    let mut streams = streams_of(&doc);
+    streams.insert("/\u{5}SummaryInformation".into(), set);
+    let read = parse_with_info(&compound_of(&streams)).unwrap();
+    assert_eq!(read.info.title.as_deref(), Some("Quarterly report"));
+    assert_eq!(read.info.creators, ["Alex Sample"]);
+    assert_eq!(read.left_out, ["headers and footers", "text boxes"]);
+    let texts: Vec<&str> = read.elements.iter().map(|e| e.text.as_str()).collect();
+    assert_eq!(texts, ["Body"]);
+    // Separators alone in the headers' story are no headers.
+    let mut s = stories(&["Body"]);
+    s.headers = vec!["\u{3}", "\u{4}"];
+    assert!(parse_with_info(&doc_with(&s, 0x00C1, 0x0200))
+        .unwrap()
+        .left_out
+        .is_empty());
 }

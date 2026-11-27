@@ -226,6 +226,12 @@ the piece table says which run of the document each holds. What is read:
   row), as `doco:Table`s of their cells, a cell's paragraphs joined.
 - A field shows its result (`PAGE` its last page number), not its code;
   a footnote reference in the body adds nothing to it.
+- Text a tracked change deleted, and hidden text, are left out, as Word
+  shows the document (by the characters' own properties; text a character
+  style hides is still read). A character past the first plane, an emoji,
+  is read as itself.
+- The **title and author** the summary information declares go on the
+  document node.
 - **Footnotes, endnotes and comments** after the body, marked by `evidence`
   `footnote`, `endnote` and `comment` as in a DOCX; a note opens with its
   number (`1`, `2`, … and `i`, `ii`, … for endnotes). `fdoc convert` keeps
@@ -235,8 +241,12 @@ What this round leaves out, and says so here rather than guessing: styles
 (so no heading, title or list is told apart from a paragraph, and list
 numbers Word computes are absent), headers and footers, text boxes, comment
 authors, a table's header row (`header_rows` is left undetected), merged
-cells, pictures, and the summary information. Word 95 and earlier and
-encrypted files are refused. Provenance and evidence are `doc`.
+cells, pictures, and the summary information's dates. A document whose
+headers, footers or text boxes hold text is named in a warning
+(`not read: headers and footers, text boxes`;
+`fluree_doc_doc::parse_with_info` lists them in `left_out`), so what they
+say is not lost without a word. Word 95 and earlier and encrypted files
+are refused. Provenance and evidence are `doc`.
 
 A file is recognised as a Word document by its content, a compound file
 holding a `WordDocument` stream, whatever its name. As for any compound

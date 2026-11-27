@@ -14,14 +14,17 @@
 //! cells; footnotes, endnotes and comments after the body, marked by their
 //! `evidence` as the DOCX reader marks them, a note opening with its number.
 //! A field shows its result, not its code. Fields that are pictures or
-//! drawn objects leave nothing.
+//! drawn objects leave nothing. Text a tracked change deleted, and hidden
+//! text, are left out by the characters' own properties (CHPX), as Word
+//! shows the document. The summary information's title and author are read
+//! ([`parse_with_info`]).
 //!
 //! **What is not, in this round.** Styles: no heading, title or list is
 //! told apart from a paragraph, and no list number is computed. Headers and
-//! footers, text boxes, comment authors, a table's header row (a table's
-//! `header_rows` is left undetected), merged cells, pictures, and the
-//! document's summary information. Word 95 and earlier, and encrypted
-//! files, are refused.
+//! footers and text boxes, which [`Parsed::left_out`] names where they hold
+//! text, comment authors, a table's header row (a table's `header_rows` is
+//! left undetected), merged cells, pictures, and the summary information's
+//! dates. Word 95 and earlier, and encrypted files, are refused.
 //!
 //! **Bounds.** The compound file is opened by the `cfb` crate, which refuses
 //! a sector chain that loops or runs past the file. The `WordDocument`
@@ -38,7 +41,7 @@
 //! document is refused.
 
 use fluree_doc_model::budget::{Budget, TooLarge};
-use fluree_doc_model::Element;
+use fluree_doc_model::{DocumentInfo, Element};
 use std::io::{Cursor, Read};
 
 /// The most bytes the `WordDocument` stream is read to: 256 MiB.
@@ -145,6 +148,10 @@ struct Fib {
     ccp: [u32; 6],
     clx: (u32, u32),
     bte_papx: (u32, u32),
+    bte_chpx: (u32, u32),
+    /// Characters of the text boxes' stories, the body's and the headers'
+    /// (`ccpTxbx`, `ccpHdrTxbx`), which follow the stories above.
+    ccp_boxes: u32,
 }
 
 fn fib(wd: &[u8]) -> Result<Fib, DocError> {
@@ -183,6 +190,8 @@ fn fib(wd: &[u8]) -> Result<Fib, DocError> {
         ccp: [lw(3)?, lw(4)?, lw(5)?, lw(6)?, lw(7)?, lw(8)?],
         clx: pair(33)?,
         bte_papx: pair(13)?,
+        bte_chpx: pair(12)?,
+        ccp_boxes: lw(9)?.saturating_add(lw(10)?),
     })
 }
 
@@ -259,8 +268,13 @@ fn chars<'a>(
 ) -> impl Iterator<Item = Char> + 'a {
     pieces.iter().flat_map(move |p| {
         let (lo, hi) = (p.cp.0.max(cp0), p.cp.1.min(cp1));
-        (lo..hi.max(lo)).map_while(move |cp| {
+        let mut cp = lo;
+        std::iter::from_fn(move || {
+            if cp >= hi {
+                return None;
+            }
             let k = cp - p.cp.0;
+            cp += 1;
             if p.compressed {
                 let fc = p.fc.saturating_add(k);
                 let &b = wd.get(fc as usize)?;
@@ -273,9 +287,26 @@ fn chars<'a>(
                 Some(Char { c, fc })
             } else {
                 let fc = p.fc.saturating_add(2 * k);
-                let u = u16_at(wd, fc as usize)?;
-                let c = char::from_u32(u32::from(u)).unwrap_or('\u{fffd}');
-                Some(Char { c, fc })
+                let u = u32::from(u16_at(wd, fc as usize)?);
+                // A character past the first plane (an emoji) is two code
+                // units, a surrogate pair, each of which alone is none.
+                let low = (0xD800..0xDC00)
+                    .contains(&u)
+                    .then(|| u16_at(wd, fc as usize + 2))
+                    .flatten()
+                    .map(u32::from)
+                    .filter(|l| cp < hi && (0xDC00..0xE000).contains(l));
+                let c = match low {
+                    Some(l) => {
+                        cp += 1;
+                        char::from_u32(0x10000 + ((u - 0xD800) << 10) + (l - 0xDC00))
+                    }
+                    None => char::from_u32(u),
+                };
+                Some(Char {
+                    c: c.unwrap_or('\u{fffd}'),
+                    fc,
+                })
             }
         })
     })
@@ -339,6 +370,96 @@ fn para_props(
     // bin table lists them.
     out.sort_by_key(|&(f0, _, _)| f0);
     Ok(out)
+}
+
+/// The stretches of the stream whose characters are deleted (a tracked
+/// deletion, `sprmCFRMarkDel`) or hidden (`sprmCFVanish`), as the CHPX
+/// FKPs say: `(fc start, fc end)`, sorted by start, for [`hidden_at`]. Each
+/// FKP page is read once, however many entries of the bin table name it.
+/// What a character style hides is not seen.
+fn hidden_runs(
+    wd: &[u8],
+    table: &[u8],
+    (fc, lcb): (u32, u32),
+) -> Result<Vec<(u32, u32)>, DocError> {
+    let mut out = Vec::new();
+    let Some(plc) = table.get(fc as usize..(fc as usize).saturating_add(lcb as usize)) else {
+        return Ok(out);
+    };
+    let n = plc.len().saturating_sub(4) / 8;
+    let mut pages = std::collections::HashSet::new();
+    let mut runs = 0usize;
+    for i in 0..n {
+        let Some(pn) = u32_at(plc, 4 * (n + 1) + 4 * i) else {
+            break;
+        };
+        if !pages.insert(pn & 0x003F_FFFF) {
+            continue;
+        }
+        let start = (pn & 0x003F_FFFF) as usize * 512;
+        let Some(page) = wd.get(start..start + 512) else {
+            continue;
+        };
+        let crun = page[511] as usize;
+        runs += crun;
+        if runs > MAX_PARA_RUNS {
+            return Err(DocError::TooLarge(format!(
+                "more than {MAX_PARA_RUNS} character property runs"
+            )));
+        }
+        for r in 0..crun {
+            let (Some(f0), Some(f1)) = (u32_at(page, 4 * r), u32_at(page, 4 * (r + 1))) else {
+                break;
+            };
+            let Some(&b) = page.get(4 * (crun + 1) + r) else {
+                break;
+            };
+            if b != 0 && chpx_hides(&page[(b as usize * 2).min(511)..511]) {
+                out.push((f0, f1));
+            }
+        }
+    }
+    out.sort_unstable();
+    Ok(out)
+}
+
+/// Whether a CHPX's properties delete or hide its characters: a toggle
+/// set on (`1`), or to the opposite of its style's (`0x81`), taken as on.
+fn chpx_hides(d: &[u8]) -> bool {
+    let Some(&cb) = d.first() else {
+        return false;
+    };
+    let Some(grp) = d.get(1..(1 + cb as usize).min(d.len())) else {
+        return false;
+    };
+    let mut at = 0usize;
+    while at + 2 <= grp.len() {
+        let op = u16_at(grp, at).unwrap_or(0);
+        at += 2;
+        let size = match (op >> 13) & 7 {
+            0 | 1 => 1,
+            2 | 4 | 5 => 2,
+            3 => 4,
+            7 => 3,
+            _ => {
+                let n = *grp.get(at).unwrap_or(&0) as usize;
+                at += 1;
+                n
+            }
+        };
+        // `sprmCFRMarkDel`, `sprmCFVanish`.
+        if matches!(op, 0x0800 | 0x083C) && matches!(grp.get(at), Some(1 | 0x81)) {
+            return true;
+        }
+        at += size;
+    }
+    false
+}
+
+/// Whether the character at `fc` is in one of `runs`.
+fn hidden_at(runs: &[(u32, u32)], fc: u32) -> bool {
+    let i = runs.partition_point(|&(f0, _)| f0 <= fc);
+    runs[..i].last().is_some_and(|&(_, f1)| fc < f1)
 }
 
 /// The properties of the paragraph whose mark is at `fc`: those of the
@@ -656,13 +777,49 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, DocError> {
     parse_within(bytes, &mut Budget::default())
 }
 
+/// What [`parse_with_info`] reads: the elements, what the file declares
+/// about itself, and what it holds that is not read.
+#[derive(Debug, Clone)]
+pub struct Parsed {
+    pub elements: Vec<Element>,
+    /// Its summary information's title and author.
+    pub info: DocumentInfo,
+    /// What the document holds that this reader does not read, and leaves
+    /// out: `headers and footers`, `text boxes`. Said, so that it is not
+    /// lost without a word.
+    pub left_out: Vec<&'static str>,
+}
+
+/// [`parse`], with the title and author the summary information declares
+/// and what is left out.
+pub fn parse_with_info(bytes: &[u8]) -> Result<Parsed, DocError> {
+    read(bytes, &mut Budget::default())
+}
+
 /// [`parse`], against `budget`.
 fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Element>, DocError> {
+    read(bytes, budget).map(|p| p.elements)
+}
+
+/// The most bytes of the summary information read: a property set is a
+/// few hundred bytes; a larger one is left unread.
+const MAX_SUMMARY_BYTES: u64 = 32 << 10;
+
+/// [`parse_with_info`], against `budget`.
+fn read(bytes: &[u8], budget: &mut Budget) -> Result<Parsed, DocError> {
     let mut cf = cfb::CompoundFile::open(Cursor::new(bytes))
         .map_err(|e| DocError::Container(e.to_string()))?;
     if !cf.is_stream("/WordDocument") {
         return Err(DocError::NotWord);
     }
+    // What the file says about itself is a nicety: one too large, or that
+    // does not read, is left out.
+    let info = SUMMARY_STREAMS
+        .iter()
+        .find(|n| cf.is_stream(n))
+        .and_then(|n| stream(&mut cf, n, MAX_SUMMARY_BYTES).ok())
+        .map(|b| summary(&b))
+        .unwrap_or_default();
     let wd = stream(&mut cf, "/WordDocument", MAX_STREAM_BYTES)?;
     let fib = fib(&wd)?;
     if !cf.is_stream(fib.table) {
@@ -673,19 +830,26 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Element>, DocEr
     }
     let table = stream(&mut cf, fib.table, MAX_TABLE_BYTES)?;
     let pieces = pieces(&table, fib.clx)?;
-    let total: u64 = fib.ccp.iter().map(|&c| u64::from(c)).sum();
+    let total: u64 = fib.ccp.iter().map(|&c| u64::from(c)).sum::<u64>() + u64::from(fib.ccp_boxes);
     if total > MAX_CHARS {
         return Err(DocError::TooLarge(format!(
             "{total} characters, more than the {MAX_CHARS} read"
         )));
     }
     let props = para_props(&wd, &table, fib.bte_papx)?;
+    let hidden = hidden_runs(&wd, &table, fib.bte_chpx)?;
     // The stories, one after another in character positions.
     let mut starts = [0u32; 7];
     for i in 0..6 {
         starts[i + 1] = starts[i].saturating_add(fib.ccp[i]);
     }
-    let story = |i: usize| chars(&wd, &pieces, starts[i], starts[i + 1]);
+    // Each story's characters, those a tracked deletion removed or that are
+    // hidden left out, as Word shows the document: they are not its text.
+    // A field's marks are kept, so its code and result stay told apart.
+    let story = |i: usize| {
+        chars(&wd, &pieces, starts[i], starts[i + 1])
+            .filter(|c| matches!(c.c, '\u{13}'..='\u{15}') || !hidden_at(&hidden, c.fc))
+    };
     let mut out = Vec::new();
     lay_out(story(0), &props, None, "doc", budget, &mut out)?;
     // Notes: footnotes (story 1) numbered 1, 2, …; endnotes (5) i, ii, ….
@@ -713,7 +877,106 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Element>, DocEr
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
-    Ok(out)
+    // What is not read: the headers' story (story 2), where it holds more
+    // than the notes' separators, and the text boxes' stories after the
+    // endnotes'.
+    let says = |mut cs: Box<dyn Iterator<Item = Char> + '_>| cs.any(|c| c.c.is_alphanumeric());
+    let mut left_out = Vec::new();
+    if says(Box::new(story(2))) {
+        left_out.push("headers and footers");
+    }
+    let boxes = starts[6].saturating_add(fib.ccp_boxes);
+    if says(Box::new(chars(&wd, &pieces, starts[6], boxes))) {
+        left_out.push("text boxes");
+    }
+    Ok(Parsed {
+        elements: out,
+        info,
+        left_out,
+    })
+}
+
+/// The summary information's stream names: the property set a compound
+/// file keeps its title and author in.
+const SUMMARY_STREAMS: [&str; 1] = ["/\u{5}SummaryInformation"];
+
+/// The title and author a summary information property set holds
+/// (`PIDSI_TITLE`, 2, and `PIDSI_AUTHOR`, 4), as strings of its code page
+/// (`PID_CODEPAGE`, 1) or UTF-16. Whatever does not read is left out.
+fn summary(b: &[u8]) -> DocumentInfo {
+    let mut info = DocumentInfo::default();
+    // The header, then the first section's id and offset.
+    let Some(section) = u32_at(b, 44).map(|o| o as usize) else {
+        return info;
+    };
+    let Some(n) = u32_at(b, section + 4).map(|n| (n as usize).min(1024)) else {
+        return info;
+    };
+    let prop = |i: usize| -> Option<(u32, usize)> {
+        let id = u32_at(b, section + 8 + 8 * i)?;
+        let at = section.checked_add(u32_at(b, section + 12 + 8 * i)? as usize)?;
+        Some((id, at))
+    };
+    let props: Vec<(u32, usize)> = (0..n).map_while(prop).collect();
+    let code_page = props
+        .iter()
+        .find(|(id, _)| *id == 1)
+        .and_then(|&(_, at)| u16_at(b, at + 4))
+        .unwrap_or(1252);
+    let text = |at: usize| -> Option<String> {
+        let len = (u32_at(b, at + 4)? as usize).min(MAX_SUMMARY_BYTES as usize);
+        let s = match u32_at(b, at)? {
+            // VT_LPSTR: bytes of the code page, a NUL at the end.
+            0x1E => {
+                let bytes = b.get(at + 8..at + 8 + len)?;
+                let bytes = bytes.split(|&c| c == 0).next().unwrap_or_default();
+                code_page_encoding(code_page)
+                    .decode_without_bom_handling(bytes)
+                    .0
+                    .into_owned()
+            }
+            // VT_LPWSTR: UTF-16 code units, a NUL at the end.
+            0x1F => {
+                let units: Vec<u16> = b
+                    .get(at + 8..at + 8 + 2 * len)?
+                    .chunks_exact(2)
+                    .map(|p| u16::from_le_bytes([p[0], p[1]]))
+                    .take_while(|&u| u != 0)
+                    .collect();
+                String::from_utf16_lossy(&units)
+            }
+            _ => return None,
+        };
+        let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!s.is_empty()).then_some(s)
+    };
+    let get = |pid: u32| {
+        props
+            .iter()
+            .find(|(id, _)| *id == pid)
+            .and_then(|&(_, at)| text(at))
+    };
+    info.title = get(2);
+    info.creators = get(4).into_iter().collect();
+    info
+}
+
+/// The encoding of a Windows code page, Windows-1252 where it is not one
+/// this reader knows.
+fn code_page_encoding(cp: u16) -> &'static encoding_rs::Encoding {
+    let label = match cp {
+        65001 => "utf-8",
+        932 => "shift_jis",
+        936 => "gbk",
+        949 => "euc-kr",
+        950 => "big5",
+        874 | 1250..=1258 => {
+            return encoding_rs::Encoding::for_label(format!("windows-{cp}").as_bytes())
+                .unwrap_or(encoding_rs::WINDOWS_1252)
+        }
+        _ => "windows-1252",
+    };
+    encoding_rs::Encoding::for_label(label.as_bytes()).unwrap_or(encoding_rs::WINDOWS_1252)
 }
 
 #[cfg(test)]
