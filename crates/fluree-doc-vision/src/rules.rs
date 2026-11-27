@@ -315,6 +315,7 @@ mod tests {
                     bbox,
                     angle: None,
                     conf: None,
+                    ink: None,
                 })
                 .collect(),
             rules: Vec::new(),

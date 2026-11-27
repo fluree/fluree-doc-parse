@@ -988,6 +988,7 @@ mod tests {
                 bbox: [w * 0.1, h * y, w * 0.8, h * y + 24.0],
                 angle: None,
                 conf: Some(0.95),
+                ink: None,
             };
             Ok(WordReading {
                 coords: Coords::Px,
@@ -1099,6 +1100,7 @@ mod tests {
                     bbox,
                     angle: None,
                     conf,
+                    ink: None,
                 })
                 .collect(),
             rules: Vec::new(),
@@ -1162,6 +1164,7 @@ mod tests {
                         bbox: [x, y, x + 120.0, y + 24.0],
                         angle: None,
                         conf: Some(0.95),
+                        ink: None,
                     }
                 })
             })
@@ -1562,6 +1565,7 @@ mod tests {
                 bbox: [x - 100.0, 290.0, x + 100.0, 310.0],
                 angle: Some(90.0),
                 conf: Some(0.95),
+                ink: None,
             })
             .collect();
         let reading = WordReading {

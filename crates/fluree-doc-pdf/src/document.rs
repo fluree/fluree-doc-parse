@@ -4955,6 +4955,116 @@ fn drawn(page_figures: &[(Vec<figure::Figure>, Vec<Option<usize>>)]) -> Vec<Vec<
         .collect()
 }
 
+/// Fewest lines of the file's own text, outside drawings, for the body to be
+/// read from them alone in a document whose other pages are read by OCR
+/// ([`pages_read_at_text_body`]): a short paragraph under a heading or two.
+const TEXT_BODY_LINES: usize = 8;
+
+/// Fewest lines a page read whole by OCR needs to be sized by its own body
+/// ([`pages_read_at_text_body`]); a page of fewer (a signature, a slip) is
+/// sized with the document's other pages so read.
+const OCR_PAGE_BODY_LINES: usize = 8;
+
+/// The body of a document that has text of its own and pages an OCR engine
+/// read whole, and its blocks as heading detection is to see them: each such
+/// page set at that body. `None` where the document has no such page, or
+/// too little text of its own ([`TEXT_BODY_LINES`]): its body is read from
+/// every page, as a scan's is.
+///
+/// A page read whole by OCR (a scan, a screenshot printed into a memo) has
+/// no scale of its own: its type is as large as the image was drawn on the
+/// page, and only its sizes relative to each other say anything. Measured
+/// against the file's own text, a screenshot drawn at half size, its many
+/// short lines at 4.5 pt, outnumbered the memo's 11 pt prose; the body came
+/// out at 4.5, and the memo's prose read as headings (18 of 35 such memos
+/// in a corpus of generated business documents). The body is the file's
+/// own text, and each page read whole is set at it by its own median, so
+/// what stands larger than the rest of its page is a heading there and
+/// nothing else is. The blocks are a copy: their geometry, and their sizes
+/// anywhere but in deciding headings, are left as read.
+fn pages_read_at_text_body(
+    pages: &[Vec<Block>],
+    drawn: &[Vec<bool>],
+) -> Option<(f32, Vec<Vec<Block>>)> {
+    let read_whole = |b: &Block| b.ocr() == Some(crate::glyph::OcrSource::Page);
+    let lines =
+        |blocks: &mut dyn Iterator<Item = &Block>| -> usize { blocks.map(|b| b.lines.len()).sum() };
+    let ocr_pages: Vec<bool> = pages
+        .iter()
+        .map(|blocks| {
+            lines(&mut blocks.iter().filter(|b| read_whole(b))) * 2 > lines(&mut blocks.iter())
+        })
+        .collect();
+    let is_drawn = |p: usize, i: usize| drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true);
+    let own: usize = pages
+        .iter()
+        .enumerate()
+        .flat_map(|(p, blocks)| blocks.iter().enumerate().map(move |(i, b)| (p, i, b)))
+        .filter(|&(p, i, b)| b.ocr().is_none() && !is_drawn(p, i))
+        .map(|(_, _, b)| b.lines.len())
+        .sum();
+    if !ocr_pages.contains(&true) || own < TEXT_BODY_LINES {
+        return None;
+    }
+    // The body, over the file's own text: whatever OCR read is set aside
+    // as a drawing's text is.
+    let own_only: Vec<Vec<bool>> = pages
+        .iter()
+        .enumerate()
+        .map(|(p, blocks)| {
+            (0..blocks.len())
+                .map(|i| is_drawn(p, i) || blocks[i].ocr().is_some())
+                .collect()
+        })
+        .collect();
+    let body = heading::body_font_size_outside(pages, &own_only);
+    // Each page read whole at its own median, by lines; one of few lines at
+    // the median of all such pages.
+    let median_of = |sizes: Vec<(f32, usize)>| -> Option<f32> {
+        let total: usize = sizes.iter().map(|(_, n)| n).sum();
+        let mut sizes = sizes;
+        sizes.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut seen = 0;
+        sizes.into_iter().find_map(|(s, n)| {
+            seen += n;
+            (seen * 2 >= total && total > 0).then_some(s)
+        })
+    };
+    let read = |p: usize| -> Vec<(f32, usize)> {
+        pages[p]
+            .iter()
+            .filter(|b| read_whole(b))
+            .map(|b| (b.font_size, b.lines.len()))
+            .collect()
+    };
+    let all: Vec<(f32, usize)> = (0..pages.len())
+        .filter(|&p| ocr_pages[p])
+        .flat_map(read)
+        .collect();
+    let document = median_of(all)?;
+    let mut sized = pages.to_vec();
+    for (p, blocks) in sized.iter_mut().enumerate().filter(|(p, _)| ocr_pages[*p]) {
+        let own = read(p);
+        let n: usize = own.iter().map(|(_, n)| n).sum();
+        let median = if n >= OCR_PAGE_BODY_LINES {
+            median_of(own)
+        } else {
+            Some(document)
+        };
+        let Some(median) = median.filter(|m| m.is_finite() && *m > 0.0) else {
+            continue;
+        };
+        let factor = body / median;
+        for b in blocks.iter_mut().filter(|b| read_whole(b)) {
+            b.font_size *= factor;
+            for l in &mut b.lines {
+                l.font_size *= factor;
+            }
+        }
+    }
+    Some((body, sized))
+}
+
 fn timed<T>(slot: &mut std::time::Duration, f: impl FnOnce() -> T) -> T {
     let start = std::time::Instant::now();
     let out = f();
@@ -6944,26 +7054,51 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // elsewhere. Gathering a numbered list rewrites the blocks, so the
     // figures follow it.
     let mut page_figures = find_figures(&raw.pages, &blocks_per_page, &layouts);
-    let mut body_font = heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures));
+    // The body, and the blocks headings are read from: a page read whole by
+    // OCR set at the body of the file's own text where there is one.
     let thin = thin_prose_body(&blocks_per_page, &raw.pages, &layouts);
-    if let Some(size) = thin {
-        body_font = size;
-    }
+    let sized_blocks =
+        |blocks: &[Vec<Block>], figures: &[(Vec<figure::Figure>, Vec<Option<usize>>)]| {
+            let drawn = drawn(figures);
+            match pages_read_at_text_body(blocks, &drawn) {
+                Some((body, sized)) => (body, Some(sized)),
+                None => (
+                    thin.unwrap_or_else(|| heading::body_font_size_outside(blocks, &drawn)),
+                    None,
+                ),
+            }
+        };
+    let (mut body_font, mut sized) = sized_blocks(&blocks_per_page, &page_figures);
     let body_bold = heading::body_is_bold(raw.pages.iter().flat_map(|p| p.glyphs.iter()));
     let (headings, kickers) = timed(&mut timings.headings, || {
-        let first = heading::detect_with_kickers(&blocks_per_page, outline, body_font, body_bold);
+        let first = heading::detect_with_kickers(
+            sized.as_deref().unwrap_or(&blocks_per_page),
+            outline,
+            body_font,
+            body_bold,
+        );
         let named = heading::outline_names(outline);
         let in_section = heading::in_section(&first.0);
         if block::gather_counted_items(&mut blocks_per_page, &|t| named(t), &in_section) {
             page_figures = find_figures(&raw.pages, &blocks_per_page, &layouts);
-            body_font = thin.unwrap_or_else(|| {
-                heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures))
-            });
-            heading::detect_with_kickers(&blocks_per_page, outline, body_font, body_bold)
+            (body_font, sized) = sized_blocks(&blocks_per_page, &page_figures);
+            heading::detect_with_kickers(
+                sized.as_deref().unwrap_or(&blocks_per_page),
+                outline,
+                body_font,
+                body_bold,
+            )
         } else {
             first
         }
     });
+    // A block's size as headings were read at.
+    let size_of = |pi: usize, bi: usize| -> f32 {
+        sized
+            .as_ref()
+            .and_then(|s| s.get(pi)?.get(bi))
+            .map_or(blocks_per_page[pi][bi].font_size, |b| b.font_size)
+    };
     // The first page's kickers, by block: text over the title.
     let kickers: std::collections::HashSet<(usize, usize)> =
         kickers.into_iter().map(|b| (0, b)).collect();
@@ -6974,9 +7109,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     let mut is_heading: std::collections::HashMap<(usize, usize), (usize, Evidence)> =
         Default::default();
     let mut form_text: std::collections::HashSet<(usize, usize)> = Default::default();
+    // A heading on a page OCR read whole, where the document's body is its
+    // own text's, is content inside the document's outline.
     let level_info: std::collections::HashMap<(usize, usize), heading::LevelInfo> = headings
         .iter()
-        .map(|h| ((h.page, h.block_index), h.level_info()))
+        .map(|h| {
+            let mut info = h.level_info();
+            info.inside = sized.is_some()
+                && blocks_per_page[h.page][h.block_index].ocr()
+                    == Some(crate::glyph::OcrSource::Page);
+            ((h.page, h.block_index), info)
+        })
         .collect();
     for h in &headings {
         is_heading.insert((h.page, h.block_index), (h.level, h.evidence));
@@ -7004,9 +7147,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // document's heading, set near a drawing — `Operation` over a drawing
     // of the control it describes, a side-head level with a chair's — and
     // not a chart's title or legend, whose style is the chart's own.
-    let heading_style = |b: &Block| {
+    let heading_style = |pi: usize, bi: usize, b: &Block| {
         (
-            (b.font_size * 2.0).round() as i32,
+            (size_of(pi, bi) * 2.0).round() as i32,
             b.lines.iter().all(|l| l.bold),
         )
     };
@@ -7014,7 +7157,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
         for (bi, b) in blocks.iter().enumerate() {
             if is_heading.contains_key(&(pi, bi)) && page_figures[pi].1[bi].is_none() {
-                free_styles.insert(heading_style(b));
+                free_styles.insert(heading_style(pi, bi, b));
             }
         }
     }
@@ -7057,11 +7200,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // figure's, in whatever style it is set, and so is a title set
             // on one line with a caption's label: `FIGURE 17` small, then
             // the chart's title large.
-            let larger =
-                b.font_size as f64 > body_font as f64 * (1.0 + heading::HEADING_SIZE_MARGIN);
+            let larger = size_of(pi, block_idx) as f64
+                > body_font as f64 * (1.0 + heading::HEADING_SIZE_MARGIN);
             let documents_heading = !in_drawing
                 && larger
-                && free_styles.contains(&heading_style(b))
+                && free_styles.contains(&heading_style(pi, block_idx, b))
                 && !heading::is_caption(&text)
                 && !labelled_caption(blocks, block_idx);
             let weak_heading_in_figure = heading.is_some_and(|(_, ev)| {

@@ -80,9 +80,11 @@
    "Northgate Utilities"
   ],
   "letter-1.clean-200": [
+   "Jordan Placeholder",
    "Northgate Utilities"
   ],
   "letter-1.clean-300": [
+   "Jordan Placeholder",
    "Northgate Utilities"
   ],
   "letter-1.fax-200": [
@@ -95,9 +97,11 @@
    "Northgate Utilities"
   ],
   "letter-1.noisy-300": [
+   "Jordan Placeholder",
    "Northgate Utilities"
   ],
   "letter-1.skew-300": [
+   "Jordan Placeholder",
    "Northgate Utilities"
   ],
   "letter-2.clean-100": [
@@ -107,26 +111,29 @@
    "Example Data Inc."
   ],
   "letter-2.clean-200": [
-   "Example Data Inc."
+   "Example Data Inc.",
+   "Taylor Example"
   ],
   "letter-2.clean-300": [
-   "Example Data Inc."
+   "Example Data Inc.",
+   "Taylor Example"
   ],
   "letter-2.fax-200": [
    "Example Data Inc."
   ],
   "letter-2.fax-std": [
-   "Example Data Inc.",
-   "Taylor Example"
+   "Example Data Inc."
   ],
   "letter-2.jpeg-150": [
    "Example Data Inc."
   ],
   "letter-2.noisy-300": [
-   "Example Data Inc."
+   "Example Data Inc.",
+   "Taylor Example"
   ],
   "letter-2.skew-300": [
-   "Example Data Inc."
+   "Example Data Inc.",
+   "Taylor Example"
   ],
   "pasted-1.screenshot-192": [
    "Bramble & Finch Ltd",
@@ -162,9 +169,7 @@
   "statement-1.fax-std": [
    "Silverpine Bank"
   ],
-  "statement-1.jpeg-150": [
-   "Silverpine Bank"
-  ],
+  "statement-1.jpeg-150": [],
   "statement-1.noisy-300": [
    "Silverpine Bank"
   ],
@@ -220,9 +225,7 @@
   ],
   "invoice-2.noisy-300": [],
   "invoice-2.skew-300": [],
-  "letter-1.clean-100": [
-   "7 Orchard Road"
-  ],
+  "letter-1.clean-100": [],
   "letter-1.clean-150": [],
   "letter-1.clean-200": [],
   "letter-1.clean-300": [],
@@ -250,7 +253,9 @@
   "statement-1.clean-300": [],
   "statement-1.fax-200": [],
   "statement-1.fax-std": [],
-  "statement-1.jpeg-150": [],
+  "statement-1.jpeg-150": [
+   "Silverpine Bank Statement of account"
+  ],
   "statement-1.noisy-300": [],
   "statement-1.skew-300": [],
   "statement-2.clean-100": [],
@@ -366,24 +371,24 @@
   "invoice-2.jpeg-150": 2,
   "invoice-2.noisy-300": 2,
   "invoice-2.skew-300": 2,
-  "letter-1.clean-100": 2,
+  "letter-1.clean-100": 1,
   "letter-1.clean-150": 1,
-  "letter-1.clean-200": 1,
-  "letter-1.clean-300": 1,
+  "letter-1.clean-200": 2,
+  "letter-1.clean-300": 2,
   "letter-1.fax-200": 1,
   "letter-1.fax-std": 1,
   "letter-1.jpeg-150": 1,
-  "letter-1.noisy-300": 1,
-  "letter-1.skew-300": 1,
+  "letter-1.noisy-300": 2,
+  "letter-1.skew-300": 2,
   "letter-2.clean-100": 1,
   "letter-2.clean-150": 1,
-  "letter-2.clean-200": 1,
-  "letter-2.clean-300": 1,
+  "letter-2.clean-200": 2,
+  "letter-2.clean-300": 2,
   "letter-2.fax-200": 1,
-  "letter-2.fax-std": 2,
+  "letter-2.fax-std": 1,
   "letter-2.jpeg-150": 1,
-  "letter-2.noisy-300": 1,
-  "letter-2.skew-300": 1,
+  "letter-2.noisy-300": 2,
+  "letter-2.skew-300": 2,
   "pasted-1.screenshot-192": 2,
   "pasted-1.screenshot-96": 2,
   "pasted-2.screenshot-192": 2,

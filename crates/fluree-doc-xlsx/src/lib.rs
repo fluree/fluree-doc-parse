@@ -4206,6 +4206,7 @@ mod tests {
                         bbox: [w * 0.1, h * 0.4, w * 0.9, h * 0.6],
                         angle: None,
                         conf: Some(0.9),
+                        ink: None,
                     }],
                     rules: Vec::new(),
                 })

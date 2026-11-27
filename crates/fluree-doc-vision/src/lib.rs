@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "oar")]
 pub mod assets;
+pub mod ink;
 #[cfg(feature = "oar")]
 pub mod oar;
 pub mod rules;
@@ -141,6 +142,11 @@ pub struct OcrWord {
     /// words' scores is then used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conf: Option<f64>,
+    /// The word's ink measured in the image read ([`ink::measure`]), in its
+    /// pixels: what sizes its type more closely than its box. An engine that
+    /// does not measure leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ink: Option<ink::Ink>,
 }
 
 /// The frame a reading's boxes are in.
@@ -259,6 +265,7 @@ mod tests {
                 ],
                 angle: Some(-0.123_456_789_012_345_67 * i as f64),
                 conf: Some(0.987_654_321_098_765_4),
+                ink: None,
             })
             .collect();
         let reading = WordReading {

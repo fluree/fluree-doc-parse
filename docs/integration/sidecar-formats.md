@@ -176,6 +176,7 @@ page does, and every character keeps a position for
 | `words[].box` | yes | `[x0, y0, x1, y1]`, y down: the word's own extent |
 | `words[].angle` | no | baseline direction, degrees counter-clockwise; the word is `box` turned about its center. Absent means level, unless the box is much taller than wide and holds three characters or more: that is text set sideways |
 | `words[].conf` | no | the engine's confidence, 0-1; its mean and minimum over the words taken are reported in [`doc:ocrReadings`](../formats/doco.md#ocr-readings). A score outside 0-1 says the reading is scored on another scale, where its other scores mean something else too (a Tesseract 1 is 1 in 100): the reading then reports no confidence at all, with a warning on stderr, and a reading of a region (`r{i}`) or of a placed picture is judged noise by its boxes alone, as a reading with no `conf` is. A word with no text is not counted, whatever its score: it is never placed, and Tesseract scores its rows of blocks and lines -1. Divide Tesseract's 0-100 scores by 100 |
+| `words[].ink` | no | the word's ink measured in the image read, in its pixels: heights above the baseline, `first_cap`, a capital opening the word from its foot; `top`, its highest line, which `top_line` names (`cap` or `ascender`; another name is read as none); `x_height`; `stem`, its stems' width, and `density`, how much of the band they are measured in is ink (0-1), which say its weight. The built-in engine writes it for Latin text. A reading whose words carry it is sized by their ink rather than their boxes, at the scale its boxes give: see below. Each field is optional, and a word without it is sized by its box. It sizes detector boxes only: a reading whose boxes hug the ink (Tesseract, hOCR, ALTO) is sized by them |
 | `rules` | no | the straight rules the image draws, in the same frame as the words. Absent means none |
 | `rules[].box` | with `rules` | `[x0, y0, x1, y1]`, y down: the rule's extent, a thin band |
 | `rules[].axis` | with `rules` | `horizontal` or `vertical` |
@@ -275,8 +276,10 @@ capitals and descenders about 1.09 em tall, one with no descenders about
 0.98, one of x-height letters only about 0.87, the dots over `i` and `j`
 counting as tall letters. A box less than five times as long as it is
 thick, over a word or two, is a little taller for its type than one over a
-line (about 0.15 em at twice as long as thick), so `Total` or `Reçu` alone
-on a line reads at the size of the paragraph around it. That margin was
+line, by a number of the image's pixels rather than a share of its type
+(about 4 px at twice as long as thick; 0.15 em in a reading in page
+units, which has no pixels), so `Total` or `Reçu` alone on a line reads at
+the size of the paragraph around it at any resolution. That margin was
 measured in paragraphs set 1.3 em apart: with more room above and below, a
 word alone on its line boxes taller still (about 0.24 em at double
 spacing), and at body size can read as a heading. A box around the
@@ -300,6 +303,44 @@ median of all the document's boxes instead. A heading on a scan is one by
 its size when it is set more than 15% larger than the body (a 12 pt heading
 over 10 pt text, 20% larger, can come out under that), with or without
 descenders: a 14 pt `Exclusions` over 11.5 pt text reads as a heading.
+
+A box says a line's size to about 5% either way, and a heading set a fifth
+larger than its body has 4% to spare. So the built-in engine also measures
+each word's ink, in the image it read (`words[].ink`): column by column of
+the box set level by its angle, the background taken from the box's border
+and ink as a distance from it in colour, specks and rules (an underline, a
+strike, a box drawn round the word) taken out, the text saying which lines
+its letters should reach. A reading of five words or more with their ink is
+sized by it: each word in capitals' heights (a capital opening it, or its
+highest line by the reading's own ratio of ascenders to capitals, or its
+x-height by the ratio of capitals to it), at the scale the reading's boxes
+give in the median. A word whose ink stands more than 40% off its box is
+sized by its box. On born-digital pages rasterised at 150 to 300 dpi and
+read by the built-in engine (Helvetica, Times and Courier, headings a fifth
+larger and not bold), 581 of 582 headings read as headings, against 322
+by their boxes, and one line of body size of 519 does; on the same pages
+in colour, light on dark, over a photo or a gradient, noisy, blurred,
+re-saved as a JPEG, through a fax's threshold, turned 1.5 degrees,
+underlined, struck through, boxed or in italic, 91% or more (by their
+boxes, 12% to 85%; see [Twins](../benchmarks/twins.md)).
+
+The ink sizes and weighs the words of a page read whole (`full`, a scan, an
+image file). A region's reading (`r{i}`) of a page with text of its own is
+the picture's lettering, read apart and never a heading, so its words keep
+what their boxes say: sized by their ink, a chart's tick labels and legend
+came apart in another order, further from the page's.
+
+The same measure gives a word's weight, which OCR otherwise does not see: a
+heading set in bold at body size, the most common cue after size, is plain
+text on a scan without it. A word is weighed against its reading's lines of
+three words or more measured in the same band (its x-height's, or its
+capitals' for a word of capitals): one whose stems, over its type size,
+stand more than 1.25 times their median, and whose band holds more than 1.3
+times their ink, is bold (weight 700), and any other regular (400). A word
+whose band spans fewer than 12 pixels, of fewer than three letters and
+figures, with a rule taken out of it (an underline, a strike, a box's edge),
+or that its ink does not size, has no weight, nor has a word whose band has
+fewer than three such lines in its reading.
 Punctuation alone in a box takes the size of its run. The sheet's
 skew, stated by `angle` or measured between neighbouring words, is taken out
 first, and the runs of one visual line share one baseline. Lines are set
