@@ -28,7 +28,7 @@
 //! - [`image::page_of`] — a bare raster image as a one-page document
 //! - [`document::analyze_with`] → `Analysis`, plus [`document::to_markdown`]
 //!   and [`document::to_xhtml`]
-//! - [`doco::to_doco`] / [`doco::to_text`] and [`doco::DocoOptions`]
+//! - [`doco::to_doco`] / [`doco::write_doco`] / [`doco::to_text`] and [`doco::DocoOptions`]
 //! - [`route::decide`] and [`route::signals`] — escalation verdicts
 //! - [`unread_pages`] and [`unread_regions`] — what the router sent a reader
 //!   to and nothing read, and [`past_limit`], the pages past the page limit
