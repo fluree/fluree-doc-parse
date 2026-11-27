@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "nist-remote-time-calibrations.pdf",
+    "url": "https://www.nist.gov/system/files/documents/calibrations/Remote-Time-Calibrations.pdf",
+    "sha256": "5c7a8a001590aa5892832add3e23409c7dc608b2c2bdf7e90e603f090e2de825",
+    "about": "NIST technical paper in NCSLI Measure, 10 pages, three columns. Page 1's first column breaks off mid-sentence over a shaded box of the authors' names and address; the sentence goes on at the top of the second column. A band of notes under the second and third columns stands level with the box's foot."
+  },
+  "checks": [
+    {
+      "id": "sentence-whole",
+      "found": "2026-11-27",
+      "issue": "The author box was read inside the Introduction's first sentence, between `generate a 1 pulse` and `per second (pps) on-time signal`.",
+      "text": "to continuously generate a 1 pulse per second (pps) on-time signal"
+    },
+    {
+      "id": "box-whole",
+      "found": "2026-11-27",
+      "issue": "A region cut at the band of notes ran through the box: its lower lines were read among the notes' lines.",
+      "text": "Andrew N. Novick Time and Frequency Division National Institute of Standards and Technology¹ Boulder, CO 80305 USA"
+    }
+  ]
+}

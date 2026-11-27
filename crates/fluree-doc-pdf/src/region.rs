@@ -113,6 +113,7 @@ pub fn read_order_with_panels(
             .collect();
     }
     let h = median(cols.iter().flatten().map(|l| l.font_size.max(1.0) as f64)).unwrap_or(10.0);
+    let boxes = panels_in_the_flow(&cols, panels);
     let page = Page {
         cols: &cols,
         cores: cols.iter().map(|ls| core(ls)).collect(),
@@ -126,7 +127,191 @@ pub fn read_order_with_panels(
     let mut out = Vec::new();
     page.read(0, cols.len() - 1, f64::MIN, f64::MAX, &mut out, 0);
     panel_after_its_sentence(&mut out, panels, h);
+    for (panel, column, next) in boxes {
+        // The panel's lines, out of the groups the region pass read them
+        // in: the column over it, and the band its foot stands level with.
+        let held = |l: &Line| panel.iter().any(|p| p.bbox == l.bbox && p.text == l.text);
+        for g in out.iter_mut() {
+            g.lines.retain(|l| !held(l));
+        }
+        out.retain(|g| !g.lines.is_empty());
+        place_after_its_sentence(&mut out, panel, column, &next);
+    }
     out
+}
+
+/// A panel set in a column under its text, between a sentence and the
+/// next column it runs on into: a journal's box of its authors' names and
+/// addresses at the foot of the first page's first column, the
+/// Introduction's first sentence breaking off over it and going on at the
+/// top of the second column (`… to continuously generate a 1 pulse` /
+/// `per second (pps) on-time signal, …`). Read where it stands, the box
+/// fell inside the sentence, and a region cut through it, at the band of
+/// notes set level with its foot, read its lower lines among the notes'.
+///
+/// Read out of the groups the region pass read it in: a drawn
+/// panel holding [`PANEL_LINES`] lines or more wholly inside it, half of
+/// them [`PANEL_WORDS`] words or more, no line running into it from
+/// outside. The line just over it in its column, [`PROSE_LINE_WORDS`]
+/// words or more, closes no sentence, and the first line of the column to
+/// its right, level with the top of the panel's column, opens in lower
+/// case. Returned with the panel's lines, in order, the column the panel
+/// stands in, and that first line: [`place_after_its_sentence`] reads the
+/// panel after the line closing the sentence.
+fn panels_in_the_flow(cols: &[Vec<Line>], panels: &[BBox]) -> Vec<(Vec<Line>, usize, Line)> {
+    let mut out = Vec::new();
+    let h = median(cols.iter().flatten().map(|l| l.font_size.max(1.0) as f64)).unwrap_or(10.0);
+    let within = |b: &BBox, f: &BBox| {
+        b.x0 >= f.x0 - BOX_SLACK
+            && b.x1 <= f.x1 + BOX_SLACK
+            && b.y0 >= f.y0 - BOX_SLACK
+            && b.y1 <= f.y1 + BOX_SLACK
+    };
+    let closes = |l: &Line| l.text.trim_end().ends_with(['.', '!', '?', ':']);
+    let opens_lower = |l: &Line| {
+        l.text
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(char::is_lowercase)
+    };
+    for f in panels {
+        let all: Vec<&Line> = cols
+            .iter()
+            .flatten()
+            .filter(|l| l.rotation_bucket == 0)
+            .collect();
+        let inside: Vec<&Line> = all.iter().copied().filter(|l| within(&l.bbox, f)).collect();
+        let into = all
+            .iter()
+            .any(|l| overlap(&l.bbox, f) && !within(&l.bbox, f));
+        if inside.len() < PANEL_LINES || !panel_text(&inside) || into {
+            continue;
+        }
+        // The column's line just over the panel, across its width.
+        let across = |l: &Line| l.bbox.x1.min(f.x1) - l.bbox.x0.max(f.x0) > 0.5 * l.bbox.width();
+        let Some(last) = all
+            .iter()
+            .filter(|l| l.bbox.y1 <= f.y0 + BOX_SLACK && across(l))
+            .max_by(|a, b| a.bbox.y1.total_cmp(&b.bbox.y1))
+            .copied()
+        else {
+            continue;
+        };
+        // The panel goes on from the column, under its last line within a
+        // paragraph's gap: a box further down is a drawing's.
+        if closes(last)
+            || words(last) < PROSE_LINE_WORDS
+            || f.y0 - last.bbox.y1 > COLUMN_RUN_GAP * last.font_size as f64
+        {
+            continue;
+        }
+        // The top of the panel's column: its lines over the panel, one
+        // under another, run up from the line over it to a gap wider than
+        // [`COLUMN_RUN_GAP`] of their lines.
+        let mut column: Vec<&Line> = all
+            .iter()
+            .copied()
+            .filter(|l| l.bbox.y1 <= f.y0 + BOX_SLACK && across(l))
+            .collect();
+        column.sort_by(|a, b| b.bbox.y0.total_cmp(&a.bbox.y0));
+        let mut top = last.bbox.y0;
+        let mut run: Vec<&Line> = Vec::new();
+        for l in &column {
+            if l.bbox.y1 < top - COLUMN_RUN_GAP * l.font_size as f64 {
+                break;
+            }
+            top = top.min(l.bbox.y0);
+            run.push(l);
+        }
+        // A column of prose the panel stands in, as wide as it: a box in a
+        // diagram, its labels over it, is no such panel.
+        let prose = run.iter().filter(|l| words(l) >= PROSE_LINE_WORDS).count();
+        let x0 = run.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+        let x1 = run.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
+        // The line over the panel was wrapped at the column's edge, the
+        // sentence breaking off to go on in the next column: a short line
+        // over a box is a title or a label.
+        if prose < PANEL_LINES
+            || f.x0 < x0 - BOX_SLACK - h
+            || f.x1 > x1 + BOX_SLACK + h
+            || last.bbox.x1 < x1 - last.font_size as f64
+        {
+            continue;
+        }
+        // The first line of the column to its right: the topmost of the
+        // lines right of the panel, from that top down to the panel's, the
+        // leftmost of those on its row.
+        let right: Vec<&Line> = all
+            .iter()
+            .copied()
+            .filter(|l| {
+                l.bbox.x0 >= f.x1 && l.bbox.y0 >= top - l.font_size as f64 && l.bbox.y0 < f.y0
+            })
+            .collect();
+        let first = right.iter().map(|l| l.bbox.y0).fold(f64::MAX, f64::min);
+        let next = right
+            .iter()
+            .filter(|l| l.bbox.y0 - first <= l.font_size as f64)
+            .min_by(|a, b| a.bbox.x0.total_cmp(&b.bbox.x0))
+            .copied();
+        let Some(next) = next.filter(|n| opens_lower(n) && words(n) >= PROSE_LINE_WORDS) else {
+            continue;
+        };
+        let next = next.clone();
+        let column_of = cols
+            .iter()
+            .position(|col| col.iter().any(|l| within(&l.bbox, f)))
+            .unwrap_or(0);
+        let mut lines: Vec<Line> = inside.into_iter().cloned().collect();
+        lines.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        out.push((lines, column_of, next));
+    }
+    out
+}
+
+/// Widest gap, in a line's size, between two lines of one column read up
+/// from a panel set in it ([`panels_in_the_flow`]): a paragraph's or a
+/// heading's space, short of the gap over a section of columns.
+const COLUMN_RUN_GAP: f64 = 2.5;
+
+/// Read `panel` after the line closing the sentence `next` opens: the
+/// group holding `next` is parted there, and the panel set between. Where
+/// no group holds it, the panel reads last.
+fn place_after_its_sentence(out: &mut Vec<Group>, panel: Vec<Line>, column: usize, next: &Line) {
+    let closes = |l: &Line| l.text.trim_end().ends_with(['.', '!', '?', ':']);
+    let group = Group {
+        lines: panel,
+        column,
+        own_measure: true,
+    };
+    let at = out.iter().enumerate().find_map(|(g, grp)| {
+        grp.lines
+            .iter()
+            .position(|l| l.bbox == next.bbox && l.text == next.text)
+            .map(|k| (g, k))
+    });
+    let Some((g, k)) = at else {
+        out.push(group);
+        return;
+    };
+    let end = out[g].lines[k..]
+        .iter()
+        .position(closes)
+        .map_or(out[g].lines.len(), |e| k + e + 1);
+    let rest = out[g].lines.split_off(end);
+    let (col, own) = (out[g].column, out[g].own_measure);
+    out.insert(g + 1, group);
+    if !rest.is_empty() {
+        out.insert(
+            g + 2,
+            Group {
+                lines: rest,
+                column: col,
+                own_measure: own,
+            },
+        );
+    }
 }
 
 /// A panel read between a paragraph and the lines it runs on into: a
@@ -2130,6 +2315,85 @@ mod tests {
         assert!(caption_beside(lines, &[photo]).is_err());
         let (lines, _) = page_with_caption(8.0);
         assert!(caption_beside(lines, &[]).is_err());
+    }
+
+    #[test]
+    fn a_panel_at_a_columns_foot_reads_after_the_sentence_it_breaks() {
+        // A journal's first column breaks off mid-sentence over its authors'
+        // box, and the sentence goes on at the top of the second column.
+        let mut lines = vec![
+            line(
+                "There is a small but growing demand for",
+                60.0,
+                100.0,
+                213.0,
+            ),
+            line("calibration laboratories and research", 60.0, 110.0, 213.0),
+            line("facilities to maintain a high accuracy", 60.0, 120.0, 213.0),
+            line(
+                "tory to continuously generate a 1 pulse",
+                60.0,
+                130.0,
+                213.0,
+            ),
+            line("Michael A. Lombardi", 68.0, 150.0, 140.0),
+            line("Time and Frequency Division", 68.0, 160.0, 167.0),
+            line("National Institute of Standards", 68.0, 170.0, 173.0),
+            line("Boulder, CO 80305 USA", 68.0, 180.0, 155.0),
+            line(
+                "per second (pps) on-time signal, and for",
+                230.0,
+                100.0,
+                382.0,
+            ),
+            line(
+                "laboratories in the United States, to be",
+                230.0,
+                110.0,
+                382.0,
+            ),
+            line(
+                "able to state the uncertainty of that signal.",
+                230.0,
+                120.0,
+                382.0,
+            ),
+            line(
+                "Once the uncertainty of the 1 pps signal",
+                230.0,
+                130.0,
+                382.0,
+            ),
+            line("is known it can be used as a standard", 230.0, 140.0, 382.0),
+        ];
+        lines.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        let panel = BBox {
+            x0: 60.0,
+            y0: 145.0,
+            x1: 213.0,
+            y1: 192.0,
+        };
+        let out = texts(&read_order_with_panels(
+            vec![lines],
+            &[],
+            &[],
+            &[],
+            &[panel],
+            &[panel],
+        ));
+        let at = |t: &str| out.iter().position(|l| l.starts_with(t)).unwrap();
+        // The sentence whole, then the box whole, then the rest.
+        assert!(at("tory to continuously") < at("per second"));
+        assert!(at("able to state") < at("Michael A. Lombardi"));
+        assert!(at("Boulder") < at("Once the uncertainty"));
+        let names: Vec<usize> = ["Michael", "Time and", "National", "Boulder"]
+            .iter()
+            .map(|t| at(t))
+            .collect();
+        assert!(
+            names.windows(2).all(|w| w[1] == w[0] + 1),
+            "the box reads whole: {out:?}"
+        );
     }
 
     #[test]

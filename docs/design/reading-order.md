@@ -327,6 +327,27 @@ before it ends a line of prose beside the panel without closing a sentence,
 the group after it opens in lower case at that group's left edge under the
 panel's foot, and a line of the sentence it runs on reaches under the panel.
 
+**A panel at a column's foot.** A journal sets its authors' names and
+address in a shaded box at the foot of the first page's first column, and
+the column's last sentence breaks off over the box and goes on at the top
+of the next column (`… to continuously generate a 1 pulse` / `per second
+(pps) on-time signal, …`). Read where it stands, the box fell inside the
+sentence. A band of notes under the other columns, level with the box's
+foot, also put a region's cut through the box, and its lower lines were
+read among the notes'. The region pass reads the page as before. Then the
+panel's lines are taken out of the groups it read them in, and read whole
+after the line that closes the sentence, when all of these hold:
+- the panel holds three lines or more wholly inside it, half of them three
+  words or more, and no line runs into it from outside;
+- it stands in a column of prose as wide as it (three lines or more of
+  five words or more, read up from the line over it to a gap of two and a
+  half lines), under that column's last line within the same gap;
+- that line, of five words or more, closes no sentence and runs to the
+  column's edge, wrapped there: a short line over a box is a title or a
+  label, and a box further down is a drawing's;
+- the first line of the column to its right, at that column's top, opens
+  in lower case.
+
 **What downstream passes keep.** Blocks are assembled per group, but a
 group that is a stretch of its page column takes the column's measure: a
 two-line display title read as a region of its own reaches the column's
