@@ -362,12 +362,18 @@ build them.
 ### Pictures a document places
 
 - `fluree_doc_email::Email` gains `media`, and `AttachedFile` gains
-  `content_id`, which an `AttachedFile` literal needs.
+  `content_id`, which an `AttachedFile` literal needs. An inline image is a
+  `doco:Figure` holding its alternative text, except an image under the
+  floor a model is sent (a signature's `LinkedIn` or `Logo` icon), whose
+  figure holds none.
 - `DocoOptions` and `Notes` gain `unread_images`, listed in the graph as
   `doc:unreadImages`: `NotRead`, `Missing`, `UnsupportedFormat`,
   `PastAllowance`, `Small`, `NotTexty` or `Failed`.
 - `escalate::CropReason` gains `SmallImage`, an image a document places
-  under the pixels a model is sent, which an OCR engine still reads.
+  under the pixels a model is sent, which an OCR engine still reads. That
+  floor is `fluree_doc_model::under_model_floor` (`MIN_SHORT_SIDE_PX`,
+  `MIN_LONG_SIDE_PX`), and `fluree_doc_model::stored_size` reads an image's
+  size from its header; `fluree_doc_pdf::image::dimensions` now calls it.
 - New: `fluree_doc_xlsx::parse_with_ocr` and `parse_with_media`,
   `fluree_doc_image::read_placed`, `texty`, `looks_like_text` and
   `without_noise`, `ocr::is_noise`, `route::pasted` and `pasted_set`,

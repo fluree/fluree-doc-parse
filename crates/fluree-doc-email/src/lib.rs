@@ -28,7 +28,11 @@
 //! `cid:`) is one of those files, and it is also drawn somewhere in the
 //! body: there it is a `doco:Figure`, listed in [`Email::media`], for an
 //! OCR engine's reading of it to be placed after
-//! (`fluree_doc_image::place_after_figures`).
+//! (`fluree_doc_image::place_after_figures`). The figure's text is the
+//! image's alternative text, except for an image under the floor a model is
+//! sent ([`fluree_doc_model::under_model_floor`]): a signature's icons
+//! (`LinkedIn`, `Logo`) would otherwise lend nearly every corporate message
+//! their words.
 
 mod address;
 mod children;
@@ -456,6 +460,17 @@ fn mark_shown(read: &mut Read) {
     }
 }
 
+/// Whether an image of the message is taken for an icon of a signature:
+/// under the floor a model is sent ([`fluree_doc_model::under_model_floor`]),
+/// its size read from its header. Such icons carry alternative text
+/// (`LinkedIn`, `Logo`) that would read as words of nearly every corporate
+/// message's body, so their figure keeps its place without it. An image
+/// whose header gives no size is not judged.
+fn is_icon(a: &AttachedFile) -> bool {
+    fluree_doc_model::stored_size(&a.bytes)
+        .is_some_and(|(w, h)| fluree_doc_model::under_model_floor(w, h))
+}
+
 /// The file a mark names by `want`, its Content-ID (`by_cid`) or its file
 /// name: the one written exactly so, else one written in another case. The
 /// one rule for a figure a body places and for an image an HTML version
@@ -543,7 +558,13 @@ fn place_images(
         }
         match at {
             Some(None) => continue,
-            Some(Some(i)) => e.figure = Some(figure(number[&i])),
+            Some(Some(i)) => {
+                e.figure = Some(figure(number[&i]));
+                if is_icon(&attachments[i]) {
+                    e.text.clear();
+                    e.links = None;
+                }
+            }
             None => {}
         }
         moved[k] = Some(elements.len());
@@ -1560,6 +1581,47 @@ Content-ID: <pdf>\r\n\
                 .unwrap();
         assert!(plain.media.is_empty());
         assert_eq!(texts(&plain)[1..], ["Hi  there"]);
+    }
+
+    #[test]
+    fn a_signatures_icon_keeps_its_figure_but_not_its_alternative_text() {
+        // A GIF's header: its logical screen, `w` × `h`.
+        let gif = |w: u16, h: u16| {
+            let mut g = b"GIF89a".to_vec();
+            g.extend(w.to_le_bytes());
+            g.extend(h.to_le_bytes());
+            g.extend(b"\x80\x00\x00\xff\xff\xff\x00\x00\x00\x3b");
+            g
+        };
+        let mut src = b"From: a@example.org\r\n\
+Subject: Chart\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"rel\"\r\n\
+\r\n\
+--rel\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<p>See below.</p><p><img src=\"cid:chart@x\" alt=\"Org chart\"></p>\
+<p>Ann Smith <img src=\"cid:in@x\" alt=\"LinkedIn\"></p>\r\n"
+            .to_vec();
+        for (id, bytes) in [("chart@x", gif(800, 600)), ("in@x", gif(16, 16))] {
+            src.extend(
+                format!("--rel\r\nContent-Type: image/gif\r\nContent-ID: <{id}>\r\n\r\n").bytes(),
+            );
+            src.extend(bytes);
+            src.extend(b"\r\n");
+        }
+        src.extend(b"--rel--\r\n");
+        let email = parse(&src).unwrap();
+        assert_eq!(
+            texts(&email)[1..],
+            ["See below.", "Org chart", "Ann Smith", ""]
+        );
+        assert_eq!(
+            figures(&email).iter().map(|f| f.1).collect::<Vec<_>>(),
+            ["figure-0-1", "figure-0-2"]
+        );
+        assert_eq!(email.media.len(), 2);
     }
 
     /// A message of plain `text`, then `parts` (headers, bytes) as inline
