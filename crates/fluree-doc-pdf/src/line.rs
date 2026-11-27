@@ -1833,10 +1833,34 @@ fn part_at_gutters(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> 
             let gutter = b.x0 - a.x1 > size * GUTTER_GAP_RATIO
                 && column_starts_in(a.x1 + size, b.x0 - size)
                 && column_starts_in(b.x0 - 1.0, b.x0 + 1.0);
+            // Text past the gap set in another size and on another baseline
+            // is another block's, whatever runs across the gap: a picture's
+            // caption level with a paragraph's line beside it, the text
+            // under the picture running on across. A paragraph's line keeps
+            // one size and baseline across its widest space.
+            // Each side's text, not a note's mark raised at the end of the
+            // last word (`MACL-153M-XX²,³`): the largest glyph of the word
+            // either side of the gap.
+            let word = |run: &mut dyn Iterator<Item = &usize>| {
+                run.map(|&j| &glyphs[j])
+                    .skip_while(|g| g.bbox.is_none())
+                    .take_while(|g| g.bbox.is_some())
+                    .max_by(|a, b| a.font_size.total_cmp(&b.font_size))
+            };
+            let other_block = match (
+                word(&mut idxs[from..k].iter().rev()),
+                word(&mut idxs[k..].iter()),
+            ) {
+                (Some(last), Some(first)) => {
+                    (last.font_size - first.font_size).abs() as f64 > RESTYLED * size
+                        && (last.origin.1 - first.origin.1).abs() > RESTYLED * size
+                }
+                _ => false,
+            };
             if b.x0 - a.x1 > size * BLOCK_GAP_RATIO
                 && (!lone_label(glyphs, &idxs[from..k])
                     || heads_a_column(me, &idxs[from..k], &glyphs[*inked], next, size))
-                && (gutter || !crossed(me, a.x1, b.x0, size))
+                && (gutter || other_block || !crossed(me, a.x1, b.x0, size))
             {
                 cuts.push(k);
             }
@@ -4273,6 +4297,34 @@ mod tests {
         ));
         let lines = assemble(&v);
         assert_eq!(lines.len(), 3, "{lines:?}");
+    }
+
+    #[test]
+    fn a_caption_set_smaller_past_a_gap_parts_from_the_line() {
+        // As above, but the text past the gap is a caption beside the line:
+        // set a size down, on a baseline of its own. The paragraph's lines
+        // running across say nothing of it.
+        let mut v = run_at("cccccccccccccccccccccccccccccccccccccccc", 0.0, -14.0, 0);
+        v.extend(run_at("aaaaaaaaaa", 0.0, 0.0, 50));
+        v.push(space(50.0, 60));
+        let mut caption = run_at("bbbbbbbbbbbbbbbbbbbbbbbbb", 75.0, 0.0, 61);
+        for gl in &mut caption {
+            gl.font_size *= 0.8;
+            gl.origin.1 += 2.5;
+            if let Some(b) = gl.bbox.as_mut() {
+                b.y0 += 2.5;
+                b.y1 += 2.5;
+            }
+        }
+        v.extend(caption);
+        v.extend(run_at(
+            "dddddddddddddddddddddddddddddddddddddddd",
+            0.0,
+            14.0,
+            90,
+        ));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 4, "{lines:?}");
     }
 
     #[test]
