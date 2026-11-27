@@ -12094,6 +12094,64 @@ mod header_tests {
             assert!(!reads_as_quantity(t), "{t} should not read as a quantity");
         }
     }
+
+    #[test]
+    fn a_page_counter_and_a_numbered_field_are_read_as_such() {
+        assert!(page_counter("PAGE OF PAGES 1 30"));
+        assert!(page_counter("Page 2 of 7"));
+        assert!(!page_counter("Page Size of the tray"));
+        assert!(!page_counter("Copybooks, 88 page, pack of 10"));
+        assert!(numbered_field("1. DATE OF ORDER"));
+        assert!(numbered_field("12. F.O.B. POINT"));
+        assert!(!numbered_field("1.5 mm"));
+        assert!(!numbered_field("2. results were"));
+    }
+
+    /// A form's frame: a head band of its title over a notice beside a page
+    /// box (`PAGE OF PAGES` over `1 30`), a rule across under them, then
+    /// numbered fields ruled row by row. `counter` sets the page box.
+    fn form(counter: bool) -> (Grid, Vec<crate::glyph::Glyph>, Vec<Rule>) {
+        let g = plain_grid(
+            vec![20.0, 300.0, 500.0, 596.0],
+            vec![13.0, 28.0, 40.0, 60.0, 80.0, 100.0],
+        );
+        let mut glyphs = vec![
+            gly(160.0, 26.0, 120.0, "ORDER FOR SUPPLIES OR SERVICES"),
+            gly(22.0, 38.0, 200.0, "IMPORTANT: Mark all packages"),
+            gly(22.0, 55.0, 60.0, "1. DATE OF ORDER"),
+            gly(302.0, 55.0, 60.0, "2. CONTRACT NO."),
+            gly(22.0, 75.0, 60.0, "3. ORDER NO."),
+            gly(22.0, 95.0, 60.0, "5. ISSUING OFFICE"),
+        ];
+        if counter {
+            glyphs.push(gly(505.0, 24.0, 60.0, "PAGE OF PAGES"));
+            glyphs.push(gly(505.0, 37.0, 20.0, "1 30"));
+        }
+        let rules = vec![
+            h(19.0, 597.0, 13.0),
+            h(19.0, 499.0, 28.0),
+            h(19.0, 597.0, 40.0),
+        ];
+        (g, glyphs, rules)
+    }
+
+    #[test]
+    fn a_form_s_page_head_is_cut_from_its_grid() {
+        let (g, glyphs, rules) = form(true);
+        let g = cut_page_head(g, &rules, &glyphs);
+        assert_eq!(g.ys, vec![40.0, 60.0, 80.0, 100.0]);
+        // Its fields are numbered: no header.
+        let rows: Vec<Vec<String>> = g
+            .cell_texts(&glyphs)
+            .chunks(g.cols())
+            .map(|r| r.to_vec())
+            .collect();
+        assert_eq!(g.header_rows(&rows, &glyphs, &rules, &[]), 0);
+        // With no page counter in it, the band is the grid's.
+        let (g, glyphs, rules) = form(false);
+        let ys = g.ys.clone();
+        assert_eq!(cut_page_head(g, &rules, &glyphs).ys, ys);
+    }
 }
 
 #[cfg(test)]
