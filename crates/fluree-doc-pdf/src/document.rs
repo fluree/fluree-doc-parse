@@ -1878,6 +1878,14 @@ const FURNITURE_ROW_SLACK: f64 = 0.005;
 /// pictures and a caption: all but a caption's or a title's line or two.
 const PICTURE_PAGE_TEXT: f64 = 0.9;
 
+/// Most share of the page's height a panel spans: a tint laid under most of
+/// the page is its background, not a box set on it.
+const PANEL_PAGE_SHARE: f64 = 0.8;
+
+/// A colour channel at or above this, in all three, is white or near it: a
+/// fill painted to blank the page, not to set a box apart.
+const PANEL_WHITE: u8 = 245;
+
 /// Fraction of a block that must lie inside a figure's drawing for the
 /// block to belong to it without being taken as a label. High enough that a
 /// paragraph brushing the drawing's margin stays prose.
@@ -3315,6 +3323,192 @@ fn nested_table(
     }
 }
 
+/// Share of a table's height, either way of its middle, within which the
+/// middle of a field's label beside it sits: a list sets a field's label
+/// level with the middle of a value of several lines, as a cell centres
+/// its text; a side head starts level with the first line of what it heads.
+const LABEL_LEVEL_SHARE: f64 = 0.25;
+
+/// A table set as one field's value in a list of fields, its label alone at
+/// the list's edge beside it (`Gradient` beside `Time (min) | Mobile Phase
+/// A(%) | …`, between `Flow Rate | 1.0 mL/min` and `Run Time | ~ 30 min`):
+/// the label names the table's rows. It reads as a band under the table's
+/// header, as the label of a table nested in a ruled field's cell does
+/// ([`nested_table`]), and is no paragraph of its own.
+///
+/// The label is a field's few words on one line, wholly left of the table,
+/// level with its middle, and nothing else is beside the table on that
+/// side. Fields of the same list stand over the table and under it, at the
+/// label's edge, their values in the column the table stands in: a label
+/// of a few words with its value beside it, or the list read as a table of
+/// two columns. A chart's axis title has no such neighbours, nor a side
+/// head in a margin over prose, nor a row's label left out of a table
+/// read short of its stub.
+fn label_tables_beside(elements: &mut Vec<Element>) {
+    let row_of = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
+        let overlap = a.y1.min(b.y1) - a.y0.max(b.y0);
+        overlap > 0.0 && overlap >= (a.y1 - a.y0).min(b.y1 - b.y0) * 0.5
+    };
+    let few_words = |t: &str| {
+        let n = t.split_whitespace().count();
+        n >= 1 && n <= MAX_FIELD_LABEL_WORDS
+    };
+    let mut labelled: Vec<(usize, usize)> = Vec::new();
+    for ti in 0..elements.len() {
+        let t = &elements[ti];
+        let (Some(tb), Some(rows)) = (t.bbox, t.cells.as_ref()) else {
+            continue;
+        };
+        let h = t.header_rows.unwrap_or(0);
+        let cols = rows.first().map_or(0, Vec::len);
+        if t.kind != "doco:Table"
+            || t.continues.is_some()
+            || t.sub_headers.as_ref().is_some_and(|s| !s.is_empty())
+            || h == 0
+            || h >= rows.len()
+            || cols < 2
+            || rows.iter().any(|r| r.len() != cols)
+            || t.merged_down.as_ref().is_some_and(|m| {
+                m.len() != rows.len() * cols || m[h * cols..(h + 1) * cols].iter().any(|x| *x)
+            })
+        {
+            continue;
+        }
+        let page = t.page;
+        let on_page = |e: &&Element| e.page == page;
+        let beside: Vec<usize> = (0..elements.len())
+            .filter(|&i| {
+                i != ti
+                    && elements[i].page == page
+                    && elements[i]
+                        .bbox
+                        .is_some_and(|b| b.x1 <= tb.x0 && b.y1 > tb.y0 && b.y0 < tb.y1)
+            })
+            .collect();
+        let [li] = beside[..] else {
+            continue;
+        };
+        let l = &elements[li];
+        let Some(lb) = l.bbox else {
+            continue;
+        };
+        let text = l.text.trim();
+        let line = lb.y1 - lb.y0;
+        let mid = |b: &crate::geom::BBox| (b.y0 + b.y1) / 2.0;
+        if l.kind != "doco:Paragraph"
+            || !few_words(text)
+            || text.ends_with(['.', ';', '!', '?'])
+            || heading::is_caption(text)
+            || lb.y0 < tb.y0
+            || lb.y1 > tb.y1
+            || (mid(&lb) - mid(&tb)).abs() > (tb.y1 - tb.y0) * LABEL_LEVEL_SHARE
+        {
+            continue;
+        }
+        // A field of the list at the label's edge, its value in the column
+        // the table stands in: its own label with a value beside it, the
+        // value starting where the table does or before; or the list read
+        // as a table of two columns, reaching over the table's column.
+        let field = |e: &Element| {
+            let Some(b) = e.bbox else {
+                return false;
+            };
+            (b.x0 - lb.x0).abs() <= line
+                && match e.kind.as_str() {
+                    "doco:Table" => {
+                        b.x1 > tb.x0
+                            && e.cells
+                                .as_ref()
+                                .is_some_and(|r| r.first().is_some_and(|r| r.len() == 2))
+                    }
+                    "doco:Paragraph" => {
+                        few_words(e.text.trim())
+                            && elements.iter().filter(on_page).any(|v| {
+                                v.bbox.is_some_and(|vb| {
+                                    vb.x0 > b.x1 && vb.x0 <= tb.x0 + line && row_of(&b, &vb)
+                                })
+                            })
+                    }
+                    _ => false,
+                }
+        };
+        // The nearest over the table and under it, on its left; on one
+        // line, the leftmost: a field's label before its value.
+        let left = |e: &&Element| e.bbox.is_some_and(|b| b.x0 < tb.x0);
+        let key = |e: &Element| e.bbox.map_or((0.0, 0.0), |b| (b.y0, b.x0));
+        let above = elements
+            .iter()
+            .filter(on_page)
+            .filter(left)
+            .filter(|e| e.bbox.is_some_and(|b| b.y1 <= tb.y0))
+            .max_by(|a, b| {
+                let (ka, kb) = (a.bbox.unwrap(), b.bbox.unwrap());
+                ka.y1.total_cmp(&kb.y1).then(kb.x0.total_cmp(&ka.x0))
+            });
+        let below = elements
+            .iter()
+            .filter(on_page)
+            .filter(left)
+            .filter(|e| e.bbox.is_some_and(|b| b.y0 >= tb.y1))
+            .min_by(|a, b| {
+                let (ka, kb) = (key(a), key(b));
+                ka.0.total_cmp(&kb.0).then(ka.1.total_cmp(&kb.1))
+            });
+        // Fields over the table and under it: the table stands in a list.
+        if above.is_some_and(field) && below.is_some_and(field) {
+            labelled.push((ti, li));
+        }
+    }
+    let mut gone: Vec<usize> = Vec::new();
+    for (ti, li) in labelled {
+        if gone.contains(&li) {
+            continue;
+        }
+        let label = elements[li].text.trim().to_string();
+        let t = &mut elements[ti];
+        let Some(rows) = t.cells.as_mut() else {
+            continue;
+        };
+        let (h, cols) = (t.header_rows.unwrap_or(0), rows[0].len());
+        let mut band = vec![String::new(); cols];
+        band[0] = label;
+        rows.insert(h, band);
+        let at = h * cols;
+        let mut left = t
+            .merged_left
+            .take()
+            .unwrap_or_else(|| vec![false; (rows.len() - 1) * cols]);
+        left.splice(at..at, (0..cols).map(|c| c > 0));
+        t.merged_left = Some(left);
+        for flags in [&mut t.merged_down, &mut t.spread_left] {
+            if let Some(f) = flags.as_mut() {
+                f.splice(at..at, std::iter::repeat_n(false, cols));
+            }
+        }
+        if let Some(d) = t.datums.as_mut() {
+            d.insert(h, vec![None; cols]);
+        }
+        for idx in [&mut t.section_breaks, &mut t.restated_headers] {
+            if let Some(v) = idx.as_mut() {
+                for r in v.iter_mut().filter(|r| **r >= h) {
+                    *r += 1;
+                }
+            }
+        }
+        t.sub_headers = Some(vec![h]);
+        t.text = rows
+            .iter()
+            .map(|r| r.join(" | "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        gone.push(li);
+    }
+    gone.sort_unstable();
+    for li in gone.into_iter().rev() {
+        elements.remove(li);
+    }
+}
+
 /// Least glyphs a ruled cell holds before it is read for a grid of its own.
 const NESTED_MIN_GLYPHS: usize = 20;
 
@@ -3546,6 +3740,9 @@ struct PageLayout {
     /// Per grid, rows whose text crosses a column boundary read from
     /// alignment rather than drawn; see [`Grid::split_by_alignment`].
     spanning_rows: Vec<Vec<usize>>,
+    /// Per grid, the bands (`y0..y1`) of rows parted where they stack their
+    /// values one a line; see [`Grid::split_stacked_rows`].
+    stacked_bands: Vec<Vec<(f64, f64)>>,
     prose_columns: Vec<Vec<Line>>,
     /// Per prose column, the page column it is a stretch of, and whether it
     /// sets its own measure; see [`crate::region::Group`].
@@ -5768,12 +5965,35 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
 
         // A one-column grid — a key/value list ruled with horizontals only —
         // reads its columns from where its text sits.
-        let spanning_rows: Vec<Vec<usize>> = timed(&mut timings.tables, || {
-            grids
-                .iter_mut()
-                .map(|g| g.split_by_alignment(&p.glyphs))
-                .collect()
-        });
+        // Then a row stacking its values one a line is parted into rows
+        // (`Grid::split_stacked_rows`), the spanning rows numbered on past
+        // the rows added over them.
+        let (spanning_rows, stacked_bands): (Vec<Vec<usize>>, Vec<Vec<(f64, f64)>>) =
+            timed(&mut timings.tables, || {
+                grids
+                    .iter_mut()
+                    .map(|g| {
+                        let spanning = g.split_by_alignment(&p.glyphs);
+                        let before = g.ys.clone();
+                        let added = g.split_stacked_rows(&p.glyphs);
+                        let bands = added
+                            .iter()
+                            .map(|&(r, _)| (before[r], before[r + 1]))
+                            .collect();
+                        let spanning = spanning
+                            .into_iter()
+                            .map(|r| {
+                                r + added
+                                    .iter()
+                                    .filter(|&&(at, _)| at < r)
+                                    .map(|&(_, n)| n)
+                                    .sum::<usize>()
+                            })
+                            .collect();
+                        (spanning, bands)
+                    })
+                    .unzip()
+            });
 
         // A line of dot leaders alone, inside a table's box, is the gutter
         // between a label the table reads and its value, left between their
@@ -5795,7 +6015,41 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // Drawn boxes, outlined or filled: a stretch's lines read box by
         // box where they stand in boxes side by side.
         let frames: Vec<crate::geom::BBox> = p.fills.iter().map(|f| f.bbox).collect();
-        let groups = crate::region::read_order(cols, &p.rules, &table_boxes, &pictures, &frames);
+        // Boxes drawn to be seen: shaded, not white, or outlined, and not
+        // the page's background nor a tint laid under most of it.
+        let panels: Vec<crate::geom::BBox> = p
+            .fills
+            .iter()
+            .filter(|f| f.bbox.height() < p.height * PANEL_PAGE_SHARE)
+            // A box holding a drawing's rules or shapes is a figure's frame
+            // or a chart's plot, not a panel of text.
+            .filter(|f| {
+                let inside = |b: &crate::geom::BBox| {
+                    b.x0 >= f.bbox.x0 - 0.5
+                        && b.x1 <= f.bbox.x1 + 0.5
+                        && b.y0 >= f.bbox.y0 - 0.5
+                        && b.y1 <= f.bbox.y1 + 0.5
+                };
+                !p.rules.iter().any(|r| inside(&r.bbox))
+                    && !p.fills.iter().any(|o| o.bbox != f.bbox && inside(&o.bbox))
+            })
+            .filter(|f| match f.paint {
+                Some(crate::rule::Paint::Solid([r, g, b, a])) => {
+                    a > 0 && r.min(g).min(b) < PANEL_WHITE
+                }
+                Some(_) => true,
+                None => f.stroked,
+            })
+            .map(|f| f.bbox)
+            .collect();
+        let groups = crate::region::read_order_with_panels(
+            cols,
+            &p.rules,
+            &table_boxes,
+            &pictures,
+            &frames,
+            &panels,
+        );
         let prose_sources: Vec<(usize, bool)> =
             groups.iter().map(|g| (g.column, g.own_measure)).collect();
         let cols: Vec<Vec<Line>> = groups.into_iter().map(|g| g.lines).collect();
@@ -5878,6 +6132,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grids,
             grid_sources,
             spanning_rows,
+            stacked_bands,
             prose_columns: cols,
             prose_sources,
             route,
@@ -6900,6 +7155,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 })
                 .collect();
             let explicit = g.layout.as_deref();
+            let mut stacked = Vec::new();
             let mut merges = match explicit {
                 Some(lay) => lay.merges(g.rows(), g.cols()),
                 None => {
@@ -6907,9 +7163,30 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     let mut m = g.merges(&page.rules, &page.fills);
                     g.text_merges(&page.glyphs, &page.rules, &mut m);
                     g.group_label_merges(&page.glyphs, &page.rules, &mut m);
+                    stacked = g.stacked_merges(
+                        &page.glyphs,
+                        &page.rules,
+                        &layout.stacked_bands[gi],
+                        &mut m,
+                    );
                     m
                 }
             };
+            // A block beside values stacked one a line, parted with their
+            // rows, is one cell: its lines read in order into its first.
+            let mut rows = rows;
+            for (band, c) in &stacked {
+                let text = band
+                    .clone()
+                    .map(|r| rows[r][*c].trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                for r in band.clone() {
+                    rows[r][*c].clear();
+                }
+                rows[band.start][*c] = text;
+            }
             // A row whose text crosses an alignment-derived boundary is one
             // cell across the row — a boxed notice over a key/value list.
             // Its text is read whole into the first cell, since the cut
@@ -7435,6 +7712,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
     link_continued_tables(&mut elements, &frames);
+    label_tables_beside(&mut elements);
     fold_header_boxes(&mut elements);
     drop_merged_columns(&mut elements);
     demote_empty_bold_heads(&mut elements);
@@ -9204,6 +9482,97 @@ mod tests {
         assert_eq!(t.merged_down.as_ref().map(Vec::len), Some(12));
         assert_eq!(t.merged_down.as_ref().map(|m| m[8]), Some(true));
         assert!(t.text.starts_with("Mode | Constant flow\nHeadspace | "));
+    }
+
+    /// A list of fields: two read as a table over a gradient table set as
+    /// the next field's value, its label `label` (text, box) beside it, and
+    /// a last field's label and value as paragraphs under it.
+    fn field_list(label: (&str, crate::geom::BBox)) -> Vec<Element> {
+        let at = |x0: f64, y0: f64, x1: f64, y1: f64| crate::geom::BBox { x0, y0, x1, y1 };
+        let table = |rows: &[&[&str]], bbox, header_rows| Element {
+            page: 0,
+            bbox: Some(bbox),
+            cells: Some(grid(rows)),
+            header_rows: Some(header_rows),
+            ..Element::new("doco:Table", "", "rust", "rules")
+        };
+        let para = |text: &str, bbox| Element {
+            page: 0,
+            bbox: Some(bbox),
+            ..Element::new("doco:Paragraph", text, "rust", "body")
+        };
+        vec![
+            table(
+                &[&["Column Temp.", "40 °C"], &["Flow Rate", "1.0 mL/min"]],
+                at(77.0, 160.0, 216.0, 190.0),
+                0,
+            ),
+            table(
+                &[
+                    &["Time (min)", "A (%)"],
+                    &["0", "100"],
+                    &["20.0", "0"],
+                    &["30.0", "100"],
+                ],
+                at(178.0, 228.0, 320.0, 346.0),
+                1,
+            ),
+            para(label.0, label.1),
+            para("Run Time", at(78.0, 363.0, 118.0, 371.0)),
+            para("~ 30 min", at(166.0, 363.0, 203.0, 371.0)),
+        ]
+    }
+
+    #[test]
+    fn a_field_s_label_beside_its_table_names_the_table_s_rows() {
+        let at = |x0: f64, y0: f64, x1: f64, y1: f64| crate::geom::BBox { x0, y0, x1, y1 };
+        let mut els = field_list(("Gradient", at(78.0, 285.0, 117.0, 293.0)));
+        label_tables_beside(&mut els);
+        assert_eq!(els.len(), 4);
+        let t = &els[1];
+        assert_eq!(
+            t.cells.as_deref(),
+            Some(
+                &grid(&[
+                    &["Time (min)", "A (%)"],
+                    &["Gradient", ""],
+                    &["0", "100"],
+                    &["20.0", "0"],
+                    &["30.0", "100"],
+                ])[..]
+            )
+        );
+        assert_eq!(t.sub_headers, Some(vec![1]));
+        assert_eq!(t.header_rows, Some(1));
+        assert_eq!(t.merged_left.as_ref().map(|m| m[3]), Some(true));
+        assert!(!els.iter().any(|e| e.text == "Gradient"));
+        // Set level with the table's head, as a side head starts what it
+        // heads, it names nothing.
+        let mut els = field_list(("Gradient", at(78.0, 228.0, 117.0, 236.0)));
+        label_tables_beside(&mut els);
+        assert_eq!(els.len(), 5);
+        // Nor with fields on one side alone: the list ends over the table.
+        let mut els = field_list(("Gradient", at(78.0, 285.0, 117.0, 293.0)));
+        els.truncate(3);
+        label_tables_beside(&mut els);
+        assert_eq!(els.len(), 3);
+        // Nor beside a table with no field of a list at its edge: prose
+        // over it, nothing under it.
+        let mut els = field_list(("Gradient", at(78.0, 285.0, 117.0, 293.0)));
+        els[0] = Element {
+            page: 0,
+            bbox: Some(at(72.0, 160.0, 540.0, 190.0)),
+            ..Element::new(
+                "doco:Paragraph",
+                "The gradient is run as the table beside shows it.",
+                "rust",
+                "body",
+            )
+        };
+        els.truncate(3);
+        label_tables_beside(&mut els);
+        assert_eq!(els.len(), 3);
+        assert_eq!(els[1].sub_headers, None);
     }
 
     #[test]
