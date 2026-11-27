@@ -8268,12 +8268,13 @@ fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
             words[c].0.push(a);
             words[c].1.push(b);
             let t: String = t.chars().map(|c| if c == '–' { '-' } else { c }).collect();
-            numeric[c] += usize::from(is_numeric_cell(&t));
+            numeric[c] += usize::from(is_numeric_cell(&t) || is_amount_unit(&t));
         }
     }
     // Columns of figures past the first, which may be a stub of labels: most
-    // of each one's words are figures. Text set in panels under their titles
-    // lines up as well, word for word, and is no table of heads over figures.
+    // of each one's words are figures, or the units a statement sets over
+    // them (`£m`). Text set in panels under their titles lines up as well,
+    // word for word, and is no table of heads over figures.
     if (1..cols).any(|c| numeric[c] * 2 <= words[c].0.len()) {
         return;
     }
@@ -8377,6 +8378,17 @@ fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
     g.bbox.x0 = xs[0];
     g.bbox.x1 = xs[cols];
     g.xs = xs;
+}
+
+/// The unit a statement sets over a column of amounts: a currency with its
+/// scale (`£m`, `$000`, `(€bn)`), or a percentage sign.
+fn is_amount_unit(t: &str) -> bool {
+    let t = t.trim().trim_start_matches('(').trim_end_matches(')');
+    if t == "%" {
+        return true;
+    }
+    t.strip_prefix(['£', '$', '€', '¥'])
+        .is_some_and(|scale| matches!(scale, "m" | "mn" | "bn" | "k" | "000" | "'000" | "’000"))
 }
 
 /// Move an aligned grid's column edges out from under its heads where a
@@ -12895,6 +12907,13 @@ mod header_tests {
             }
         }
         (g, glyphs)
+    }
+
+    #[test]
+    fn amount_units_stand_with_figures() {
+        assert!(is_amount_unit("£m") && is_amount_unit("($000)") && is_amount_unit("€bn"));
+        assert!(is_amount_unit("%"));
+        assert!(!is_amount_unit("£") && !is_amount_unit("Sales") && !is_amount_unit("$m2"));
     }
 
     #[test]
