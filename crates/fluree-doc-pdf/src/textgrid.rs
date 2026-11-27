@@ -2064,7 +2064,25 @@ fn read_beside(
             // prose over the table. Down the header means between its lines,
             // over the stub's own labels: the columns' heads go on over it
             // too, as a chart's labels, a caption beside the table or a title
-            // beside a one-line header do not.
+            // beside a one-line header do not. Or across the header's one
+            // line: a stub's head of two lines centred on it, the first over
+            // it and the second under it, each within a line of it
+            // (`Sequence` over `Oxy. | Octo. | …` over `Date`). That line
+            // names the columns in words: beside a line of units (`(%)`)
+            // or of periods (`FY25 | FY24`) under the names, a label is the
+            // first section's, or prose run beside a chart's labels.
+            let straddles = |l: &Line| {
+                !cur.chunks.is_empty()
+                    && cur.chunks.iter().all(in_words)
+                    && !cur.chunks.iter().any(|c| column_of(&cols0, c) == Some(0))
+                    && (first + 1..start).any(|i| {
+                        let n = &clipped[i];
+                        n.base > cur.base
+                            && n.base - cur.base <= n.fs * WRAP_LEADING
+                            && n.base - l.base <= n.fs * WRAP_LEADING * 1.2
+                            && n.chunks.iter().any(|c| column_of(&cols0, c) == Some(0))
+                    })
+            };
             let stub = stub
                 || label_row(above)
                     && header_seen > 0
@@ -2076,7 +2094,7 @@ fn read_beside(
                         .first()
                         .is_some_and(|s| above.chunks[0].x1 > s.0 && above.chunks[0].x0 < s.1)
                     && fills_gap(&above.chunks[0])
-                    && heads_over(above);
+                    && (heads_over(above) || straddles(above));
             if header_named && !(banner || wrapped || fills_gaps) {
                 break;
             }
@@ -2676,6 +2694,15 @@ fn is_unit_head(t: &str) -> bool {
         .is_some_and(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// Whether a column's head is set in words: a word of three letters or
+/// more in it (`Oxy.`, `Criteria`), not a unit (`(%)`), a period (`FY25`)
+/// or a figure alone.
+fn in_words(c: &Chunk) -> bool {
+    c.text
+        .split(|ch: char| !ch.is_alphabetic())
+        .any(|w| w.chars().count() >= 3)
+}
+
 /// Rows, header and bands from the table's lines.
 fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Option<Grid> {
     let fs = lines.iter().map(|l| l.fs).fold(0.0, f64::max).max(1.0);
@@ -2845,12 +2872,27 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         // Wrapped from the line above, unless that rule parts them
         // (`United States` under `Sales Volumes per Day by Products | 2017
         // | 2016`).
+        let in_stub = |q: &Line| q.chunks.iter().any(|c| column_of(&cols, c) == Some(0));
         let wrapped = head.len() > 1 && {
             let p = head[head.len() - 2];
-            l.base - p.base <= l.fs * WRAP_LEADING
-                && p.chunks.iter().any(|c| column_of(&cols, c) == Some(0))
-                && !ruled_apart
+            l.base - p.base <= l.fs * WRAP_LEADING && in_stub(p) && !ruled_apart
         };
+        // Or a stub's head wrapped across the header's one line, its first
+        // line over the columns' heads and this one within a line under
+        // them (`Sequence` over `Oxy. | Octo. | …` over `Date`).
+        let straddled = head.len() > 2 && !ruled_apart && {
+            let p = head[head.len() - 2];
+            l.base - p.base <= l.fs * WRAP_LEADING
+                && !p.chunks.is_empty()
+                && p.chunks.iter().all(in_words)
+                && !in_stub(p)
+                && head[..head.len() - 2]
+                    .iter()
+                    .rev()
+                    .find(|q| in_stub(q))
+                    .is_some_and(|q| l.base - q.base <= l.fs * WRAP_LEADING * 1.2)
+        };
+        let wrapped = wrapped || straddled;
         if label_only && head.len() > 1 && !wrapped {
             body.insert(0, head.pop().unwrap());
         } else {
@@ -5824,6 +5866,29 @@ mod tests {
         assert!(head.contains("Time"), "{head}");
         assert!(head.contains("(min)"), "{head}");
         assert!(head.contains("Mobile"), "{head}");
+    }
+
+    #[test]
+    fn a_stub_head_wrapped_across_a_one_line_header_is_the_header_s() {
+        // `Sequence` over the columns' heads, `Date` under them, each
+        // within a line of them: the stub's head of two lines, centred on
+        // the header's one.
+        let head = header_read(&[
+            ("Sequence", 20.0, 38.0),
+            ("Mass", 120.0, 43.0),
+            ("Vol.", 220.0, 43.0),
+            ("Date", 20.0, 48.0),
+        ]);
+        assert_eq!(head, "Sequence Date | Mass | Vol.");
+        // A label set a line and more under the header, the stub's head a
+        // line over it, is the body's first section, not the head's tail.
+        let head = header_read(&[
+            ("Sample", 20.0, 30.0),
+            ("Mass", 120.0, 42.0),
+            ("Vol.", 220.0, 42.0),
+            ("Group", 20.0, 56.0),
+        ]);
+        assert!(!head.contains("Group"), "{head}");
     }
 
     /// A rule across the table at `y`, from `x0` to `x1`.
