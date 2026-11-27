@@ -1185,12 +1185,20 @@ fn bold_style(h: &Handle) -> bool {
 
 /// Is every word under this node set bold? `None` where it holds no text.
 fn bold_throughout(h: &Handle, inherited: bool) -> Option<bool> {
-    let bold = inherited || bold_style(h) || matches!(tag_of(h).as_deref(), Some("b" | "strong"));
+    throughout(h, inherited, &|h| {
+        bold_style(h) || matches!(tag_of(h).as_deref(), Some("b" | "strong"))
+    })
+}
+
+/// Is every word under this node set as `set` says, by the node itself or
+/// one around it? `None` where it holds no text.
+fn throughout(h: &Handle, inherited: bool, set: &dyn Fn(&Handle) -> bool) -> Option<bool> {
+    let on = inherited || set(h);
     let mut seen = None;
     for c in h.children.borrow().iter() {
         let here = match &c.data {
-            NodeData::Text { contents } if !contents.borrow().trim().is_empty() => Some(bold),
-            NodeData::Element { .. } if !skipped(c) => bold_throughout(c, bold),
+            NodeData::Text { contents } if !contents.borrow().trim().is_empty() => Some(on),
+            NodeData::Element { .. } if !skipped(c) => throughout(c, on, set),
             _ => None,
         };
         match here {
@@ -1202,6 +1210,257 @@ fn bold_throughout(h: &Handle, inherited: bool) -> Option<bool> {
     seen
 }
 
+/// An element's inline style declarations, lowercase, each value with its
+/// spaces: a shorthand's values are parted by them (`padding: 2px 1pt`).
+fn declarations(h: &Handle) -> Vec<(String, String)> {
+    attr_of(h, "style")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .split(';')
+        .filter_map(|d| {
+            let (k, v) = d.split_once(':')?;
+            Some((k.trim().to_string(), v.trim().to_string()))
+        })
+        .collect()
+}
+
+/// A CSS length in points: `pt`, `px` (three-quarters of a point), `em`
+/// at a 10 pt text, a bare `0`. `None` for a share of the parent or a
+/// keyword, which says nothing of the text's own size.
+fn css_points(v: &str) -> Option<f64> {
+    let v = v.trim();
+    let num = |s: &str| s.trim().parse::<f64>().ok();
+    if let Some(n) = v.strip_suffix("pt") {
+        num(n)
+    } else if let Some(n) = v.strip_suffix("px") {
+        num(n).map(|n| n * 0.75)
+    } else if let Some(n) = v.strip_suffix("em") {
+        num(n).map(|n| n * 10.0)
+    } else {
+        num(v).filter(|n| *n == 0.0)
+    }
+}
+
+/// How far in from its box an element sets its text: its left padding and
+/// margin and its first line's indent, in points.
+fn left_indent(h: &Handle) -> f64 {
+    let (mut padding, mut margin, mut indent) = (0.0, 0.0, 0.0);
+    // A shorthand's left value: the fourth of four, else the second.
+    let left = |v: &str| {
+        let parts: Vec<&str> = v.split_whitespace().collect();
+        let at = match parts.len() {
+            4 => 3,
+            2 | 3 => 1,
+            _ => 0,
+        };
+        parts.get(at).and_then(|p| css_points(p)).unwrap_or(0.0)
+    };
+    for (k, v) in declarations(h) {
+        match k.as_str() {
+            "padding" => padding = left(&v),
+            "padding-left" => padding = css_points(&v).unwrap_or(0.0),
+            "margin" => margin = left(&v),
+            "margin-left" => margin = css_points(&v).unwrap_or(0.0),
+            "text-indent" => indent = css_points(&v).unwrap_or(0.0),
+            _ => {}
+        }
+    }
+    padding + margin + indent
+}
+
+/// The indent of the text in this node: its own, and each one's on the way
+/// down to its first word.
+fn text_indent(h: &Handle) -> f64 {
+    let own = left_indent(h);
+    for c in h.children.borrow().iter() {
+        match &c.data {
+            NodeData::Text { contents } if !contents.borrow().trim().is_empty() => return own,
+            NodeData::Element { .. } if !skipped(c) && !text_of(c).0.is_empty() => {
+                return own + text_indent(c);
+            }
+            _ => {}
+        }
+    }
+    own
+}
+
+/// The one size, in points, all the text under this node is set in, where
+/// it says: `None` where it says nothing or its words differ.
+fn size_throughout(h: &Handle) -> Option<f64> {
+    fn sizes(h: &Handle, inherited: Option<f64>, out: &mut Vec<Option<f64>>) {
+        let mut size = inherited;
+        for (k, v) in declarations(h) {
+            if k == "font-size" {
+                size = css_points(&v);
+            }
+        }
+        for c in h.children.borrow().iter() {
+            match &c.data {
+                NodeData::Text { contents } if !contents.borrow().trim().is_empty() => {
+                    out.push(size)
+                }
+                NodeData::Element { .. } if !skipped(c) => sizes(c, size, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    sizes(h, None, &mut out);
+    let first = (*out.first()?)?;
+    out.iter()
+        .all(|s| s.is_some_and(|s| (s - first).abs() < 0.01))
+        .then_some(first)
+}
+
+/// How a row of one cell across the table is set: what tells a band over
+/// a group of rows from the rows it groups, and from a band beside it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct BandStyle {
+    /// Bold throughout, or a `<th>`.
+    strong: bool,
+    underline: bool,
+    italic: bool,
+    /// In points, where the cell's text is all one size and says so.
+    size: Option<f64>,
+    /// How far in, in points, its text starts.
+    indent: f64,
+}
+
+impl BandStyle {
+    fn of(cell: &Handle, th: bool) -> BandStyle {
+        let underline = |h: &Handle| {
+            tag_of(h).as_deref() == Some("u")
+                || declarations(h).iter().any(|(k, v)| {
+                    (k == "text-decoration" || k == "text-decoration-line")
+                        && v.contains("underline")
+                })
+        };
+        let italic = |h: &Handle| {
+            matches!(tag_of(h).as_deref(), Some("i" | "em"))
+                || declarations(h)
+                    .iter()
+                    .any(|(k, v)| k == "font-style" && (v == "italic" || v == "oblique"))
+        };
+        BandStyle {
+            strong: th || bold_throughout(cell, false) == Some(true),
+            underline: throughout(cell, false, &underline) == Some(true),
+            italic: throughout(cell, false, &italic) == Some(true),
+            size: size_throughout(cell),
+            indent: text_indent(cell),
+        }
+    }
+
+    /// Does a band set as `self` group the rows set as `other`: at least as
+    /// prominent in every way the two say, and more so in one? Bolder,
+    /// underlined, upright over italic, larger, or set further out. A band
+    /// set as the one beside it is its sibling, and groups none of it.
+    fn stands_over(&self, other: &BandStyle) -> bool {
+        // Half a point either way is the same indent; a hundredth, the same
+        // size.
+        let ranks = [
+            (self.strong as i8 as f64, other.strong as i8 as f64, 0.0),
+            (
+                self.underline as i8 as f64,
+                other.underline as i8 as f64,
+                0.0,
+            ),
+            (!self.italic as i8 as f64, !other.italic as i8 as f64, 0.0),
+            (-self.indent, -other.indent, 0.5),
+        ];
+        let mut ranks = ranks.to_vec();
+        if let (Some(a), Some(b)) = (self.size, other.size) {
+            ranks.push((a, b, 0.01));
+        }
+        ranks.iter().all(|(a, b, tol)| a >= &(b - tol))
+            && ranks.iter().any(|(a, b, tol)| a > &(b + tol))
+    }
+}
+
+/// The body rows that are bands: one cell across the whole table, labelling
+/// the rows beneath it (`<td colspan="4">Food</td>` over the dishes) rather
+/// than a row of data itself.
+///
+/// A band labels the rows under it up to the next row of one cell that it
+/// does not stand over ([`BandStyle::stands_over`]): the next band of its
+/// own level or above. It is a band only where those rows hold data. So a
+/// group set over its sub-groups (`Power` bold over `Average (W)` in plain)
+/// labels the sub-groups' rows too, and the two are read one over the
+/// other. Rows of one cell set alike, one under another, are siblings:
+/// each labels nothing, and is a row of its own. They are a list set in a
+/// table, a subsidiaries' list's names under each bold country, or a
+/// table's numbered notes. Read as bands, each carried every name above it.
+///
+/// A row that opens on a note's mark under rows of data is a note to them,
+/// not a band: a note follows what it marks, and a band comes before what
+/// it labels. Read as bands, a statement's notes (`(1) Amounts reclassified
+/// …`) labelled the next year's rows.
+///
+/// Blank rows hold no data, and the last row has nothing beneath it to
+/// label.
+fn bands(
+    cells: &[Vec<String>],
+    full_width: &[bool],
+    styles: &[Option<BandStyle>],
+    header_rows: usize,
+) -> Vec<usize> {
+    let n = cells.len();
+    let has_text = |r: usize| cells[r].iter().any(|t| !t.trim().is_empty());
+    let data_above = |r: usize| (header_rows..r).any(|s| !full_width[s] && has_text(s));
+    // Rows of one cell across, which end the rows a band labels where it
+    // does not stand over them, whether or not they can be bands.
+    let one_cell: Vec<bool> = (0..n)
+        .map(|r| {
+            r >= header_rows
+                && full_width[r]
+                && cells[r].first().is_some_and(|t| !t.trim().is_empty())
+        })
+        .collect();
+    let candidate =
+        |r: usize| one_cell[r] && r + 1 < n && !(opens_on_note_mark(&cells[r][0]) && data_above(r));
+    let style = |r: usize| styles.get(r).copied().flatten().unwrap_or_default();
+    // From the foot up: whether a row is a band rests on the rows under it.
+    let mut band = vec![false; n];
+    for r in (0..n).rev().filter(|&r| candidate(r)) {
+        band[r] = (r + 1..n)
+            .take_while(|&s| !one_cell[s] || style(r).stands_over(&style(s)))
+            .any(|s| has_text(s) && !band[s]);
+    }
+    (0..n).filter(|&r| band[r]).collect()
+}
+
+/// Does a line open on a note's mark: a number or a letter in brackets
+/// (`(1)`, `(a)`, `1)`), a symbol (`*`, `†`, `‡`, `§`), a raised figure
+/// (`¹`), or a note's word (`Note:`, `Source:`)? Not a number closed by a
+/// point, which numbers a section as often (`1. Basis of presentation`).
+fn opens_on_note_mark(text: &str) -> bool {
+    let t = text.trim_start();
+    let Some(first) = t.chars().next() else {
+        return false;
+    };
+    if matches!(
+        first,
+        '*' | '†' | '‡' | '§' | '¹' | '²' | '³' | '\u{2070}'..='\u{2079}'
+    ) {
+        return true;
+    }
+    let lower = t.to_lowercase();
+    if ["note:", "notes:", "source:", "sources:"]
+        .iter()
+        .any(|w| lower.starts_with(w))
+    {
+        return true;
+    }
+    let label = match t.strip_prefix('(') {
+        Some(rest) => rest.split_once(')').map(|(l, _)| l),
+        None => t.split_once(')').map(|(l, _)| l),
+    };
+    label.is_some_and(|l| {
+        let n = l.chars().count();
+        (1..=3).contains(&n) && l.chars().all(|c| c.is_ascii_digit())
+            || (n == 1 && l.chars().all(|c| c.is_ascii_lowercase()))
+    })
+}
+
 /// Build the flat grid, carrying `colspan` / `rowspan` into the model's merge
 /// flags — the same convention DOCX's gridSpan/vMerge map to and the PDF
 /// engine derives from ruling.
@@ -1211,9 +1470,13 @@ fn emit_table(table: &Handle, out: &mut Out) {
 
     let mut rows: Vec<Vec<(String, usize, usize)>> = Vec::new();
     let mut kinds: Vec<RowKind> = Vec::new();
+    // How each row's first cell with text is set, to rank the rows that are
+    // one cell across the table.
+    let mut styles: Vec<Option<BandStyle>> = Vec::new();
     for tr in &trs {
         let mut cells = Vec::new();
         let mut marks = Vec::new();
+        let mut style = None;
         for cell in children_of(tr) {
             let th = match tag_of(&cell).as_deref() {
                 Some("th") => true,
@@ -1237,6 +1500,9 @@ fn emit_table(table: &Handle, out: &mut Out) {
                     && !text.chars().any(char::is_alphabetic)
                     && bold_throughout(&cell, false) != Some(true),
             });
+            if style.is_none() && !text.is_empty() {
+                style = Some(BandStyle::of(&cell, th));
+            }
             cells.push((text, num_attr(&cell, "colspan"), num_attr(&cell, "rowspan")));
         }
         if cells.is_empty() {
@@ -1244,6 +1510,7 @@ fn emit_table(table: &Handle, out: &mut Out) {
         }
         kinds.push(row_kind(&marks));
         rows.push(cells);
+        styles.push(style);
     }
     if rows.is_empty() {
         return;
@@ -1337,6 +1604,8 @@ fn emit_table(table: &Handle, out: &mut Out) {
                     || (0..width).all(|c| !m_down[(r + 1) * width + c] || m_down[r * width + c]))
         })
         .collect();
+    let styles: Vec<Option<BandStyle>> =
+        (0..n).filter(|&r| !hollow[r]).map(|r| styles[r]).collect();
     let (grid, m_left, m_down, full_width, header_rows, n) = if hollow.iter().any(|h| *h) {
         let keep = |r: usize| !hollow[r];
         let rows_of = |v: &[bool]| -> Vec<bool> {
@@ -1364,13 +1633,8 @@ fn emit_table(table: &Handle, out: &mut Out) {
         .map(|r| r.join(" | "))
         .collect::<Vec<_>>()
         .join("\n");
-    // A body row that is one cell across the whole table labels the rows
-    // beneath it — `<td colspan="4">Food</td>` over the dishes — and is not
-    // itself a row of data. The last row has nothing beneath it to label.
     let header_rows = header_rows.min(n);
-    let sub_headers: Vec<usize> = (header_rows..n.saturating_sub(1))
-        .filter(|&r| full_width[r] && !cells[r][0].trim().is_empty())
-        .collect();
+    let sub_headers = bands(&cells, &full_width, &styles, header_rows);
     let mut e = element("doco:Table", text, None);
     e.header_rows = Some(header_rows);
     e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
@@ -1983,6 +2247,90 @@ mod tests {
         let t = &els[0];
         assert_eq!(t.header_rows, Some(1));
         assert_eq!(t.sub_headers, Some(vec![1, 3]));
+    }
+
+    #[test]
+    fn a_list_set_in_a_table_is_rows_under_its_bold_heads() {
+        // A subsidiaries' list: every row one cell across, each country
+        // bold and underlined over its companies, a blank row between.
+        let row = |t: &str, head: bool| {
+            let style = if head {
+                "font-weight:700;text-decoration:underline"
+            } else {
+                "font-weight:400"
+            };
+            format!("<tr><td colspan=\"3\"><font style=\"{style}\">{t}</font></td></tr>")
+        };
+        let blank = "<tr><td colspan=\"3\"></td></tr>";
+        let html = format!(
+            "<table><tr><td></td><td></td><td></td></tr>{}{}{}{blank}{}{}{blank}{}</table>",
+            row("Switzerland", true),
+            row("Alpine Holdings SA", false),
+            row("Alpine Trading SA", false),
+            row("Bermuda", true),
+            row("Greenleaf, Ltd.", false),
+            row("Closing note", false),
+        );
+        let t = &parse(&html)[0];
+        // The countries, not the companies: rows set alike are siblings,
+        // and each labels nothing.
+        assert_eq!(t.sub_headers, Some(vec![1, 5]));
+    }
+
+    #[test]
+    fn bands_set_alike_are_siblings_and_a_group_stands_over_its_sub_groups() {
+        let band =
+            |t: &str, style: &str| format!("<tr><td colspan=\"2\" style=\"{style}\">{t}</td></tr>");
+        let data = |a: &str, b: &str| format!("<tr><td>{a}</td><td>{b}</td></tr>");
+        let bold = "font-weight:bold";
+        // `Power` bold over `Average (W)` and `Peak (W)` in plain: a group
+        // over its sub-groups, each a band.
+        let html = format!(
+            "<table><tr><th>Item</th><th>Value</th></tr>{}{}{}{}{}{}</table>",
+            band("Power", bold),
+            band("Average (W)", ""),
+            data("Idle", "4.1"),
+            band("Peak (W)", ""),
+            data("Write", "6.8"),
+            data("Total", "10.9"),
+        );
+        assert_eq!(parse(&html)[0].sub_headers, Some(vec![1, 2, 4]));
+        // Set alike, one straight over the other, the first labels nothing:
+        // it is a row of its own.
+        let html = format!(
+            "<table><tr><th>Item</th><th>Value</th></tr>{}{}{}{}</table>",
+            band("Company name", bold),
+            band("Statement title", bold),
+            data("Revenue", "12"),
+            data("Total", "12"),
+        );
+        assert_eq!(parse(&html)[0].sub_headers, Some(vec![2]));
+    }
+
+    #[test]
+    fn notes_under_a_tables_rows_are_no_bands() {
+        let band = |t: &str| format!("<tr><td colspan=\"2\">{t}</td></tr>");
+        let data = |a: &str, b: &str| format!("<tr><td>{a}</td><td>{b}</td></tr>");
+        // One year's rows, their notes, then the next year's rows: the notes
+        // mark the rows above them and label none under them.
+        let html = format!(
+            "<table><tr><th>Item</th><th>Value</th></tr>{}{}{}{}{}{}</table>",
+            data("Balance at January 1", "(251)"),
+            band("(1) Amounts reclassified included gains."),
+            band("(2) Amounts reclassified included losses."),
+            data("Balance at January 1", "(156)"),
+            band("* Restated."),
+            data("Total", "(407)"),
+        );
+        assert_eq!(parse(&html)[0].sub_headers, None);
+        // A band over the rows stays one, whatever its text opens on.
+        let html = format!(
+            "<table><tr><th>Item</th><th>Value</th></tr>{}{}{}</table>",
+            band("(a) Retail"),
+            data("Stores", "12"),
+            data("Total", "12"),
+        );
+        assert_eq!(parse(&html)[0].sub_headers, Some(vec![1]));
     }
 
     #[test]
