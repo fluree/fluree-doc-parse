@@ -302,8 +302,12 @@ paragraph a paragraph mark, a line break kept as a line. A paragraph whose
 properties (`StyleTextPropAtom`) give it a bullet or an indent level past the
 first is a list item, as a PPTX paragraph is; where they say nothing, a body
 placeholder's paragraph, which the master bullets, is one. The level itself
-is not kept: the element model gives a level to headings only. A slide whose shapes hold no text, as an older writer
-keeps it, is read from the slide list. A slide's **speaker notes** (the
+is not kept: the element model gives a level to headings only. PowerPoint
+keeps a placeholder's text (the title, the body) in the slide list, the
+placeholder naming it there (`OutlineTextRefAtom`): it is read where the
+placeholder stands, among the slide's pictures, tables and text boxes. A
+slide whose shapes show nothing and name nothing, as an older writer keeps
+it, is read from the slide list. A slide's **speaker notes** (the
 notes slide its own atom names) follow its content on its page, as
 paragraphs whose `evidence` is `notes`: what the presenter said, kept apart
 from what the audience saw.
@@ -341,6 +345,10 @@ chain that loops ends), each persist directory read once and about four
 million of their entries in all, and 10,000 slides read. A slide listed
 twice, or a notes slide named by two slides, is read once; the text read,
 however many slides name one place in the stream, is at most 256 MiB.
+Each text a placeholder names is a copy, counted each time against the
+document's budget, and each record a slide's walk visits is a step of its
+work, so slides laid inside each other's records are not walked without
+end.
 Provenance and evidence are `ppt`. Returns `PptError`
 (`fluree_doc_ppt::parse`) otherwise.
 
