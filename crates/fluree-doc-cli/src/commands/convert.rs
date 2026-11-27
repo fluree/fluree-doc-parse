@@ -599,25 +599,20 @@ fn convert_image(
     }
     // A model may read what OCR leaves unread, as on a scanned PDF page.
     let model_after = cfg.escalate && cfg.tier_results.is_none();
-    // What OCR made of it when it took no word, or only words it doubts:
-    // kept should the model fail, and its reading, empty, listed should the
-    // model read nothing either.
+    // What OCR made of it when it took no word: kept should the model fail,
+    // and its reading, empty, listed should the model read nothing either.
     let mut ocr_read = None;
     if cfg.ocr.is_some() || cfg.ocr_words.is_some() {
         match ocr_image(&data, header, src, cfg, quiet) {
-            Ok(read) if (read.read_something && !read.doubtful) || !model_after => {
+            // Whatever OCR's confidence in the words it took: it is reported
+            // (`doc:ocrReadings`), not a reason to send the image to a model.
+            // Whether a model reads an image OCR read is the run's to say.
+            Ok(read) if read.read_something || !model_after => {
                 return Ok(render_image_ocr(read, src, args, quiet));
             }
             Ok(read) => {
                 if !quiet {
-                    eprintln!(
-                        "note: {stem}: OCR read {}; the configured model reads it",
-                        if read.read_something {
-                            "only words it doubts"
-                        } else {
-                            "nothing"
-                        }
-                    );
+                    eprintln!("note: {stem}: OCR read nothing; the configured model reads it");
                 }
                 ocr_read = Some(read);
             }
@@ -649,9 +644,9 @@ fn convert_image(
     let page = "p0_full";
     let readings = match image_readings(stem, page, &data, format.mime(), cfg, cfg.escalate) {
         Ok(readings) => readings,
-        // OCR read it and took no word, or only words it doubts: the model
-        // failing leaves that reading, as it leaves a placed picture's, not
-        // the conversion failed. Where OCR had no reading of it (no words written for it),
+        // OCR read it and took no word: the model failing leaves that
+        // reading, as it leaves a placed picture's, not the conversion
+        // failed. Where OCR had no reading of it (no words written for it),
         // the model was its only reader, and its failure the conversion's.
         Err(e) => match ocr_read {
             Some(read) if read.readings > 0 => {
@@ -670,6 +665,8 @@ fn convert_image(
             bbox: Some(doc.pages[0].images[0].bbox),
             ..Element::new("doco:Paragraph", String::new(), "rust", "layout")
         });
+        // No line of OCR's to check the model's reading against: the model
+        // reads an image OCR took no word in.
         splice_image_reading(&mut elements, stem, page, readings.as_ref(), &[]);
     }
     // An image nothing read is listed unread, so the output says so too. A
@@ -685,10 +682,8 @@ fn convert_image(
         ..Default::default()
     };
     // The model read nothing either: OCR's reading, which took no word, is
-    // still the image's, as an empty reading of a PDF page is. One that
-    // took only words it doubts is not listed: the model, which read the
-    // image for them, found no text, and its words are not in the output.
-    if let Some(read) = ocr_read.filter(|r| elements.is_empty() && !r.read_something) {
+    // still the image's, as an empty reading of a PDF page is.
+    if let Some(read) = ocr_read.filter(|_| elements.is_empty()) {
         warn_listed_scores(read.scores, &read.notes.ocr, quiet);
         notes.ocr = read.notes.ocr;
     }
@@ -1426,10 +1421,6 @@ struct ImageOcr {
     /// Some word was taken, or a model's reading supplied spliced over the
     /// page.
     read_something: bool,
-    /// Every reading that took a word is noise by the confidence a placed
-    /// picture's is held to ([`fluree_doc_pdf::ocr::MIN_PICTURE_CONFIDENCE`]):
-    /// a configured model reads the image instead.
-    doubtful: bool,
     /// The OCR readings of it, taken or set aside: none where no words
     /// were written for it.
     readings: usize,
@@ -1551,20 +1542,8 @@ fn ocr_image(
     // pages of text, not an image whose few words may be all it holds.
     let read_something = injected.iter().any(|r| r.refused.is_none() && r.taken > 0)
         || a.elements.iter().any(|e| e.evidence == "page-tier");
-    // But where all OCR took is words it doubts, a photograph's one "word"
-    // at 0.21 or a whiteboard's stray letters, a configured model reads it
-    // instead, as it reads an image OCR took nothing in: the rule a placed
-    // picture's reading is held to, its words' mean confidence, which a
-    // stamp's `PAID` at 0.97 passes. Without a model, OCR's words are the
-    // output, as a scan read poorly gives its.
-    let doubtful = !a.elements.iter().any(|e| e.evidence == "page-tier")
-        && injected
-            .iter()
-            .filter(|r| r.refused.is_none() && r.taken > 0)
-            .all(|r| {
-                r.mean_conf
-                    .is_some_and(|c| c < fluree_doc_pdf::ocr::MIN_PICTURE_CONFIDENCE)
-            });
+    // However unsure OCR is of them: its confidence is reported
+    // (`doc:ocrReadings`), and routes nothing.
     let unread = if read_something {
         Vec::new()
     } else {
@@ -1584,7 +1563,6 @@ fn ocr_image(
         sizes,
         notes,
         read_something,
-        doubtful,
         readings: injected.len(),
         scores,
     })
