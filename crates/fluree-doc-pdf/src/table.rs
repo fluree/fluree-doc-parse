@@ -1329,13 +1329,83 @@ impl Grid {
         // So does one whose labels a colon ends, in any weight.
         let colon_labels =
             self.cols() == 2 && rows.iter().all(|r| r.len() == 2) && colon_fields(&rows.concat());
-        if label_column || colon_labels || self.lists_fields(rows, glyphs, rules, fills) {
+        // So does one whose first row is set as the fields under it are.
+        let set_as_field = run == 0 && self.opens_as_field(rows, &weights, rules, fills);
+        if label_column
+            || colon_labels
+            || set_as_field
+            || self.lists_fields(rows, glyphs, rules, fills)
+        {
             return 0;
         }
         // run == 1 is itself the exclusive-stripe evidence: band 0 filled,
         // band 1 not (where the run stopped).
         let styled = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, 1) || run == 1;
         decide_header_rows(rows, styled)
+    }
+
+    /// The first row is set as a field, and so is a row under it: a bold
+    /// label, and beside it one value, plain, in the next cell or across
+    /// every cell after the label.
+    ///
+    /// A header row is set alike across its cells, bold or plain. A bold
+    /// label beside a plain value is how a field is set, and where a row
+    /// under it is set that way too, the first row is one more field: a
+    /// parameter table's `Instrument | <model>` over `Detector | <model>`,
+    /// its leading labels bold and the rest plain. Its value can span the
+    /// columns a table nested further down rules for itself (a gradient's
+    /// `Time | A% | B%` in its value column), as the next field's does.
+    ///
+    /// Not over figures: where every row set that way holds figures
+    /// beside its label and the first row holds words, the first row
+    /// names them (`Item | Amount` over `Bolt | 0.40` and a bold `Total |
+    /// 0.50`).
+    fn opens_as_field(
+        &self,
+        rows: &[Vec<String>],
+        weights: &[Vec<(usize, usize)>],
+        rules: &[Rule],
+        fills: &[crate::rule::Fill],
+    ) -> bool {
+        let cols = self.cols();
+        if cols < 2 || rows.len() != weights.len() || rows.iter().any(|r| r.len() != cols) {
+            return false;
+        }
+        let bold = |(weighted, heavy): (usize, usize)| weighted > 0 && heavy * 2 > weighted;
+        let field = |w: &[(usize, usize)]| {
+            bold(w[0]) && w[1..].iter().any(|c| c.0 > 0) && w[1..].iter().all(|c| !bold(*c))
+        };
+        let label = rows[0][0].trim();
+        if !field(&weights[0]) || !label.chars().any(char::is_alphabetic) || is_numeric_cell(label)
+        {
+            return false;
+        }
+        let alike: Vec<usize> = (1..rows.len()).filter(|&r| field(&weights[r])).collect();
+        if alike.is_empty() {
+            return false;
+        }
+        let values = |r: usize| -> Vec<&str> {
+            rows[r][1..]
+                .iter()
+                .map(|t| t.trim())
+                .filter(|t| !t.is_empty())
+                .collect()
+        };
+        let figures = |r: usize| {
+            let v = values(r);
+            !v.is_empty() && v.iter().all(|t| is_numeric_cell(t))
+        };
+        if alike.iter().all(|&r| figures(r)) && !figures(0) {
+            return false;
+        }
+        // One value: no rule parts the cells after the label, in the first
+        // row or the one under it. A label spanning columns the next row
+        // names one by one is a banner over them (`Payment Due Dates` over
+        // `(a) 4/15` and `(b) 6/15`).
+        cols == 2 || {
+            let m = self.merges(rules, fills);
+            (0..2).all(|r| (2..cols).all(|c| m.continues_left[r * cols + c]))
+        }
     }
 
     /// A list of fields ruled into rows, `Label | value` on every row, the
@@ -1381,7 +1451,20 @@ impl Grid {
                 .map(|r| text(r, 1))
                 .filter(|t| !t.is_empty())
                 .all(|t| words(first) < words(t));
-        if !labelled || names {
+        // Nor over figures: a value column of figures on most rows under
+        // the first, and a phrase in the first, is a header naming them
+        // however plainly it is set (`Benzene %RSD Peak Area Ratios (n =
+        // 6)` over `0.94`, `1.35`). A quantity is a value like the figures
+        // (`38.7 ± 9.89`, `5 Years`), and one word as much a value as a
+        // name (`APCI` over an ion source's temperatures): the list stands.
+        let below: Vec<&str> = (1..n)
+            .map(|r| text(r, 1))
+            .filter(|t| !t.is_empty())
+            .collect();
+        let figures = below.iter().filter(|t| is_numeric_cell(t)).count();
+        let heads_figures =
+            figures * 2 > below.len() && !reads_as_quantity(first) && words(first) >= 2;
+        if !labelled || names || heads_figures {
             return false;
         }
         let Some(strokes) = (1..n)
@@ -10755,6 +10838,223 @@ mod header_tests {
             None,
         );
         assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 1);
+    }
+
+    /// A grid of `rows`, 20pt each, columns at `xs`: each cell's text set
+    /// in its weight, a rule under every row across the grid, and the
+    /// vertical `rules` given.
+    fn weighted_grid(
+        xs: &[f64],
+        rows: &[&[(&str, Option<u32>)]],
+        verticals: Vec<Rule>,
+    ) -> (Grid, Vec<Vec<String>>, Vec<crate::glyph::Glyph>, Vec<Rule>) {
+        let ys: Vec<f64> = (0..=rows.len()).map(|i| 100.0 + 20.0 * i as f64).collect();
+        let (left, right) = (xs[0], xs[xs.len() - 1]);
+        let g = Grid {
+            layout: None,
+            page: 0,
+            xs: xs.to_vec(),
+            ys: ys.clone(),
+            bbox: BBox {
+                x0: left,
+                y0: ys[0],
+                x1: right,
+                y1: ys[rows.len()],
+            },
+        };
+        let mut glyphs = Vec::new();
+        for (r, cells) in rows.iter().enumerate() {
+            for (c, (text, weight)) in cells.iter().enumerate() {
+                glyphs.extend(text.chars().enumerate().map(|(i, ch)| {
+                    let mut gl = gly(
+                        xs[c] + 5.0 + 5.0 * i as f64,
+                        ys[r] + 15.0,
+                        5.0,
+                        &ch.to_string(),
+                    );
+                    gl.weight = *weight;
+                    gl
+                }));
+            }
+        }
+        let t = rows
+            .iter()
+            .map(|cells| cells.iter().map(|(t, _)| t.to_string()).collect())
+            .collect();
+        let mut rules: Vec<Rule> = ys.iter().map(|&y| h(left, right, y)).collect();
+        rules.extend(verticals);
+        (g, t, glyphs, rules)
+    }
+
+    const BOLD: Option<u32> = Some(700);
+    const PLAIN: Option<u32> = Some(400);
+
+    #[test]
+    fn a_first_row_set_as_the_fields_under_it_is_no_header() {
+        // A parameter list: the first fields' labels bold, their values
+        // plain, the rest plain throughout.
+        let (g, t, glyphs, rules) = weighted_grid(
+            &[0.0, 150.0, 400.0],
+            &[
+                &[("Instrument", BOLD), ("GC 2010 Plus", PLAIN)],
+                &[("Detector", BOLD), ("MS TQ8040", PLAIN)],
+                &[("Carrier Gas", PLAIN), ("Helium", PLAIN)],
+                &[("Flow Rate", PLAIN), ("1.0 mL/min", PLAIN)],
+            ],
+            Vec::new(),
+        );
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 0);
+        // Alone in that setting, the first row is set apart: a header.
+        let (g, t, glyphs, rules) = weighted_grid(
+            &[0.0, 150.0, 400.0],
+            &[
+                &[("Parameter", BOLD), ("Setting", PLAIN)],
+                &[("Carrier Gas", PLAIN), ("Helium", PLAIN)],
+                &[("Flow Rate", PLAIN), ("1.0 mL/min", PLAIN)],
+            ],
+            Vec::new(),
+        );
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 1);
+        // Bold across, over bold labels beside plain values: a header.
+        let (g, t, glyphs, rules) = weighted_grid(
+            &[0.0, 150.0, 400.0],
+            &[
+                &[("Parameter", BOLD), ("Setting", BOLD)],
+                &[("Detector", BOLD), ("MS TQ8040", PLAIN)],
+                &[("Carrier Gas", PLAIN), ("Helium", PLAIN)],
+            ],
+            Vec::new(),
+        );
+        assert!(!g.opens_as_field(&t, &weights_of(&g, &glyphs), &rules, &[]));
+    }
+
+    fn weights_of(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> Vec<Vec<(usize, usize)>> {
+        (0..g.rows()).map(|r| g.cell_weights(glyphs, r)).collect()
+    }
+
+    #[test]
+    fn a_first_field_s_value_spans_the_columns_a_table_nested_under_it_rules() {
+        // The value column parted into three under `Gradient` alone: the
+        // first row's value runs across all three.
+        let xs = [0.0, 100.0, 200.0, 300.0, 400.0];
+        let rows: &[&[(&str, Option<u32>)]] = &[
+            &[
+                ("Column", BOLD),
+                ("C18 2.7", PLAIN),
+                ("µm 50 x", PLAIN),
+                ("3.0 mm", PLAIN),
+            ],
+            &[
+                ("Flow Rate", BOLD),
+                ("0.5 mL/min", PLAIN),
+                ("", None),
+                ("", None),
+            ],
+            &[
+                ("Gradient", BOLD),
+                ("0", PLAIN),
+                ("95", PLAIN),
+                ("5", PLAIN),
+            ],
+            &[("", None), ("8.0", PLAIN), ("10", PLAIN), ("90", PLAIN)],
+        ];
+        let frame = vec![
+            v(100.0, 180.0, 0.0),
+            v(100.0, 180.0, 100.0),
+            v(100.0, 180.0, 400.0),
+        ];
+        let nested = vec![v(140.0, 180.0, 200.0), v(140.0, 180.0, 300.0)];
+        let (g, t, glyphs, rules) =
+            weighted_grid(&xs, rows, frame.iter().chain(&nested).copied().collect());
+        assert!(g.opens_as_field(&t, &weights_of(&g, &glyphs), &rules, &[]));
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 0);
+        // Parted through the first row too, its cells are values apart.
+        let through = vec![v(100.0, 180.0, 200.0), v(100.0, 180.0, 300.0)];
+        let (g, t, glyphs, rules) =
+            weighted_grid(&xs, rows, frame.iter().chain(&through).copied().collect());
+        assert!(!g.opens_as_field(&t, &weights_of(&g, &glyphs), &rules, &[]));
+        // Parted from the second row on, the first is a banner over the
+        // columns the second names.
+        let banner: &[&[(&str, Option<u32>)]] = &[
+            &[
+                ("Section A", BOLD),
+                ("Payment Due", PLAIN),
+                ("Dates", PLAIN),
+                ("", None),
+            ],
+            &[
+                ("", None),
+                ("(a) 4/15", PLAIN),
+                ("(b) 6/15", PLAIN),
+                ("(c) 9/15", PLAIN),
+            ],
+            &[
+                ("Line 16", BOLD),
+                ("100", PLAIN),
+                ("100", PLAIN),
+                ("100", PLAIN),
+            ],
+            &[
+                ("Line 17", BOLD),
+                ("25", PLAIN),
+                ("25", PLAIN),
+                ("25", PLAIN),
+            ],
+        ];
+        let under = vec![v(120.0, 180.0, 200.0), v(120.0, 180.0, 300.0)];
+        let (g, t, glyphs, rules) =
+            weighted_grid(&xs, banner, frame.iter().chain(&under).copied().collect());
+        assert!(!g.opens_as_field(&t, &weights_of(&g, &glyphs), &rules, &[]));
+    }
+
+    #[test]
+    fn a_first_row_over_figures_names_them() {
+        // A bold label beside a plain value, as a bold total is set: the
+        // words over the figures are their header.
+        let (g, t, glyphs, rules) = weighted_grid(
+            &[0.0, 150.0, 400.0],
+            &[
+                &[("Item", BOLD), ("Amount", PLAIN)],
+                &[("Bolt", PLAIN), ("0.40", PLAIN)],
+                &[("Nut", PLAIN), ("0.10", PLAIN)],
+                &[("Total", BOLD), ("0.50", PLAIN)],
+            ],
+            Vec::new(),
+        );
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 1);
+        // Set like the rows under it, ruled like them, the first row of a
+        // label column over figures still names them.
+        let (g, t, glyphs, rules) = field_list(
+            &[
+                ("Test series", "Peak area ratio %RSD (n = 6)"),
+                ("Run 1", "0.94"),
+                ("Run 2", "1.35"),
+                ("Run 3", "0.86"),
+                ("Criteria", "≤ 10"),
+            ],
+            None,
+            None,
+        );
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 1);
+        // A first value that is a value like the figures, a quantity or a
+        // single word, leaves the list a list.
+        for first in [
+            ("Ion Source", "APCI"),
+            ("Mean ± SD", "38.7 ± 9.89"),
+            ("Time to Exit", "5 Years"),
+        ] {
+            let (g, t, glyphs, rules) = field_list(
+                &[
+                    first,
+                    ("Gas Temp. (°C)", "325"),
+                    ("Vaporizer (°C)", "350"),
+                    ("Gas flow (L/min)", "5"),
+                ],
+                None,
+                None,
+            );
+            assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 0, "{first:?}");
+        }
     }
 
     #[test]
