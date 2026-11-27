@@ -2842,6 +2842,73 @@ fn reads_as_rows(grid: &Grid, glyphs: &[Glyph]) -> bool {
 /// at which a ruled grid's cell counts as coarse.
 const PROSE_CELL_WORDS: usize = 25;
 
+/// Drop the rows of a table that hold nothing: a blank row a table sets
+/// between its groups of rows, ruled as its own
+/// ([`table::Grid::trim_to_content_ruled`]). The row is the ruling's
+/// spacing, not data: it is not emitted, and the rows under it number on
+/// from the rows over it. A row a merged cell spans, its text read into the
+/// cell's first row, is part of that cell and stays.
+fn drop_blank_rows(e: &mut Element) {
+    let Some(rows) = e.cells.as_ref() else {
+        return;
+    };
+    let (n, cols) = (rows.len(), rows.first().map_or(0, Vec::len));
+    if n < 3 || cols == 0 || rows.iter().any(|r| r.len() != cols) {
+        return;
+    }
+    let per_cell = |v: &Option<Vec<bool>>| v.as_ref().is_none_or(|v| v.len() == n * cols);
+    if !(per_cell(&e.merged_down) && per_cell(&e.merged_left) && per_cell(&e.spread_left)) {
+        return;
+    }
+    let down = |r: usize, c: usize| e.merged_down.as_ref().is_some_and(|m| m[r * cols + c]);
+    let blank: Vec<usize> = (1..n - 1)
+        .filter(|&r| {
+            rows[r].iter().all(|t| t.trim().is_empty())
+                && (0..cols).all(|c| !down(r, c) && !down(r + 1, c))
+        })
+        .collect();
+    if blank.is_empty() {
+        return;
+    }
+    let keep = |r: &usize| !blank.contains(r);
+    let up = |r: usize| r - blank.iter().filter(|&&b| b < r).count();
+    let rows: Vec<Vec<String>> = rows
+        .iter()
+        .enumerate()
+        .filter(|(r, _)| keep(r))
+        .map(|(_, row)| row.clone())
+        .collect();
+    let flat = |v: &mut Option<Vec<bool>>| {
+        if let Some(v) = v.as_mut() {
+            *v = v
+                .chunks(cols)
+                .enumerate()
+                .filter(|(r, _)| keep(r))
+                .flat_map(|(_, row)| row.iter().copied())
+                .collect();
+        }
+    };
+    flat(&mut e.merged_down);
+    flat(&mut e.merged_left);
+    flat(&mut e.spread_left);
+    let indexes = |v: &mut Option<Vec<usize>>| {
+        if let Some(v) = v.as_mut() {
+            *v = v.iter().copied().filter(keep).map(up).collect();
+        }
+    };
+    indexes(&mut e.sub_headers);
+    indexes(&mut e.restated_headers);
+    if let Some(h) = e.header_rows.as_mut() {
+        *h = up(*h);
+    }
+    e.text = rows
+        .iter()
+        .map(|r| r.join(" | "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    e.cells = Some(rows);
+}
+
 /// The table a grid nested in a ruled cell reads as: its own header row,
 /// then a band naming the property it sits under (`Acoustical
 /// Performance`), so its cells carry that as their section, then its rows.
@@ -4583,7 +4650,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // populated cells is the one that explains the page.
         let trim = |mut gs: Vec<Grid>| -> Vec<Grid> {
             for g in gs.iter_mut() {
-                g.trim_to_content(&p.glyphs);
+                g.trim_to_content_ruled(&p.glyphs, &p.rules);
             }
             gs.retain(|g| g.rows() >= 2 && g.cols() >= 1);
             gs
@@ -6754,6 +6821,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .then_some(merges.continues_left),
                 ..Element::new("doco:Table", text, "rust", "rules")
             });
+            let this_table = table_elements.len() - 1;
             in_doubt[gi] = table_elements.last().is_some_and(|t| {
                 table_in_doubt(
                     t,
@@ -6781,6 +6849,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 table_elements.push(nested_table(n, &raw.pages[pi], pi, label, &scrub_texts));
                 tables += 1;
             }
+            drop_blank_rows(&mut table_elements[this_table]);
         }
         // Table-confidence anchors: a table whose reading is in doubt
         // ([`table_in_doubt`]) anchors for a model's reading of its crop. The
@@ -8531,6 +8600,47 @@ mod tests {
             &["See below", "", ""],
         ]);
         assert!(!group_label(&dangling, 1));
+    }
+
+    #[test]
+    fn a_blank_row_inside_a_table_is_not_emitted() {
+        let mut t = Element {
+            cells: Some(grid(&[
+                &["Mode", "Constant flow"],
+                &["", ""],
+                &["Headspace", ""],
+                &["Volume", "1000 µL"],
+                &["Spanned", "x"],
+                &["", ""],
+                &["Last", "y"],
+            ])),
+            header_rows: Some(0),
+            sub_headers: Some(vec![2]),
+            // The second blank row is the merged cell's, set over two rows.
+            merged_down: Some(vec![
+                false, false, false, false, false, false, false, false, false, false, true, false,
+                false, false,
+            ]),
+            ..Element::new("doco:Table", "", "rust", "rules")
+        };
+        drop_blank_rows(&mut t);
+        assert_eq!(
+            t.cells.as_deref(),
+            Some(
+                &grid(&[
+                    &["Mode", "Constant flow"],
+                    &["Headspace", ""],
+                    &["Volume", "1000 µL"],
+                    &["Spanned", "x"],
+                    &["", ""],
+                    &["Last", "y"],
+                ])[..]
+            )
+        );
+        assert_eq!(t.sub_headers, Some(vec![1]));
+        assert_eq!(t.merged_down.as_ref().map(Vec::len), Some(12));
+        assert_eq!(t.merged_down.as_ref().map(|m| m[8]), Some(true));
+        assert!(t.text.starts_with("Mode | Constant flow\nHeadspace | "));
     }
 
     #[test]
