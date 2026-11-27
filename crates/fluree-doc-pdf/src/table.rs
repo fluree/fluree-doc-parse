@@ -5110,6 +5110,7 @@ pub fn detect_framed(
 ) -> Vec<Grid> {
     let grids = detect_framed_rules(rules, fills, glyphs, page, frames)
         .into_iter()
+        .map(|g| cut_to_box(g, rules, fills, glyphs))
         .map(|g| cut_page_head(g, rules, glyphs))
         .collect();
     with_column_bands(with_header_band_edges(grids, fills, glyphs), rules, glyphs)
@@ -5215,6 +5216,136 @@ fn cut_page_head(g: Grid, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) -> Gri
         ..g
     }
 }
+
+/// Fewest of a grid's row boundaries a box holds inside it to frame rows of
+/// the grid: two, a table's rows ruled apart within it. A row's own
+/// shading, or a header's band, holds none.
+const BOX_INNER_EDGES: usize = 2;
+
+/// A grid cut to the box its table is set in: a filled box across the
+/// grid's width and short of its height, holding rows of the grid ruled
+/// apart inside it, one of its edges running through a row of the grid
+/// that holds text on both sides of it. That row ran the box's first line
+/// together with what stands over it (a receipt's stay details over its
+/// `DESCRIPTION | RATE | AMOUNT`), ruled off by the page's rules over the
+/// box, those rules running past the box's sides. The table is the box's:
+/// the rows outside it are the page's.
+///
+/// The box opens on the table's header, naming its columns. A header set on
+/// the page over a shaded body meets the box at a row's edge, and nothing
+/// is cut.
+fn cut_to_box(
+    g: Grid,
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+) -> Grid {
+    if g.layout.is_some() || g.rows() < 2 {
+        return g;
+    }
+    let tol = EDGE_TOLERANCE;
+    let (gx0, gx1) = (g.xs[0], g.xs[g.cols()]);
+    let (gy0, gy1) = (g.ys[0], g.ys[g.rows()]);
+    // Glyphs of the grid's width in `y0..y1`.
+    let any_in = |y0: f64, y1: f64| {
+        glyphs.iter().any(|gl| {
+            !gl.text.trim().is_empty()
+                && gl.bbox.is_some_and(|b| {
+                    let (x, y) = gl.center();
+                    x >= gx0 && x <= gx1 && y > y0 && y < y1 && b.y0 >= y0 - tol
+                })
+        })
+    };
+    // The row an edge at `y` runs through, text on both sides of it.
+    let straddled = |y: f64| {
+        g.ys.windows(2)
+            .any(|w| w[0] < y - tol && w[1] > y + tol && any_in(w[0], y) && any_in(y, w[1]))
+    };
+    let Some(b) = fills
+        .iter()
+        .map(|f| f.bbox)
+        .filter(|b| b.x0 <= gx0 + tol && b.x1 >= gx1 - tol)
+        .filter(|b| b.y0 > gy0 + tol || b.y1 < gy1 - tol)
+        .filter(|b| {
+            g.ys.iter()
+                .filter(|&&y| y > b.y0 + tol && y < b.y1 - tol)
+                .count()
+                >= BOX_INNER_EDGES
+        })
+        .find(|b| {
+            // On the side of an edge the grid's row runs through, the grid's
+            // rules are the page's, running past both the box's sides: one at
+            // least, and none of the box's width.
+            let page_ruled = |side: &dyn Fn(f64) -> bool| {
+                let ruled: Vec<&Rule> = rules
+                    .iter()
+                    .filter(|r| r.orientation == Orientation::Horizontal)
+                    .filter(|r| side(r.axis_pos()))
+                    .filter(|r| g.ys.iter().any(|y| (y - r.axis_pos()).abs() <= tol))
+                    .filter(|r| r.bbox.x1 > gx0 && r.bbox.x0 < gx1)
+                    .collect();
+                !ruled.is_empty()
+                    && ruled
+                        .iter()
+                        .all(|r| r.bbox.x0 < b.x0 - tol && r.bbox.x1 > b.x1 + tol)
+            };
+            (straddled(b.y0) && page_ruled(&|y| y < b.y0 - tol))
+                || (straddled(b.y1) && page_ruled(&|y| y > b.y1 + tol))
+        })
+    else {
+        return g;
+    };
+    // The box's edges, or a boundary of the grid's at either.
+    let at = |edge: f64| {
+        g.ys.iter()
+            .copied()
+            .find(|y| (y - edge).abs() <= tol)
+            .unwrap_or(edge)
+    };
+    let (top, bottom) = (at(b.y0).max(gy0), at(b.y1).min(gy1));
+    let mut ys = vec![top];
+    ys.extend(
+        g.ys.iter()
+            .copied()
+            .filter(|&y| y > top + tol && y < bottom - tol),
+    );
+    ys.push(bottom);
+    let cut = Grid {
+        bbox: BBox {
+            y0: top,
+            y1: bottom,
+            ..g.bbox
+        },
+        ys,
+        ..g.clone()
+    };
+    // The box opens on its table's header: its first row names two columns
+    // or more, each in a few words, no figure or leader among them. A box
+    // of fields run on with leaders (`Wages . . . 125,000`) is a form's.
+    let cells = cut.cell_texts(glyphs);
+    let names: Vec<&str> = cells[..cut.cols()]
+        .iter()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let named = names.len() >= 2
+        && names.iter().all(|t| {
+            t.split_whitespace().count() <= BOX_HEAD_WORDS
+                && t.chars().any(char::is_alphabetic)
+                && !t.chars().any(|c| c.is_ascii_digit())
+                && !t.contains("..")
+                && !t.contains(". .")
+        });
+    if named {
+        cut
+    } else {
+        g
+    }
+}
+
+/// Most words a column's name in a box's first row runs to: a header's
+/// label, not a field's line.
+const BOX_HEAD_WORDS: usize = 4;
 
 /// [`detect_framed`]'s grids, as the rules alone give them.
 fn detect_framed_rules(
@@ -7885,8 +8016,61 @@ pub fn detect_aligned(
     }
     for g in out.iter_mut() {
         extend_by_banner(g, &rows);
+        drop_field_line(g, glyphs, rules);
     }
     out
+}
+
+/// Least share of an aligned grid's width a rule spans to rule its first
+/// row off from the rest: the grid's own width, its cells' ends allowed for.
+const FIELD_LINE_RULE_SPAN: f64 = 0.9;
+
+/// Drop an aligned grid's first row where it is a line of fields, each a
+/// label set inline with its value (`Guest Name: Sanjay | Date:
+/// 31/12/2017`), ruled off from the rows under it by a rule across the
+/// grid: the page's facts over the table, not the names of its columns. A
+/// header names its columns; a field states its own value. The grid starts
+/// at the rule.
+fn drop_field_line(g: &mut Grid, glyphs: &[crate::glyph::Glyph], rules: &[Rule]) {
+    if g.layout.is_some() || g.rows() < 3 {
+        return;
+    }
+    let cols = g.cols();
+    let cells = g.cell_texts(glyphs);
+    let first: Vec<&str> = cells[..cols]
+        .iter()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if first.len() < 2 || !first.iter().all(|t| label_colon(t) == Some(false)) {
+        return;
+    }
+    let (x0, x1) = (g.xs[0], g.xs[cols]);
+    // The ink of a row: its glyphs' tops and bottoms.
+    let ink = |r: usize| {
+        glyphs
+            .iter()
+            .filter(|gl| !gl.text.trim().is_empty())
+            .filter_map(|gl| gl.bbox.map(|b| (gl.center(), b)))
+            .filter(|((x, y), _)| *x >= x0 && *x <= x1 && *y >= g.ys[r] && *y < g.ys[r + 1])
+            .fold((f64::MAX, f64::MIN), |(lo, hi), (_, b)| {
+                (lo.min(b.y0), hi.max(b.y1))
+            })
+    };
+    let (above, below) = (ink(0).1, ink(1).0);
+    let ruled = rules.iter().find(|r| {
+        r.orientation == Orientation::Horizontal
+            && r.axis_pos() > above
+            && r.axis_pos() < below
+            && r.bbox.x1.min(x1) - r.bbox.x0.max(x0) >= (x1 - x0) * FIELD_LINE_RULE_SPAN
+    });
+    let Some(rule) = ruled else {
+        return;
+    };
+    let top = rule.axis_pos();
+    g.ys.remove(0);
+    g.ys[0] = top;
+    g.bbox.y0 = top;
 }
 
 /// Take into an accepted grid the column banner set just above it.
@@ -12151,6 +12335,103 @@ mod header_tests {
         let (g, glyphs, rules) = form(false);
         let ys = g.ys.clone();
         assert_eq!(cut_page_head(g, &rules, &glyphs).ys, ys);
+    }
+
+    /// A receipt's grid as the page's rules read it: two rows over a filled
+    /// box (the page's fields, then stay details), the box's header in the
+    /// second row with them, its rows ruled inside it, and a note under it.
+    /// `over` sets the stay details over the box. The page's rules at the
+    /// grid's top two edges run from `x0` to `x1`.
+    fn receipt(
+        over: bool,
+        x0: f64,
+        x1: f64,
+    ) -> (
+        Grid,
+        Vec<crate::glyph::Glyph>,
+        Vec<crate::rule::Fill>,
+        Vec<Rule>,
+    ) {
+        let g = plain_grid(
+            vec![42.0, 297.0, 470.0, 552.0],
+            vec![68.0, 96.0, 216.0, 253.0, 290.0, 327.0, 367.0, 476.0],
+        );
+        let mut glyphs = vec![
+            gly(50.0, 88.0, 60.0, "Guest"),
+            gly(50.0, 200.0, 60.0, "DESCRIPTION"),
+            gly(400.0, 200.0, 30.0, "RATE"),
+            gly(480.0, 200.0, 40.0, "AMOUNT"),
+            gly(50.0, 240.0, 60.0, "Room"),
+            gly(50.0, 278.0, 60.0, "Grand"),
+            gly(50.0, 315.0, 60.0, "Payment"),
+            gly(50.0, 352.0, 60.0, "Balance"),
+            gly(50.0, 420.0, 60.0, "Note"),
+        ];
+        if over {
+            glyphs.push(gly(50.0, 120.0, 60.0, "Hotel"));
+        }
+        let rules = vec![h(x0, x1, 67.7), h(x0, x1, 95.7)];
+        (g, glyphs, vec![fill(41.0, 179.0, 553.0, 368.0)], rules)
+    }
+
+    #[test]
+    fn a_box_of_leadered_fields_is_not_cut_to() {
+        // The box opens on a field run on with leaders, not on names.
+        let (g, mut glyphs, fills, rules) = receipt(true, 28.0, 566.0);
+        glyphs.retain(|gl| !matches!(gl.text.as_str(), "DESCRIPTION" | "RATE" | "AMOUNT"));
+        glyphs.push(gly(50.0, 200.0, 200.0, "Wages . . . . . . . ."));
+        glyphs.push(gly(480.0, 200.0, 40.0, "125,000"));
+        let ys = g.ys.clone();
+        assert_eq!(cut_to_box(g, &rules, &fills, &glyphs).ys, ys);
+    }
+
+    #[test]
+    fn a_grid_run_over_a_boxed_table_is_cut_to_the_box() {
+        let (g, glyphs, fills, rules) = receipt(true, 28.0, 566.0);
+        let g = cut_to_box(g, &rules, &fills, &glyphs);
+        assert_eq!(g.ys, vec![179.0, 216.0, 253.0, 290.0, 327.0, 367.0]);
+        assert_eq!(g.cell_texts(&glyphs)[0], "DESCRIPTION");
+        // Where nothing stands over the box in the row its edge runs
+        // through, that row is the box's header set on the page: no cut.
+        let (g, glyphs, fills, rules) = receipt(false, 28.0, 566.0);
+        let ys = g.ys.clone();
+        assert_eq!(cut_to_box(g, &rules, &fills, &glyphs).ys, ys);
+        // Nor where the rules over the box stop within its width: they are
+        // the table's own, a form's boxes ruled as its rows are.
+        let (g, glyphs, fills, rules) = receipt(true, 42.0, 552.0);
+        let ys = g.ys.clone();
+        assert_eq!(cut_to_box(g, &rules, &fills, &glyphs).ys, ys);
+    }
+
+    #[test]
+    fn a_line_of_fields_ruled_off_over_an_aligned_table_is_no_header() {
+        let mut g = plain_grid(
+            vec![40.0, 300.0, 400.0, 560.0],
+            vec![70.0, 95.0, 115.0, 135.0],
+        );
+        let mut glyphs = vec![
+            gly(42.0, 88.0, 70.0, "Guest Name: Avery"),
+            gly(402.0, 88.0, 70.0, "Date: 31/12/2017"),
+        ];
+        for (k, t) in ["Hotel Details", "Check In", "Rooms"].iter().enumerate() {
+            glyphs.push(gly([42.0, 302.0, 402.0][k], 110.0, 40.0, t));
+        }
+        for (k, t) in ["Resort", "31/12/2017", "1"].iter().enumerate() {
+            glyphs.push(gly([42.0, 302.0, 402.0][k], 130.0, 40.0, t));
+        }
+        let rules = vec![h(30.0, 570.0, 96.0)];
+        drop_field_line(&mut g, &glyphs, &rules);
+        assert_eq!(g.rows(), 2);
+        assert_eq!(g.cell_texts(&glyphs)[0], "Hotel Details");
+        // Column names over the rule stay the header.
+        let mut g = plain_grid(
+            vec![40.0, 300.0, 400.0, 560.0],
+            vec![70.0, 95.0, 115.0, 135.0],
+        );
+        glyphs[0] = gly(42.0, 88.0, 70.0, "Guest Name");
+        glyphs[1] = gly(402.0, 88.0, 70.0, "Date");
+        drop_field_line(&mut g, &glyphs, &rules);
+        assert_eq!(g.rows(), 3);
     }
 }
 
