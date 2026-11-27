@@ -1328,11 +1328,30 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     } else {
                         Vec::new()
                     };
+                    // A header restated in a row whose first cell spans down
+                    // the rows under it names those rows alone: a table
+                    // nested in a list of fields, its label set down its rows
+                    // (`Gradient` beside `Time (min) | A% | B%`). The fields
+                    // after the span go back to the table's own names, and
+                    // the label is the rows' own, no column's name.
+                    let stub_span_end = |s: usize| -> Option<usize> {
+                        let m = e.merged_down.as_deref()?;
+                        let at = |r: usize| m.get(r * ncols).copied().unwrap_or(false);
+                        if !at(s + 1) {
+                            return None;
+                        }
+                        let mut end = s + 1;
+                        while end + 1 < rows.len() && at(end + 1) {
+                            end += 1;
+                        }
+                        Some(end)
+                    };
                     let restated_header = |s: usize| -> Vec<String> {
+                        let nested = stub_span_end(s).is_some();
                         (0..ncols)
                             .map(|c| {
                                 let label = rows[s].get(c).map_or("", |t| t.trim());
-                                if label.is_empty() {
+                                if label.is_empty() || (nested && c == 0) {
                                     return header.get(c).cloned().unwrap_or_default();
                                 }
                                 match upper.get(c).map(|u| u.trim()).filter(|u| !u.is_empty()) {
@@ -1369,16 +1388,21 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         let header = restated_headers
                             .iter()
                             .rev()
-                            .find(|(s, _)| *s < r)
+                            .find(|(s, _)| *s < r && stub_span_end(*s).is_none_or(|end| r <= end))
                             .map_or(&header, |(_, h)| h);
                         // The bands over a row: the nearest above it, and
                         // each band set directly over that one, a group over
                         // its sub-group (`Power Management` over `Average
                         // power requirements (W)`), joined from the top down
                         // as a stacked header's labels are.
+                        // A section runs on to the next band, or to a break the
+                        // table set between its groups (a blank row), where
+                        // the rows go on with no section over them.
+                        let breaks = e.section_breaks.as_deref().unwrap_or(&[]);
                         let section = (!subs.contains(&r))
                             .then(|| subs.iter().filter(|s| **s < r && **s >= n_header).max())
                             .flatten()
+                            .filter(|&&s| !breaks.iter().any(|&b| b > s && b <= r))
                             .map(|&s| {
                                 let mut top = s;
                                 while top > n_header && subs.contains(&(top - 1)) {
@@ -1502,11 +1526,19 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             em.nodes[cell_idx]
                                 .insert("doc:rowIndex".into(), json!(rows_before + r - n_header));
                             em.nodes[cell_idx].insert("doc:columnIndex".into(), json!(c));
+                            // A cell set across every column of its row, a
+                            // band or a note closing the table, is no one
+                            // column's value: the first column's header
+                            // does not name it.
+                            let whole_row = c == 0
+                                && ncols > 1
+                                && (subs.contains(&r)
+                                    || (1..ncols).all(|k| own_left[r * ncols + k]));
                             if let Some(h) = spread
                                 .heads
                                 .get(&(r, c))
                                 .or(header.get(c))
-                                .filter(|h| !h.is_empty())
+                                .filter(|h| !h.is_empty() && !whole_row)
                             {
                                 em.nodes[cell_idx]
                                     .insert("doc:columnHeader".into(), Value::String(h.clone()));
@@ -2000,10 +2032,71 @@ mod tests {
             .expect("the closing band is a cell");
         assert_eq!(notes["doc:columnIndex"], json!(0));
         assert!(notes.get("doc:sectionLabel").is_none());
+        // Across every column, it is no one column's value.
+        assert!(notes.get("doc:columnHeader").is_none());
         // A band with data under it is no cell of its own.
         assert!(!cells
             .iter()
             .any(|c| c["doc:cellValue"] == "Power Management"));
+    }
+
+    #[test]
+    fn a_note_merged_across_every_column_has_no_column_header() {
+        // A settings table closed by a note in one cell across the table,
+        // its columns' rules not drawn through it.
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            [
+                ["Time (min)", "Ions", "Gain"],
+                ["0 - 2.6", "29 - 45", "5"],
+                ["2.6 - 4", "29 - 65", "1"],
+                ["Ions 78 and 51 are read in SIM mode.", "", ""],
+            ]
+            .iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect(),
+        );
+        t.header_rows = Some(1);
+        let mut left = vec![false; 12];
+        left[10] = true;
+        left[11] = true;
+        t.merged_left = Some(left);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let note = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "Ions 78 and 51 are read in SIM mode.")
+            .expect("the note is a cell");
+        assert!(note.get("doc:columnHeader").is_none());
+        let time = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "2.6 - 4")
+            .unwrap();
+        assert_eq!(time["doc:columnHeader"], "Time (min)");
+
+        // Merged across two of three columns, a value stays the first's.
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            [
+                ["Time (min)", "Ions", "Gain"],
+                ["0 - 2.6", "29 - 45", "5"],
+                ["Not read", "", "1"],
+            ]
+            .iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect(),
+        );
+        t.header_rows = Some(1);
+        let mut left = vec![false; 9];
+        left[7] = true;
+        t.merged_left = Some(left);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let part = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "Not read")
+            .unwrap();
+        assert_eq!(part["doc:columnHeader"], "Time (min)");
     }
 
     fn row_header_of<'a>(cells: &'a [Value], value: &str) -> &'a Value {
@@ -2305,6 +2398,73 @@ mod tests {
             "every row under it until the next"
         );
         assert!(cell("By wt").is_empty(), "the row itself is not data");
+    }
+
+    #[test]
+    fn a_section_ends_where_the_table_set_a_break_between_its_groups() {
+        let mut t = el("doco:Table", "", None);
+        t.id = "elem-00001".into();
+        let row = |a: &str, b: &str| vec![a.into(), b.into()];
+        t.cells = Some(vec![
+            row("Instrument", "GC 2010 Plus"),
+            row("Conditions", ""),
+            row("Carrier Gas", "Helium"),
+            row("Sampler", "AOC-5000"),
+            row("Injection Volume", "1000 µL"),
+        ]);
+        t.header_rows = Some(0);
+        t.sub_headers = Some(vec![1]);
+        t.section_breaks = Some(vec![3]);
+        let g = graph(&[t]);
+        let cell = |value: &str| -> Value {
+            g.iter()
+                .find(|n| n["doc:cellValue"] == value)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(cell("Helium")["doc:sectionLabel"], "Conditions");
+        assert!(cell("AOC-5000").get("doc:sectionLabel").is_none());
+        assert!(cell("1000 µL").get("doc:sectionLabel").is_none());
+        assert!(cell("GC 2010 Plus").get("doc:sectionLabel").is_none());
+    }
+
+    #[test]
+    fn a_header_restated_beside_a_label_set_down_its_rows_names_those_rows_alone() {
+        // A list of conditions, no header row; `Gradient` set down the rows
+        // of a table nested in its value column, that table's header beside
+        // it; a field after it.
+        let mut t = el("doco:Table", "", None);
+        t.id = "elem-00001".into();
+        let row = |a: &str, b: &str, c: &str, d: &str| vec![a.into(), b.into(), c.into(), d.into()];
+        t.cells = Some(vec![
+            row("Flow Rate", "0.5 mL/min", "", ""),
+            row("Gradient", "Time (min)", "A%", "B%"),
+            row("", "0", "95", "5"),
+            row("", "8.0", "10", "90"),
+            row("Injection Volume", "5 µL", "", ""),
+        ]);
+        t.header_rows = Some(0);
+        let mut down = vec![false; 20];
+        down[2 * 4] = true;
+        down[3 * 4] = true;
+        t.merged_down = Some(down);
+        t.restated_headers = Some(vec![1]);
+        let g = graph(&[t]);
+        let cell = |value: &str| -> Value {
+            g.iter()
+                .find(|n| n["doc:cellValue"] == value)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(cell("8.0")["doc:columnHeader"], "Time (min)");
+        assert_eq!(cell("90")["doc:columnHeader"], "B%");
+        assert_eq!(cell("8.0")["doc:rowHeader"], "Gradient");
+        // The field after the span is no time, and the label names no
+        // column.
+        assert!(cell("5 µL").get("doc:columnHeader").is_none());
+        assert!(g
+            .iter()
+            .all(|n| n.get("doc:columnHeader").and_then(Value::as_str) != Some("Gradient")));
     }
 
     #[test]

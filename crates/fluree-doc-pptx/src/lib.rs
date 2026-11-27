@@ -411,6 +411,7 @@ pub fn parse_slide_with_charts(
                         shape = match t.as_str() {
                             // The title slide's title is the deck's.
                             "ctrTitle" if page == 0 => Shape::DeckTitle,
+                            "subTitle" if page == 0 => Shape::DeckSubtitle,
                             "title" | "ctrTitle" => Shape::SlideTitle,
                             _ => Shape::Body,
                         };
@@ -498,6 +499,20 @@ pub fn parse_slide_with_charts(
         buf.clear();
     }
     flush(&mut out, &mut text, page, Shape::Body, None);
+    // A subtitle follows its title, whichever shape the slide lists first:
+    // the subtitle and what the slide lists after it, up to the title, go
+    // after the title. With no title it subtitles nothing, and is text.
+    match (
+        out.iter().position(|e| e.kind == "doco:Subtitle"),
+        out.iter().position(|e| e.kind == "doco:Title"),
+    ) {
+        (Some(s), Some(t)) if s < t => {
+            let run: Vec<Element> = out.drain(s..t).collect();
+            out.splice(s + 1..s + 1, run);
+        }
+        (Some(s), None) => out[s].kind = "doco:Paragraph".into(),
+        _ => {}
+    }
     Ok(out)
 }
 
@@ -525,6 +540,10 @@ enum Shape {
     SlideTitle,
     /// The title on the deck's title slide: the deck's own.
     DeckTitle,
+    /// The subtitle on the deck's title slide: the deck's subtitle, its
+    /// first paragraph. The ones after it (a presenter, a date under the
+    /// subtitle) are text.
+    DeckSubtitle,
 }
 
 /// `item` is a list item's depth, its paragraph's outline level `lvl`, for
@@ -539,6 +558,8 @@ fn flush(out: &mut Vec<Element>, buf: &mut String, page: usize, shape: Shape, it
     }
     if shape == Shape::DeckTitle {
         out.push(element("doco:Title", t, None, page));
+    } else if shape == Shape::DeckSubtitle && !out.iter().any(|e| e.kind == "doco:Subtitle") {
+        out.push(element("doco:Subtitle", t, None, page));
     } else if shape == Shape::SlideTitle {
         out.push(element("doco:SectionTitle", t, Some(1), page));
     } else if let Some(depth) = item {
@@ -628,7 +649,30 @@ mod tests {
         ));
         let els = parse_slide_xml(&first, 0).unwrap();
         assert_eq!(els[0].kind, "doco:Title");
-        assert_eq!(els[1].kind, "doco:Paragraph");
+        assert_eq!(els[1].kind, "doco:Subtitle");
+        // Listed before the title, the subtitle still follows it, and the
+        // subtitle's next paragraph is text.
+        let first = slide(&format!(
+            "{}{}",
+            shape(
+                Some("subTitle"),
+                &format!("{}{}", para("Q3 2026"), para("Ada Park"))
+            ),
+            shape(Some("ctrTitle"), &para("Quarterly Review")),
+        ));
+        let kinds: Vec<(String, String)> = parse_slide_xml(&first, 0)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.kind, e.text))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("doco:Title".to_string(), "Quarterly Review".to_string()),
+                ("doco:Subtitle".to_string(), "Q3 2026".to_string()),
+                ("doco:Paragraph".to_string(), "Ada Park".to_string()),
+            ]
+        );
         // A later title slide, a section divider, is a heading like any
         // slide's title.
         let later = slide(&shape(Some("ctrTitle"), &para("Appendix")));

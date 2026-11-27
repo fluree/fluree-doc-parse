@@ -1,0 +1,16 @@
+{
+  "document": {
+    "file": "bosch-bme280-datasheet.pdf",
+    "url": "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf",
+    "sha256": "a2ccdb449fec94380742fe8eec851a11d9bd4142252d332b34682b4deecd7d89",
+    "about": "Bosch Sensortec BME280 sensor datasheet (60 pages): shaded two-column tables, a header row of words over a column of figures."
+  },
+  "checks": [
+    {
+      "id": "table-13-header-over-figures",
+      "found": "2026-11-27",
+      "issue": "Table 13 (page 22) is two columns ruled alike, its header row set like the rows under it. It was read as a list of fields: `Temperature | Typical change in noise compared to 25 °C` became a row, and the percentages had no column name.",
+      "row": {"Temperature": "-10 °C", "Typical change in noise compared to 25 °C": "+25 %"}
+    }
+  ]
+}

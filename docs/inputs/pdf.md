@@ -578,6 +578,15 @@ run across their gutter:
   continues them, alone on its row. A band whose text does not run on as
   prose, such as a figure's labels or a chart's ticks, is left as it was. A
   region in which no band has a gutter is read as before.
+- **A caption of many lines across.** Lines across the gutter part a region
+  only where they are few: two, or one line in five. A caption's or title's
+  lines one after another count as one, so a caption wrapped to six lines
+  over a short stretch of two columns parts it once, as a one-line caption
+  would. This holds where the lines across are fewer than the region's other
+  lines: a column of paragraphs is mostly lines across, one run to each
+  paragraph, and is not read as columns under a caption. A label set
+  sideways, as a diagram's is, stands on no row, so a caption's short last
+  line beside it still goes on from the line over it.
 
 **Blocks side by side.** Two blocks of text set side by side within one
 column's stretch are each read whole, the left first, or the right where it
@@ -916,6 +925,18 @@ these is a figure:
 - a signature under the line and the name it signs;
 - a photo with only a credit in its corner.
 
+Two kinds of label pass whatever their size or length:
+- marks with no letter or figure in them (`..`, `•·`), a chart's data points
+  read as text where the picture carries a text layer of its own;
+- an axis's scale, a line most of whose words (three in four) hold a figure,
+  however many ticks it carries, a misread one among them (`2t50`).
+
+On a page of pictures and a caption, nine-tenths of its text lying on its
+pictures (a figure of charts set as images, each lettered by a text layer of
+its own), the labels are measured against the text off the pictures, the
+caption or the title. Measured against themselves, the larger of them read
+as display type.
+
 A picture's labels still count toward the body size. A picture holds only
 a few, and setting them aside could tip a slide deck's body to another
 size.
@@ -941,13 +962,24 @@ into one grid (`240 | 240` down to `0 | 0`, each panel's title over its
 scale): every column of numbers steps evenly and stands beside a chart's
 plot. A table whose figures step so (a rank, a conversion) stands beside
 no chart, and a grid holding a line of the page's prose is no chart's
-axes. So is a dimension drawing's grid: its lines end in
+axes. So is a grid lying across charts set side by side, each holding part
+of it, as much of it on their drawings together as a grid inside one would
+have: one chart's ticks read with the next one's. The chart holding most of
+it takes its text. So is a dimension drawing's grid: its lines end in
 arrowheads, two or more of them, and its cells hold callouts alone, such as
 figures with their units (`83⁵/16"`, `(2117 mm)`), counts (`2X`) and datum
 letters, with no words but units and a dimension's notes (`TYP`, `MAX`).
 The drawing is a figure, and the callouts and view names around it are its
 labels. A table drawn over a drawing, ruled at its rows and columns and
 mostly filled, stays a table.
+
+**A displayed equation is no table.** An equation whose fractions are set
+over bars lines up its numerators in one row and its terms in the next, and
+reads as a grid. A grid of three rows or fewer, with a relation (`=`) in a
+cell and two cells or more opening or closing on an operator (`×`, `÷`,
+`·`, `+`), its terms run on across the cuts (`× Cs ×`, `× 10`,
+`+ 1000]`), is read as text. A table's cell may hold an equality
+(`R² = 0.9976`) or a product (`2 × 10⁶`) whole within it, and stays a table.
 
 **A chart's scale beside prose.** Where a chart stands in one column and
 the page's prose in the next, the prose's lines and the chart's scale can

@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "pmc5131497.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5131497/",
+    "sha256": "0763dd466519fba9aac988a37884c50e7d4e8f78728fdc2ff00c1a6b2a954d6a",
+    "about": "BMC Medicine 2016, 14:194, PMC5131497. Table 3 (p6) opens on a shaded row naming its label column (`Clinical features`), over italic, unshaded bands (`Triggering factor`, `Laboratory features`, `Treatments`). The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-27 (#494): guard. A first row set apart from the table's bands (shaded, where they are bare) is not its first band."
+  ],
+  "checks": [
+    {
+      "id": "shaded-first-row-is-no-band",
+      "found": "2026-11-27",
+      "issue": "#494: guard. `Clinical features`, shaded over unshaded bands, must not become the first rows' section.",
+      "cell": {"value": "13", "row": "Number of patients"}
+    },
+    {
+      "id": "bands-label-their-rows",
+      "found": "2026-11-27",
+      "issue": "#494: guard. The later bands still label their rows.",
+      "cell": {"value": "13 (100)", "row": "AOSD flare, number (%)", "section": "Triggering factor"}
+    }
+  ]
+}

@@ -520,6 +520,7 @@ impl OcrEngine for OarEngine {
             height: Some(image.height as f64),
             engine: Some(ENGINE.into()),
             words,
+            rules: Vec::new(),
         })
     }
 }
