@@ -425,19 +425,29 @@ fn paragraphs(
 ) -> Result<(), DocError> {
     let mut text = String::new();
     // Fields: whether each open one is past its separator (showing its
-    // result).
+    // result), and how many are not, which hide what they hold. Counted as
+    // they open and close, rather than by looking at every open field for
+    // each character: a file opening a million fields, then holding a
+    // million characters, cost their product.
     let mut fields: Vec<bool> = Vec::new();
+    let mut hiding = 0usize;
     for ch in chars {
-        let shown = fields.iter().all(|r| *r);
+        let shown = hiding == 0;
         match ch.c {
-            '\u{13}' => fields.push(false),
+            '\u{13}' => {
+                fields.push(false);
+                hiding += 1;
+            }
             '\u{14}' => {
-                if let Some(f) = fields.last_mut() {
+                if let Some(f) = fields.last_mut().filter(|f| !**f) {
                     *f = true;
+                    hiding -= 1;
                 }
             }
             '\u{15}' => {
-                fields.pop();
+                if fields.pop() == Some(false) {
+                    hiding -= 1;
+                }
             }
             '\r' | '\u{7}' => {
                 let p = props_at(props, ch.fc);
@@ -448,6 +458,7 @@ fn paragraphs(
                 };
                 out(para, budget)?;
                 fields.clear();
+                hiding = 0;
             }
             _ if !shown => {}
             '\u{2}' => {

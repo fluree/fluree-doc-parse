@@ -451,3 +451,46 @@ fn a_paragraph_finds_its_properties_by_search() {
     assert_eq!(props_at(&runs, 2 * n + 5), ParaProps::default());
     assert_eq!(props_at(&[(10, 20, runs[1].2)], 5), ParaProps::default());
 }
+
+/// The paragraphs `paragraphs` makes of `s`, as text.
+fn para_texts(s: &str) -> Vec<String> {
+    let mut got = Vec::new();
+    paragraphs(
+        s.chars().map(|c| Char { c, fc: 0 }),
+        &[],
+        None,
+        &mut Budget::default(),
+        &mut |p, _| {
+            got.push(p.text);
+            Ok(())
+        },
+    )
+    .unwrap();
+    got
+}
+
+#[test]
+fn fields_show_their_results_however_they_nest_or_are_left_open() {
+    // A field in a field's result shows its own result; one in a field's
+    // code shows nothing; a separator past the result, or an end with no
+    // field open, changes nothing.
+    assert_eq!(
+        para_texts("a\u{13}X\u{14}b\u{13}Y\u{14}c\u{15}d\u{15}e\r"),
+        ["abcde"]
+    );
+    assert_eq!(
+        para_texts("a\u{13}X\u{13}Y\u{14}y\u{15}Z\u{14}b\u{14}c\u{15}\u{15}d\r"),
+        ["abcd"]
+    );
+    // Fields left open hide the rest of their paragraph only.
+    assert_eq!(
+        para_texts("a\u{13}\u{13}\u{13}hidden\rshown\r"),
+        ["a", "shown"]
+    );
+    // A million fields opened, each showing its result, never closed,
+    // then a million characters: read in one pass (looking at every open
+    // field for each character, a million million steps), and all shown.
+    let n = 1 << 20;
+    let s = format!("{}{}\r", "\u{13}\u{14}".repeat(n), "x".repeat(n));
+    assert_eq!(para_texts(&s)[0].len(), n);
+}
