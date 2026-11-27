@@ -5398,8 +5398,8 @@ pub fn continued_row(
 /// is (bold in each cell, or shaded), with labels in two cells or more and
 /// no figures, and the next page opens on a table drawn at its columns
 /// ([`opens_under`]). A row of a table's body is set as the rows under it
-/// are (`• Diagnostic tests | $0 Talk to your provider`, `Authorized
-/// entrants: | Refer to the daily roster`): bold nowhere, or in its label
+/// are (`• Lab tests | $0 per visit`, `Entrants: | See the day's
+/// list`): bold nowhere, or in its label
 /// alone. A column's name is a phrase ([`HEAD_LABEL_WORDS`]); captions
 /// boxed side by side at the foot, over the next page's figures in boxes
 /// at the same places, are sentences.
