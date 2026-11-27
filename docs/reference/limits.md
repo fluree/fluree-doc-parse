@@ -231,11 +231,55 @@ walking the table as the writer does, without making a copy): each cell a
 merge fills, a node of its own, at a cell's cost, and each byte copied,
 merged value or label, at the text's. A cell's labels are counted on every
 table, merged or not: a long row label over many columns is the same copy.
+A part of a table a page break carried on (`continues`) is written with
+what it takes from the part before: the column names in force at that
+part's end, on a part with no header of its own, the band open at its foot,
+on each row until the part's own first band or break, and the value it ends
+on in a cell the break cut. None is in the part's own cells, so the budget
+counts them on every cell they land on, with the part before
+(`fluree_doc_model::doco::TableCopies`, which the budget keeps across a
+document's tables): a band of 6,000 characters at the foot of one page,
+over 10,000 rows on the next, is 120 MB of labels from 6 KB, and is refused.
 The 5.3 GB above is 4.4 B a byte copied, under the 12 the budget counts;
 both files are refused as DoCO now, before a copy is made. DoCO now writes
 its graph a node at a time, and holds the merged values while it writes a
 table but not the labels; the labels are counted all the same, as the
-bound on what a few kilobytes of merges make it write. Only DoCO makes
+bound on what a few kilobytes of merges make it write.
+
+A PDF's tables, an XPS document's and those an OCR reading makes are laid
+out from what the page draws, by a layout that keeps no budget: their
+copies are spent once the document's elements are final (after the model
+tiers' readings and the pages not asked for left out), from the
+budget the pages were read within. Past it, a PDF or an XPS document is
+read short, as it is past the budget while its pages are read: to the most
+pages whose glyphs and tables' copies fit together, the pages dropped
+giving back what their glyphs spent, the rest listed `PastMemoryLimit`. A
+table on a document's first page that does not fit alone, and an image
+(one page), leave nothing to read short and are refused.
+
+What is made after, and may be left out without the document being
+wrong, is spent from what the pages and their tables left, all or
+nothing, and never reads the document short:
+
+- the notes a PDF's readers left (`--comments`): past what is left, all
+  of them are left out, with a warning (`warning: <stem>: notes left out:
+  …`), and the pages are kept whole. Spent before the tables' copies,
+  notes nobody prints could have read a document short of its pages;
+- the text read in the pictures a document places in its flow (a
+  `.docx`'s, an `.xlsx`'s, a `.ppt`'s, an e-mail's), by OCR or a model:
+  each picture's reading (its elements, their text, a table's cells and
+  the copies DoCO writes of them) is spent from what the document, then
+  the pictures before it, left, in the order they are first drawn (a
+  reading the configured model makes in the run, once it has read them
+  all). A picture whose reading is past it is listed unread,
+  `PastMemoryLimit` ([Images nothing read](../formats/doco.md#images-nothing-read)),
+  counted on stderr with `--max-memory` to raise it, and no model is
+  sent it; the document and the pictures before it are kept. Each picture
+  spent from a budget of its own, a document of 256 pictures could take
+  256 times what one document may. An XPS document's pictures are read
+  into its pages, and spent with them, as above. 24 pages of a
+ruled table of 40 rows, each a header of three 46-character names, read in
+2 MiB as Markdown and the text, and to page 15 as DoCO. Only DoCO makes
 these copies: converted to text, a value merged down is counted once a row,
 as the projection shows it, and converted to Markdown, XHTML or JSON,
 nothing is copied, so both files convert.
@@ -616,8 +660,10 @@ building a path before handing it over, a glyph's outline, a shading. Its
 memory is bounded by the content stream's own size, its time by none:
 there is no deadline ([Time](#time)). The layout passes after extraction
 spend the work budget where their cost is the file's choice; their memory
-follows the glyphs kept. The notes left on the pages read are read on a
-budget of their own, after the pages.
+follows the glyphs kept. The notes left on the pages read are read after
+the pages, from what the pages and their tables left ([Copies of a
+table's cells](#copies-of-a-tables-cells)): past it, they are left out,
+not the pages.
 
 The measurements behind each cost are in [How the limits were
 sized](../design/limits.md#a-pdfs-content).

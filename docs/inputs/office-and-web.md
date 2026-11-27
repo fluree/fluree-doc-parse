@@ -193,7 +193,11 @@ decoded; one past either is reported and left as its figure. A document as a
 whole has at most 256 images read, holding 512 million pixels together, as
 their headers state them: a few kilobytes of archive can hold hundreds of
 large images, and past that allowance the rest are counted among those not
-read, with a note saying why. In a library,
+read, with a note saying why. What their readings make is spent from what
+the document left of its memory budget, one picture after the other: a
+picture whose reading is past it is listed `PastMemoryLimit` and counted
+with a note naming `--max-memory`, the document and the pictures before it
+kept ([limits](../reference/limits.md#copies-of-a-tables-cells)). In a library,
 `fluree_doc_docx::parse_with_ocr` (feature `ocr`) does it with an engine;
 `parse_with_media` says where each figure's images are, `read_pictures`
 reads each image once within that allowance (`read_media` reads one part of

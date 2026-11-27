@@ -329,7 +329,10 @@ Its text is read as a DOCX picture's is (see
 [Office files](office-and-web.md#docx)): by OCR (`--ocr`, `--ocr-words`,
 `<stem>_m<n>.json`), by a model's reading supplied (`--tier-results`,
 `<stem>_m<n>.json`) or by the configured model, and placed right after its
-figure. `fdoc dev render-routed` writes each
+figure, within what the message left of its memory budget
+(`email.budget`): an image whose reading is past it is listed
+`PastMemoryLimit`, the message and the images before it kept. `fdoc dev
+render-routed` writes each
 image as `<stem>_m<n>.png`, `kind: "media"`, reason `embedded_image`
 (`small_image` under the floor a model is sent, below), with
 its `figure` and its `part`: the `cid:` URL the message names it by, or

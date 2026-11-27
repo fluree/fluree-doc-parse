@@ -102,7 +102,9 @@ pub struct OcrParse {
     /// The images not read, as `doc:unreadImages` lists them, once for each
     /// figure drawing them, with why: `Missing` (not in the package),
     /// `UnsupportedFormat` (a drawing kept as EMF or WMF, a GIF),
-    /// `PastAllowance` (past [`Allowance::DOCUMENT`]) or `Failed`. Each is
+    /// `PastAllowance` (past [`Allowance::DOCUMENT`]), `PastMemoryLimit`
+    /// (its reading past what the document left of its budget) or
+    /// `Failed`. Each is
     /// left as its figures.
     pub unread: Vec<fluree_doc_model::UnreadImage>,
     /// What went wrong with each image `UnsupportedFormat` or `Failed`, by
@@ -119,15 +121,25 @@ pub struct OcrParse {
 /// [`parse_with_info`], with the text in the document's pictures read by
 /// `engine` and placed right after each figure that draws them
 /// ([`fluree_doc_image::place_after_figures`]), each picture read once,
-/// within [`Allowance::DOCUMENT`].
+/// within [`Allowance::DOCUMENT`] and what the document left of its
+/// budget.
 #[cfg(feature = "ocr")]
 pub fn parse_with_ocr(
     bytes: &[u8],
     engine: &dyn fluree_doc_vision::OcrEngine,
 ) -> Result<OcrParse, DocxError> {
     let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
-    let (mut elements, info, media) = parse_package(&mut pkg)?;
-    let r = fluree_doc_image::read_placed(media, &mut |part| read_media(&mut pkg, part), engine);
+    // The pictures' readings are spent from what the document left of its
+    // budget: together, they take no more than one document may.
+    let mut budget = Budget::default();
+    let (mut elements, info, media) =
+        parse_package_within(&mut pkg, &Options::default(), &mut budget)?;
+    let r = fluree_doc_image::read_placed(
+        media,
+        &mut |part| read_media(&mut pkg, part),
+        engine,
+        &mut budget,
+    );
     fluree_doc_image::place_after_figures(&mut elements, r.read);
     Ok(OcrParse {
         elements,
@@ -185,13 +197,25 @@ pub fn parse_package_options(
     pkg: &mut Package<'_>,
     options: &Options,
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
+    parse_package_within(pkg, options, &mut Budget::default())
+}
+
+/// [`parse_package_options`], spending from `budget`, the document's, and
+/// leaving it spent: a caller that goes on to read the document's pictures
+/// spends what their readings make from what the document left of it
+/// (`fluree_doc_image::read_placed`, as `parse_with_ocr` does), so a
+/// document and its pictures are bounded together.
+pub fn parse_package_within(
+    pkg: &mut Package<'_>,
+    options: &Options,
+    budget: &mut Budget,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
     let main = pkg.main_part("word/document.xml");
     // What the document makes, its body, header, footer and notes, is spent
     // from one budget as it is made, and the parts it is read from, each
     // inflated whole, before.
-    let mut budget = Budget::default();
     let xml = pkg
-        .read_within(&main, &mut budget)?
+        .read_within(&main, budget)?
         .ok_or(DocxError::NoDocument)?;
     // Styles refine what a table's first row is and which paragraphs are
     // the title; a package without them, or with ones that do not parse,
@@ -199,7 +223,7 @@ pub fn parse_package_options(
     let styles = pkg
         .related(&main, "styles", "word/styles.xml")
         .map_err(DocxError::Zip)?;
-    let styles = pkg.read_within(&styles, &mut budget)?;
+    let styles = pkg.read_within(&styles, budget)?;
     let (header_styles, title_styles) = match &styles {
         Some(styles) => (header_row_styles(styles), title_styles(styles)),
         None => (HashSet::new(), TitleStyles::new()),
@@ -209,10 +233,9 @@ pub fn parse_package_options(
     let numbering = pkg
         .related(&main, "numbering", "word/numbering.xml")
         .map_err(DocxError::Zip)?;
-    let numbering = pkg.read_within(&numbering, &mut budget)?;
+    let numbering = pkg.read_within(&numbering, budget)?;
     let numbering = Numbering::new(numbering.as_deref(), styles.as_deref());
-    let (body, figure_rids) =
-        parse_body(&xml, &header_styles, &title_styles, numbering, &mut budget)?;
+    let (body, figure_rids) = parse_body(&xml, &header_styles, &title_styles, numbering, budget)?;
     // The page header and footer: where a controlled document keeps its
     // number, revision and title, which its body never repeats. Each is
     // read once, the header before the body and the footer after it, and
@@ -287,8 +310,8 @@ pub fn parse_package_options(
         }
         Ok(out)
     };
-    let header = read_parts("header", "header", &mut budget)?;
-    let footer = read_parts("footer", "footer", &mut budget)?;
+    let header = read_parts("header", "header", budget)?;
+    let footer = read_parts("footer", "footer", budget)?;
     // Footnotes and endnotes, after the body, each labelled with the
     // number Word shows it by; then the footer; then the comments, which
     // Word does not print, when asked for. Each marked as what it is, so a
@@ -312,7 +335,7 @@ pub fn parse_package_options(
             settings_xml.as_deref(),
             &header_styles,
             &title_styles,
-            &mut budget,
+            budget,
         )?);
     }
     let mut elements = header;

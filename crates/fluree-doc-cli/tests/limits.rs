@@ -338,6 +338,66 @@ fn pages_pdf(n: usize) -> Vec<u8> {
 /// A PDF of `n` pages, each saying its number, then `lines` lines of
 /// words, with `extra(i)` written in the dictionary of page `i`.
 fn pages_pdf_with(n: usize, lines: usize, extra: impl Fn(usize) -> String) -> Vec<u8> {
+    let contents: Vec<String> = (0..n)
+        .map(|i| {
+            let words: String = (0..lines)
+                .map(|l| format!(" 0 -14 Td (Line {l} of page {}, in words) Tj", i + 1))
+                .collect();
+            format!(
+                "BT /F1 12 Tf 72 740 Td (Page number {}) Tj{words} ET",
+                i + 1
+            )
+        })
+        .collect();
+    pdf_of(&contents, extra)
+}
+
+/// A PDF of `pages` pages, each a ruled table of three columns and 40
+/// rows: a header of three long names in 4 pt, over rows of one digit.
+/// DoCO writes each name again on every cell under it (`doc:columnHeader`),
+/// some 5,500 bytes of copies a page, which Markdown and the text do not.
+fn ruled_tables_pdf(pages: usize) -> Vec<u8> {
+    ruled_tables_pdf_with(pages, |_| String::new())
+}
+
+/// [`ruled_tables_pdf`], with `extra(i)` written in the dictionary of page
+/// `i`.
+fn ruled_tables_pdf_with(pages: usize, extra: impl Fn(usize) -> String) -> Vec<u8> {
+    let (rows, top, h) = (40, 720, 18);
+    let x = [72, 222, 372, 522];
+    let mut page = vec!["0.5 w".to_string()];
+    for r in 0..=rows {
+        let y = top - r * h;
+        page.push(format!("{} {y} m {} {y} l S", x[0], x[3]));
+    }
+    for c in x {
+        page.push(format!("{c} {top} m {c} {} l S", top - rows * h));
+    }
+    page.push("BT".into());
+    for r in 0..rows {
+        for (c, left) in x[..3].iter().enumerate() {
+            let (size, text) = match r {
+                0 => (
+                    4,
+                    format!("Column {c} named at a great length, to be copied"),
+                ),
+                _ => (10, ((r + c) % 10).to_string()),
+            };
+            let y = top - r * h - 13;
+            page.push(format!(
+                "/F1 {size} Tf 1 0 0 1 {} {y} Tm ({text}) Tj",
+                left + 4
+            ));
+        }
+    }
+    page.push("ET".into());
+    pdf_of(&vec![page.join("\n"); pages], extra)
+}
+
+/// A PDF of a page drawing each of `contents` in Helvetica (`/F1`), with
+/// `extra(i)` written in the dictionary of page `i`.
+fn pdf_of(contents: &[String], extra: impl Fn(usize) -> String) -> Vec<u8> {
+    let n = contents.len();
     let font = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
     let mut objs = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
@@ -350,14 +410,7 @@ fn pages_pdf_with(n: usize, lines: usize, extra: impl Fn(usize) -> String) -> Ve
         ),
         font.to_string(),
     ];
-    for i in 0..n {
-        let words: String = (0..lines)
-            .map(|l| format!(" 0 -14 Td (Line {l} of page {}, in words) Tj", i + 1))
-            .collect();
-        let text = format!(
-            "BT /F1 12 Tf 72 740 Td (Page number {}) Tj{words} ET",
-            i + 1
-        );
+    for (i, text) in contents.iter().enumerate() {
         objs.push(format!(
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
              /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R {} >>",
@@ -527,6 +580,136 @@ fn a_pdf_past_its_memory_is_read_to_the_last_whole_page_and_says_so() {
 }
 
 #[test]
+fn a_pdf_whose_tables_doco_copies_past_its_memory_is_read_short_as_doco() {
+    // Its glyphs fit in 2 MiB, and Markdown and the text write each header
+    // once: they convert whole. DoCO writes the headers on every cell, which
+    // the 2 MiB do not hold: read to a page, the rest listed past the
+    // memory limit, as a PDF whose pages do not fit is.
+    let dir = scratch("copies");
+    let pdf = dir.join("tables.pdf");
+    std::fs::write(&pdf, ruled_tables_pdf(24)).unwrap();
+    let pdf = pdf.to_str().unwrap();
+    let convert = |format: &str| {
+        let args = ["convert", pdf, "--no-escalate", "-f", format];
+        fdoc(&dir, &[&args[..], &["--max-memory", "2"]].concat(), &[])
+    };
+    for format in ["md", "text"] {
+        let o = convert(format);
+        assert!(o.status.success(), "{}", stderr(&o));
+        assert!(stderr(&o).is_empty(), "{format}: {}", stderr(&o));
+    }
+    let o = convert("doco");
+    assert!(o.status.success(), "{}", stderr(&o));
+    let e = stderr(&o);
+    let read: usize = e
+        .split("read to page ")
+        .nth(1)
+        .and_then(|t| t.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("{e}"));
+    assert!(read > 0 && read < 24, "{e}");
+    assert!(
+        e.contains(&format!("read to page {read} (raise it with --max-memory)")),
+        "{e}"
+    );
+    let graph = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(
+        graph.matches("PastMemoryLimit").count(),
+        24 - read,
+        "{graph}"
+    );
+    // Within its budget, whole.
+    let o = fdoc(&dir, &["convert", pdf, "--no-escalate", "-f", "doco"], &[]);
+    assert!(
+        o.status.success() && stderr(&o).is_empty(),
+        "{}",
+        stderr(&o)
+    );
+}
+
+/// An XPS document of `pages` pages, each a table of three columns and 40
+/// rows set out in aligned runs of text: a header of three names over rows
+/// of numbers. DoCO writes each name again on every cell under it, some
+/// 3,000 bytes of copies a page.
+fn aligned_tables_xps(pages: usize) -> Vec<u8> {
+    use std::io::Write;
+    let ns = "http://schemas.microsoft.com/xps/2005/06";
+    let glyphs = |x: usize, y: usize, text: &str| {
+        let indices: Vec<&str> = text
+            .chars()
+            .map(|c| if c == ' ' { ",25" } else { ",55" })
+            .collect();
+        format!(
+            "<Glyphs OriginX=\"{x}\" OriginY=\"{y}\" FontRenderingEmSize=\"12\" UnicodeString=\"{text}\" Indices=\"{}\"/>",
+            indices.join(";")
+        )
+    };
+    let mut page = String::new();
+    for r in 0..40 {
+        for c in 0..3 {
+            let text = match r {
+                0 => format!("Column {c} named at length"),
+                _ => format!("{}0.5", (r + c) % 10),
+            };
+            page.push_str(&glyphs(96 + 200 * c, 100 + 22 * r, &text));
+        }
+    }
+    let page =
+        format!("<FixedPage Width=\"816\" Height=\"1056\" xmlns=\"{ns}\">{page}</FixedPage>");
+    let listed: String = (1..=pages)
+        .map(|i| format!("<PageContent Source=\"Pages/{i}.fpage\"/>"))
+        .collect();
+    let mut parts: Vec<(String, String)> = vec![
+        (
+            "_rels/.rels".into(),
+            format!("<Relationships><Relationship Id=\"R0\" Type=\"{ns}/fixedrepresentation\" Target=\"/seq.fdseq\"/></Relationships>"),
+        ),
+        (
+            "seq.fdseq".into(),
+            format!("<FixedDocumentSequence xmlns=\"{ns}\"><DocumentReference Source=\"/Documents/1/doc.fdoc\"/></FixedDocumentSequence>"),
+        ),
+        (
+            "Documents/1/doc.fdoc".into(),
+            format!("<FixedDocument xmlns=\"{ns}\">{listed}</FixedDocument>"),
+        ),
+    ];
+    parts.extend((1..=pages).map(|i| (format!("Documents/1/Pages/{i}.fpage"), page.clone())));
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    for (name, body) in &parts {
+        z.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(body.as_bytes()).unwrap();
+    }
+    z.finish().unwrap();
+    buf.into_inner()
+}
+
+#[test]
+fn an_xps_documents_tables_are_spent_their_doco_copies_too() {
+    // Laid out by the PDF pipeline, its tables are spent as a PDF's are:
+    // within 1 MiB as Markdown and the text, not as DoCO, read to a page.
+    let dir = scratch("xps-copies");
+    let xps = dir.join("tables.xps");
+    std::fs::write(&xps, aligned_tables_xps(60)).unwrap();
+    let xps = xps.to_str().unwrap();
+    let convert = |format: &str| {
+        let args = ["convert", xps, "--no-escalate", "-f", format];
+        fdoc(&dir, &[&args[..], &["--max-memory", "1"]].concat(), &[])
+    };
+    for format in ["md", "text"] {
+        let o = convert(format);
+        assert!(o.status.success(), "{}", stderr(&o));
+        assert!(stderr(&o).is_empty(), "{format}: {}", stderr(&o));
+    }
+    let o = convert("doco");
+    assert!(o.status.success(), "{}", stderr(&o));
+    let e = stderr(&o);
+    assert!(e.contains("are past the memory limit, not read"), "{e}");
+    assert!(e.contains("(raise it with --max-memory)"), "{e}");
+}
+
+#[test]
 fn a_document_read_short_is_said_under_quiet_where_its_output_cannot() {
     // JSON and text carry no notes: quiet, the cut is still said.
     let dir = scratch("quiet");
@@ -600,4 +783,90 @@ fn a_note_on_a_page_past_the_page_limit_is_not_read() {
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(out.contains("A note on page 2"), "{out}");
     assert!(!out.contains("A note on page 3"), "{out}");
+}
+
+#[test]
+fn a_pdfs_notes_are_read_within_its_budget_or_left_out() {
+    // Two pages of forty lines, which fit in 1 MiB, and two notes of 20,000
+    // letters on the first, which fit in 1 MiB too, but not beside the
+    // pages. Read from a budget of their own, they were kept; read from the
+    // document's, they are left out, said once, and the pages converted
+    // whole.
+    let dir = scratch("long-notes");
+    let pdf = dir.join("noted.pdf");
+    let note = |n: usize| {
+        format!(
+            "<< /Type /Annot /Subtype /Text /Rect [100 700 120 720] \
+             /Contents (Note {n} {}) >>",
+            "y".repeat(20_000)
+        )
+    };
+    let notes = format!("/Annots [{} {}]", note(1), note(2));
+    std::fs::write(
+        &pdf,
+        pages_pdf_with(
+            2,
+            40,
+            |i| if i == 0 { notes.clone() } else { String::new() },
+        ),
+    )
+    .unwrap();
+    let pdf = pdf.to_str().unwrap();
+    let convert = |memory: &[&str]| {
+        let args = ["convert", pdf, "--no-escalate", "--comments"];
+        fdoc(&dir, &[&args[..], memory].concat(), &[])
+    };
+    let o = convert(&["--max-memory", "1"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("Line 39 of page 2,"), "{out}");
+    assert!(!out.contains("Note 1") && !out.contains("Note 2"), "{out}");
+    assert_eq!(
+        stderr(&o),
+        "warning: noted: notes left out: text past the 1 MiB of memory a document may take \
+         (raise it with --max-memory)\n"
+    );
+    // Within its budget, the notes are read.
+    let o = convert(&[]);
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("Note 1") && out.contains("Note 2"), "{out}");
+}
+
+#[test]
+fn a_pdfs_notes_are_spent_after_its_tables_and_never_cut_its_pages() {
+    // Twelve pages of tables whose DoCO copies fit in 2 MiB, and a note of
+    // 60,000 letters on the first that does not fit beside them. The notes
+    // are spent from what the pages and their tables left: left out, the
+    // pages kept whole. Spent before the tables' copies, the note would fit
+    // beside the glyphs, and the tables would read the document short.
+    let dir = scratch("notes-after-tables");
+    let pdf = dir.join("tables.pdf");
+    let note = format!(
+        "/Annots [<< /Type /Annot /Subtype /Text /Rect [100 700 120 720] \
+         /Contents (A long note {}) >>]",
+        "y".repeat(60_000)
+    );
+    let extra = |i: usize| if i == 0 { note.clone() } else { String::new() };
+    std::fs::write(&pdf, ruled_tables_pdf_with(12, extra)).unwrap();
+    let pdf = pdf.to_str().unwrap();
+    let convert = |memory: &[&str]| {
+        let args = ["convert", pdf, "--no-escalate", "-f", "doco", "--comments"];
+        fdoc(&dir, &[&args[..], memory].concat(), &[])
+    };
+    let o = convert(&["--max-memory", "2"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let e = stderr(&o);
+    assert!(e.contains("warning: tables: notes left out"), "{e}");
+    assert!(!e.contains("past the memory limit, not read"), "{e}");
+    let graph = String::from_utf8_lossy(&o.stdout);
+    assert!(!graph.contains("PastMemoryLimit"), "{graph}");
+    assert!(!graph.contains("A long note"));
+    // Within its budget, the note is read beside them.
+    let o = convert(&[]);
+    assert!(
+        o.status.success() && stderr(&o).is_empty(),
+        "{}",
+        stderr(&o)
+    );
+    assert!(String::from_utf8_lossy(&o.stdout).contains("A long note"));
 }

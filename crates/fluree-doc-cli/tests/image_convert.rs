@@ -559,6 +559,70 @@ fn words(w: f64, h: f64, text: &str) -> String {
 }
 
 #[test]
+fn an_images_tables_are_spent_their_doco_copies() {
+    // A reading of an image that sets out a table of three long column
+    // names over 700 rows: DoCO writes each name again on every cell under
+    // it, some 100,000 bytes of copies, past 1 MiB at the budget's costs.
+    // Markdown writes each once; DoCO's are refused, nothing left to read
+    // short on one page.
+    let dir = scratch("copies");
+    let (w, h) = (1200u32, 22_000u32);
+    let mut png = Vec::new();
+    image::GrayImage::from_pixel(w, h, image::Luma([255u8]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let input = dir.join("ledger.png");
+    std::fs::write(&input, png).unwrap();
+    let words: Vec<serde_json::Value> = (0..700)
+        .flat_map(|r| {
+            (0..3).map(move |c| {
+                let (x, y) = (40.0 + 400.0 * c as f64, 40.0 + 30.0 * r as f64);
+                let text = match r {
+                    0 => format!("Column{c}NamedAtAGreatLengthToBeCopiedOnEveryCell"),
+                    _ => format!("{}.5", (r + c) % 10),
+                };
+                serde_json::json!({ "text": text, "box": [x, y, x + 360.0, y + 20.0], "conf": 0.95 })
+            })
+        })
+        .collect();
+    let reading = serde_json::json!({ "coords": "px", "width": w, "height": h, "words": words });
+    let sidecars = dir.join("words");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    std::fs::write(sidecars.join("ledger.json"), reading.to_string()).unwrap();
+    let run = |format: &str| {
+        let home = dir.join("home");
+        Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .arg("convert")
+            .arg(&input)
+            .args(["-f", format, "--max-memory", "1", "--ocr-words"])
+            .arg(&sidecars)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &home)
+            .env_remove("FDOC_OCR_WORDS")
+            .env_remove("FDOC_TIER_RESULTS")
+            .env_remove("FDOC_MAX_MEMORY")
+            .output()
+            .unwrap()
+    };
+    let md = run("md");
+    assert!(
+        md.status.success(),
+        "{}",
+        String::from_utf8_lossy(&md.stderr)
+    );
+    assert!(String::from_utf8_lossy(&md.stdout).contains("Column2NamedAt"));
+    let doco = run("doco");
+    let e = String::from_utf8_lossy(&doco.stderr);
+    assert!(!doco.status.success(), "{e}");
+    assert!(
+        e.contains("image too large: copies of table cells past the 1 MiB")
+            && e.contains("(raise it with --max-memory)"),
+        "{e}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn words_named_after_the_image_are_read() {
     // `fdoc ocr photo.jpg` writes `photo.json`: convert finds it.
     let dir = scratch("named");
