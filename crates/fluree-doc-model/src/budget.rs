@@ -206,6 +206,11 @@ thread_local! {
 /// counting at `output`'s costs: a converter wraps the reading of a document
 /// in it once, and every reader's budget follows, without each taking the
 /// output as an argument.
+///
+/// The setting is the calling thread's, as [`within`]'s is. A reader run on
+/// another thread, a worker of a caller's own pool, does not see it and
+/// counts at DoCO's costs: wrap the reading in it inside the task, on the
+/// thread that reads.
 pub fn converting_to<R>(output: Output, read: impl FnOnce() -> R) -> R {
     struct Restore(Output);
     impl Drop for Restore {
@@ -341,6 +346,11 @@ thread_local! {
 /// beside the message) shares what the outer one leaves rather than
 /// taking a budget of its own on top of it, without each reader's entry
 /// point taking a budget to be handed one.
+///
+/// The share is the calling thread's. A reader run on another thread, a
+/// worker of a caller's own pool, does not see it and takes a whole
+/// budget: call this inside the task, on the thread that reads, with what
+/// the caller means that reading to have.
 pub fn within<R>(memory: u64, f: impl FnOnce() -> R) -> R {
     /// The share before, put back however `f` ends.
     struct Restore(u64);

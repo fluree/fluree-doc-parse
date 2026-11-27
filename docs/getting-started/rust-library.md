@@ -397,3 +397,20 @@ build them.
 `fluree_doc_markdown::parse`, `fluree_doc_text::parse` and
 `fluree_doc_html::parse` read every byte sequence; they fail only past the
 document's budget, returning the `fluree_doc_model::budget::TooLarge` itself.
+
+## A document's budget
+
+Each reader's entry point makes the document's budget
+(`fluree_doc_model::budget::Budget::default()`) from two settings of the
+thread that calls it: the output the document is converted to
+(`budget::converting_to`), whose costs it counts at, and the share of
+memory `budget::within` leaves it. Both are thread-local. A caller that
+runs readers on a pool of its own (rayon, a blocking pool) sets them inside
+each task, on the worker thread: set on the thread that hands the work out,
+they do not reach the reader, which counts at DoCO's costs with a whole
+budget. See [Limits](../reference/limits.md).
+
+Pages read as parts of one document can share its budget, as an e-mail's
+HTML versions do: `fluree_doc_html::parse_within`, `parse_message_within`
+and `cid_ids_within` take a `&mut Budget` and leave it with what the page
+leaves; a page refused spends all its work, so the next is refused at once.
