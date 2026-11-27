@@ -1638,20 +1638,43 @@ impl Grid {
         rules: &[Rule],
         fills: &[crate::rule::Fill],
     ) -> bool {
+        self.heads_rows_from(0, header, rows, glyphs, rules, fills)
+    }
+
+    /// As [`Grid::heads_its_rows`], for the `header` rows from row `top`:
+    /// a table opening on its first section's band names its columns in
+    /// the row under the band. The row it is set apart from is the first
+    /// under it filling two cells or more, and more than half as many as
+    /// the header names: a section's band across the row (`MAS Contract
+    /// Year 4 …`, its words dealt into two cells by the cuts), bold or
+    /// shaded as a header is, heads the rows it opens, and the header is
+    /// set apart from those.
+    pub(crate) fn heads_rows_from(
+        &self,
+        top: usize,
+        header: usize,
+        rows: &[Vec<String>],
+        glyphs: &[crate::glyph::Glyph],
+        rules: &[Rule],
+        fills: &[crate::rule::Fill],
+    ) -> bool {
         let n = rows.len().min(self.rows());
-        if header == 0 || header >= n {
+        let h = top + header;
+        if header == 0 || h >= n {
             return false;
         }
         let cols = self.cols();
         let text = |r: usize, c: usize| rows[r].get(c).map_or("", |t| t.trim());
-        let bold = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, header);
-        let shaded = self.band_has_fill(fills, 0)
-            && !self.band_has_fill(fills, header)
-            && !(header + 1 < n && self.band_has_fill(fills, header + 1));
-        let under = self.rule_between(rules, header);
-        let below: Vec<Option<f64>> = (header + 1..n)
-            .map(|r| self.rule_between(rules, r))
-            .collect();
+        let filled = |r: usize| (0..cols).filter(|&c| !text(r, c).is_empty()).count();
+        let first = (h..n)
+            .find(|&r| filled(r) >= 2 && filled(r) * 2 > filled(top))
+            .unwrap_or(h);
+        let bold = self.cells_are_bold(glyphs, top) && !self.row_is_bold(glyphs, first);
+        let shaded = self.band_has_fill(fills, top)
+            && !self.band_has_fill(fills, first)
+            && !(first + 1 < n && self.band_has_fill(fills, first + 1));
+        let under = self.rule_between(rules, h);
+        let below: Vec<Option<f64>> = (h + 1..n).map(|r| self.rule_between(rules, r)).collect();
         let others = below.iter().flatten().copied().fold(0.0, f64::max);
         let ruled = under.is_some_and(|u| {
             (others > 0.0 && u > others * HEAVIER_RULE)
@@ -1660,7 +1683,7 @@ impl Grid {
         let stacked = header > 1;
         let (mut typed, mut named) = (0usize, 0usize);
         for c in 0..cols {
-            let cells: Vec<&str> = (header..n)
+            let cells: Vec<&str> = (h..n)
                 .map(|r| text(r, c))
                 .filter(|t| !t.is_empty())
                 .collect();
@@ -1670,18 +1693,18 @@ impl Grid {
                 continue;
             }
             typed += 1;
-            let head = text(0, c);
+            let head = text(top, c);
             if head.chars().any(char::is_alphanumeric) && !reads_as_quantity(head) {
                 named += 1;
             }
         }
         let contrast = typed > 0 && named * 2 > typed;
-        let weights0 = self.cell_weights(glyphs, 0);
-        let weights1 = self.cell_weights(glyphs, header);
+        let weights0 = self.cell_weights(glyphs, top);
+        let weights1 = self.cell_weights(glyphs, first);
         let heavy = |(w, h): (usize, usize)| w > 0 && h * 2 > w;
         let (mut compared, mut alike) = (0usize, 0usize);
         for c in 0..cols {
-            let (a, b) = (text(0, c), text(header, c));
+            let (a, b) = (text(top, c), text(first, c));
             if a.is_empty() || b.is_empty() {
                 continue;
             }
