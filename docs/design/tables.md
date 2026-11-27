@@ -122,6 +122,22 @@ The blank row is the ruling's spacing, not data, and is not emitted: the rows
 under it number on from the rows over it. A row a merged cell spans, its text
 read into the cell's first row, belongs to that cell and stays.
 
+A table's last row printed over a page break, alone at the head of the next
+page inside the table's ruling (`Needle Wash | Methanol`), is a ruled row on
+its own, and one row stands alone as no table. It is the table's row,
+continuing it, when:
+- the page before ends on a ruled table, two lines of text or fewer under it
+  (a folio, a running line);
+- the page opens on the row, two lines or fewer over it;
+- it is ruled as the table is: rules over and under it across the table's
+  width, its sides drawn at the table's, and every column rule in it at one
+  of the table's columns;
+- it is one row, no taller than three of the table's rows, with text in two
+  cells or more.
+
+It is read in the table's columns. Two rows or more under the break are a
+table of their own, read as any is, and the continued table joins them.
+
 A grid the trim runs down to the three lines a grid needs without finding a
 band any vertical crosses has only its rules to say where its rows are.
 Lines of text between two rules drawn over different stretches of the page,
