@@ -2,8 +2,7 @@
 
 use super::*;
 use fluree_doc_model::budget::{
-    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
-    MAX_MEMORY, TEXT_BYTES,
+    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, MAX_MEMORY, TEXT_BYTES,
 };
 use std::io::Write;
 
@@ -321,7 +320,7 @@ fn a_repeated_cell_of_text_is_bounded_by_its_bytes() {
     // For Markdown, which copies nothing: the table, and each copy a cell
     // that holds the text, written once in its row.
     let need = |n: u64| {
-        FLAT_ELEMENT_BYTES
+        ELEMENT_BYTES
             + n * (FLAT_CELL_BYTES + CELL_BYTES)
             + n * (word.trim().len() as u64) * TEXT_BYTES
     };
@@ -351,7 +350,7 @@ fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
     let refused = within(need - 1, Output::Doco).unwrap_err();
     assert!(matches!(refused, OdfError::TooLarge(_)), "{refused}");
     // Markdown writes a paragraph as a line: it costs less.
-    let flat = 1000 * (FLAT_ELEMENT_BYTES + TEXT_BYTES) + reading(&text(&body));
+    let flat = 1000 * (ELEMENT_BYTES + TEXT_BYTES) + reading(&text(&body));
     assert!(within(flat, Output::Flat).is_ok());
     assert!(within(flat - 1, Output::Flat).is_err());
     // A presentation's, the same.
@@ -379,7 +378,7 @@ fn a_table_padded_to_its_widest_row_counts_the_padding() {
     );
     // The table, and the 1024 cells that hold `x`, at Markdown's costs.
     let need = 1101 * 4096 * CELL_BYTES
-        + FLAT_ELEMENT_BYTES
+        + ELEMENT_BYTES
         + 1024 * (FLAT_CELL_BYTES + TEXT_BYTES)
         + reading(&text(&body));
     let within = |memory: u64| {

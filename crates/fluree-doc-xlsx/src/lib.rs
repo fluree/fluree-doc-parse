@@ -2316,8 +2316,7 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
 mod tests {
     use super::*;
     use fluree_doc_model::budget::{
-        text_cost, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
-        TEXT_BYTES,
+        text_cost, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, TEXT_BYTES,
     };
 
     /// [`grid_elements`] within the default budget.
@@ -2606,14 +2605,18 @@ mod tests {
                 ..GridSheet::default()
             }]
         };
-        // The sheet's title, the table and its cells, each a node of the
-        // output, and the title's text, besides; and the labels DoCO copies
-        // onto each cell below the header, its column's (a byte) and, past
-        // the first, its row's (another).
+        // The sheet's title and the table, each an element, its cells, each
+        // a node of the output written a node at a time, and the title's
+        // text, besides; and the labels DoCO copies onto each cell below
+        // the header, its column's (a byte) and, past the first, its row's
+        // (another).
         let labels = 99 * 100 + 99 * 99;
         let cells = |n: u64| {
             Budget::new(
-                10_002 * ELEMENT_BYTES + (1 + labels) * TEXT_BYTES + n * CELL_BYTES,
+                2 * ELEMENT_BYTES
+                    + 10_000 * FLAT_CELL_BYTES
+                    + (1 + labels) * TEXT_BYTES
+                    + n * CELL_BYTES,
                 u64::MAX,
             )
         };
@@ -2623,7 +2626,7 @@ mod tests {
         // copies no label: the title and the table, each an element.
         let flat = |n: u64| {
             Budget::new(
-                2 * FLAT_ELEMENT_BYTES + 10_000 * FLAT_CELL_BYTES + TEXT_BYTES + n * CELL_BYTES,
+                2 * ELEMENT_BYTES + 10_000 * FLAT_CELL_BYTES + TEXT_BYTES + n * CELL_BYTES,
                 u64::MAX,
             )
             .for_output(Output::Flat)

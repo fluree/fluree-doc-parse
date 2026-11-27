@@ -99,7 +99,7 @@ own, so they are listed here.
   is converted to, whose costs it is counted at), `within` (a share of the
   budget, for a file read beside another), `filled_cell_bytes`,
   `filled_csv_cell_bytes`, `scaled`
-  (a `const fn`), `char_cost`, `FLAT_ELEMENT_BYTES`, `FLAT_CELL_BYTES`,
+  (a `const fn`), `char_cost`, `FLAT_CELL_BYTES`,
   `CSV_CELL_BYTES`, `PART_BYTES`, and `Budget::for_output`, `spend_text_cells`,
   `spend_cell_texts`, `spend_csv_cell_texts`, `spend_text_cost`, `spend_links`, `memory_left` and
   `spend_bytes`.

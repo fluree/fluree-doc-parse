@@ -7,7 +7,7 @@
 
 use fluree_doc_model::budget::{
     converting_to, filled_cell_bytes, filled_csv_cell_bytes, output, text_cost, Output, CELL_BYTES,
-    ELEMENT_BYTES, MAX_MEMORY, TEXT_BYTES,
+    FLAT_CELL_BYTES, MAX_MEMORY, TEXT_BYTES,
 };
 use fluree_doc_model::doco::table_copies;
 use fluree_doc_model::{DocoOptions, Element, Notes};
@@ -16,8 +16,8 @@ use fluree_doc_model::{DocoOptions, Element, Notes};
 /// text, or Markdown, XHTML and JSON (`Output::Flat`), picked by the XOR of
 /// its bytes. A seed is read as it is written, and a mutation of any byte
 /// picks another output about two times in three, so over a campaign each input
-/// is tried at each output's costs: the flat outputs admit the most
-/// elements (2 KiB each, no copies of a table's cells), DoCO the most
+/// is tried at each output's costs: the flat outputs admit the most table
+/// cells (no copies of them, a `.csv` record's cheaper), DoCO the most
 /// copies.
 pub fn output_of(data: &[u8]) -> Output {
     match data.iter().fold(0u8, |x, b| x ^ b) % 3 {
@@ -55,7 +55,7 @@ pub fn estimated_memory(elements: &[Element], output: Output) -> u64 {
         let copied = match output {
             Output::Doco => copies
                 .cells
-                .saturating_mul(ELEMENT_BYTES)
+                .saturating_mul(FLAT_CELL_BYTES)
                 .saturating_add(copies.text.saturating_mul(TEXT_BYTES)),
             Output::Text => copies.merged.saturating_mul(TEXT_BYTES),
             Output::Flat => 0,
@@ -108,7 +108,8 @@ pub fn check_with(elements: &[Element], notes: &Notes) {
         let _ = fluree_doc_model::to_text(elements);
     }
     if output == Output::Doco {
-        let _ = fluree_doc_model::to_doco(elements, &DocoOptions::default());
+        // Written as `fdoc` writes it, a node at a time, never held whole.
+        let _ = fluree_doc_model::write_doco(elements, &DocoOptions::default(), std::io::sink());
     }
 }
 

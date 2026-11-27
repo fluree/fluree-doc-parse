@@ -889,9 +889,10 @@ fn cells_that_overlap_across_the_grid_are_read_as_text() {
 #[test]
 fn a_tables_cell_costs_what_a_sheets_does() {
     use fluree_doc_model::budget::{Output, CELL_BYTES, FLAT_CELL_BYTES, TEXT_BYTES};
-    // A row of 100 cells of one digit: each written once in its row, at a
-    // sheet's cost for Markdown, its slot and text apart, where an element
-    // each (2 KiB) would not fit; a node of its own each (4 KiB) for DoCO.
+    // A row of 100 cells of one digit: each written once in its row for
+    // Markdown, and as a node of its own, a node at a time, for DoCO, at a
+    // sheet's cost, its slot and text apart, where an element each (2 KiB)
+    // would not fit.
     let cells: Vec<Vec<u8>> = (0..100)
         .map(|c| cell(c * 10, 0, c * 10 + 10, 10, "1"))
         .collect();
@@ -906,9 +907,10 @@ fn a_tables_cell_costs_what_a_sheets_does() {
             &mut Budget::new(memory, 0).for_output(output),
         )
     };
-    let t = read(Output::Flat).unwrap().unwrap();
-    assert_eq!(t.rows[0].len(), 100);
-    assert!(read(Output::Doco).is_err());
+    for output in [Output::Flat, Output::Doco] {
+        let t = read(output).unwrap().unwrap();
+        assert_eq!(t.rows[0].len(), 100);
+    }
 }
 
 #[test]

@@ -85,8 +85,8 @@ fn a_csv_and_a_tsv_are_tables_in_every_output() {
 #[test]
 fn a_large_table_is_counted_at_the_output_asked_for() {
     // An export of 50,000 rows by 15 columns, every cell filled: 750,000
-    // cells, about 80 MB as Markdown, past 2 GB as DoCO, whose graph
-    // writes each cell as a node with its labels.
+    // cells, about 100 MB as Markdown, 245 MB as DoCO, whose graph writes
+    // each cell as a node with its labels, a node at a time.
     let dir = scratch("large-table");
     let csv = dir.join("export.csv");
     let mut text = (0..15)
@@ -103,7 +103,7 @@ fn a_large_table_is_counted_at_the_output_asked_for() {
         );
     }
     std::fs::write(&csv, text).unwrap();
-    for format in ["md", "xhtml", "json", "text"] {
+    for format in ["md", "xhtml", "json", "text", "doco"] {
         let o = convert(&dir, &csv, format, &[]);
         assert!(
             o.status.success(),
@@ -116,8 +116,30 @@ fn a_large_table_is_counted_at_the_output_asked_for() {
             "{format}: the last cell is missing"
         );
     }
-    // As DoCO it is refused, cleanly and before a node is made.
-    let o = convert(&dir, &csv, "doco", &[]);
+    // Written straight to a file, as to the terminal.
+    let jsonld = dir.join("export.jsonld");
+    let o = convert(&dir, &csv, "doco", &["-o", jsonld.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let graph: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&jsonld).unwrap()).unwrap();
+    let cells = graph["@graph"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["@type"] == "doc:TableCell")
+        .count();
+    assert_eq!(cells, 750_000);
+    // DoCO still counts more of it than Markdown: the copies of the table
+    // it keeps while it writes it, each cell's labels. Within 400 MiB,
+    // Markdown converts it and DoCO is refused, cleanly and before a node
+    // is written.
+    let md = convert(&dir, &csv, "md", &["--max-memory", "400"]);
+    assert!(
+        md.status.success(),
+        "{}",
+        String::from_utf8_lossy(&md.stderr)
+    );
+    let o = convert(&dir, &csv, "doco", &["--max-memory", "400"]);
     assert_eq!(o.status.code(), Some(1));
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains("table too large"), "{err}");

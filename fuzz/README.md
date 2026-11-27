@@ -36,12 +36,12 @@ not.
 Each target reads its input for one output, as `fdoc convert -f` does,
 picked by the XOR of the input's bytes (`src/lib.rs`, `output_of`): DoCO
 JSON-LD, the text, or Markdown, XHTML and JSON, which admit the most
-elements. A seed is read as written, and a mutation of any byte picks
+table cells. A seed is read as written, and a mutation of any byte picks
 another output about two times in three, so over a campaign each input is tried
 at each output's costs. The reader's budget counts at that output's costs
 (`fluree_doc_model::budget::converting_to`), and the target renders what it
 made through that output (through every output for DoCO, whose costs are
-the largest) and asserts that it stands for no more memory than one
+the largest, and DoCO itself as `fdoc` writes it, a node at a time) and asserts that it stands for no more memory than one
 document may take, at the same costs, the copies the output writes of a
 table's cells included (for DoCO, a merged value in each cell it covers,
 each cell's labels), so a reader that makes a table without spending them

@@ -429,8 +429,7 @@ mod tests {
     use fluree_doc_model::scaling::assert_linear;
 
     use fluree_doc_model::budget::{
-        converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
-        TEXT_BYTES,
+        converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, TEXT_BYTES,
     };
 
     fn parse(src: &str) -> Vec<Element> {
@@ -450,7 +449,7 @@ mod tests {
         // Markdown, and the parser's tree, its 10 pipes and 3 line ends at a
         // slot and a half (19).
         let src = "| a | b | c |\n|---|---|---|\n| 1 |\n";
-        let need = (6 + 19) * CELL_BYTES + FLAT_ELEMENT_BYTES + 4 * (FLAT_CELL_BYTES + TEXT_BYTES);
+        let need = (6 + 19) * CELL_BYTES + ELEMENT_BYTES + 4 * (FLAT_CELL_BYTES + TEXT_BYTES);
         let within =
             |memory: u64| parse_within(src, Budget::new(memory, 0).for_output(Output::Flat));
         assert_eq!(within(need).unwrap()[0].cells.as_ref().unwrap()[1].len(), 3);
@@ -645,14 +644,13 @@ mod tests {
 
     #[test]
     fn each_link_is_spent_before_it_is_kept() {
-        // DoCO writes each as a node: two million on one line aborted.
+        // Two million on one line aborted, when DoCO held each link's node.
         let src = "[a](bc) ".repeat(100);
         let within = |memory: u64| parse_within(&src, Budget::new(memory, 0));
         let text = 2 * 100 - 1;
-        // Each link's brackets, marks of the parser's tree: three slots.
-        let need = ELEMENT_BYTES
-            + text * TEXT_BYTES
-            + 100 * (ELEMENT_BYTES + 4 * CELL_BYTES + 2 * TEXT_BYTES);
+        // Each link four slots, in every output, and its brackets, marks of
+        // the parser's tree: three slots more.
+        let need = ELEMENT_BYTES + text * TEXT_BYTES + 100 * (7 * CELL_BYTES + 2 * TEXT_BYTES);
         assert_eq!(within(need).unwrap()[0].links.as_ref().unwrap().len(), 100);
         assert!(within(need - 1).is_err());
     }
@@ -664,7 +662,7 @@ mod tests {
         // that hold text of a byte, and 11 marks (6 pipes, 3 line ends, the
         // link's brackets) at a slot and a half (16).
         let src = "| [a](bc) |\n|---|\n| x |\n";
-        let need = (2 + 16) * CELL_BYTES + FLAT_ELEMENT_BYTES + 2 * (FLAT_CELL_BYTES + TEXT_BYTES);
+        let need = (2 + 16) * CELL_BYTES + ELEMENT_BYTES + 2 * (FLAT_CELL_BYTES + TEXT_BYTES);
         let within =
             |memory: u64| parse_within(src, Budget::new(memory, 0).for_output(Output::Flat));
         let table = within(need).unwrap();

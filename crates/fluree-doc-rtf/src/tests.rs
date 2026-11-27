@@ -225,7 +225,7 @@ fn a_rows_definitions_are_spent_at_each_row_before_they_are_copied() {
 #[test]
 fn a_tables_cell_costs_what_a_sheets_does() {
     use fluree_doc_model::budget::{
-        Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+        Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, TEXT_BYTES,
     };
     // Two rows of two cells, three that hold text.
     let doc = "{\\rtf1\\trowd\\cellx1\\cellx2\\intbl ab\\cell c\\cell\\row\\trowd\\cellx1\\cellx2\\intbl d\\cell\\cell\\row\\pard\\par}";
@@ -235,14 +235,15 @@ fn a_tables_cell_costs_what_a_sheets_does() {
     };
     // Each row keeps its two cells and a copy of their definitions, then
     // the grid of four: the table, and each cell that holds text written
-    // once in its row, or a node of its own in DoCO.
+    // once in its row, or as a node of its own in DoCO, a node at a time,
+    // at the same cost. DoCO spends the labels it copies into each cell
+    // too.
     let slots = 2 * 4 + 4;
-    let flat = slots * CELL_BYTES + FLAT_ELEMENT_BYTES + 3 * FLAT_CELL_BYTES + 4 * TEXT_BYTES;
+    let flat = slots * CELL_BYTES + ELEMENT_BYTES + 3 * FLAT_CELL_BYTES + 4 * TEXT_BYTES;
     assert_eq!(read(Output::Flat, flat).unwrap().unwrap()[0], ["ab", "c"]);
     assert!(read(Output::Flat, flat - 1).is_err());
-    let doco = slots * CELL_BYTES + 4 * ELEMENT_BYTES + 4 * TEXT_BYTES;
-    assert!(read(Output::Doco, doco + (1 << 20)).is_ok());
-    assert!(read(Output::Doco, doco - 1).is_err());
+    assert!(read(Output::Doco, flat + (1 << 20)).is_ok());
+    assert!(read(Output::Doco, flat).is_err());
 }
 
 trait Positions {

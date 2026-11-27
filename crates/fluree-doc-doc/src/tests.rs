@@ -3,8 +3,7 @@
 
 use super::*;
 use fluree_doc_model::budget::{
-    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
-    TEXT_BYTES,
+    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, TEXT_BYTES,
 };
 use std::io::Write;
 
@@ -416,7 +415,7 @@ fn a_tables_padding_is_spent_before_it_is_made() {
     // row, for an output that copies none of them (Markdown).
     let budget = |cells: u64| {
         Budget::new(
-            cells * CELL_BYTES + FLAT_ELEMENT_BYTES + 13 * (FLAT_CELL_BYTES + TEXT_BYTES),
+            cells * CELL_BYTES + ELEMENT_BYTES + 13 * (FLAT_CELL_BYTES + TEXT_BYTES),
             0,
         )
         .for_output(Output::Flat)
