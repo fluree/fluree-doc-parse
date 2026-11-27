@@ -1409,6 +1409,25 @@ impl Grid {
         if run >= 2 && self.stripes_from(fills, run - 1) && figures_row(&rows[run - 1]) {
             run -= 1;
         }
+        // The run's last row is the table's first band where it holds a
+        // label in its first cell alone, as a row further down does under a
+        // fill of its own: a funding table's `Months 1 – 12`, shaded as its
+        // header is, over the CLINs it groups, and `Months 13-24` over the
+        // next. A band labels the rows under it; it names no column.
+        let band = |r: usize| {
+            rows[r].first().is_some_and(|t| !t.trim().is_empty())
+                && rows[r].iter().skip(1).all(|t| t.trim().is_empty())
+        };
+        // Beside other columns only, and in a run that leaves rows bare: a
+        // one-column listing shaded throughout holds nothing but such rows.
+        if run >= 2
+            && run < rows.len()
+            && self.cols() >= 2
+            && band(run - 1)
+            && (run..rows.len()).any(|r| band(r) && self.band_has_fill(fills, r))
+        {
+            run -= 1;
+        }
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
             return run;
         }
@@ -10468,6 +10487,41 @@ mod header_tests {
             .map(|r| (0..4).map(|c| format!("r{r}c{c}")).collect())
             .collect();
         assert_eq!(g.header_rows(&rows, &[], &[], &fills), 3);
+    }
+
+    #[test]
+    fn a_shaded_first_band_is_no_header_row() {
+        // A funding table: its header shaded, its first period band shaded
+        // under it, and the next period's band shaded further down. The
+        // shaded run is the header and the first band, not a two-row header.
+        let g = grid_with_bands();
+        let row = |r: usize| fill(0.0, 100.0 + 20.0 * r as f64, 400.0, 120.0 + 20.0 * r as f64);
+        let rows: Vec<Vec<String>> = [
+            ["CLIN", "Funding Amount", "Estimated Date", "Note"],
+            ["Months 1 – 12", "", "", ""],
+            ["0001 – Storage", "TBD", "TBD", "a"],
+            ["Months 13-24", "", "", ""],
+            ["0006 – Storage", "$2,947,920.24", "December 3, 2021", "b"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1), row(3)]), 1);
+        // With no band of the kind further down, a shaded second row under
+        // the header is the header's own.
+        assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1)]), 2);
+        // A one-column listing holds such rows alone: its shading, broken
+        // once, is no band's. Its run is deeper than a header is, and it
+        // keeps the single header row it falls back to; shortened by one
+        // as though it ended on a band, it read as four header rows.
+        let one = Grid {
+            xs: vec![0.0, 400.0],
+            ys: (0..10).map(|r| 100.0 + 20.0 * r as f64).collect(),
+            ..grid_with_bands()
+        };
+        let lines: Vec<Vec<String>> = (0..9).map(|r| vec![format!("line {r}")]).collect();
+        let shaded: Vec<_> = (0..9).filter(|&r| r != 5).map(row).collect();
+        assert_eq!(one.header_rows(&lines, &[], &[], &shaded), 1);
     }
 
     #[test]
