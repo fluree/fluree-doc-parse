@@ -120,9 +120,10 @@ upright page holding a table whose text runs up keeps its text and takes
 the table's. When two thirds of the
 text, counted in characters, runs one way sideways and less than a quarter
 of it is level, or two thirds of it runs upside down, or more of it upside
-down than level with the two together a quarter of it (a sheet fed upside
-down under the upright header a fax machine stamps, or carrying a table set
-sideways), the page is read in
+down than level with the two together a quarter of it and 20 characters or
+more upside down (a sheet fed upside down under the upright header a fax
+machine stamps, or carrying a table set sideways, not a stamp or a word
+read the wrong way up), the page is read in
 the frame where it runs upright, and every box is still placed on the page
 as displayed. Words of one or two characters do not count: a digit is boxed
 about as tall as wide and read at any angle. A page read upright, or with its text running down,

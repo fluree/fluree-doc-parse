@@ -1151,9 +1151,9 @@ fn quarter_turned(read: f64, crop: f64) -> bool {
 /// page with upright text of its own keeps its frame, and a table set
 /// sideways on it is laid along its angle where it is. It turns a half for
 /// [`TURN_SHARE`] of its text upside down, or for more upside down than level
-/// when the two make [`KEEP_LEVEL_SHARE`] of it: a sheet fed upside down
-/// under an upright fax header, or with a table set sideways on it. None
-/// otherwise.
+/// when the two make [`KEEP_LEVEL_SHARE`] of it and the text upside down is
+/// at least [`UPSIDE_DOWN_LEAST`]: a sheet fed upside down under an upright
+/// fax header, or with a table set sideways on it. None otherwise.
 fn page_turn(placed: &[Option<Placed>]) -> Option<i32> {
     let weight = |w: &Placed| {
         let n = w.text.chars().filter(|c| !c.is_whitespace()).count();
@@ -1183,7 +1183,9 @@ fn page_turn(placed: &[Option<Placed>]) -> Option<i32> {
     // text of its own, turned a half.
     let (level, upside_down) = (at(0.0), at(180.0));
     if upside_down >= TURN_SHARE * total
-        || (upside_down > level && upside_down + level >= KEEP_LEVEL_SHARE * total)
+        || (upside_down > level
+            && upside_down >= UPSIDE_DOWN_LEAST
+            && upside_down + level >= KEEP_LEVEL_SHARE * total)
     {
         return Some(180);
     }
@@ -1208,6 +1210,17 @@ const TURN_SHARE: f64 = 2.0 / 3.0;
 /// of the page's text, and the page reads better turned, the table kept a
 /// table; four lines of text and up keep the frame.
 const KEEP_LEVEL_SHARE: f64 = 0.25;
+
+/// Fewest characters of text upside down that turn a page a half when most
+/// of its text is neither upside down nor level: a line of a sheet's own
+/// text, as a sheet fed upside down holds, not a stamp, a page number, a
+/// table's cell or a word or two read the wrong way up. A line of body text
+/// holds 50 to 90 characters, and the shortest page this turns for, two
+/// lines under a fax header, about 60; a stamp (`PAID`, `COPY`, `RECEIVED
+/// 12 NOV`) or a cell (`SKU-60138`) holds under 20. Over a page turned
+/// sideways, a few such words upside down would otherwise turn it a half
+/// against two thirds of its text.
+const UPSIDE_DOWN_LEAST: f64 = 20.0;
 
 /// An angle in degrees, brought into (-180, 180].
 fn normalise_deg(a: f64) -> f64 {
@@ -5816,6 +5829,27 @@ mod tests {
         let t = texts(&mut doc, &r).join("\n");
         let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
         assert!(at("THE QUICK BROWN FOX") < at("PACK MY BOX WITH"), "{t}");
+    }
+
+    #[test]
+    fn a_word_upside_down_does_not_turn_a_sideways_page_a_half() {
+        // A short sheet scanned sideways, its line running up the page, a
+        // stamp read upside down and a word read level: more of the rest
+        // upside down than level, the two together over a quarter of the
+        // text, but a stamp's worth, not a line of the sheet's own text.
+        // The page turns a quarter for its line.
+        let mut words: Vec<OcrWord> = sideways_words(90.0, 0).into_iter().take(8).collect();
+        words.push(OcrWord {
+            angle: Some(180.0),
+            ..word("SPECIMEN", [300.0, 600.0, 348.0, 613.0])
+        });
+        words.push(word("Copy", [300.0, 700.0, 324.0, 713.0]));
+        let mut doc = blank_scan();
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+        assert_eq!(r[0].taken, 10);
+        assert_eq!(doc.pages[0].rotation, 270);
+        let t = texts(&mut doc, &r).join("\n");
+        assert!(t.contains("The quick brown fox jumps over the dog"), "{t}");
     }
 
     #[test]
