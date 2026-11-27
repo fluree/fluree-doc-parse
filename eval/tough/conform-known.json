@@ -33,7 +33,7 @@
   "xhtml block.merged": 12,
   "xhtml table.header_rows": 26,
   "xhtml table.restated_headers": 5,
-  "xhtml table.sub_headers": 26
+  "xhtml table.sub_headers": 40
  },
  "bmc-pmc5131497-shaded-first-row": {
   "md list.extra": 1,
@@ -57,14 +57,20 @@
   "md text.lost": 3,
   "xhtml block.merged": 75,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 22,
+  "xhtml table.sub_headers": 1,
   "xhtml text.extra": 2,
   "xhtml text.lost": 9
+ },
+ "caption-beside-text-reads-apart": {
+  "md table.header_rows": 1
  },
  "cbs-kms-overview-first-row-is-a-field": {
   "md list.extra": 4,
   "md table.header_rows": 1,
   "md table.lost": 3
+ },
+ "census-lists-side-by-side": {
+  "md text.changed": 1
  },
  "census-p60-glyph-names": {
   "md list.extra": 7,
@@ -280,7 +286,8 @@
   "md list.extra": 1,
   "md table.header_rows": 2,
   "md table.lost": 4,
-  "md text.changed": 1
+  "md text.changed": 1,
+  "xhtml table.sub_headers": 1
  },
  "eurlex-ai-act": {
   "md list.extra": 512,
@@ -570,6 +577,9 @@
   "xhtml text.extra": 5,
   "xhtml text.lost": 43
  },
+ "form-boxes-parted-by-a-rule": {
+  "md table.lost": 3
+ },
  "google-axis-years-at-the-foot": {
   "md table.header_rows": 37,
   "md table.lost": 11,
@@ -767,6 +777,15 @@
   "xhtml text.extra": 1,
   "xhtml text.lost": 2
  },
+ "html-list-in-a-table-under-bold-heads": {
+  "md table.lost": 9,
+  "xhtml table.header_rows": 3,
+  "xhtml table.sub_headers": 3
+ },
+ "html-notes-under-a-statement-are-no-bands": {
+  "md list.extra": 22,
+  "md table.lost": 146
+ },
  "ibf-bopp-degree-units": {
   "md table.lost": 1
  },
@@ -778,7 +797,8 @@
   "md table.header_rows": 15,
   "md table.lost": 9,
   "md text.lost": 1,
-  "xhtml block.merged": 21
+  "xhtml block.merged": 21,
+  "xhtml table.sub_headers": 1
  },
  "ilcor-prisma-diagram": {
   "xhtml block.merged": 1
@@ -865,7 +885,7 @@
   "md table.lost": 25,
   "md text.lost": 2,
   "xhtml table.header_rows": 4,
-  "xhtml table.sub_headers": 4
+  "xhtml table.sub_headers": 6
  },
  "kohler-colour-codes": {
   "md table.header_rows": 1,
@@ -899,25 +919,25 @@
   "md table.header_rows": 1,
   "md table.lost": 9,
   "xhtml table.header_rows": 1,
-  "xhtml table.sub_headers": 8
+  "xhtml table.sub_headers": 1
  },
  "lapp-product-panel-prose": {
   "md table.header_rows": 1,
   "md table.lost": 9,
   "xhtml table.header_rows": 1,
-  "xhtml table.sub_headers": 8
+  "xhtml table.sub_headers": 1
  },
  "lapp-qr-caption": {
   "md table.header_rows": 1,
   "md table.lost": 9,
   "xhtml table.header_rows": 1,
-  "xhtml table.sub_headers": 8
+  "xhtml table.sub_headers": 1
  },
  "lapp-template-text": {
   "md table.header_rows": 1,
   "md table.lost": 9,
   "xhtml table.header_rows": 1,
-  "xhtml table.sub_headers": 8
+  "xhtml table.sub_headers": 1
  },
  "lutron-369613a-list-or": {
   "md table.lost": 1,
@@ -1024,12 +1044,14 @@
  "mahle-band-titles": {
   "md table.header_rows": 48,
   "md table.lost": 106,
-  "xhtml block.merged": 4
+  "xhtml block.merged": 4,
+  "xhtml table.sub_headers": 1
  },
  "mahle-wrapped-interchange": {
   "md table.header_rows": 48,
   "md table.lost": 106,
-  "xhtml block.merged": 4
+  "xhtml block.merged": 4,
+  "xhtml table.sub_headers": 1
  },
  "malaria-j-table-heads": {
   "md list.extra": 5,
@@ -1237,7 +1259,7 @@
   "md text.changed": 3,
   "xhtml block.merged": 2,
   "xhtml table.header_rows": 2,
-  "xhtml table.sub_headers": 2
+  "xhtml table.sub_headers": 3
  },
  "pmc1866754-centred-group-labels": {
   "md list.extra": 1,
@@ -1326,7 +1348,8 @@
  "pmc3359190-age-over-its-rule": {
   "md list.extra": 2,
   "md table.header_rows": 1,
-  "md table.lost": 11
+  "md table.lost": 11,
+  "xhtml table.sub_headers": 1
  },
  "pmc3608546-units-under-groups": {
   "md list.extra": 1,
@@ -1398,7 +1421,7 @@
   "md table.lost": 7,
   "xhtml block.merged": 4,
   "xhtml table.header_rows": 1,
-  "xhtml table.sub_headers": 1
+  "xhtml table.sub_headers": 5
  },
  "pmc5989438-tight-references": {
   "md list.extra": 7,
@@ -1608,7 +1631,7 @@
   "xhtml table.header_rows": 34,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 4,
-  "xhtml table.sub_headers": 34
+  "xhtml table.sub_headers": 35
  },
  "thermo-m-series-callout-line": {
   "md list.extra": 1,
@@ -1935,7 +1958,7 @@
   "md text.lost": 15,
   "xhtml block.merged": 77,
   "xhtml table.header_rows": 1,
-  "xhtml table.sub_headers": 1
+  "xhtml table.sub_headers": 2
  },
  "usgs-tm5b13-plot-legends": {
   "md table.header_rows": 16,
@@ -1943,7 +1966,7 @@
   "md text.lost": 15,
   "xhtml block.merged": 77,
   "xhtml table.header_rows": 1,
-  "xhtml table.sub_headers": 1
+  "xhtml table.sub_headers": 2
  },
  "usgs-tm5b13-running-heads": {
   "md table.header_rows": 16,
@@ -1951,22 +1974,27 @@
   "md text.lost": 15,
   "xhtml block.merged": 77,
   "xhtml table.header_rows": 1,
-  "xhtml table.sub_headers": 1
+  "xhtml table.sub_headers": 2
  },
  "wd-gold-footnotes": {
-  "md table.lost": 3
+  "md table.lost": 3,
+  "xhtml table.sub_headers": 3
  },
  "wd-gold-note-after-quantity": {
-  "md table.lost": 3
+  "md table.lost": 3,
+  "xhtml table.sub_headers": 3
  },
  "wd-gold-spec-tables": {
-  "md table.lost": 3
+  "md table.lost": 3,
+  "xhtml table.sub_headers": 3
  },
  "wd-gold-template-labels": {
-  "md table.lost": 3
+  "md table.lost": 3,
+  "xhtml table.sub_headers": 3
  },
  "wd-gold-title": {
-  "md table.lost": 3
+  "md table.lost": 3,
+  "xhtml table.sub_headers": 3
  },
  "wes-italic-before-slash": {
   "md list.extra": 4,
