@@ -1630,6 +1630,13 @@ impl Grid {
     ///   it. In most of the columns both fill, that would mean one type
     ///   (quantities or words) and one weight, as a field list's rows are,
     ///   whose values are figures in some fields and words in others.
+    ///
+    /// The row it is set apart from is the first under it filling two
+    /// cells or more, and more than half as many as the header names. A
+    /// section's band under the header (`MAS Contract Year 4 …`, its words
+    /// dealt into two cells by the cuts), bold or shaded as a header is,
+    /// or the header's own second line (`run` of `Longer run`) is no row of
+    /// the table's values to tell it from.
     pub(crate) fn heads_its_rows(
         &self,
         header: usize,
@@ -1638,28 +1645,8 @@ impl Grid {
         rules: &[Rule],
         fills: &[crate::rule::Fill],
     ) -> bool {
-        self.heads_rows_from(0, header, rows, glyphs, rules, fills)
-    }
-
-    /// As [`Grid::heads_its_rows`], for the `header` rows from row `top`:
-    /// a table opening on its first section's band names its columns in
-    /// the row under the band. The row it is set apart from is the first
-    /// under it filling two cells or more, and more than half as many as
-    /// the header names: a section's band across the row (`MAS Contract
-    /// Year 4 …`, its words dealt into two cells by the cuts), bold or
-    /// shaded as a header is, heads the rows it opens, and the header is
-    /// set apart from those.
-    pub(crate) fn heads_rows_from(
-        &self,
-        top: usize,
-        header: usize,
-        rows: &[Vec<String>],
-        glyphs: &[crate::glyph::Glyph],
-        rules: &[Rule],
-        fills: &[crate::rule::Fill],
-    ) -> bool {
         let n = rows.len().min(self.rows());
-        let h = top + header;
+        let h = header;
         if header == 0 || h >= n {
             return false;
         }
@@ -1667,10 +1654,10 @@ impl Grid {
         let text = |r: usize, c: usize| rows[r].get(c).map_or("", |t| t.trim());
         let filled = |r: usize| (0..cols).filter(|&c| !text(r, c).is_empty()).count();
         let first = (h..n)
-            .find(|&r| filled(r) >= 2 && filled(r) * 2 > filled(top))
+            .find(|&r| filled(r) >= 2 && filled(r) * 2 > filled(0))
             .unwrap_or(h);
-        let bold = self.cells_are_bold(glyphs, top) && !self.row_is_bold(glyphs, first);
-        let shaded = self.band_has_fill(fills, top)
+        let bold = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, first);
+        let shaded = self.band_has_fill(fills, 0)
             && !self.band_has_fill(fills, first)
             && !(first + 1 < n && self.band_has_fill(fills, first + 1));
         let under = self.rule_between(rules, h);
@@ -1693,18 +1680,18 @@ impl Grid {
                 continue;
             }
             typed += 1;
-            let head = text(top, c);
+            let head = text(0, c);
             if head.chars().any(char::is_alphanumeric) && !reads_as_quantity(head) {
                 named += 1;
             }
         }
         let contrast = typed > 0 && named * 2 > typed;
-        let weights0 = self.cell_weights(glyphs, top);
+        let weights0 = self.cell_weights(glyphs, 0);
         let weights1 = self.cell_weights(glyphs, first);
         let heavy = |(w, h): (usize, usize)| w > 0 && h * 2 > w;
         let (mut compared, mut alike) = (0usize, 0usize);
         for c in 0..cols {
-            let (a, b) = (text(top, c), text(first, c));
+            let (a, b) = (text(0, c), text(first, c));
             if a.is_empty() || b.is_empty() {
                 continue;
             }

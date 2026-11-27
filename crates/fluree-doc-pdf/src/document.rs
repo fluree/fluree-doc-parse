@@ -7870,18 +7870,6 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                             .into_iter()
                             .filter(|r| !sub_headers.contains(r)),
                     );
-                    // A table opening on its first section's band names its
-                    // columns in the row under the band, where that row
-                    // heads the rows under it as a header heads its table
-                    // (`Base Period: Months 1-12` over `Labor Category |
-                    // Hours | Rate | …`).
-                    let page = &raw.pages[pi];
-                    if first_band
-                        && !sub_headers.contains(&1)
-                        && g.heads_rows_from(1, 1, &rows, &page.glyphs, &page.rules, &page.fills)
-                    {
-                        restated.push(1);
-                    }
                     restated.sort_unstable();
                     restated.dedup();
                     restated
