@@ -28,7 +28,11 @@ Read as a [Word file](office-and-web.md#docx) is:
   list style computes, are not written;
 - tables are tables, their declared header rows (`table-header-rows`) their
   `header_rows`, a cell spanning columns or rows making the cells it covers
-  continuations (`merged_left`, `merged_down`);
+  continuations (`merged_left`, `merged_down`). What DoCO copies of a merge
+  (its value in each row it covers, the texts of the cells it covers joined
+  first) and the labels each cell carries count against the tables' bounds
+  as cells holding that text, so a span over many rows of text fails as too
+  large rather than being written once a row;
 - footnotes and endnotes are read after the body, each opening with its
   citation (`1`, `i`), marked `evidence` `footnote` or `endnote`; comments
   last, each opening with its author, `evidence` `comment` (`fdoc convert`
@@ -57,8 +61,10 @@ A sheet writes its trailing empty rows and columns as one row repeated to
 the end of the grid (`number-rows-repeated="1048573"`). Repeats are
 counted, not copied, while they hold nothing; a repeated cell that holds
 something is a cell each time it repeats, its text copied each time, and a
-workbook of more than about four million such cells, or whose copies of
-text pass 256 MiB, fails as too large. A cell spanning rows and columns is
+workbook of more than about four million such cells, or whose cells and
+copies of text pass the document's budget
+([limits on what one document may make](../reference/limits.md)), fails as
+too large. A cell spanning rows and columns is
 a merge, laid out as far as the sheet's cells reach. So a few hundred bytes
 cannot ask for the sixteen billion cells a repeated row of repeated cells
 describes, nor for the copies of one long cell repeated across them. Rows
@@ -75,17 +81,24 @@ read.
 
 ## Bounds
 
-Each part at most 64 MiB inflated, checked as it inflates, and its XML at
-most four million nodes nested 256 deep. The tables of a text or a
-presentation hold at most about four million cells in all, a repeated cell
-counted each time and a short row's padding to the table's width counted
-too, and at most 64 MiB of cell text, a repeated cell's text counted each
-time it is copied: a cell of a few kilobytes repeated a thousand times asks
-for gigabytes. Both are counted before the cells are made, and a document
-past either fails as too large. A text's or a presentation's elements, its
-tables' cells (a repeated one each time, a cell that holds text at what the
-output makes of it: a node of its own in DoCO, a cell of its row in the
-others) and their text are also counted against the memory one document
-may take, before they are made. In a library,
+Each part is read within what is left of the document's budget
+([limits on what one document may make](../reference/limits.md)), checked
+as it inflates, at two bytes a byte, with no smaller bound of its own: a
+LibreOffice spreadsheet of 50,000 rows by 12 columns holds 77 MB of
+content. Its XML is at most four million nodes nested 256 deep, and its
+tree is spent from the budget as it is built, each node before it is
+copied out of the part: two cell slots a node, two an attribute, one for
+each 128 bytes of its XML, since four bytes of XML (`<a/>`) make a node of
+about 140 bytes and 9 MB of `<a b=""/>` a tree of 376 MB. What a document
+makes of it is spent from the document's budget too before it is made,
+and a paragraph or a cell whose text the budget has no room left for is
+refused before its text is copied out of the tree: each paragraph and its
+text; each table cell, a repeated cell each time it is copied, once, its
+text too, a cell that holds text at what the output makes of it (a node of
+its own in DoCO, a cell of its row in the others), and a short row's
+padding to the table's width; a table's text; and the copies DoCO writes of
+a table's cells (a merged value in each cell it covers, each cell's labels):
+a cell of a few kilobytes repeated a thousand times asks for gigabytes. A
+document past it fails as too large. In a library,
 `fluree_doc_odf::parse_with_info` returns the elements, the declared info
 and the kind; `Format::sniff` tells the kind from the bytes.

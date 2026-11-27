@@ -29,16 +29,22 @@
 //! chart shows and keeps what the cache stores (`datums`), and a series
 //! whose cells were deleted since (`#REF!`) is no column.
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{Datum, DocumentInfo, Element};
-use fluree_doc_ooxml::{attr, local, Package};
+use fluree_doc_ooxml::{attr, local, Package, Relations};
+use fluree_doc_xlsx::{custom_fmt, NumFmt};
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum PptxError {
     Zip(String),
     Xml(String),
     NoSlides,
+    /// Past what one document may make ([`Budget`]), naming it.
+    TooLarge(String),
 }
 
 impl std::fmt::Display for PptxError {
@@ -47,11 +53,18 @@ impl std::fmt::Display for PptxError {
             Self::Zip(e) => write!(f, "not a readable .pptx: {e}"),
             Self::Xml(e) => write!(f, "malformed slide XML: {e}"),
             Self::NoSlides => write!(f, "package has no slides"),
+            Self::TooLarge(e) => write!(f, "PPTX deck too large: {e}"),
         }
     }
 }
 
 impl std::error::Error for PptxError {}
+
+impl From<TooLarge> for PptxError {
+    fn from(e: TooLarge) -> Self {
+        Self::TooLarge(e.to_string())
+    }
+}
 
 /// Parse a `.pptx` file's bytes into elements, in slide order.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptxError> {
@@ -62,25 +75,56 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptxError> {
 /// properties, read from the one opening of the package.
 pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), PptxError> {
     let mut pkg = Package::open(bytes).map_err(PptxError::Zip)?;
-    let slides = slide_parts(&mut pkg);
+    // What the deck makes, slide by slide, is spent from one budget as it
+    // is made, and each part it is read from, inflated whole, before: a
+    // slide listed a thousand times is read a thousand times, and its
+    // relationships once.
+    let mut budget = Budget::default();
+    let slides = slide_parts(&mut pkg, &mut budget)?;
     if slides.is_empty() {
         return Err(PptxError::NoSlides);
     }
 
     let mut out = Vec::new();
+    // Each chart part read once, by its name, however many slides or
+    // frames name it: `None` where it holds no series.
+    let mut parsed: HashMap<String, Option<Chart>> = HashMap::new();
+    // Each slide's charts by relationship id, the first of an id that
+    // names a chart with series, resolved once for its part however many
+    // times the deck lists it, and spent once: read again for each
+    // listing, a slide of 300,000 chart relationships listed 100 times
+    // took 17 s, and the budget allows a million listings.
+    let mut slide_charts: HashMap<String, HashMap<String, String>> = HashMap::new();
     for (idx, name) in slides.iter().enumerate() {
-        let Some(xml) = pkg.read(name) else {
+        let Some(xml) = pkg.read_within(name, &mut budget)? else {
             continue;
         };
-        // Charts live in their own parts; the slide only names a
-        // relationship id, so resolve those before walking it.
-        let charts: Vec<(String, String)> = pkg
-            .relationships(name)
-            .into_iter()
-            .filter(|r| r.is("chart") && !r.external)
-            .filter_map(|r| Some((r.id, pkg.read(&r.target)?)))
-            .collect();
-        out.extend(parse_slide_with_charts(&xml, idx, &charts)?);
+        if !slide_charts.contains_key(name) {
+            // Charts live in their own parts; the slide only names a
+            // relationship id, so resolve those before walking it.
+            let mut by_id: HashMap<String, String> = HashMap::new();
+            for r in pkg.relationships(name).map_err(PptxError::Zip)? {
+                if !r.is("chart") || r.external || by_id.contains_key(&r.id) {
+                    continue;
+                }
+                if !parsed.contains_key(&r.target) {
+                    let chart = match pkg.read_within(&r.target, &mut budget)? {
+                        Some(cx) => parse_chart(&cx, &mut budget)?,
+                        None => None,
+                    };
+                    parsed.insert(r.target.clone(), chart);
+                }
+                if parsed[&r.target].is_some() {
+                    budget.spend_text(&r.id)?;
+                    budget.spend_text(&r.target)?;
+                    by_id.insert(r.id, r.target);
+                }
+            }
+            slide_charts.insert(name.clone(), by_id);
+        }
+        let by_id = &slide_charts[name];
+        let chart = |id: &str| parsed.get(by_id.get(id)?)?.as_ref();
+        out.extend(parse_slide(&xml, idx, &chart, &mut budget)?);
     }
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
@@ -95,28 +139,33 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
 /// A package without that list, or whose list names no part it holds, is
 /// read in the numeric order of its slide parts' names, where `slide10`
 /// comes after `slide2`.
-fn slide_parts(pkg: &mut Package<'_>) -> Vec<String> {
+fn slide_parts(pkg: &mut Package<'_>, budget: &mut Budget) -> Result<Vec<String>, PptxError> {
     let presentation = pkg.main_part("ppt/presentation.xml");
-    let rels = pkg.relationships(&presentation);
+    let rels = pkg.relationships(&presentation).map_err(PptxError::Zip)?;
     let names = pkg.part_names();
+    // Each slide listed found in one lookup among the relationships, and
+    // its part in one among the package's: a scan of each for every
+    // listing made the listing's cost their product.
+    let relations = Relations::new(&rels);
+    let held: HashSet<&str> = names.iter().map(String::as_str).collect();
     let listed: Vec<String> = pkg
-        .read(&presentation)
+        .read_within(&presentation, budget)?
         .map(|xml| slide_ids(&xml))
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|id| rels.iter().find(|r| r.id == id && !r.external))
-        .map(|r| r.target.clone())
-        .filter(|p| names.contains(p))
+        .filter_map(|id| relations.part(&id))
+        .filter(|p| held.contains(p))
+        .map(str::to_string)
         .collect();
     if !listed.is_empty() {
-        return listed;
+        return Ok(listed);
     }
     let mut numbered: Vec<(usize, String)> = names
         .into_iter()
         .filter_map(|n| slide_number(&n).map(|k| (k, n)))
         .collect();
     numbered.sort();
-    numbered.into_iter().map(|(_, n)| n).collect()
+    Ok(numbered.into_iter().map(|(_, n)| n).collect())
 }
 
 /// The relationship ids of `presentation.xml`'s slide list, in order.
@@ -171,13 +220,17 @@ struct Chart {
 /// cache's format code, as a workbook's cell is read: `0.062432` for
 /// `6.2432000000000015E-2` under `General`, `2000-01-01` for the serial
 /// `36526` under `mmm-yy` (see `fluree_doc_xlsx::format_general` for the
-/// fifteen figures General shows).
-fn cached_number(raw: &str, code: Option<&str>, date1904: bool) -> (String, Option<Datum>) {
-    use fluree_doc_xlsx::{cell_datum, custom_fmt, format_number, CellStyle, NumFmt};
+/// fifteen figures General shows). `format` is the code read, once for
+/// its cache; `None` is General.
+fn cached_number(
+    raw: &str,
+    format: Option<Arc<NumFmt>>,
+    date1904: bool,
+) -> (String, Option<Datum>) {
+    use fluree_doc_xlsx::{cell_datum, format_number, CellStyle};
     let style = CellStyle {
-        format: code.map_or(NumFmt::General, custom_fmt),
-        bold: false,
-        size: 11.0,
+        format: format.unwrap_or_else(|| Arc::new(NumFmt::General)),
+        ..CellStyle::default()
     };
     (
         format_number(raw, &style, date1904),
@@ -196,7 +249,7 @@ pub fn info(bytes: &[u8]) -> DocumentInfo {
 /// it is a malformed part, not a chart anyone plotted.
 const MAX_POINTS: usize = 100_000;
 
-/// Read a chart part. Values come from the cached `c:strCache`/`c:numCache`
+/// Read a chart part, within a budget of its own. Values come from the cached `c:strCache`/`c:numCache`
 /// blocks, which hold what the chart actually plots — the `c:f` formula
 /// beside them points into a workbook that may not travel with the deck.
 ///
@@ -206,16 +259,19 @@ const MAX_POINTS: usize = 100_000;
 /// series' gaps stay gaps instead of moving its later values onto earlier
 /// categories. Of a multi-level category axis, the first level is read: the
 /// labels next to the plot, one per point.
-pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
-    read_chart(xml).map(|c| (c.title, c.categories, c.series))
+pub fn parse_chart_xml(xml: &str) -> Result<Option<ChartData>, PptxError> {
+    let chart = parse_chart(xml, &mut Budget::default())?;
+    Ok(chart.map(|c| (c.title, c.categories, c.series)))
 }
 
-/// As [`parse_chart_xml`], with each point's stored value beside what it
-/// shows. A cache of numbers is read through its format code (see
-/// `cached_number`). A series whose values formula names cells deleted
-/// since (`Sheet1!#REF!`) plots nothing and is left out; one whose name
-/// alone does has no name.
-fn read_chart(xml: &str) -> Option<Chart> {
+/// [`parse_chart_xml`], with each point's stored value beside what it
+/// shows, what it makes spent from the deck's `budget` before it is made:
+/// each point read, and each series' or category list's values laid out
+/// by index, as many as its cache declares. A cache of numbers is read
+/// through its format code (see `cached_number`). A series whose values
+/// formula names cells deleted since (`Sheet1!#REF!`) plots nothing and is
+/// left out; one whose name alone does has no name.
+fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<Chart>, TooLarge> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut chart = Chart::default();
@@ -241,9 +297,10 @@ fn read_chart(xml: &str) -> Option<Chart> {
     let mut text = String::new();
     let mut depth_title = 0usize;
     // The cache being read holds numbers, and the format code it shows
-    // them through; a point can name its own.
+    // them through, read once for the cache, not again for each point; a
+    // point can name its own.
     let mut numeric = false;
-    let mut cache_code: Option<String> = None;
+    let mut cache_code: Option<Arc<NumFmt>> = None;
     let mut point_code: Option<String> = None;
     let mut in_code = false;
     // Reading the formula the current part of a series reads its cells by.
@@ -305,7 +362,7 @@ fn read_chart(xml: &str) -> Option<Chart> {
             }
             Event::End(e) => match local(e.name().as_ref()) {
                 "formatCode" => {
-                    cache_code = Some(std::mem::take(&mut text));
+                    cache_code = Some(Arc::new(custom_fmt(&std::mem::take(&mut text))));
                     in_code = false;
                 }
                 "f" if in_formula => {
@@ -337,12 +394,22 @@ fn read_chart(xml: &str) -> Option<Chart> {
                                         pending.last().map_or(0, |(i, ..)| i + 1)
                                     });
                                     if at < MAX_POINTS {
+                                        budget.spend_cells(1)?;
                                         let (shown, datum) = if numeric {
-                                            let code = point_code.take().or(cache_code.clone());
-                                            cached_number(&val, code.as_deref(), date1904)
+                                            let format = (point_code.take())
+                                                .map(|c| Arc::new(custom_fmt(&c)))
+                                                .or_else(|| cache_code.clone());
+                                            cached_number(&val, format, date1904)
                                         } else {
                                             (val.trim().to_string(), None)
                                         };
+                                        // Spent as soon as made: a format
+                                        // code's text is shown in each
+                                        // point it formats.
+                                        budget.spend_text(&shown)?;
+                                        if let Some(d) = &datum {
+                                            budget.spend_text(&d.value)?;
+                                        }
                                         pending.push((at, shown, datum));
                                     }
                                 }
@@ -355,7 +422,7 @@ fn read_chart(xml: &str) -> Option<Chart> {
                 "title" => in_title = false,
                 "pt" => point = None,
                 "cat" | "xVal" => {
-                    let (points, datums) = by_index(&mut pending, &mut count);
+                    let (points, datums) = by_index(&mut pending, &mut count, budget)?;
                     if chart.categories.is_empty() {
                         chart.categories = points;
                         chart.category_datums = datums;
@@ -364,7 +431,7 @@ fn read_chart(xml: &str) -> Option<Chart> {
                     level = 0;
                 }
                 "val" | "yVal" => {
-                    let (points, datums) = by_index(&mut pending, &mut count);
+                    let (points, datums) = by_index(&mut pending, &mut count, budget)?;
                     let name = std::mem::take(&mut series_name);
                     if !values_broken {
                         let name = if name_broken { String::new() } else { name };
@@ -384,21 +451,25 @@ fn read_chart(xml: &str) -> Option<Chart> {
         }
         buf.clear();
     }
-    (!chart.series.is_empty()).then_some(chart)
+    Ok((!chart.series.is_empty()).then_some(chart))
 }
 
 /// A cache's values laid out by index: as many as it declares or holds,
-/// blank where it wrote no point. Leaves the cache state empty for the next.
+/// blank where it wrote no point, and what each stores, spent from
+/// `budget` before they are made (a series with none still one slot).
+/// Leaves the cache state empty for the next.
 fn by_index(
     points: &mut Vec<(usize, String, Option<Datum>)>,
     count: &mut usize,
-) -> (Vec<String>, Vec<Option<Datum>>) {
+    budget: &mut Budget,
+) -> Result<(Vec<String>, Vec<Option<Datum>>), TooLarge> {
     let n = points
         .iter()
         .map(|(i, ..)| i + 1)
         .max()
         .unwrap_or(0)
         .max(*count);
+    budget.spend_cells(2 * n.max(1) as u64)?;
     let mut out = vec![String::new(); n];
     let mut datums = vec![None; n];
     for (i, v, d) in points.drain(..) {
@@ -406,32 +477,35 @@ fn by_index(
         datums[i] = d;
     }
     *count = 0;
-    (out, datums)
+    Ok((out, datums))
 }
 
 /// A chart as a table: categories down the first column, one column per
 /// series. The numbers become cells, so a consumer can ask what EMEA's share
 /// was without looking at a picture.
+///
+/// Its grid, a row for each category or value of the longest series and a
+/// column for each series, is spent from `budget` before it is made, and
+/// its cells that hold text and their text after: a chart its frames name
+/// many times is read once and made once for each.
 #[cfg(test)]
 fn chart_element(
-    title: String,
-    categories: Vec<String>,
-    series: Vec<Series>,
+    (title, categories, series): &ChartData,
     page: usize,
-) -> Vec<Element> {
-    chart_table(
-        Chart {
-            title,
-            categories,
-            series,
-            ..Default::default()
-        },
-        page,
-    )
+    budget: &mut Budget,
+) -> Result<Vec<Element>, TooLarge> {
+    let chart = Chart {
+        title: title.clone(),
+        categories: categories.clone(),
+        series: series.clone(),
+        ..Default::default()
+    };
+    chart_table(&chart, page, budget)
 }
 
-/// As [`chart_element`], with what each cell stores beside what it shows.
-fn chart_table(chart: Chart, page: usize) -> Vec<Element> {
+/// As [`chart_element`], with what each cell stores beside what it shows,
+/// spent with the grid when the chart stores any.
+fn chart_table(chart: &Chart, page: usize, budget: &mut Budget) -> Result<Vec<Element>, TooLarge> {
     let Chart {
         title,
         categories,
@@ -441,19 +515,33 @@ fn chart_table(chart: Chart, page: usize) -> Vec<Element> {
     } = chart;
     let mut out = Vec::new();
     if !title.is_empty() {
-        out.push(element("doco:SectionTitle", title, Some(2), page));
-    }
-    let mut header = vec![String::new()];
-    for (name, _) in &series {
-        header.push(name.clone());
+        keep(
+            &mut out,
+            element("doco:SectionTitle", title.clone(), Some(2), page),
+            budget,
+        )?;
     }
     let n = categories
         .len()
         .max(series.iter().map(|(_, v)| v.len()).max().unwrap_or(0));
+    let width = 1 + series.len();
+    let stores = (category_datums.iter())
+        .chain(series_datums.iter().flatten())
+        .any(Option::is_some);
+    let grids = if stores { 2 } else { 1 };
+    budget.spend_cells(
+        (n as u64 + 1)
+            .saturating_mul(width as u64)
+            .saturating_mul(grids),
+    )?;
+    let mut header = vec![String::new()];
+    for (name, _) in series {
+        header.push(name.clone());
+    }
     let mut rows = vec![header];
     for i in 0..n {
         let mut row = vec![categories.get(i).cloned().unwrap_or_default()];
-        for (_, vals) in &series {
+        for (_, vals) in series {
             row.push(vals.get(i).cloned().unwrap_or_default());
         }
         rows.push(row);
@@ -463,27 +551,28 @@ fn chart_table(chart: Chart, page: usize) -> Vec<Element> {
         .map(|r| r.join(" | "))
         .collect::<Vec<_>>()
         .join("\n");
-    let width = rows.first().map_or(0, Vec::len);
-    let mut datums = vec![vec![None; width]];
-    for i in 0..rows.len() - 1 {
-        let mut row = vec![category_datums.get(i).cloned().flatten()];
-        for d in &series_datums {
-            row.push(d.get(i).cloned().flatten());
-        }
-        row.resize(width, None);
-        datums.push(row);
-    }
     let mut e = element("doco:Table", text, None, page);
     e.header_rows = Some(1);
+    if stores {
+        let mut datums = vec![vec![None; width]];
+        for i in 0..rows.len() - 1 {
+            let mut row = vec![category_datums.get(i).cloned().flatten()];
+            for d in series_datums {
+                row.push(d.get(i).cloned().flatten());
+            }
+            row.resize(width, None);
+            datums.push(row);
+        }
+        for d in datums.iter().flatten().flatten() {
+            budget.spend_text(&d.value)?;
+        }
+        e.datums = Some(datums);
+    }
     e.cells = Some(rows);
-    e.datums = datums
-        .iter()
-        .flatten()
-        .any(Option::is_some)
-        .then_some(datums);
     e.evidence = "pptx-chart";
+    spend_table(&e, budget)?;
     out.push(e);
-    out
+    Ok(out)
 }
 
 /// `ppt/slides/slide12.xml` → 12. Notes and layouts are not slides.
@@ -512,6 +601,33 @@ pub fn parse_slide_with_charts(
     page: usize,
     charts: &[(String, String)],
 ) -> Result<Vec<Element>, PptxError> {
+    let mut budget = Budget::default();
+    let mut parsed = Vec::new();
+    for (id, cx) in charts {
+        if let Some(chart) = parse_chart(cx, &mut budget)? {
+            parsed.push((id.clone(), chart));
+        }
+    }
+    // The first of an id, as a scan finds it.
+    let mut by_id: HashMap<&str, &Chart> = HashMap::new();
+    for (id, chart) in &parsed {
+        by_id.entry(id.as_str()).or_insert(chart);
+    }
+    parse_slide(xml, page, &|id| by_id.get(id).copied(), &mut budget)
+}
+
+/// [`parse_slide_with_charts`], what the slide makes spent from the deck's
+/// `budget` as it is made.
+///
+/// `chart` finds the chart a frame names by relationship id in one lookup:
+/// a scan of the slide's charts for each frame made the slide's cost their
+/// product.
+fn parse_slide<'c>(
+    xml: &str,
+    page: usize,
+    chart: &dyn Fn(&str) -> Option<&'c Chart>,
+    budget: &mut Budget,
+) -> Result<Vec<Element>, PptxError> {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -528,6 +644,13 @@ pub fn parse_slide_with_charts(
     let mut row: Vec<Cell> = Vec::new();
     let mut cell = Cell::default();
     let mut in_cell = false;
+    // The cell slots the table's cells and rows were spent at as they were
+    // read, which its grid's spending counts as its own.
+    let mut held = 0u64;
+    // Whether the deck's subtitle is read, kept rather than looked for in
+    // `out` at each paragraph of its shape: a subtitle of many paragraphs
+    // made that a scan of the slide for each.
+    let mut subtitled = false;
 
     loop {
         match r.read_event_into(&mut buf) {
@@ -561,10 +684,8 @@ pub fn parse_slide_with_charts(
                 "chart" => {
                     // The frame names its part by relationship id.
                     if let Some(id) = attr(&e, "id") {
-                        if let Some((_, cx)) = charts.iter().find(|(rid, _)| *rid == id) {
-                            if let Some(chart) = read_chart(cx) {
-                                out.extend(chart_table(chart, page));
-                            }
+                        if let Some(chart) = chart(&id) {
+                            out.extend(chart_table(chart, page, budget)?);
                         }
                     }
                 }
@@ -598,28 +719,48 @@ pub fn parse_slide_with_charts(
                         flush(
                             &mut out,
                             &mut text,
-                            page,
-                            shape,
-                            (para_bullet || para_level > 0).then_some(para_level),
-                        );
+                            (
+                                page,
+                                shape,
+                                (para_bullet || para_level > 0).then_some(para_level),
+                            ),
+                            &mut subtitled,
+                            budget,
+                        )?;
                         para_bullet = false;
                         para_level = 0;
                     }
                 }
+                // Each cell and row is spent as it is kept, not when the
+                // table ends: a megabyte zipped of `<a:tc></a:tc>` held
+                // gigabytes of cells before its grid was spent.
                 "tc" => {
                     in_cell = false;
+                    budget.spend_cells(1)?;
+                    held += 1;
                     row.push(std::mem::take(&mut cell));
                 }
-                "tr" => rows.push(std::mem::take(&mut row)),
+                "tr" => {
+                    budget.spend_cells(1)?;
+                    held += 1;
+                    rows.push(std::mem::take(&mut row));
+                }
                 "tbl" => {
                     in_table = in_table.saturating_sub(1);
                     if in_table == 0 {
-                        emit_table(&mut out, std::mem::take(&mut rows), page);
+                        let rows = std::mem::take(&mut rows);
+                        emit_table(&mut out, rows, page, std::mem::take(&mut held), budget)?;
                     }
                 }
                 "sp" => {
                     // A shape's title-ness does not leak into the next shape.
-                    flush(&mut out, &mut text, page, shape, None);
+                    flush(
+                        &mut out,
+                        &mut text,
+                        (page, shape, None),
+                        &mut subtitled,
+                        budget,
+                    )?;
                     shape = Shape::Body;
                 }
                 _ => {}
@@ -628,7 +769,13 @@ pub fn parse_slide_with_charts(
         }
         buf.clear();
     }
-    flush(&mut out, &mut text, page, Shape::Body, None);
+    flush(
+        &mut out,
+        &mut text,
+        (page, Shape::Body, None),
+        &mut subtitled,
+        budget,
+    )?;
     // A subtitle follows its title, whichever shape the slide lists first:
     // the subtitle and what the slide lists after it, up to the title, go
     // after the title. With no title it subtitles nothing, and is text.
@@ -676,42 +823,78 @@ enum Shape {
     DeckSubtitle,
 }
 
-/// `item` is a list item's depth, its paragraph's outline level `lvl`, for
-/// a paragraph read as one.
-fn flush(out: &mut Vec<Element>, buf: &mut String, page: usize, shape: Shape, item: Option<usize>) {
+/// `e` kept, it and its text spent from `budget` first.
+fn keep(out: &mut Vec<Element>, e: Element, budget: &mut Budget) -> Result<(), TooLarge> {
+    budget.spend_elements(1)?;
+    budget.spend_text(&e.text)?;
+    out.push(e);
+    Ok(())
+}
+
+/// A table's element, its cells that hold text and their text spent from
+/// `budget` (its grid was, before it was made), and what DoCO copies of
+/// its cells.
+fn spend_table(e: &Element, budget: &mut Budget) -> Result<(), TooLarge> {
+    budget.spend_elements(1)?;
+    budget.spend_cell_texts(e.cells.iter().flatten().flatten().map(String::as_str))?;
+    budget.spend_copies(e)
+}
+
+/// The text gathered in `buf` as an element of the slide `page`, by the
+/// shape it is in. `item` is a list item's depth, its paragraph's outline
+/// level `lvl`, for a paragraph read as one.
+fn flush(
+    out: &mut Vec<Element>,
+    buf: &mut String,
+    (page, shape, item): (usize, Shape, Option<usize>),
+    subtitled: &mut bool,
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     let t = std::mem::take(buf)
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
     if t.is_empty() {
-        return;
+        return Ok(());
     }
-    if shape == Shape::DeckTitle {
-        out.push(element("doco:Title", t, None, page));
-    } else if shape == Shape::DeckSubtitle && !out.iter().any(|e| e.kind == "doco:Subtitle") {
-        out.push(element("doco:Subtitle", t, None, page));
+    let e = if shape == Shape::DeckTitle {
+        element("doco:Title", t, None, page)
+    } else if shape == Shape::DeckSubtitle && !*subtitled {
+        *subtitled = true;
+        element("doco:Subtitle", t, None, page)
     } else if shape == Shape::SlideTitle {
-        out.push(element("doco:SectionTitle", t, Some(1), page));
+        element("doco:SectionTitle", t, Some(1), page)
     } else if let Some(depth) = item {
-        out.push(Element {
+        Element {
             depth,
             ..element("doc:ListItem", t, None, page)
-        });
+        }
     } else {
-        out.push(element("doco:Paragraph", t, None, page));
-    }
+        element("doco:Paragraph", t, None, page)
+    };
+    keep(out, e, budget)
 }
 
-fn emit_table(out: &mut Vec<Element>, rows: Vec<Vec<Cell>>, page: usize) {
+/// A table's rows as a `doco:Table`, its grid (its rows padded to its
+/// widest) spent from `budget` before it is made, but for the cells and
+/// rows `held` as they were read, spent already.
+fn emit_table(
+    out: &mut Vec<Element>,
+    rows: Vec<Vec<Cell>>,
+    page: usize,
+    held: u64,
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     let rows: Vec<Vec<Cell>> = rows.into_iter().filter(|r| !r.is_empty()).collect();
     if rows.is_empty() {
-        return;
+        return Ok(());
     }
     let width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
     if width == 0 {
-        return;
+        return Ok(());
     }
     let n = rows.len();
+    budget.spend_cells((n as u64).saturating_mul(width as u64).saturating_sub(held))?;
     let mut grid = vec![String::new(); n * width];
     let mut m_left = vec![false; n * width];
     let mut m_down = vec![false; n * width];
@@ -726,10 +909,9 @@ fn emit_table(out: &mut Vec<Element>, rows: Vec<Vec<Cell>>, page: usize) {
             if cell.v_continue && r > 0 {
                 m_down[r * width + c] = true;
             }
-            for k in 1..cell.span.max(1) {
-                if c + k < width {
-                    m_left[r * width + c + k] = true;
-                }
+            // A span is cut at the grid's edge.
+            for k in 1..cell.span.max(1).min(width - c) {
+                m_left[r * width + c + k] = true;
             }
         }
     }
@@ -746,12 +928,15 @@ fn emit_table(out: &mut Vec<Element>, rows: Vec<Vec<Cell>>, page: usize) {
     e.cells = Some(cells);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
+    spend_table(&e, budget)?;
     out.push(e);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluree_doc_model::scaling::assert_linear;
 
     const NS: &str = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
 
@@ -768,6 +953,24 @@ mod tests {
 
     fn para(text: &str) -> String {
         format!("<a:p><a:r><a:t>{text}</a:t></a:r></a:p>")
+    }
+
+    #[test]
+    fn a_subtitle_of_many_paragraphs_is_read_in_linear_time() {
+        // Each paragraph after the first looked for a subtitle among the
+        // slide's elements so far, past a title of `n` paragraphs.
+        fluree_doc_model::scaling::assert_linear(
+            "a subtitle's paragraphs",
+            5_000,
+            |n| {
+                slide(&format!(
+                    "{}{}",
+                    shape(Some("ctrTitle"), &para("Quarterly Review").repeat(n)),
+                    shape(Some("subTitle"), &para("Q3 2026").repeat(n))
+                ))
+            },
+            |x| assert!(parse_slide_xml(x, 0).is_ok()),
+        );
     }
 
     #[test]
@@ -905,16 +1108,17 @@ mod tests {
             &["North America", "EMEA", "Asia Pacific"],
             &["34.5", "28.0", "17.5"],
         ));
-        let (title, cats, series) = parse_chart_xml(&x).expect("series found");
+        let chart = parse_chart_xml(&x).unwrap().expect("series found");
+        let (title, cats, series) = &chart;
         assert_eq!(title, "Employees by region");
-        assert_eq!(cats, ["North America", "EMEA", "Asia Pacific"]);
+        assert_eq!(*cats, ["North America", "EMEA", "Asia Pacific"]);
         assert_eq!(series.len(), 1);
         assert_eq!(series[0].0, "Share");
         // A cache with no format code shows its numbers in General, as the
         // chart does: `28.0` is `28`.
         assert_eq!(series[0].1, ["34.5", "28", "17.5"]);
 
-        let els = chart_element(title, cats, series, 0);
+        let els = chart_element(&chart, 0, &mut Budget::default()).unwrap();
         let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
         let cells = t.cells.as_ref().unwrap();
         assert_eq!(cells[0], vec!["", "Share"]);
@@ -929,18 +1133,20 @@ mod tests {
             ser("Americas", &["2023", "2024"], &["31.2", "34.5"]),
             ser("EMEA", &["2023", "2024"], &["24.1", "28.0"])
         ));
-        let (_, cats, series) = parse_chart_xml(&x).unwrap();
-        assert_eq!(cats, ["2023", "2024"], "categories are read once");
+        let chart = parse_chart_xml(&x).unwrap().unwrap();
+        let (_, cats, series) = &chart;
+        assert_eq!(cats, &["2023", "2024"], "categories are read once");
         assert_eq!(series.len(), 2);
-        let els = chart_element(String::new(), cats, series, 0);
-        let cells = els[0].cells.as_ref().unwrap();
+        let els = chart_element(&chart, 0, &mut Budget::default()).unwrap();
+        let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
+        let cells = t.cells.as_ref().unwrap();
         assert_eq!(cells[0], vec!["", "Americas", "EMEA"]);
         assert_eq!(cells[2], vec!["2024", "34.5", "28"]);
     }
 
     #[test]
     fn a_part_with_no_series_is_not_a_chart() {
-        assert!(parse_chart_xml("<c:chartSpace/>").is_none());
+        assert!(parse_chart_xml("<c:chartSpace/>").unwrap().is_none());
     }
 
     #[test]
@@ -954,7 +1160,7 @@ mod tests {
              <c:val><c:numLit><c:ptCount val=\"3\"/><c:pt idx=\"0\"><c:v>10</c:v></c:pt>\
              <c:pt idx=\"2\"><c:v>30</c:v></c:pt></c:numLit></c:val></c:ser>",
         );
-        let (_, cats, series) = parse_chart_xml(&x).unwrap();
+        let (_, cats, series) = parse_chart_xml(&x).unwrap().unwrap();
         assert_eq!(cats, ["A", "B", "C"]);
         assert_eq!(series[0].1, ["10", "", "30"]);
         // A trailing point left out still has its row.
@@ -963,7 +1169,7 @@ mod tests {
              <c:pt idx=\"1\"><c:v>B</c:v></c:pt></c:strLit></c:cat>\
              <c:val><c:numLit><c:ptCount val=\"2\"/><c:pt idx=\"0\"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser>",
         );
-        assert_eq!(parse_chart_xml(&x).unwrap().2[0].1, ["5", ""]);
+        assert_eq!(parse_chart_xml(&x).unwrap().unwrap().2[0].1, ["5", ""]);
     }
 
     #[test]
@@ -978,7 +1184,7 @@ mod tests {
              <c:val><c:numRef><c:f>Sheet1!$B$2:$B$3</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"2\"/>\
              <c:pt idx=\"0\"><c:v>6.2432000000000015E-2</c:v></c:pt><c:pt idx=\"1\"><c:v>9.3014240000000008</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>",
         );
-        let chart = read_chart(&x).unwrap();
+        let chart = parse_chart(&x, &mut Budget::default()).unwrap().unwrap();
         assert_eq!(chart.categories, ["2000-01-01", "2000-02-01"]);
         assert_eq!(chart.series[0].1, ["0.062432", "9.301424"]);
         // What it stores is kept, at full precision, typed.
@@ -991,7 +1197,7 @@ mod tests {
             chart.category_datums[0].as_ref().unwrap().datatype,
             "xsd:date"
         );
-        let table = chart_table(chart, 0);
+        let table = chart_table(&chart, 0, &mut Budget::default()).unwrap();
         let t = table.iter().find(|e| e.kind == "doco:Table").unwrap();
         assert_eq!(t.cells.as_ref().unwrap()[1], ["2000-01-01", "0.062432"]);
         assert!(t.datums.as_ref().unwrap()[0].iter().all(Option::is_none));
@@ -1014,7 +1220,7 @@ mod tests {
             // Its name alone does: a column without a name.
             series("Sheet1!#REF!", "Sheet1!$B$4", "#REF!"),
         ));
-        let (_, _, series) = parse_chart_xml(&x).unwrap();
+        let (_, _, series) = parse_chart_xml(&x).unwrap().unwrap();
         let names: Vec<&str> = series.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["Reference", ""]);
     }
@@ -1028,7 +1234,255 @@ mod tests {
              </c:multiLvlStrCache></c:multiLvlStrRef></c:cat>\
              <c:val><c:numLit><c:pt idx=\"0\"><c:v>1</c:v></c:pt><c:pt idx=\"1\"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>",
         );
-        assert_eq!(parse_chart_xml(&x).unwrap().1, ["Q1", "Q2"]);
+        assert_eq!(parse_chart_xml(&x).unwrap().unwrap().1, ["Q1", "Q2"]);
+    }
+
+    #[test]
+    fn a_charts_declared_points_are_spent_before_they_are_made() {
+        // One series declaring 100,000 points it does not write: refused
+        // by a budget of 8,192 cells before its values are laid out.
+        let x = chart_xml(
+            "<c:ser><c:val><c:numCache><c:ptCount val=\"100000\"/></c:numCache></c:val></c:ser>",
+        );
+        let mut small = Budget::new(8_192 * fluree_doc_model::budget::CELL_BYTES, 0);
+        assert!(parse_chart(&x, &mut small).is_err());
+        assert!(parse_chart(&x, &mut Budget::default()).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_tables_cell_costs_what_a_sheets_does() {
+        use fluree_doc_model::budget::{
+            Output, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+        };
+        let mut e = Element::new("doco:Table", String::new(), "pptx", "pptx");
+        e.cells = Some(vec![vec!["ab".into(), String::new()]]);
+        let spend =
+            |output, memory| spend_table(&e, &mut Budget::new(memory, 0).for_output(output));
+        // The table, and its cell that holds text written once in its row,
+        // or a node of its own in DoCO; its grid was spent as it was made.
+        let flat = FLAT_ELEMENT_BYTES + FLAT_CELL_BYTES + 2 * TEXT_BYTES;
+        assert!(spend(Output::Flat, flat).is_ok());
+        assert!(spend(Output::Flat, flat - 1).is_err());
+        let doco = 2 * ELEMENT_BYTES + 2 * TEXT_BYTES;
+        assert!(spend(Output::Doco, doco).is_ok());
+        assert!(spend(Output::Doco, doco - 1).is_err());
+    }
+
+    /// A stored package of `parts`.
+    fn package(parts: &[(String, String)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in parts {
+            z.start_file(name.as_str(), opts).unwrap();
+            z.write_all(body.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn a_slide_listed_is_found_among_the_relationships_in_one_lookup() {
+        // 20,000 slides listed by an id none of 200,000 relationships has,
+        // then one that is: a scan of them all for each listing took 24 s
+        // in a release build.
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+        let bytes = |n: usize| {
+            let listed: String = (0..n)
+                .map(|i| format!("<p:sldId id=\"{}\" r:id=\"rIdXXXXXXX\"/>", 256 + i))
+                .collect();
+            let others: String = (0..10 * n)
+                .map(|i| format!("<Relationship Id=\"rId{i:07}\" Target=\"a\"/>"))
+                .collect();
+            let parts = vec![
+                (
+                    "ppt/presentation.xml".to_string(),
+                    format!(
+                        "<p:presentation {NS}><p:sldIdLst>{listed}\
+                     <p:sldId id=\"1\" r:id=\"rId1\"/></p:sldIdLst></p:presentation>"
+                    ),
+                ),
+                (
+                    "ppt/_rels/presentation.xml.rels".to_string(),
+                    format!(
+                        "<Relationships>{others}<Relationship Id=\"rId1\" Type=\"{rel}\" \
+                     Target=\"slides/slide1.xml\"/></Relationships>"
+                    ),
+                ),
+                (
+                    "ppt/slides/slide1.xml".to_string(),
+                    slide(&shape(None, &para("listed"))),
+                ),
+            ];
+            package(&parts)
+        };
+        assert_linear("slides listed among relationships", 1_000, bytes, |b| {
+            parse(b).unwrap();
+        });
+        let els = parse(&bytes(2_000)).unwrap();
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, ["listed"]);
+    }
+
+    #[test]
+    fn a_slides_part_is_found_among_the_packages_in_one_lookup() {
+        // 200,000 slides listed by a relationship to a part the package
+        // does not hold, among 30,000 parts: a scan of the parts for each
+        // listing took 4.7 s in a release build. A deck that lists no part it
+        // holds is read in its parts' order.
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+        let bytes = |n: usize| {
+            let listed = "<p:sldId id=\"256\" r:id=\"rId1\"/>".repeat(20 * n);
+            let mut parts =
+                vec![
+            (
+                "ppt/presentation.xml".to_string(),
+                format!("<p:presentation {NS}><p:sldIdLst>{listed}</p:sldIdLst></p:presentation>"),
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels".to_string(),
+                format!(
+                    "<Relationships><Relationship Id=\"rId1\" Type=\"{rel}\" \
+                     Target=\"slides/gone.xml\"/></Relationships>"
+                ),
+            ),
+            (
+                "ppt/slides/slide1.xml".to_string(),
+                slide(&shape(None, &para("unlisted"))),
+            ),
+        ];
+            parts.extend((0..3 * n).map(|i| (format!("ppt/other/p{i}.xml"), String::new())));
+            package(&parts)
+        };
+        assert_linear("slides listed among parts", 500, bytes, |b| {
+            parse(b).unwrap();
+        });
+        let els = parse(&bytes(1_000)).unwrap();
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, ["unlisted"]);
+    }
+
+    #[test]
+    fn a_frames_chart_is_found_among_the_slides_in_one_lookup() {
+        // 20,000 frames naming an id none of the slide's 200,000 chart
+        // relationships has: a scan of them all for each frame took 24 s in
+        // a release build.
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+        let frame = "<p:graphicFrame><a:graphic><a:graphicData>\
+                     <c:chart xmlns:c=\"c\" r:id=\"rIdXXXXXXX\"/></a:graphicData></a:graphic></p:graphicFrame>";
+        let bytes = |n: usize| {
+            let charts: String = (0..10 * n)
+            .map(|i| {
+                format!(
+                    "<Relationship Id=\"rId{i:07}\" Type=\"{rel}\" Target=\"../charts/chart1.xml\"/>"
+                )
+            })
+            .collect();
+            let parts = vec![
+                (
+                    "ppt/charts/chart1.xml".to_string(),
+                    chart_xml(&ser("Share", &["EMEA"], &["28.0"])),
+                ),
+                ("ppt/slides/slide1.xml".to_string(), slide(&frame.repeat(n))),
+                (
+                    "ppt/slides/_rels/slide1.xml.rels".to_string(),
+                    format!("<Relationships>{charts}</Relationships>"),
+                ),
+            ];
+            package(&parts)
+        };
+        assert_linear("frames among chart relationships", 1_000, bytes, |b| {
+            parse(b).unwrap();
+        });
+        let els = parse(&bytes(2_000)).unwrap();
+        assert!(els.iter().all(|e| e.kind != "doco:Table"));
+    }
+
+    #[test]
+    fn a_slides_relationships_are_read_once_however_often_it_is_listed() {
+        // A slide of 200,000 chart relationships listed 200 times: its
+        // relationships read and resolved again for each listing, 300,000
+        // listed 100 times took 17 s in a release build.
+        let chart = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+        let slide_rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+        let frame = "<p:graphicFrame><a:graphic><a:graphicData>\
+                     <c:chart xmlns:c=\"c\" r:id=\"rId0000007\"/></a:graphicData></a:graphic></p:graphicFrame>";
+        let bytes = |n: usize| {
+            let charts: String = (0..1_000 * n)
+            .map(|i| {
+                format!(
+                    "<Relationship Id=\"rId{i:07}\" Type=\"{chart}\" Target=\"../charts/chart1.xml\"/>"
+                )
+            })
+            .collect();
+            let listed = "<p:sldId id=\"256\" r:id=\"rIdS\"/>".repeat(n);
+            let parts =
+                vec![
+            (
+                "ppt/presentation.xml".to_string(),
+                format!("<p:presentation {NS}><p:sldIdLst>{listed}</p:sldIdLst></p:presentation>"),
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels".to_string(),
+                format!(
+                    "<Relationships><Relationship Id=\"rIdS\" Type=\"{slide_rel}\" \
+                     Target=\"slides/slide1.xml\"/></Relationships>"
+                ),
+            ),
+            (
+                "ppt/charts/chart1.xml".to_string(),
+                chart_xml(&ser("Share", &["EMEA"], &["28.0"])),
+            ),
+            ("ppt/slides/slide1.xml".to_string(), slide(frame)),
+            (
+                "ppt/slides/_rels/slide1.xml.rels".to_string(),
+                format!("<Relationships>{charts}</Relationships>"),
+            ),
+        ];
+            package(&parts)
+        };
+        assert_linear("a slide listed many times", 10, bytes, |b| {
+            parse(b).unwrap();
+        });
+        let els = parse(&bytes(20)).unwrap();
+        let tables = els.iter().filter(|e| e.kind == "doco:Table").count();
+        assert_eq!(tables, 20, "the chart, at each listing");
+    }
+
+    #[test]
+    fn a_chart_named_by_many_frames_is_read_once() {
+        // A chart part of 1 MiB, named by each of 1,300 slides and twice by
+        // the first: read once, it spends 2 MiB of the budget; read for
+        // each slide, 2.6 GB, past it.
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+        let frame = "<p:graphicFrame><a:graphic><a:graphicData>\
+                     <c:chart xmlns:c=\"c\" r:id=\"rId1\"/></a:graphicData></a:graphic></p:graphicFrame>";
+        let padded = format!(
+            "{}{}",
+            ser("Share", &["EMEA"], &["28.0"]),
+            " ".repeat(1 << 20)
+        );
+        let mut parts = vec![("ppt/charts/chart1.xml".to_string(), chart_xml(&padded))];
+        let slides = 1_300;
+        for k in 1..=slides {
+            let frames = if k == 1 { 2 } else { 1 };
+            parts.push((
+                format!("ppt/slides/slide{k}.xml"),
+                slide(&frame.repeat(frames)),
+            ));
+            parts.push((
+                format!("ppt/slides/_rels/slide{k}.xml.rels"),
+                format!(
+                    "<Relationships><Relationship Id=\"rId1\" Type=\"{rel}\" \
+                     Target=\"../charts/chart1.xml\"/></Relationships>"
+                ),
+            ));
+        }
+        let els = parse(&package(&parts)).unwrap();
+        let tables = els.iter().filter(|e| e.kind == "doco:Table").count();
+        assert_eq!(tables, slides + 1, "one table for each frame");
     }
 
     #[test]
@@ -1077,5 +1531,83 @@ mod tests {
     #[test]
     fn a_non_archive_is_an_error_not_a_panic() {
         assert!(parse(b"not a zip").is_err());
+    }
+
+    /// A slide with a table of one column: `first`, then `rows - 1` cells
+    /// continuing it (`vMerge`).
+    fn merged_down(first: &str, rows: usize) -> String {
+        let row = |attr: &str, text: &str| {
+            format!(
+                "<a:tr><a:tc{attr}><a:txBody>{}</a:txBody></a:tc></a:tr>",
+                para(text)
+            )
+        };
+        slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl>{}{}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>",
+            row("", first),
+            row(" vMerge=\"1\"", "").repeat(rows - 1)
+        ))
+    }
+
+    #[test]
+    fn a_long_value_merged_down_is_refused_rather_than_copied_into_each_row() {
+        let long = "y".repeat(200_000);
+        assert!(parse_slide_xml(&merged_down(&long, 3), 0).is_ok());
+        let err = parse_slide_xml(&merged_down(&long, 3_000), 0).unwrap_err();
+        assert!(matches!(err, PptxError::TooLarge(_)), "{err}");
+    }
+
+    #[test]
+    fn a_span_past_the_grid_is_cut_at_its_edge() {
+        // A span of 2^63 columns over a table two wide marks one.
+        let x = slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl>\
+               <a:tr><a:tc gridSpan=\"9223372036854775807\"><a:txBody>{}</a:txBody></a:tc>\
+                     <a:tc hMerge=\"1\"><a:txBody>{}</a:txBody></a:tc></a:tr>\
+             </a:tbl></a:graphicData></a:graphic></p:graphicFrame>",
+            para("Banner"),
+            para("")
+        ));
+        let els = parse_slide_xml(&x, 0).unwrap();
+        let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
+        assert_eq!(*t.merged_left.as_ref().unwrap(), [false, true]);
+    }
+
+    #[test]
+    fn a_tables_grid_is_spent_before_it_is_made() {
+        // One row of 4,000 cells over 4,000 rows of one: sixteen million
+        // cells of padding.
+        let wide = format!("<a:tr>{}</a:tr>", "<a:tc></a:tc>".repeat(4_000));
+        let tall = "<a:tr><a:tc></a:tc></a:tr>".repeat(4_000);
+        let x = slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl>{wide}{tall}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
+        ));
+        let mut small = Budget::new(1 << 30, 0);
+        let err = parse_slide(&x, 0, &|_| None, &mut small).unwrap_err();
+        assert!(matches!(err, PptxError::TooLarge(_)), "{err}");
+    }
+
+    #[test]
+    fn a_tables_cells_are_spent_as_they_are_read() {
+        // 100,000 empty cells in a table that never ends: held until it did,
+        // and never spent, they are refused by a budget of 10,000 as they
+        // are read. A megabyte zipped of them held gigabytes.
+        let cells = "<a:tc></a:tc>".repeat(100_000);
+        let open = slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl><a:tr>{cells}"
+        ));
+        let cell = fluree_doc_model::budget::CELL_BYTES;
+        let mut small = Budget::new(10_000 * cell, 0);
+        let err = parse_slide(&open, 0, &|_| None, &mut small).unwrap_err();
+        assert!(matches!(err, PptxError::TooLarge(_)), "{err}");
+        // A table that ends is spent at its grid, what it was spent at as
+        // it was read part of it, not on top: 3,000 cells and 1,000 rows
+        // read, a grid of 3,000, and the table's element.
+        let rows = "<a:tr><a:tc></a:tc><a:tc></a:tc><a:tc></a:tc></a:tr>".repeat(1_000);
+        let x = slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl>{rows}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
+        ));
+        let mut fits = Budget::new(4_100 * cell, 0);
+        parse_slide(&x, 0, &|_| None, &mut fits).unwrap();
     }
 }

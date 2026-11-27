@@ -13,9 +13,11 @@ values), `page` is `0`, and there is no `bbox` and nothing to escalate.
 What the reader has to decide, it decides by short rules:
 
 - **Encoding.** A byte-order mark says which (UTF-8, UTF-16 LE or BE);
-  otherwise bytes that are valid UTF-8 are read as UTF-8, and anything else
-  as Windows-1252, which is what Excel saves a CSV in on most Western
-  systems.
+  otherwise bytes whose every other byte is mostly zero, and the others
+  never, are UTF-16 in the byte order the zeros give (what a program may
+  write as "Unicode text", no mark before it); otherwise bytes that are
+  valid UTF-8 are read as UTF-8, and anything else as Windows-1252, which
+  is what Excel saves a CSV in on most Western systems.
 - **Delimiter.** A `.tsv` is split on tabs. A `.csv` names its delimiter in
   Excel's `sep=;` first line, which is no row, or else it is sniffed: of
   comma, semicolon, tab and pipe, the one found outside quotes the same
@@ -39,14 +41,16 @@ number, and `03/04/2026` a date only in one country's order, so a type would
 be a guess about the file rather than a fact in it. A workbook declares its
 types, and its tables carry them (see [XLSX](office-and-web.md#xlsx)).
 
-The table's cells, its rows padded to the widest, and their text are
-counted against the memory one document may take as they are read, before
-they are allocated, and a table past it is refused (`CsvError::TooLarge`):
-one very wide row over a million short ones would otherwise ask for a
-trillion cells. A cell that holds text is counted at what the output makes
-of it: a node of its own in DoCO (4 KiB), a cell of its row in Markdown,
-XHTML, JSON and the text (128 bytes and its text). So 70,000 records of ten
-fields (4 MB) convert to Markdown and are refused as DoCO. The
+Every cell, the rows padded to the widest, and its text are spent from the
+document's budget ([limits on what one document may make](../reference/limits.md))
+as the table is read, before they are allocated, and so are the copies DoCO
+writes of them (each cell's column header and row label); past it the file
+is refused (`CsvError::TooLarge`): one very wide row over a million short
+ones would otherwise ask for a trillion cells. A record's cell is counted at
+what it takes, a fraction of a sheet's, so an ordinary file of five columns
+converts up to about 1.6 million records to Markdown, JSON or the text, and
+about 100,000 to DoCO, which writes each cell as a node of its own
+([A CSV's records](../reference/limits.md#a-csvs-records)). The
 empty fields of a record are counted, not held, until one that holds
 something follows them, so a line of nothing but delimiters, which is no
 row, costs nothing however long it is.

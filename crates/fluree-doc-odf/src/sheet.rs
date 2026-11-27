@@ -1,9 +1,11 @@
 //! An OpenDocument spreadsheet's sheets, for the workbook layout.
 //!
 //! A repeated cell that holds something is a cell, and its text a copy,
-//! each time it repeats: the cells are counted against [`MAX_CELLS`], and
-//! each cell and its text spent from the document's [`Budget`], before it
-//! is made.
+//! each time it repeats, across its row or down its rows: the cells are
+//! counted against [`MAX_CELLS`], and each cell and its text spent from the
+//! document's [`Budget`] once, before it is made. A row's cells are read as
+//! the file states them, each with how many columns it repeats across, and
+//! only made, each copy, into the sheet.
 
 use crate::tree::Tree;
 use crate::{OdfError, MAX_CELLS};
@@ -17,13 +19,20 @@ use std::collections::HashSet;
 const MAX_ROWS: u64 = 1 << 20;
 const MAX_COLUMNS: u64 = 1 << 14;
 
-pub(crate) fn elements(content: &Tree) -> Result<Vec<Element>, OdfError> {
+pub(crate) fn elements(content: &Tree, budget: &mut Budget) -> Result<Vec<Element>, OdfError> {
+    let sheets = sheets(content, budget)?;
+    fluree_doc_xlsx::grid_elements(sheets, "odf", budget)
+        .map_err(|e| OdfError::TooLarge(e.to_string()))
+}
+
+/// The sheets' cells, each copy of a repeated one a cell, each spent from
+/// `budget` once, with its text, before it is made.
+fn sheets(content: &Tree, budget: &mut Budget) -> Result<Vec<GridSheet>, OdfError> {
     let bold = bold_styles(content);
     let mut sheets = Vec::new();
     let mut total = 0usize;
     // A repeated cell is its text again each time: spent before each copy,
     // as the cell is.
-    let mut budget = Budget::default();
     let Some(book) = content.find(0, "spreadsheet") else {
         return Ok(Vec::new());
     };
@@ -44,7 +53,10 @@ pub(crate) fn elements(content: &Tree) -> Result<Vec<Element>, OdfError> {
                 break;
             }
             let repeat = count(content.attr(r, "number-rows-repeated"));
-            let cells = cells_of(content, r, &bold, &mut budget)?;
+            // The row's text is copied out of the tree to be read.
+            crate::room_for_text(content, r, budget)
+                .map_err(|e| OdfError::TooLarge(e.to_string()))?;
+            let cells = cells_of(content, r, &bold);
             if is_header && row == u64::from(header) {
                 header += repeat.min(16) as u32;
             }
@@ -57,24 +69,24 @@ pub(crate) fn elements(content: &Tree) -> Result<Vec<Element>, OdfError> {
                     break;
                 }
                 for c in &cells {
-                    total += 1;
-                    if total > MAX_CELLS {
-                        return Err(OdfError::TooLarge(format!(
-                            "its sheets hold more than {MAX_CELLS} cells"
-                        )));
-                    }
-                    spend(&mut budget, &c.cell.text)?;
-                    g.cells.push(GridCell {
-                        row: row as u32,
-                        ..c.cell.clone()
-                    });
-                    if let Some((cs, rs)) = c.span {
-                        g.merges.push((
-                            row as u32,
-                            c.cell.col,
-                            row as u32 + rs - 1,
-                            c.cell.col + cs - 1,
-                        ));
+                    for k in 0..c.columns {
+                        total += 1;
+                        if total > MAX_CELLS {
+                            return Err(OdfError::TooLarge(format!(
+                                "its sheets hold more than {MAX_CELLS} cells"
+                            )));
+                        }
+                        spend(budget, &c.cell.text)?;
+                        let col = c.cell.col + k;
+                        g.cells.push(GridCell {
+                            row: row as u32,
+                            col,
+                            ..c.cell.clone()
+                        });
+                        if let Some((cs, rs)) = c.span {
+                            g.merges
+                                .push((row as u32, col, row as u32 + rs - 1, col + cs - 1));
+                        }
                     }
                 }
                 row += 1;
@@ -83,22 +95,21 @@ pub(crate) fn elements(content: &Tree) -> Result<Vec<Element>, OdfError> {
         g.frozen_rows = header;
         sheets.push(g);
     }
-    fluree_doc_xlsx::grid_elements(sheets, "odf", &mut budget)
-        .map_err(|e| OdfError::TooLarge(e.to_string()))
+    Ok(sheets)
 }
 
-/// A row's cells that hold something, at their columns, repeats counted.
+/// A cell of a row that holds something, as the file states it: at its
+/// first column, and how many columns it repeats across.
 struct RowCell {
     cell: GridCell,
+    columns: u32,
     span: Option<(u32, u32)>,
 }
 
-fn cells_of(
-    t: &Tree,
-    r: usize,
-    bold: &HashSet<String>,
-    budget: &mut Budget,
-) -> Result<Vec<RowCell>, OdfError> {
+/// A row's cells that hold something, each once however many columns it
+/// repeats across, within the sheet's columns: what the row's copies are
+/// made from. Each is a cell of the part's tree, spent with it.
+fn cells_of(t: &Tree, r: usize, bold: &HashSet<String>) -> Vec<RowCell> {
     let mut out = Vec::new();
     let mut col = 0u64;
     for c in t.elements(r) {
@@ -134,30 +145,21 @@ fn cells_of(
         };
         let (cs, rs) = (span("number-columns-spanned"), span("number-rows-spanned"));
         let is_bold = t.attr(c, "style-name").is_some_and(|s| bold.contains(s));
-        for _ in 0..repeat {
-            if col >= MAX_COLUMNS {
-                break;
-            }
-            spend(budget, &text)?;
-            out.push(RowCell {
-                cell: GridCell {
-                    row: 0,
-                    col: col as u32,
-                    text: text.clone(),
-                    datum: datum.clone(),
-                    bold: is_bold,
-                },
-                span: (cs > 1 || rs > 1).then_some((cs, rs)),
-            });
-            col += 1;
-            // A cell repeated across a row is as many cells, within the
-            // sheet's bound on them.
-            if out.len() > MAX_CELLS {
-                break;
-            }
-        }
+        let columns = repeat.min(MAX_COLUMNS - col);
+        out.push(RowCell {
+            cell: GridCell {
+                row: 0,
+                col: col as u32,
+                text,
+                datum,
+                bold: is_bold,
+            },
+            columns: columns as u32,
+            span: (cs > 1 || rs > 1).then_some((cs, rs)),
+        });
+        col += columns;
     }
-    Ok(out)
+    out
 }
 
 /// One cell and its text, spent before they are made.
@@ -295,6 +297,40 @@ mod tests {
         // The same cell a few times reads.
         let row = row.replace("3000", "3");
         assert!(parse(&sheet(&row)).is_ok());
+    }
+
+    #[test]
+    fn each_cell_and_each_copy_of_a_repeated_one_is_spent_once() {
+        use fluree_doc_model::budget::{Budget, CELL_BYTES, MAX_MEMORY, TEXT_BYTES};
+        // As LibreOffice writes a number; a row of three, one cell repeated
+        // across two columns; the row repeated down three rows.
+        let cell = |v: &str, repeat: u32| {
+            format!(
+                "<table:table-cell table:number-columns-repeated=\"{repeat}\" office:value-type=\"float\" \
+                 office:value=\"{v}\"><text:p>{v}</text:p></table:table-cell>"
+            )
+        };
+        let rows = format!(
+            "<table:table-row table:number-rows-repeated=\"3\">{}{}</table:table-row>\
+             <table:table-row>{}</table:table-row>",
+            cell("12", 1),
+            cell("345", 2),
+            cell("6", 1)
+        );
+        let pkg = sheet(&rows);
+        let mut p = fluree_doc_ooxml::Package::open(&pkg).unwrap();
+        let content = crate::tree(&mut p, "content.xml", &mut Budget::new(MAX_MEMORY, 0))
+            .unwrap()
+            .unwrap();
+        let mut b = Budget::new(MAX_MEMORY, 0);
+        let got = super::sheets(&content, &mut b).unwrap();
+        assert_eq!(got[0].cells.len(), 3 * 3 + 1);
+        // Ten cells and their text, each once.
+        let text = 3 * (2 + 2 * 3) + 1;
+        assert_eq!(
+            MAX_MEMORY - b.memory_left(),
+            10 * CELL_BYTES + text * TEXT_BYTES
+        );
     }
 
     #[test]

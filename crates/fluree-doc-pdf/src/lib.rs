@@ -244,6 +244,39 @@ pub fn unread_regions(
     out
 }
 
+/// The entries of a PDF array as written, each a reference or an object,
+/// up to the first that does not read.
+///
+/// hayro-syntax's `Array::raw_iter` unwraps each entry, trusting that an
+/// array its parser could skip over reads back entry by entry; one that
+/// does not (`[+ ]`: a lone sign skips as a number but does not read as one)
+/// panics. So each entry is read here first, without the document's
+/// context, which reads whatever it reads (a reference is not followed, a
+/// string is decrypted or not but read either way), and the array's own
+/// iterator is taken no further than those that read.
+///
+/// Each entry is read as it is asked for, not the whole array first: a
+/// link or an outline item asks for its destination's first entry, and
+/// 20,000 links sharing one destination of 100,000 entries read it whole
+/// each time, 48 s.
+pub(crate) fn array_entries<'a>(
+    array: &hayro_syntax::object::Array<'a>,
+) -> impl Iterator<Item = hayro_syntax::object::MaybeRef<hayro_syntax::object::Object<'a>>> {
+    use hayro_syntax::object::{MaybeRef, Object};
+    use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
+    let ctx = ReaderContext::dummy();
+    let mut r = Reader::new(array.data());
+    let mut raw = array.raw_iter();
+    std::iter::from_fn(move || {
+        r.skip_white_spaces_and_comments();
+        if r.at_end() || r.read_with_context::<MaybeRef<Object<'_>>>(&ctx).is_none() {
+            return None;
+        }
+        raw.next()
+    })
+    .fuse()
+}
+
 /// What the PDF interpreter reported on each page ([`Page::warnings`]),
 /// once per page and kind, with how many times, in page order.
 pub fn parse_warnings(doc: &Document) -> Vec<fluree_doc_model::ParseWarning> {
@@ -308,6 +341,49 @@ pub use text::PageText;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_array_is_read_up_to_the_first_entry_that_does_not_read() {
+        use hayro_syntax::object::{Array, MaybeRef};
+        use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
+        // `+` alone skips as a number but does not read as one, and the
+        // array's own iterator panicked on it: as a link's or an outline
+        // item's destination, or in a page's list of annotations.
+        let ctx = ReaderContext::dummy();
+        let read = |src: &'static [u8]| {
+            Reader::new(src)
+                .read_with_context::<Array<'_>>(&ctx)
+                .expect("the array skips")
+        };
+        let entries: Vec<_> = array_entries(&read(b"[3 0 R /XYZ + 1]")).collect();
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(entries[0], MaybeRef::Ref(_)));
+        assert_eq!(array_entries(&read(b"[+ ]")).count(), 0);
+        assert_eq!(array_entries(&read(b"[1 2 (x)]")).count(), 3);
+    }
+
+    #[test]
+    fn an_arrays_first_entry_is_read_alone() {
+        use hayro_syntax::object::Array;
+        use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
+        // A destination of n entries, its first asked for n times, as n
+        // links sharing it ask: the array was read whole each time.
+        let ctx = ReaderContext::dummy();
+        fluree_doc_model::scaling::assert_linear(
+            "a shared destination's first entry",
+            2_000,
+            |n| format!("[3 0 R{}]", " 1".repeat(n)).into_bytes(),
+            |src| {
+                let array = Reader::new(src)
+                    .read_with_context::<Array<'_>>(&ctx)
+                    .unwrap();
+                let n = src.len() / 2;
+                for _ in 0..n {
+                    assert!(array_entries(&array).next().is_some());
+                }
+            },
+        );
+    }
     use crate::extract::{ImagePlacement, OcrRead};
     use fluree_doc_model::Element;
 

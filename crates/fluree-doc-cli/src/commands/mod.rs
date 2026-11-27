@@ -51,6 +51,7 @@ pub(crate) fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         out_dir: None,
         pages: None,
         jobs: 1,
+        job_memory: None,
         layout_boxes: None,
         tier_results: None,
         structure_results: None,

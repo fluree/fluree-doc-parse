@@ -52,8 +52,10 @@ use fluree_doc_model::{Element, Media, MediaSource};
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 
-/// The most bytes the `PowerPoint Document` stream is read to: 256 MiB.
-pub const MAX_STREAM_BYTES: u64 = 256 << 20;
+/// The most bytes the `PowerPoint Document` stream is read to: 256 MiB (a
+/// sixteenth built for the fuzz targets, as the budget is,
+/// [`fluree_doc_model::budget::scaled`]).
+pub const MAX_STREAM_BYTES: u64 = fluree_doc_model::budget::scaled(256 << 20);
 /// The deepest nesting of containers followed.
 pub const MAX_DEPTH: usize = 64;
 /// The most edits followed back from the last.
@@ -539,9 +541,7 @@ fn table(
     for ((_, s), (c0, c1, r0, r1)) in cells.iter().zip(spans) {
         let mut found = Vec::new();
         texts(d, s, depth + 1, (&mut 4, false), &[], budget, &mut found)?;
-        // A cell that holds text is a node of the output of its own.
-        budget.spend_elements(1)?;
-        grid.rows[r0][c0] = found
+        let text = found
             .iter()
             .filter_map(|i| match i {
                 Item::Text(t) => Some(tidy(&t.text.replace('\r', " "))),
@@ -550,6 +550,12 @@ fn table(
             .filter(|t| !t.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
+        // A cell that holds text, at what the output makes of it, its text
+        // spent as it was decoded.
+        if !text.is_empty() {
+            budget.spend_text_cells(1)?;
+        }
+        grid.rows[r0][c0] = text;
         for row in r0..r1 {
             for col in c0..c1 {
                 if col > c0 {
@@ -741,12 +747,13 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
     parse_with_media(bytes).map(|(elements, _)| elements)
 }
 
-/// The most bytes one picture is read to: 64 MiB, as a DOCX's.
-pub const MAX_MEDIA_BYTES: u64 = 64 << 20;
+/// The most bytes one picture is read to: 64 MiB, as a DOCX's (scaled as
+/// [`MAX_STREAM_BYTES`]).
+pub const MAX_MEDIA_BYTES: u64 = fluree_doc_model::budget::scaled(64 << 20);
 
 /// Where a picture is kept: in the `Pictures` stream at an offset, or in
 /// the document stream, inside its store entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Stored {
     Delayed(usize),
     Inline(usize),
@@ -786,7 +793,7 @@ fn picture_store(doc: &[u8], document: &Record) -> Vec<Option<Stored>> {
 /// A picture record's image: its bytes past the record's own header, its
 /// unique ids and its tag. A drawing (EMF, WMF, PICT) is returned as stored,
 /// compressed, and is no image a reader decodes.
-fn blip(d: &[u8], at: usize) -> Result<Vec<u8>, String> {
+fn blip(d: &[u8], at: usize) -> Result<&[u8], String> {
     let r = record(d, at).ok_or("the picture is not where its entry says")?;
     if (r.data.1 - r.data.0) as u64 > MAX_MEDIA_BYTES {
         return Err(format!("a picture of more than {MAX_MEDIA_BYTES} bytes"));
@@ -800,7 +807,6 @@ fn blip(d: &[u8], at: usize) -> Result<Vec<u8>, String> {
         _ => return Err(format!("not a picture record ({:#06x})", r.typ)),
     };
     d.get(r.data.0 + skip..r.data.1)
-        .map(<[u8]>::to_vec)
         .ok_or_else(|| "the picture record is cut short".into())
 }
 
@@ -843,6 +849,18 @@ impl MediaReader {
 
     /// The bytes of the picture `part` names, as [`read_media`] reads them.
     pub fn read(&self, part: &str) -> Result<Vec<u8>, String> {
+        self.picture(part).map(<[u8]>::to_vec)
+    }
+
+    /// The first `n` bytes of the picture `part` names, at most: enough to
+    /// tell its format without copying the rest. Several entries of a
+    /// deck's store may point at one large picture, and each is looked at.
+    pub fn head(&self, part: &str, n: usize) -> Result<Vec<u8>, String> {
+        self.picture(part).map(|p| p[..n.min(p.len())].to_vec())
+    }
+
+    /// The picture `part` names, where the deck holds it.
+    fn picture(&self, part: &str) -> Result<&[u8], String> {
         let pib: usize = part
             .strip_prefix("Pictures#")
             .and_then(|n| n.parse().ok())
@@ -1001,12 +1019,18 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
             }
         }
     }
-    // The pictures the store holds, by their `pib`.
-    let blips: HashSet<u32> = picture_store(&doc, &document)
+    // The pictures the store holds, by their `pib`, each named by the first
+    // entry that points where it is: entries may point any number of times
+    // at one picture, and a picture is read once by its name, however many
+    // show it.
+    let mut first: HashMap<Stored, u32> = HashMap::new();
+    let blips: HashMap<u32, u32> = picture_store(&doc, &document)
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.is_some())
-        .map(|(i, _)| i as u32 + 1)
+        .filter_map(|(i, e)| {
+            let pib = i as u32 + 1;
+            e.map(|at| (pib, *first.entry(at).or_insert(pib)))
+        })
         .collect();
     let mut media = Vec::new();
     let mut figures = 0usize;
@@ -1061,7 +1085,11 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
                 Item::Text(t) => t,
                 Item::Table(t) => {
                     budget.spend_elements(1)?;
-                    out.push(table_element(t, page));
+                    let e = table_element(t, page);
+                    // What DoCO copies of it: a merged value in each cell
+                    // it covers.
+                    budget.spend_copies(&e)?;
+                    out.push(e);
                     continue;
                 }
                 Item::Picture(pib, alt) => {
@@ -1070,13 +1098,11 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
                     let id = format!("figure-{page}-{figures}");
                     // Each shape that shows it: the reader reads a picture
                     // once, however many show it.
-                    let part = format!("Pictures#{pib}");
                     media.push(Media {
                         figure: id.clone(),
-                        source: if blips.contains(&pib) {
-                            MediaSource::Part(part)
-                        } else {
-                            MediaSource::Missing(part)
+                        source: match blips.get(&pib) {
+                            Some(named) => MediaSource::Part(format!("Pictures#{named}")),
+                            None => MediaSource::Missing(format!("Pictures#{pib}")),
                         },
                         index: 0,
                     });

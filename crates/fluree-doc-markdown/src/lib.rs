@@ -10,24 +10,125 @@
 //! every element's `bbox` is `None` rather than a zeroed box that would read
 //! as a real position to a consumer.
 //!
-//! A block of raw HTML is read with the HTML reader: it is content, and it
-//! is how a table that spans cells, or has bands or a header of several
-//! rows, is written in Markdown, ours included.
+//! **Bounds.** Each element, each table cell, a table's rows padded to the
+//! widest, their text, each link, and the copies the output makes of a
+//! table's cells (a cell's column header, row label and section band) are
+//! counted against the document's [`Budget`] before they are made: a band's
+//! label a megabyte long over a hundred columns and forty rows would
+//! otherwise be written four thousand times.
+//!
+//! A block of raw HTML is read with the HTML reader, within the same
+//! budget: it is content, and it is how a table that spans cells, or has
+//! bands or a header of several rows, is written in Markdown, ours
+//! included.
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{Element, Link};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-/// Parse Markdown into document elements in reading order.
-pub fn parse(src: &str) -> Vec<Element> {
+/// Parse Markdown into document elements in reading order; refused past
+/// the document's budget.
+pub fn parse(src: &str) -> Result<Vec<Element>, TooLarge> {
+    parse_within(src, Budget::default())
+}
+
+/// [`parse`], against `budget`.
+fn parse_within(src: &str, mut budget: Budget) -> Result<Vec<Element>, TooLarge> {
+    // pulldown-cmark builds the tree of the whole document before its first
+    // event, out of the reader's sight: spent first, and held throughout.
+    budget.spend_cells(tree_slots(tree_marks(src.as_bytes())))?;
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_FOOTNOTES);
-    Reader::default().run(Parser::new_ext(src, opts))
+    Reader {
+        budget,
+        ..Reader::default()
+    }
+    .run(Parser::new_ext(src, opts))
+}
+
+/// What pulldown-cmark's tree of `marks` marks ([`tree_marks`]) costs, in
+/// cell slots: one and a half a mark, 192 bytes. About 100 bytes a mark
+/// were measured at their peak, from `*a* ` to `[a`, nested `- ` and lines
+/// of `a`, and up to 210 in address space, the tree's vector of nodes
+/// reserving up to twice what it holds: 19 million `[a` aborted at 4 GB,
+/// 60 MB of `*a* ` too, where a 108 MB log, six marks a line, took 522 MB.
+fn tree_slots(marks: u64) -> u64 {
+    marks.saturating_add(marks / 2)
+}
+
+/// The marks of `src` from which pulldown-cmark's tree is made: each byte
+/// that may open or close inline markup (`` ` ``, `\`, `&`, `*`, `_`, `~`,
+/// `!`, `<`, `[`, `]`, `|`, as the parser looks for them) and each line
+/// end, each a node of the tree and, at most, the text before it, and each
+/// container a line opens (a quote's `>`, a list item's marker), a node or
+/// two. Text between them, however long, is one node.
+fn tree_marks(src: &[u8]) -> u64 {
+    let mut marks = containers(src);
+    for (i, b) in src.iter().enumerate() {
+        match b {
+            b'`' | b'\\' | b'&' | b'*' | b'_' | b'~' | b'!' | b'<' | b'[' | b']' | b'|' | b'\r' => {
+                marks += 1
+            }
+            b'\n' => marks += 1 + containers(&src[i + 1..]),
+            _ => {}
+        }
+    }
+    marks
+}
+
+/// The containers the line at the start of `line` opens: each `>`, and each
+/// list item's marker (`-`, `+`, `*`, or up to nine digits and `.` or `)`,
+/// before a space or the line's end), as many as are nested, blanks between.
+fn containers(line: &[u8]) -> u64 {
+    let blank = |b: Option<&u8>| matches!(b, None | Some(b' ' | b'\t' | b'\r' | b'\n'));
+    let mut n = 0;
+    let mut i = 0;
+    loop {
+        while matches!(line.get(i), Some(b' ' | b'\t')) {
+            i += 1;
+        }
+        let digits = line[i..]
+            .iter()
+            .take(10)
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        let next = match line.get(i) {
+            Some(b'>') => i + 1,
+            Some(b'-' | b'+' | b'*') if blank(line.get(i + 1)) => i + 1,
+            _ if (1..10).contains(&digits)
+                && matches!(line.get(i + digits), Some(b'.' | b')'))
+                && blank(line.get(i + digits + 1)) =>
+            {
+                i + digits + 1
+            }
+            _ => return n,
+        };
+        n += 1;
+        i = next;
+    }
+}
+
+/// The character offset of each byte offset in `s`, offsets in ascending
+/// order, counted in one pass. An offset inside a character counts the
+/// characters before it; one past the end, all of them.
+fn char_offsets(s: &str, bytes: impl Iterator<Item = usize>) -> Vec<usize> {
+    let mut chars = s.char_indices().map(|(i, _)| i).peekable();
+    let mut n = 0;
+    bytes
+        .map(|b| {
+            while chars.next_if(|&at| at < b).is_some() {
+                n += 1;
+            }
+            n
+        })
+        .collect()
 }
 
 #[derive(Default)]
 struct Reader {
+    budget: Budget,
     out: Vec<Element>,
     text: String,
     /// Heading level being collected, if any.
@@ -38,6 +139,8 @@ struct Reader {
     in_code: bool,
     /// Table under construction: rows, and whether the header row is open.
     rows: Vec<Vec<String>>,
+    /// The cells spent for `rows` and `row`.
+    cells: u64,
     row: Vec<String>,
     in_table: bool,
     in_table_head: bool,
@@ -50,9 +153,13 @@ struct Reader {
     strong: usize,
     cell_strong_text: bool,
     cell_plain_text: bool,
-    /// Links closed so far in the text under construction, and the one still
-    /// open, as `(char offset where its anchor begins, target)`.
-    links: Vec<Link>,
+    /// Links closed so far in the text under construction, as `(byte
+    /// offsets where the anchor begins and ends, link)`, and the one still
+    /// open, as `(byte offset where its anchor begins, target)`: in bytes,
+    /// which [`flush_text`](Reader::flush_text) turns into characters once.
+    /// Counting the characters at each link is quadratic in a paragraph of
+    /// links: 600,000 on one line, 4 MB, took 16 s.
+    links: Vec<(usize, usize, Link)>,
     open_link: Option<(usize, String)>,
     /// The raw HTML block being read, if one is open.
     html: Option<String>,
@@ -72,31 +179,34 @@ impl Reader {
         }
     }
 
-    fn flush_text(&mut self, kind: &str, level: Option<usize>) {
+    fn flush_text(&mut self, kind: &str, level: Option<usize>) -> Result<(), TooLarge> {
         let raw = std::mem::take(&mut self.text);
         let links = std::mem::take(&mut self.links);
         self.open_link = None;
-        let t = raw.trim().to_string();
-        if t.is_empty() {
-            return;
+        if raw.trim().is_empty() {
+            return Ok(());
         }
-        let mut e = self.element(kind, t, level);
+        self.budget.spend_elements(1)?;
+        self.budget.spend_text(raw.trim())?;
+        let mut e = self.element(kind, raw.trim().to_string(), level);
         // `element` holds the trimmed text; the offsets were taken against
         // the untrimmed string, so they shift by whatever the trim removed.
-        let lead = raw.chars().take_while(|c| c.is_whitespace()).count();
-        let len = e.text.chars().count();
+        let lead = raw.len() - raw.trim_start().len();
+        let end = lead + e.text.len();
+        let begins = char_offsets(&raw[lead..end], links.iter().map(|l| l.0.max(lead) - lead));
+        let ends = char_offsets(&raw[lead..end], links.iter().map(|l| l.1.max(lead) - lead));
         let shifted: Vec<Link> = links
             .into_iter()
-            .filter_map(|l| {
-                let (b, end) = l.span()?;
-                (b >= lead && end - lead <= len)
-                    .then(|| Link::uri(l.href()).spanning(b - lead, end - lead))
+            .zip(begins.into_iter().zip(ends))
+            .filter_map(|((b, end_at, link), (from, to))| {
+                (b >= lead && end_at <= end && to > from).then(|| link.spanning(from, to))
             })
             .collect();
         if !shifted.is_empty() {
             e.links = Some(shifted);
         }
         self.out.push(e);
+        Ok(())
     }
 
     /// Mark where a link's anchor starts. Its extent is known only when the
@@ -106,35 +216,89 @@ impl Reader {
         if dest.is_empty() {
             return;
         }
-        self.open_link = Some((self.text.chars().count(), dest.to_string()));
+        self.open_link = Some((self.text.len(), dest.to_string()));
     }
 
-    fn close_link(&mut self) {
+    /// Close the open link, spent before it is kept.
+    fn close_link(&mut self) -> Result<(), TooLarge> {
         let Some((begin, dest)) = self.open_link.take() else {
-            return;
+            return Ok(());
         };
-        let end = self.text.chars().count();
-        if end > begin {
-            self.links.push(Link::uri(dest).spanning(begin, end));
+        let end = self.text.len();
+        // A link in a table cell has no element to be kept on (the cell's
+        // text leaves as the table's), so it is not spent either.
+        if end > begin && !self.in_table {
+            let link = Link::uri(dest);
+            self.budget.spend_links(std::slice::from_ref(&link))?;
+            self.links.push((begin, end, link));
         }
+        Ok(())
     }
 
     /// End the text read so far as the block it belongs to: the open list
     /// item's, or a paragraph of its own.
-    fn flush_block(&mut self) {
+    fn flush_block(&mut self) -> Result<(), TooLarge> {
         let kind = if self.items > 0 {
             "doc:ListItem"
         } else {
             "doco:Paragraph"
         };
-        self.flush_text(kind, None);
+        self.flush_text(kind, None)
     }
 
-    fn run(mut self, parser: Parser<'_>) -> Vec<Element> {
+    /// A table's cells as read, each row padded to the widest: spent before
+    /// the padding is made, then what the output copies of them.
+    fn table(&mut self) -> Result<Option<Element>, TooLarge> {
+        let rows = std::mem::take(&mut self.rows);
+        let read = std::mem::take(&mut self.cells);
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+        let grid = (rows.len() as u64).saturating_mul(width as u64);
+        // pulldown-cmark gives every row the header's cells, each spent as
+        // read, so nothing is padded here; the padding is spent all the same,
+        // should a row ever come short.
+        self.budget.spend_cells(grid.saturating_sub(read))?;
+        self.budget.spend_elements(1)?;
+        let rows: Vec<Vec<String>> = rows
+            .into_iter()
+            .map(|mut r| {
+                r.resize(width, String::new());
+                r
+            })
+            .collect();
+        let text = rows
+            .iter()
+            .map(|r| r.join(" | "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Markdown has no merged cells, so a section band is
+        // written as a body row holding only a bold first cell
+        // (`| **Food** | | |`). Bold is the author's mark: a row
+        // whose other cells are merely empty is an item with
+        // values missing. The last row has nothing to label.
+        let sub_headers: Vec<usize> = (self.header_rows..rows.len().saturating_sub(1))
+            .filter(|&r| {
+                width > 1
+                    && self.first_bold.get(r).copied().unwrap_or(false)
+                    && !rows[r][0].is_empty()
+                    && rows[r][1..].iter().all(|c| c.is_empty())
+            })
+            .collect();
+        let mut e = self.element("doco:Table", text, None);
+        e.header_rows = Some(self.header_rows);
+        e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
+        e.cells = Some(rows);
+        self.budget.spend_copies(&e)?;
+        Ok(Some(e))
+    }
+
+    fn run(mut self, parser: Parser<'_>) -> Result<Vec<Element>, TooLarge> {
         for ev in parser {
             match ev {
                 Event::Start(Tag::Heading { level, .. }) => {
-                    self.flush_block();
+                    self.flush_block()?;
                     self.heading = Some(match level {
                         HeadingLevel::H1 => 1,
                         HeadingLevel::H2 => 2,
@@ -146,21 +310,21 @@ impl Reader {
                 }
                 Event::End(TagEnd::Heading(_)) => {
                     let level = self.heading.take();
-                    self.flush_text("doco:SectionTitle", level);
+                    self.flush_text("doco:SectionTitle", level)?;
                 }
                 // A nested list ends its parent item's own text, which is
                 // that item's, before the nested items begin.
-                Event::Start(Tag::List(_)) => self.flush_block(),
+                Event::Start(Tag::List(_)) => self.flush_block()?,
                 Event::Start(Tag::Item) => {
-                    self.flush_block();
+                    self.flush_block()?;
                     self.items += 1;
                 }
                 Event::End(TagEnd::Item) => {
-                    self.flush_text("doc:ListItem", None);
+                    self.flush_text("doc:ListItem", None)?;
                     self.items = self.items.saturating_sub(1);
                 }
                 Event::Start(Tag::CodeBlock(_)) => {
-                    self.flush_block();
+                    self.flush_block()?;
                     self.in_code = true;
                 }
                 Event::End(TagEnd::CodeBlock) => {
@@ -169,14 +333,17 @@ impl Reader {
                     // folding it into a paragraph's single flow.
                     let t = std::mem::take(&mut self.text);
                     if !t.trim().is_empty() {
+                        self.budget.spend_elements(1)?;
+                        self.budget.spend_text(t.trim_end())?;
                         let e = self.element("doco:Paragraph", t.trim_end().to_string(), None);
                         self.out.push(e);
                     }
                 }
                 Event::Start(Tag::Table(_)) => {
-                    self.flush_block();
+                    self.flush_block()?;
                     self.in_table = true;
                     self.rows.clear();
+                    self.cells = 0;
                     self.first_bold.clear();
                     self.cell_strong_text = false;
                     self.cell_plain_text = false;
@@ -202,7 +369,12 @@ impl Reader {
                     self.rows.push(std::mem::take(&mut self.row));
                 }
                 Event::End(TagEnd::TableCell) => {
-                    let c = self.text.trim().to_string();
+                    self.budget.spend_cells(1)?;
+                    self.cells += 1;
+                    let c = self.text.trim();
+                    // A cell that holds text, at what the output makes of it.
+                    self.budget.spend_cell_texts([c])?;
+                    let c = c.to_string();
                     self.text.clear();
                     if self.row.is_empty() {
                         self.first_bold
@@ -219,41 +391,9 @@ impl Reader {
                 }
                 Event::End(TagEnd::Table) => {
                     self.in_table = false;
-                    let rows = std::mem::take(&mut self.rows);
-                    if rows.is_empty() {
-                        continue;
+                    if let Some(e) = self.table()? {
+                        self.out.push(e);
                     }
-                    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
-                    let rows: Vec<Vec<String>> = rows
-                        .into_iter()
-                        .map(|mut r| {
-                            r.resize(width, String::new());
-                            r
-                        })
-                        .collect();
-                    let text = rows
-                        .iter()
-                        .map(|r| r.join(" | "))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    // Markdown has no merged cells, so a section band is
-                    // written as a body row holding only a bold first cell
-                    // (`| **Food** | | |`). Bold is the author's mark: a row
-                    // whose other cells are merely empty is an item with
-                    // values missing. The last row has nothing to label.
-                    let sub_headers: Vec<usize> = (self.header_rows..rows.len().saturating_sub(1))
-                        .filter(|&r| {
-                            width > 1
-                                && self.first_bold.get(r).copied().unwrap_or(false)
-                                && !rows[r][0].is_empty()
-                                && rows[r][1..].iter().all(|c| c.is_empty())
-                        })
-                        .collect();
-                    let mut e = self.element("doco:Table", text, None);
-                    e.header_rows = Some(self.header_rows);
-                    e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
-                    e.cells = Some(rows);
-                    self.out.push(e);
                 }
                 // A blank line between list items makes each item's text a
                 // paragraph inside it, and an item can hold several. They
@@ -263,9 +403,9 @@ impl Reader {
                         self.text.push(' ');
                     }
                 }
-                Event::End(TagEnd::Paragraph) => self.flush_text("doco:Paragraph", None),
+                Event::End(TagEnd::Paragraph) => self.flush_text("doco:Paragraph", None)?,
                 Event::Start(Tag::Link { dest_url, .. }) => self.open_link(&dest_url),
-                Event::End(TagEnd::Link) => self.close_link(),
+                Event::End(TagEnd::Link) => self.close_link()?,
                 Event::Start(Tag::Strong) => self.strong += 1,
                 Event::End(TagEnd::Strong) => self.strong = self.strong.saturating_sub(1),
                 Event::Text(t) | Event::Code(t) => {
@@ -286,13 +426,13 @@ impl Reader {
                         self.text.push(' ');
                     }
                 }
-                Event::Rule => self.flush_block(),
+                Event::Rule => self.flush_block()?,
                 // A block of raw HTML is the document's content as much as
                 // the Markdown around it: a table with spans or bands can
                 // only be written so. It is read as the HTML reader reads a
                 // page, its headings declared by its tags and no keyword.
                 Event::Start(Tag::HtmlBlock) => {
-                    self.flush_block();
+                    self.flush_block()?;
                     self.html = Some(String::new());
                 }
                 Event::Html(t) => {
@@ -303,24 +443,78 @@ impl Reader {
                 Event::End(TagEnd::HtmlBlock) => {
                     let h = self.html.take().unwrap_or_default();
                     if !h.trim().is_empty() {
-                        let (read, _) = fluree_doc_html::parse_with_quote_depth(&h);
+                        // Read within the document's budget, which the
+                        // HTML reader leaves with what the block leaves.
+                        let (read, _, _) =
+                            fluree_doc_html::parse_message_within(&h, &mut self.budget)?;
                         self.out.extend(read);
                     }
                 }
                 _ => {}
             }
         }
-        self.flush_text("doco:Paragraph", None);
+        self.flush_text("doco:Paragraph", None)?;
         for (i, e) in self.out.iter_mut().enumerate() {
             e.id = format!("elem-{:05}", i + 1);
         }
-        self.out
+        Ok(self.out)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluree_doc_model::scaling::assert_linear;
+
+    use fluree_doc_model::budget::{
+        converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
+        TEXT_BYTES,
+    };
+
+    fn parse(src: &str) -> Vec<Element> {
+        super::parse(src).unwrap()
+    }
+
+    #[test]
+    fn paragraphs_and_cells_past_the_budget_are_refused() {
+        let src = "w\n\n".repeat(1000);
+        let within = |memory: u64| parse_within(&src, Budget::new(memory, 0));
+        // Each line end a mark of the parser's tree, a slot and a half.
+        let need = 1000 * (ELEMENT_BYTES + TEXT_BYTES) + 3000 * CELL_BYTES;
+        assert_eq!(within(need).unwrap().len(), 1000);
+        assert!(within(need - 1).is_err());
+        // A header of 3 cells over a row of 1, which the parser gives the
+        // header's cells: 6 cells, 4 that hold text and the table, for
+        // Markdown, and the parser's tree, its 10 pipes and 3 line ends at a
+        // slot and a half (19).
+        let src = "| a | b | c |\n|---|---|---|\n| 1 |\n";
+        let need = (6 + 19) * CELL_BYTES + FLAT_ELEMENT_BYTES + 4 * (FLAT_CELL_BYTES + TEXT_BYTES);
+        let within =
+            |memory: u64| parse_within(src, Budget::new(memory, 0).for_output(Output::Flat));
+        assert_eq!(within(need).unwrap()[0].cells.as_ref().unwrap()[1].len(), 3);
+        assert!(within(need - 1).is_err());
+    }
+
+    #[test]
+    fn a_bands_label_the_output_copies_into_each_cell_is_spent() {
+        // A band of 1 MB over 100 columns and 40 rows: DoCO writes it as the
+        // section label of each of their 4,000 cells, 4 GB of copies.
+        let band = format!("| **{}** |{}\n", "B".repeat(1 << 20), " |".repeat(99));
+        let row = format!("|{}\n", " 1 |".repeat(100));
+        let src = format!(
+            "|{}\n|{}\n{band}{}",
+            " h |".repeat(100),
+            "---|".repeat(100),
+            row.repeat(40)
+        );
+        let refused = super::parse(&src).unwrap_err();
+        assert!(refused.to_string().contains("copies"), "{refused}");
+        // Markdown and the text write it once.
+        for output in [Output::Flat, Output::Text] {
+            let e = converting_to(output, || super::parse(&src)).unwrap();
+            assert_eq!(e[0].sub_headers, Some(vec![1]));
+        }
+    }
 
     fn kinds(els: &[Element]) -> Vec<&str> {
         els.iter().map(|e| e.kind.as_str()).collect()
@@ -466,6 +660,82 @@ mod tests {
         let (b, end) = links[0].span().unwrap();
         let anchor: String = e[0].text.chars().skip(b).take(end - b).collect();
         assert_eq!(anchor, "the filing");
+    }
+
+    #[test]
+    fn links_on_one_line_are_located_in_linear_time() {
+        // Each link counted the characters of the paragraph before it:
+        // 600,000 on one line, 4 MB, took 16 s.
+        let src = |n: usize| format!("é {}[ç](u) ü", "[a](b) ".repeat(n));
+        // As Markdown: as DoCO, a million links are past the budget.
+        assert_linear("links on one line", 20_000, src, |src| {
+            converting_to(Output::Flat, || parse(src));
+        });
+        let n = 100_000;
+        let e = converting_to(Output::Flat, || parse(&src(n)));
+        let links = e[0].links.as_ref().unwrap();
+        assert_eq!(links.len(), n + 1);
+        // Spans in characters, past the multi-byte ones.
+        assert_eq!(links[1].span(), Some((4, 5)));
+        assert_eq!(links[n].span(), Some((2 + 2 * n, 3 + 2 * n)));
+        assert_eq!(links[n].href(), "u");
+    }
+
+    #[test]
+    fn each_link_is_spent_before_it_is_kept() {
+        // DoCO writes each as a node: two million on one line aborted.
+        let src = "[a](bc) ".repeat(100);
+        let within = |memory: u64| parse_within(&src, Budget::new(memory, 0));
+        let text = 2 * 100 - 1;
+        // Each link's brackets, marks of the parser's tree: three slots.
+        let need = ELEMENT_BYTES
+            + text * TEXT_BYTES
+            + 100 * (ELEMENT_BYTES + 4 * CELL_BYTES + 2 * TEXT_BYTES);
+        assert_eq!(within(need).unwrap()[0].links.as_ref().unwrap().len(), 100);
+        assert!(within(need - 1).is_err());
+    }
+
+    #[test]
+    fn a_link_in_a_table_cell_is_not_spent() {
+        // Its anchor's text is the cell's, and the link is not kept: the
+        // table costs what its cells and the parser's tree do, 2 cells
+        // that hold text of a byte, and 11 marks (6 pipes, 3 line ends, the
+        // link's brackets) at a slot and a half (16).
+        let src = "| [a](bc) |\n|---|\n| x |\n";
+        let need = (2 + 16) * CELL_BYTES + FLAT_ELEMENT_BYTES + 2 * (FLAT_CELL_BYTES + TEXT_BYTES);
+        let within =
+            |memory: u64| parse_within(src, Budget::new(memory, 0).for_output(Output::Flat));
+        let table = within(need).unwrap();
+        assert_eq!(
+            table[0].cells,
+            Some(vec![vec!["a".to_string()], vec!["x".to_string()]])
+        );
+        assert!(table[0].links.is_none());
+        assert!(within(need - 1).is_err());
+    }
+
+    #[test]
+    fn the_parsers_tree_is_spent_from_its_marks_before_it_is_built() {
+        // Each byte that may open or close inline markup, each line end.
+        assert_eq!(tree_marks(b"plain text, no marks"), 0);
+        assert_eq!(tree_marks(b"*a* `b` [c](d) <e> &f; !g \\h ~i~ |j|\r\n"), 16);
+        // Each container a line opens, nested ones included, and no list
+        // marker that is not followed by a blank.
+        assert_eq!(
+            tree_marks(b"> > >quoted\n- - item\n  12. x\n1.5 -3 +4"),
+            3 + (1 + 2) + (1 + 1) + 1
+        );
+        assert_eq!(tree_marks(b"1234567890. ten digits are no marker"), 0);
+        // 15 million `*a* ` on one line, 60 MB, aborted the process at 4 GB:
+        // 30 million marks are past the budget, refused before the parse.
+        let hostile = "*a* ".repeat(1 << 20);
+        assert_eq!(tree_marks(hostile.as_bytes()), 2 << 20);
+        assert_eq!(tree_slots(2 << 20), 3 << 20);
+        let refused = parse_within(&hostile, Budget::new((3 << 20) * CELL_BYTES - 1, 0));
+        assert!(refused.unwrap_err().to_string().starts_with("cells past"));
+        // Text between marks costs nothing more, however long.
+        let log = "2026-11-23T12:00:00Z INFO [worker-3] done\n".repeat(1000);
+        assert_eq!(tree_marks(log.as_bytes()), 3000);
     }
 
     #[test]

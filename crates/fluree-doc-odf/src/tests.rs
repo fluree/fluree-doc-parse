@@ -1,6 +1,10 @@
 //! Synthetic OpenDocument packages and what the readers make of them.
 
 use super::*;
+use fluree_doc_model::budget::{
+    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
+    MAX_MEMORY, TEXT_BYTES,
+};
 use std::io::Write;
 
 const NS: &str = "xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
@@ -223,7 +227,9 @@ fn the_kind_is_the_mimetype_and_parts_are_bounded() {
         Err(OdfError::NotOdf)
     ));
     assert_eq!(Format::sniff(b"PK\x03\x04"), None);
-    // A content part that inflates past its bound.
+    // A content part past 64 MiB, a bound of its own it no longer has:
+    // read, within the budget, which bounds it
+    // ([`a_part_past_what_the_budget_has_left_is_refused_before_it_is_read`]).
     let mut buf = std::io::Cursor::new(Vec::new());
     let mut z = zip::ZipWriter::new(&mut buf);
     let deflate = zip::write::SimpleFileOptions::default()
@@ -233,14 +239,11 @@ fn the_kind_is_the_mimetype_and_parts_are_bounded() {
         .unwrap();
     z.start_file("content.xml", deflate).unwrap();
     let chunk = vec![b' '; 1 << 20];
-    for _ in 0..(MAX_PART_BYTES >> 20) + 1 {
+    for _ in 0..65 {
         z.write_all(&chunk).unwrap();
     }
     z.finish().unwrap();
-    assert!(matches!(
-        parse(&buf.into_inner()),
-        Err(OdfError::TooLarge(_))
-    ));
+    assert!(parse(&buf.into_inner()).unwrap().is_empty());
     // Nesting past the tree's bound.
     let deep = format!(
         "<office:text>{}{}</office:text>",
@@ -295,35 +298,104 @@ fn texts(els: &[Element]) -> Vec<&str> {
     els.iter().map(|e| e.text.as_str()).collect()
 }
 
+/// What reading `pkg`'s content and styles spends, their text and their
+/// trees, before any element is made from them.
+fn reading(pkg: &[u8]) -> u64 {
+    let mut b = Budget::new(MAX_MEMORY, 0);
+    let mut p = Package::open(pkg).unwrap();
+    for name in ["content.xml", "styles.xml"] {
+        tree(&mut p, name, &mut b).unwrap();
+    }
+    MAX_MEMORY - b.memory_left()
+}
+
 #[test]
 fn a_repeated_cell_of_text_is_bounded_by_its_bytes() {
-    // 70 KiB of text in a cell repeated 1024 times: 70 MiB of text asked
-    // for in a few kilobytes, past the bytes the tables may hold.
-    let word = "word ".repeat(14 << 10);
+    // 7 KiB of text in a cell repeated 1024 times: 7 MiB of text asked for
+    // in a few hundred bytes, each copy spent before it is made.
+    let word = "word ".repeat(1400);
     let cell = |repeat: usize| {
-        format!(
+        text(&format!(
             "<table:table><table:table-row><table:table-cell table:number-columns-repeated=\"{repeat}\">\
-             <text:p>{word}</text:p></table:table-cell></table:table-row></table:table>"
+             <text:p>{}</text:p></table:table-cell></table:table-row></table:table>",
+            word.trim()
+        ))
+    };
+    // For Markdown, which copies nothing: the table, and each copy a cell
+    // that holds the text, written once in its row.
+    let need = |n: u64| {
+        FLAT_ELEMENT_BYTES
+            + n * (FLAT_CELL_BYTES + CELL_BYTES)
+            + n * (word.trim().len() as u64) * TEXT_BYTES
+    };
+    let need = |n: u64| need(n) + reading(&cell(n as usize));
+    let within = |repeat: usize, memory: u64| {
+        parse_within(
+            &cell(repeat),
+            &mut Budget::new(memory, 0).for_output(Output::Flat),
         )
     };
-    let refused = parse(&text(&cell(1024))).unwrap_err();
+    let els = within(1024, need(1024)).unwrap().0;
+    assert_eq!(els[0].cells.as_ref().unwrap()[0].len(), 1024);
+    let refused = within(1024, need(1024) - 1).unwrap_err();
     assert!(matches!(refused, OdfError::TooLarge(_)), "{refused}");
-    // Within them, the copies are cells.
-    let els = parse(&text(&cell(4))).unwrap();
-    assert_eq!(els[0].cells.as_ref().unwrap()[0].len(), 4);
+}
+
+#[test]
+fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
+    // A paragraph of one letter is six bytes of XML, and a node of the
+    // output: 1.5 million of them, 66 KB zipped, are 6 GB of DoCO.
+    let body = "<text:p>w</text:p>".repeat(1000);
+    let within = |memory: u64, output: Output| {
+        parse_within(&text(&body), &mut Budget::new(memory, 0).for_output(output))
+    };
+    let need = 1000 * (ELEMENT_BYTES + TEXT_BYTES) + reading(&text(&body));
+    assert_eq!(within(need, Output::Doco).unwrap().0.len(), 1000);
+    let refused = within(need - 1, Output::Doco).unwrap_err();
+    assert!(matches!(refused, OdfError::TooLarge(_)), "{refused}");
+    // Markdown writes a paragraph as a line: it costs less.
+    let flat = 1000 * (FLAT_ELEMENT_BYTES + TEXT_BYTES) + reading(&text(&body));
+    assert!(within(flat, Output::Flat).is_ok());
+    assert!(within(flat - 1, Output::Flat).is_err());
+    // A presentation's, the same.
+    let slides = package(
+        "presentation",
+        &format!(
+            "<office:presentation><draw:page><draw:frame><draw:text-box>{body}</draw:text-box></draw:frame></draw:page></office:presentation>"
+        ),
+        &[],
+    );
+    let need = 1000 * (ELEMENT_BYTES + TEXT_BYTES) + reading(&slides);
+    assert!(parse_within(&slides, &mut Budget::new(need, 0)).is_ok());
+    assert!(parse_within(&slides, &mut Budget::new(need - 1, 0)).is_err());
 }
 
 #[test]
 fn a_table_padded_to_its_widest_row_counts_the_padding() {
-    // One row of 4096 empty cells, then 1100 rows of none: a grid of 4.5
-    // million cells, the padding past the cells the tables may hold.
+    // One row of 4096 cells, one holding text, then 1100 rows of none: a
+    // grid of 4.5 million cells, every one spent.
     let rows = "<table:table-row/>".repeat(1100);
     let body = format!(
         "<table:table><table:table-row><table:table-cell table:number-columns-repeated=\"1024\"/>\
          <table:table-cell table:number-columns-repeated=\"1024\"/><table:table-cell table:number-columns-repeated=\"1024\"/>\
          <table:table-cell table:number-columns-repeated=\"1024\"><text:p>x</text:p></table:table-cell></table:table-row>{rows}</table:table>"
     );
-    assert!(matches!(parse(&text(&body)), Err(OdfError::TooLarge(_))));
+    // The table, and the 1024 cells that hold `x`, at Markdown's costs.
+    let need = 1101 * 4096 * CELL_BYTES
+        + FLAT_ELEMENT_BYTES
+        + 1024 * (FLAT_CELL_BYTES + TEXT_BYTES)
+        + reading(&text(&body));
+    let within = |memory: u64| {
+        parse_within(
+            &text(&body),
+            &mut Budget::new(memory, 0).for_output(Output::Flat),
+        )
+    };
+    assert_eq!(
+        within(need).unwrap().0[0].cells.as_ref().unwrap().len(),
+        1101
+    );
+    assert!(matches!(within(need - 1), Err(OdfError::TooLarge(_))));
 }
 
 #[test]
@@ -399,35 +471,183 @@ fn a_header_repeated_on_master_pages_is_read_once_and_its_own_lines_kept() {
     );
 }
 
-/// A text document's elements read within `budget`, or why not.
-fn text_within(body: &str, budget: Budget) -> Result<Vec<Element>, OdfError> {
-    let xml = format!(
-        "<office:document-content {NS}><office:body><office:text>{body}</office:text></office:body></office:document-content>"
+#[test]
+fn copies_of_merged_cells_are_spent() {
+    // A cell spanning n rows over n covered cells that each hold text of
+    // their own: DoCO joins the n texts and writes them on each row.
+    let table = |n: usize, first: &str| {
+        let row = |cell: String| format!("<table:table-row>{cell}</table:table-row>");
+        format!(
+            "<table:table>{}{}</table:table>",
+            row(format!(
+                "<table:table-cell table:number-rows-spanned=\"{n}\"><text:p>{first}</text:p></table:table-cell>"
+            )),
+            row("<table:covered-table-cell><text:p>x</text:p></table:covered-table-cell>".into())
+                .repeat(n - 1)
+        )
+    };
+    // 3,000 rows: 3,000 nodes read, 18 million bytes of copies, past 64 MiB
+    // only with the copies counted.
+    let within = |n: usize, first: &str, output: Output| {
+        parse_within(
+            &text(&table(n, first)),
+            &mut Budget::new(64 << 20, 0).for_output(output),
+        )
+    };
+    assert!(within(1_000, "x", Output::Doco).is_ok());
+    let refused = within(3_000, "x", Output::Doco).unwrap_err();
+    assert!(refused.to_string().contains("copies"), "{refused}");
+    // The text shows the joined value on each row too; Markdown, once.
+    assert!(within(3_000, "x", Output::Text).is_err());
+    assert!(within(3_000, "x", Output::Flat).is_ok());
+    // One long value over many rows, the same, within the whole budget: a
+    // file of a few kilobytes whose copies are 7 GB.
+    let long = "y".repeat(200_000);
+    assert!(parse(&text(&table(3, &long))).is_ok());
+    assert!(matches!(
+        parse(&text(&table(3_000, &long))),
+        Err(OdfError::TooLarge(_))
+    ));
+    assert!(converting_to(Output::Flat, || parse(&text(&table(3_000, &long)))).is_ok());
+}
+
+#[test]
+fn a_parts_tree_is_spent_before_its_elements_are_made() {
+    // 200,000 empty elements, 4 bytes of XML each, the most a part packs
+    // into nodes: a tree no element is made of, 136 bytes a node measured,
+    // refused by a budget that holds the part and 10,000 nodes.
+    let pkg = text(&format!("<text:p>w</text:p>{}", "<a/>".repeat(200_000)));
+    let part = 800_000 * PART_BYTES;
+    let refused = parse_within(&pkg, &mut Budget::new(part + 10_000 * CELL_BYTES, 0)).unwrap_err();
+    assert!(refused.to_string().contains("cells past the"), "{refused}");
+    // Each node, each attribute and the list of them, and the text they
+    // hold.
+    let mut b = Budget::new(MAX_MEMORY, 0);
+    let t = Tree::parse("<a b=\"\" c=\"v\">x</a>", &mut b).unwrap();
+    assert_eq!(t.nodes.len(), 3);
+    let node = tree::NODE_CELLS * CELL_BYTES;
+    let attr = tree::ATTR_CELLS * CELL_BYTES;
+    assert_eq!(
+        MAX_MEMORY - b.memory_left(),
+        2 * node + 3 * attr + 2 * CELL_BYTES
     );
-    let content = Tree::parse(&xml).unwrap();
-    let mut room = Room::within(budget);
-    let read = text_elements(&content, None, &mut room);
-    room.check(read)
+    // A node of one attribute, 370 bytes measured, counts four slots.
+    let mut b = Budget::new(MAX_MEMORY, 0);
+    Tree::parse("<a b=\"\"/>", &mut b).unwrap();
+    assert_eq!(MAX_MEMORY - b.memory_left(), 4 * CELL_BYTES);
+    // Within what the reading costs, read; a byte less, refused.
+    let need = reading(&pkg) + ELEMENT_BYTES + TEXT_BYTES;
+    assert!(parse_within(&pkg, &mut Budget::new(need, 0)).is_ok());
+    assert!(parse_within(&pkg, &mut Budget::new(need - 1, 0)).is_err());
+}
+
+#[test]
+fn a_part_past_what_the_budget_has_left_is_refused_before_it_is_read() {
+    // A content part of 3 MiB of spaces, past a budget of 4 MiB at two
+    // bytes a byte.
+    let pkg = text(&" ".repeat(3 << 20));
+    let refused = parse_within(&pkg, &mut Budget::new(4 << 20, 0)).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "OpenDocument file too large: bytes of parts inflated past the 4 MiB of memory a document may take"
+    );
+}
+
+/// A text document whose content part is `prefix`, `bytes`, then the end of
+/// a paragraph: bytes that need not be UTF-8.
+fn text_with_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    z.start_file("mimetype", stored).unwrap();
+    write!(z, "application/vnd.oasis.opendocument.text").unwrap();
+    z.start_file("content.xml", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    write!(
+        z,
+        "<office:document-content {NS}><office:body><office:text><text:p>a"
+    )
+    .unwrap();
+    z.write_all(bytes).unwrap();
+    write!(
+        z,
+        "b</text:p></office:text></office:body></office:document-content>"
+    )
+    .unwrap();
+    z.finish().unwrap();
+    buf.into_inner()
+}
+
+#[test]
+fn a_part_not_utf8_is_spent_at_its_replacements_before_they_are_made() {
+    // Each byte that is not UTF-8 is read as U+FFFD, three bytes of it.
+    let els = parse(&text_with_bytes(b"\xff")).unwrap();
+    assert_eq!(els[0].text, "a\u{fffd}b");
+    // A megabyte of them makes three of replacements beside it: past a
+    // budget that holds the part at two bytes a byte, and more, refused
+    // as bytes of the part, before they are made.
+    let n = 1 << 20;
+    let pkg = text_with_bytes(&vec![0xff; n]);
+    let budget = (n as u64 + 1_000) * PART_BYTES + (n as u64);
+    let refused = parse_within(&pkg, &mut Budget::new(budget, u64::MAX)).unwrap_err();
+    assert!(
+        refused.to_string().contains("bytes of parts inflated"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn frames_nested_in_paragraphs_are_read_in_linear_time() {
+    // A paragraph holding a text box holding a paragraph, `n` deep, each
+    // with text of its own: each paragraph checked the room for the text
+    // of every frame under it, again at each level.
+    let nested = |n: usize| {
+        let words = "word ".repeat(20_000);
+        let mut body = String::new();
+        for _ in 0..n {
+            body.push_str(&format!("<text:p>{words}<draw:frame><draw:text-box>"));
+        }
+        for _ in 0..n {
+            body.push_str("</draw:text-box></draw:frame></text:p>");
+        }
+        text(&body)
+    };
+    let els = parse(&nested(3)).unwrap();
+    assert_eq!(els.len(), 3);
+    fluree_doc_model::scaling::assert_linear("frames nested", 20, nested, |pkg| {
+        assert!(parse(pkg).is_ok())
+    });
+}
+
+#[test]
+fn a_notes_citation_is_its_own() {
+    // The citation is the note's child: one inside its body is text.
+    let body = "<text:p>Cited<text:note><text:note-body><text:p>Body \
+                <text:note-citation>9</text:note-citation></text:p></text:note-body>\
+                <text:note-citation>1</text:note-citation></text:note></text:p>";
+    let els = parse(&text(body)).unwrap();
+    assert_eq!(els.last().unwrap().text, "1 Body 9");
 }
 
 #[test]
 fn a_texts_tables_and_paragraphs_spend_the_documents_budget() {
-    use fluree_doc_model::budget::{Output, ELEMENT_BYTES};
     // A hundred rows of a cell repeated a hundred times: 10,000 cells that
     // hold text from a few kilobytes. DoCO writes each as a node, at
     // 4 KiB; Markdown writes each once in its row.
     let row = "<table:table-row><table:table-cell table:number-columns-repeated=\"100\">\
                <text:p>x</text:p></table:table-cell></table:table-row>";
-    let table = format!("<table:table>{}</table:table>", row.repeat(100));
+    let table = text(&format!("<table:table>{}</table:table>", row.repeat(100)));
     let budget = || Budget::new(5_000 * ELEMENT_BYTES, 0);
-    let refused = text_within(&table, budget()).unwrap_err();
+    let refused = parse_within(&table, &mut budget()).unwrap_err();
     assert!(refused.to_string().contains("past"), "{refused}");
-    let els = text_within(&table, budget().for_output(Output::Flat)).unwrap();
-    assert_eq!(els[0].cells.as_ref().unwrap().len(), 100);
-    // Paragraphs, each an element, are spent as well.
-    let paras = "<text:p>x</text:p>".repeat(100);
-    assert!(text_within(&paras, Budget::new(100 * ELEMENT_BYTES + 100 * 12, 0)).is_ok());
-    assert!(text_within(&paras, Budget::new(99 * ELEMENT_BYTES, 0)).is_err());
+    let els = parse_within(&table, &mut budget().for_output(Output::Flat)).unwrap();
+    assert_eq!(els.0[0].cells.as_ref().unwrap().len(), 100);
+    // Paragraphs, each an element and its text, are spent as well.
+    let paras = text(&"<text:p>x</text:p>".repeat(100));
+    let need = reading(&paras) + 100 * (ELEMENT_BYTES + TEXT_BYTES);
+    assert!(parse_within(&paras, &mut Budget::new(need, 0)).is_ok());
+    assert!(parse_within(&paras, &mut Budget::new(need - 1, 0)).is_err());
 }
 
 #[test]
@@ -460,12 +680,13 @@ fn broken_or_deep_documents_read_as_far_as_they_go() {
     let cut = "<office:text><text:p>Kept</text:p><text:p>Cut off<text:span";
     let els = parse(&package("text", cut, &[])).unwrap();
     assert_eq!(texts(&els), ["Kept", "Cut off"]);
-    // Lists nested 120 deep, within the tree's bound: each item read, its
-    // depth capped.
+    // Lists nested as deep as the tree allows, 126 lists in 126 items in
+    // the three elements around a text: each item read, its depth capped,
+    // within a test thread's 2 MiB stack.
     let deep = format!(
         "<office:text>{}<text:p>Deepest</text:p>{}</office:text>",
-        "<text:list><text:list-item>".repeat(120),
-        "</text:list-item></text:list>".repeat(120)
+        "<text:list><text:list-item>".repeat(126),
+        "</text:list-item></text:list>".repeat(126)
     );
     let els = parse(&package("text", &deep, &[])).unwrap();
     assert_eq!(texts(&els), ["Deepest"]);

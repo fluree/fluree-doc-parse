@@ -662,6 +662,46 @@ fn pictures_are_figures_whose_bytes_the_store_gives() {
     assert_eq!(read_media(&bytes, "Pictures#2").unwrap(), other);
     assert!(read_media(&bytes, "Pictures#9").is_err());
     assert!(read_media(&bytes, "word/media/x.png").is_err());
+    // Its first bytes alone, from the store in the stream or the entry.
+    let deck = MediaReader::open(&bytes).unwrap();
+    assert_eq!(deck.head("Pictures#1", 8).unwrap(), png[..8]);
+    assert_eq!(deck.head("Pictures#2", 8).unwrap(), other[..8]);
+    assert_eq!(deck.head("Pictures#1", 1 << 20).unwrap(), png);
+    assert!(deck.head("Pictures#9", 8).is_err());
+}
+
+#[test]
+fn entries_pointing_at_one_picture_name_it_once() {
+    // Entries 1, 2 and 4 all point at the one picture of the Pictures
+    // stream; entry 3 holds its own. Shown four times, they are two
+    // pictures, read once each.
+    let png = b"\x89PNG\r\n\x1a\n shared picture";
+    let other = b"\x89PNG\r\n\x1a\n own picture";
+    let entries = [
+        fbse(0, None),
+        fbse(0, None),
+        fbse(0, Some(&png_blip(other))),
+        fbse(0, None),
+    ]
+    .concat();
+    let store = rec(
+        true,
+        0,
+        0x040B,
+        &rec(true, 0, 0xF000, &rec(true, 0, 0xF001, &entries)),
+    );
+    let shapes: Vec<u8> = (1..=4).flat_map(|pib| picture_shape(pib, None)).collect();
+    let slide = rec(true, 0, 0x040C, &shapes);
+    let bytes = deck_of(&store, &slide, Some(&png_blip(png)));
+    let (_, media) = parse_with_media(&bytes).unwrap();
+    let parts: Vec<&str> = media.iter().filter_map(|m| m.source.part()).collect();
+    assert_eq!(
+        parts,
+        ["Pictures#1", "Pictures#1", "Pictures#3", "Pictures#1"]
+    );
+    let pictures = fluree_doc_model::pictures(media);
+    assert_eq!(pictures.len(), 2);
+    assert_eq!(pictures[0].uses.len(), 3);
 }
 
 /// A deck whose slide list is `list`, with slides `slides`, each object id
@@ -852,6 +892,61 @@ fn cells_that_overlap_across_the_grid_are_read_as_text() {
 }
 
 #[test]
+fn a_tables_cell_costs_what_a_sheets_does() {
+    use fluree_doc_model::budget::{Output, CELL_BYTES, FLAT_CELL_BYTES, TEXT_BYTES};
+    // A row of 100 cells of one digit: each written once in its row, at a
+    // sheet's cost for Markdown, its slot and text apart, where an element
+    // each (2 KiB) would not fit; a node of its own each (4 KiB) for DoCO.
+    let cells: Vec<Vec<u8>> = (0..100)
+        .map(|c| cell(c * 10, 0, c * 10 + 10, 10, "1"))
+        .collect();
+    let group = table_group(&cells);
+    let r = record(&group, 0).unwrap();
+    let memory = 100 * (CELL_BYTES + FLAT_CELL_BYTES + 16 * TEXT_BYTES);
+    let read = |output| {
+        table(
+            &group,
+            &r,
+            0,
+            &mut Budget::new(memory, u64::MAX).for_output(output),
+        )
+    };
+    let t = read(Output::Flat).unwrap().unwrap();
+    assert_eq!(t.rows[0].len(), 100);
+    assert!(read(Output::Doco).is_err());
+}
+
+#[test]
+fn an_empty_cell_costs_its_slot_only() {
+    use fluree_doc_model::budget::{Output, CELL_BYTES, FLAT_CELL_BYTES, TEXT_BYTES};
+    // A row of 100 cells, every other one empty: a cell that holds text
+    // each of the 50 others, as a `.doc` table's.
+    let cells: Vec<Vec<u8>> = (0..100)
+        .map(|c| {
+            cell(
+                c * 10,
+                0,
+                c * 10 + 10,
+                10,
+                if c % 2 == 0 { "1" } else { "" },
+            )
+        })
+        .collect();
+    let group = table_group(&cells);
+    let r = record(&group, 0).unwrap();
+    let memory = 100 * CELL_BYTES + 50 * (FLAT_CELL_BYTES + 16 * TEXT_BYTES);
+    let t = table(
+        &group,
+        &r,
+        0,
+        &mut Budget::new(memory, u64::MAX).for_output(Output::Flat),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(t.rows[0].iter().filter(|c| c.is_empty()).count(), 50);
+}
+
+#[test]
 fn a_group_that_is_no_table_is_read_once_however_deep() {
     // Sixteen groups, each inside a cell of the one above, each claiming to
     // be a table of 1,025 cells down a diagonal, a grid past the bound: a
@@ -897,6 +992,26 @@ fn a_group_that_is_no_table_is_read_once_however_deep() {
     )
     .unwrap();
     assert!(out.iter().any(|i| matches!(i, Item::Table(_))));
+}
+
+#[test]
+fn what_doco_copies_of_a_table_is_spent_before_it_is_kept() {
+    // A long first cell labels each other cell of its row as its row
+    // header: a hundred copies of it that the file states once.
+    let long = "w".repeat(100_000);
+    let mut cells: Vec<Vec<u8>> = (0..101)
+        .map(|c| cell(c * 10, 0, c * 10 + 10, 10, "H"))
+        .collect();
+    cells.push(cell(0, 10, 10, 20, &long));
+    cells.extend((1..101).map(|c| cell(c * 10, 10, c * 10 + 10, 20, "1")));
+    let slide = rec(true, 0, 0x040C, &table_group(&cells));
+    let bytes = deck_of(&[], &slide, None);
+    // Room for the table and its text, which a budget of 20 MiB is many
+    // times over, but not for 10 MB of copies at 12 bytes a byte.
+    let err = parse_within(&bytes, &mut Budget::new(20 << 20, 1 << 20)).unwrap_err();
+    assert!(err.to_string().contains("copies"), "{err}");
+    let (els, _) = parse_within(&bytes, &mut Budget::default()).unwrap();
+    assert!(els.iter().any(|e| e.kind == "doco:Table"));
 }
 
 /// A placeholder shape naming the slide list's text `index`, as PowerPoint

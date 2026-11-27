@@ -1,0 +1,90 @@
+From: =?utf-8?q?L=C3=A9na?= Holt <lena@example.com>
+To: Kai Moreno <kai@example.com>, ops@example.com
+Cc: audit@example.com
+Subject: RE: Budget =?utf-8?b?4pyT?=
+Date: Fri, 17 Jul 2026 09:00:00 +0200
+Message-ID: <seed-1@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============9097135673113894479=="
+
+--===============9097135673113894479==
+Content-Type: multipart/alternative;
+ boundary="===============4351290204749605828=="
+
+--===============4351290204749605828==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Approved.
+
+From: Kai Moreno <kai@example.com>
+Sent: Thursday, July 16, 2026 8:42 AM
+Subject: Budget
+
+> Can you approve it?
+
+--===============4351290204749605828==
+MIME-Version: 1.0
+Content-Type: multipart/related;
+ boundary="===============1868729532591011102=="
+
+--===============1868729532591011102==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+<html><body><p>Approved.</p><p><img src=3D"cid:logo@x" alt=3D"Logo"></p><tabl=
+e><tr><th>Item</th><th>Cost</th></tr><tr><td>A</td><td>1</td></tr></table><bl=
+ockquote>Can you approve it?</blockquote></body></html>
+
+--===============1868729532591011102==
+Content-Type: image/png
+Content-Transfer-Encoding: base64
+Content-ID: <logo@x>
+MIME-Version: 1.0
+Content-Disposition: inline
+
+iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAKklEQVR4nA3HMQEAMAzDMAMriMDp
+aSgBUYCbPgEOLh5CnLjx8lOnbr36AOO3DflsbMvSAAAAAElFTkSuQmCC
+
+--===============1868729532591011102==--
+
+--===============4351290204749605828==--
+
+--===============9097135673113894479==
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="report.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjQKJSVFT0YK
+
+--===============9097135673113894479==
+Content-Type: message/rfc822
+Content-Transfer-Encoding: 8bit
+MIME-Version: 1.0
+Content-Disposition: attachment
+
+From: Kai Moreno <kai@example.com>
+To: ops@example.com
+Subject: Budget
+Date: Thu, 16 Jul 2026 08:42:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============1536968401880823970=="
+
+--===============1536968401880823970==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Can you approve it?
+
+--===============1536968401880823970==
+Content-Type: text/csv
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="data.csv"
+MIME-Version: 1.0
+
+Y29sMSxjb2wyCjEsMgo=
+
+--===============1536968401880823970==--
+
+--===============9097135673113894479==--

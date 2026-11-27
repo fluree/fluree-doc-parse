@@ -21,28 +21,74 @@
 //!   peak memory one unit was measured to take, from the reader through the
 //!   largest output (`doco`), so a document that spends the whole of
 //!   [`MAX_MEMORY`], however it mixes them, stays within a 4 GB address
-//!   space, with room for its input and a library's own copies.
+//!   space, with room for its input and a library's own copies. The copies
+//!   DoCO writes of a table's cells (a merged value in each cell it covers,
+//!   each cell's labels) are spent at the same costs, as cells that hold
+//!   that text ([`Budget::spend_copies`]).
 //!
-//! What an element costs depends on the output the document is converted
-//! to ([`Output`]): DoCO writes each element and each cell that holds text
-//! as a node of its own, where Markdown, XHTML and JSON write each once. A
-//! converter that knows its output says so around the reading
-//! ([`converting_to`]); a reader that is not told counts at DoCO's costs,
-//! the largest.
+//! What an element costs, and which copies are made, depend on the output
+//! the document is converted to ([`Output`]): DoCO writes each element and
+//! each cell that holds text as a node of its own, with its labels, where
+//! Markdown, XHTML and JSON write each once. A converter that knows its
+//! output says so around the reading ([`converting_to`]); a reader that is
+//! not told counts at DoCO's costs, the largest.
 //! * **Work**, in steps of a layout pass whose cost the file chooses (two
 //!   islands of cells compared, a glyph checked against those it may
 //!   overprint), at most [`MAX_WORK`]: a few seconds.
 //!
 //! A reader that guards a library's allocations it cannot see (what
 //! calamine reserves for a sheet) keeps its own [`Meter`] for them.
+//!
+//! A document read inside another (an e-mail's attachment) is read
+//! [`within`] what the outer one leaves.
+//!
+//! A part a package inflates whole (an Office file's main part, its
+//! slides) is read within what is left of the memory budget and spent from
+//! it, two bytes for each ([`Budget::spend_bytes`]).
+
+use std::cell::Cell;
+
+/// The memory budget as shipped, 2.5 GiB, whatever this build's is.
+const SHIPPED_MEMORY: u64 = 5 << 29;
 
 /// The memory a document's elements, cells and text may take, estimated
 /// at the costs below: 2.5 GiB.
-pub const MAX_MEMORY: u64 = 5 << 29;
+#[cfg(not(fuzzing))]
+pub const MAX_MEMORY: u64 = SHIPPED_MEMORY;
+
+/// Built for the fuzz targets (`fuzz/`), a sixteenth of it, 160 MiB: an
+/// input that spends the whole budget then takes a fraction of a second
+/// rather than seconds, and one that makes more than the budget sees stands
+/// out under the targets' memory limit, rather than hiding under the room a
+/// full budget needs.
+#[cfg(fuzzing)]
+pub const MAX_MEMORY: u64 = SHIPPED_MEMORY >> 4;
+
+/// A reader's own bound on memory the budget does not count (what calamine
+/// allocates for a workbook, the glyphs of an XPS page), `n` as sized for
+/// the shipped budget, scaled as this build's [`MAX_MEMORY`] is: `n` as
+/// shipped, a sixteenth of it for the fuzz targets. A bound that did not
+/// scale would let one input take as much under the fuzzer as in
+/// production, past the targets' memory limit, where the budget is a
+/// sixteenth.
+pub const fn scaled(n: u64) -> u64 {
+    scaled_to(n, MAX_MEMORY)
+}
+
+/// `n`, sized for the shipped budget, for a budget of `memory`: divided as
+/// many times as `memory` goes into the shipped one.
+const fn scaled_to(n: u64, memory: u64) -> u64 {
+    n / (SHIPPED_MEMORY / memory)
+}
 
 /// The steps of the layout passes whose cost a file chooses, per document:
 /// about 268 million, a few seconds.
+#[cfg(not(fuzzing))]
 pub const MAX_WORK: u64 = 1 << 28;
+
+/// Built for the fuzz targets, a sixteenth of it, as [`MAX_MEMORY`] is.
+#[cfg(fuzzing)]
+pub const MAX_WORK: u64 = 1 << 24;
 
 /// What one element, or one table cell that holds text, costs at most,
 /// from the reader's copy through the largest output (`doco`, where a
@@ -61,7 +107,7 @@ pub const FLAT_ELEMENT_BYTES: u64 = 2 << 10;
 /// What one table cell that holds text costs when the output writes it once,
 /// in its row (Markdown, XHTML, JSON, the text), beyond its slots
 /// ([`CELL_BYTES`]) and its text, which are counted apart
-/// ([`Budget::spend_text_cells`]);
+/// ([`Budget::spend_text_cells`], [`filled_cell_bytes`]), in every format;
 /// DoCO writes it as a node of its own, at [`ELEMENT_BYTES`]. A one-digit
 /// cell of an `.xlsx` sheet was measured at about 750 B in all, from the
 /// reader through Markdown, of which its slots and text count about 460 B:
@@ -83,7 +129,8 @@ pub const FLAT_CELL_BYTES: u64 = 512;
 /// [`ELEMENT_BYTES`] (2.9 KB measured).
 pub const CSV_CELL_BYTES: u64 = 128;
 
-/// What a document is converted to, which sets what its elements cost.
+/// What a document is converted to, which sets what its elements cost and
+/// which copies of its tables' cells are made ([`Budget::spend_copies`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Output {
     /// The DoCO JSON-LD graph: each element and each cell that holds text a
@@ -125,11 +172,21 @@ impl Output {
     }
 }
 
-/// What a `.csv` record's cell that holds `text` costs at `output` beyond
-/// its slot ([`CELL_BYTES`]): nothing when it is empty, else
-/// [`Output::csv_cell_bytes`] and its text at [`text_cost`]. The CSV reader
-/// keeps nothing of a cell but its text, and a cell costs it a fraction of
-/// a sheet's.
+/// What a table cell that holds `text` costs at `output` beyond its slot
+/// ([`CELL_BYTES`], spent with the table's grid): nothing when it is empty,
+/// else [`Output::text_cell_bytes`] and its text at [`text_cost`]. One cost
+/// for a cell of every format, whichever reader made it (a CSV record, a
+/// Markdown or HTML table, a Word or OpenDocument table, a sheet). The
+/// slots each reader keeps are spent apart and differ (a sheet's layout
+/// copies its cells, a Markdown table's parser builds a tree), so the same
+/// table may still be refused from one format and not from another.
+pub fn filled_cell_bytes(output: Output, text: &str) -> u64 {
+    filled_at(output.text_cell_bytes(), text)
+}
+
+/// [`filled_cell_bytes`] for a `.csv` record's cell, at
+/// [`Output::csv_cell_bytes`]: the CSV reader keeps nothing of a cell but
+/// its text, and a cell costs it a fraction of a sheet's.
 pub fn filled_csv_cell_bytes(output: Output, text: &str) -> u64 {
     filled_at(output.csv_cell_bytes(), text)
 }
@@ -149,6 +206,11 @@ thread_local! {
 /// counting at `output`'s costs: a converter wraps the reading of a document
 /// in it once, and every reader's budget follows, without each taking the
 /// output as an argument.
+///
+/// The setting is the calling thread's, as [`within`]'s is. A reader run on
+/// another thread, a worker of a caller's own pool, does not see it and
+/// counts at DoCO's costs: wrap the reading in it inside the task, on the
+/// thread that reads.
 pub fn converting_to<R>(output: Output, read: impl FnOnce() -> R) -> R {
     struct Restore(Output);
     impl Drop for Restore {
@@ -171,10 +233,23 @@ pub fn output() -> Output {
 /// spent), and the separators every output writes for it.
 pub const CELL_BYTES: u64 = 128;
 
+/// What one image a figure names by relationship id costs, beyond the id's
+/// text: the reader's copies of the id (its list and the set that keeps it
+/// once), then the media entry the caller lists, read or not. One `.docx`
+/// picture naming a million images, each its own id, was measured to peak
+/// at 566 MB in all.
+pub const MEDIA_BYTES: u64 = 512;
+
 /// What one byte of text costs at most, counted at [`text_cost`]: the
 /// copies a reader and a layout make (a cell's text, a table's text, its
 /// rows), then the output.
 pub const TEXT_BYTES: u64 = 12;
+
+/// What one byte of a part inflated whole costs: the part's own, and the
+/// copy a reader's event buffer makes of an event as long as the part (a
+/// run of text between two tags). A `.docx` whose main part is 1.9 GB of
+/// spaces peaked at 4.0 GB.
+pub const PART_BYTES: u64 = 2;
 
 /// A budget spent: what was being counted, and the bound.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,14 +323,48 @@ pub struct Budget {
     max_memory: u64,
     work: Meter,
     output: Output,
+    /// The copies of the document's tables counted so far, each part's
+    /// end kept for the part a page break carries on from it.
+    tables: crate::doco::TableCopies,
 }
 
 impl Default for Budget {
     /// [`MAX_MEMORY`] and [`MAX_WORK`], at the costs of the [`output`] the
-    /// document is converted to.
+    /// document is converted to; inside [`within`], no more memory than it
+    /// gives.
     fn default() -> Self {
-        Self::new(MAX_MEMORY, MAX_WORK).for_output(output())
+        Self::new(MAX_MEMORY.min(SHARE.with(Cell::get)), MAX_WORK).for_output(output())
     }
+}
+
+thread_local! {
+    /// The memory a budget made on this thread may hold, set by [`within`].
+    static SHARE: Cell<u64> = const { Cell::new(u64::MAX) };
+}
+
+/// Run `f` with each [`Budget::default`] made on this thread meanwhile
+/// holding at most `memory`, and no more than an enclosing call gives.
+///
+/// A document read while another is held (an e-mail's attachment, read
+/// beside the message) shares what the outer one leaves rather than
+/// taking a budget of its own on top of it, without each reader's entry
+/// point taking a budget to be handed one.
+///
+/// The share is the calling thread's. A reader run on another thread, a
+/// worker of a caller's own pool, does not see it and takes a whole
+/// budget: call this inside the task, on the thread that reads, with what
+/// the caller means that reading to have.
+pub fn within<R>(memory: u64, f: impl FnOnce() -> R) -> R {
+    /// The share before, put back however `f` ends.
+    struct Restore(u64);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SHARE.with(|s| s.set(self.0));
+        }
+    }
+    let outer = SHARE.with(|s| s.replace(s.get().min(memory)));
+    let _restore = Restore(outer);
+    f()
 }
 
 impl Budget {
@@ -268,6 +377,7 @@ impl Budget {
             max_memory: memory,
             work: Meter::new(work, "steps of layout"),
             output: Output::Doco,
+            tables: crate::doco::TableCopies::default(),
         }
     }
 
@@ -302,9 +412,23 @@ impl Budget {
         self.spend_memory("elements", n, self.output.text_cell_bytes())
     }
 
-    /// Count the `.csv` record's cells about to be made that hold `texts`,
-    /// beyond their slots, at [`filled_csv_cell_bytes`]: an empty one costs
-    /// nothing, one that holds text a record's cell and its text.
+    /// Count the table cells about to be made that hold `texts`, beyond
+    /// their slots, at [`filled_cell_bytes`]: an empty one costs nothing, one
+    /// that holds text a cell that holds text, and its text. For a reader
+    /// whose cells' text is not spent elsewhere.
+    pub fn spend_cell_texts<'a>(
+        &mut self,
+        texts: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), TooLarge> {
+        let output = self.output;
+        let n = texts
+            .into_iter()
+            .fold(0u64, |n, t| n.saturating_add(filled_cell_bytes(output, t)));
+        self.spend_memory("cells", n, 1)
+    }
+
+    /// [`Budget::spend_cell_texts`] for a `.csv` record's cells, at
+    /// [`filled_csv_cell_bytes`].
     pub fn spend_csv_cell_texts<'a>(
         &mut self,
         texts: impl IntoIterator<Item = &'a str>,
@@ -323,6 +447,13 @@ impl Budget {
         self.spend_memory("cells", n, CELL_BYTES)
     }
 
+    /// Count an image a figure names by `id`, about to be kept, at
+    /// [`MEDIA_BYTES`] and the id's text: a picture may name millions.
+    pub fn spend_media(&mut self, id: &str) -> Result<(), TooLarge> {
+        self.spend_memory("images", 1, MEDIA_BYTES)?;
+        self.spend_text(id)
+    }
+
     /// Count a copy of `s` about to be made, at [`text_cost`].
     pub fn spend_text(&mut self, s: &str) -> Result<(), TooLarge> {
         self.spend_chars(s.chars())
@@ -334,19 +465,84 @@ impl Budget {
         let n = chars
             .into_iter()
             .fold(0u64, |n, c| n.saturating_add(char_cost(c)));
-        self.spend_memory("text", n, TEXT_BYTES)
+        self.spend_text_cost(n)
+    }
+
+    /// Count text about to be made whose cost is already known, `cost` as
+    /// [`text_cost`] counts it: text a reader gathers from a tree, counted
+    /// in a pass that copies nothing, then gathered into a string.
+    pub fn spend_text_cost(&mut self, cost: u64) -> Result<(), TooLarge> {
+        self.spend_memory("text", cost, TEXT_BYTES)
+    }
+
+    /// Count what the output copies of the table `e`, once its cells are
+    /// spent ([`table_copies`](crate::doco::table_copies)): for DoCO, each
+    /// cell a merged value fills, a node of its own, and the text copied, a
+    /// merged value into each cell it covers and each cell's labels; for
+    /// the text projection, a value merged down on each row; for the
+    /// others, nothing. A reader calls it on every table it makes, in the
+    /// order it keeps them, before keeping it: a merge or a label the file
+    /// states once is written once per cell. A part a page break carries
+    /// on (`continues`) is counted with the header, the band and the cut
+    /// value it takes from the part before
+    /// ([`TableCopies`](crate::doco::TableCopies)).
+    pub fn spend_copies(&mut self, e: &crate::Element) -> Result<(), TooLarge> {
+        const WHAT: &str = "copies of table cells";
+        if self.output == Output::Flat {
+            return Ok(());
+        }
+        let copies = self.tables.count(e);
+        if self.output == Output::Text {
+            return self.spend_memory(WHAT, copies.merged, TEXT_BYTES);
+        }
+        self.spend_memory(WHAT, copies.cells, ELEMENT_BYTES)?;
+        self.spend_memory(WHAT, copies.text, TEXT_BYTES)
+    }
+
+    /// Count the links about to be kept on an element, and each target's
+    /// text. DoCO writes each as a node of its own, listed on its element:
+    /// 600,000 on one line of Markdown peaked at 2.5 GB, 4.2 KB a link,
+    /// and two million aborted at 4 GB. The others write it in the text,
+    /// at four cell slots a link: the reader's copies as it locates the
+    /// anchor, and the markup (two million, 400 B a link, as Markdown).
+    pub fn spend_links(&mut self, links: &[crate::Link]) -> Result<(), TooLarge> {
+        const WHAT: &str = "links";
+        let n = links.len() as u64;
+        match self.output {
+            Output::Doco => self.spend_memory(WHAT, n, ELEMENT_BYTES + CELL_BYTES)?,
+            Output::Text | Output::Flat => self.spend_memory(WHAT, n, 4 * CELL_BYTES)?,
+        }
+        for l in links {
+            if let crate::Target::Uri { uri } = &l.target {
+                self.spend_memory(WHAT, text_cost(uri), TEXT_BYTES)?;
+            }
+        }
+        Ok(())
     }
 
     /// Count `n` steps of a layout pass about to be taken.
     pub fn spend_work(&mut self, n: u64) -> Result<(), TooLarge> {
         self.work.spend(n)
     }
+
+    /// The estimated memory not spent yet.
+    pub fn memory_left(&self) -> u64 {
+        self.max_memory.saturating_sub(self.memory)
+    }
+
+    /// Count `n` bytes of a part inflated whole, at [`PART_BYTES`] each:
+    /// what an archive holds in a few kilobytes can be gigabytes once
+    /// inflated, and a document's main part has no smaller bound of its
+    /// own.
+    pub fn spend_bytes(&mut self, n: u64) -> Result<(), TooLarge> {
+        self.spend_memory("bytes of parts inflated", n, PART_BYTES)
+    }
 }
 
 /// The most bytes `c` takes in any output: a control character is six
 /// (`\u0001` in JSON), `"` six (`&quot;` in XHTML), `&` five, `<` and `>`
 /// four; a character Markdown escapes two; any other its UTF-8.
-fn char_cost(c: char) -> u64 {
+pub fn char_cost(c: char) -> u64 {
     match c {
         c if c.is_ascii_control() => 6,
         '"' | '&' => 6,
@@ -401,6 +597,24 @@ mod tests {
     }
 
     #[test]
+    fn a_link_is_a_node_in_doco_and_a_few_slots_in_the_others() {
+        let links = [crate::Link::uri("ab"), crate::Link::page(3)];
+        let spend = |output: Output, memory: u64| {
+            Budget::new(memory, 0)
+                .for_output(output)
+                .spend_links(&links)
+        };
+        let doco = 2 * (ELEMENT_BYTES + CELL_BYTES) + 2 * TEXT_BYTES;
+        assert!(spend(Output::Doco, doco).is_ok());
+        assert!(spend(Output::Doco, doco - 1).is_err());
+        let flat = 2 * 4 * CELL_BYTES + 2 * TEXT_BYTES;
+        for output in [Output::Flat, Output::Text] {
+            assert!(spend(output, flat).is_ok());
+            assert!(spend(output, flat - 1).is_err());
+        }
+    }
+
+    #[test]
     fn text_counts_at_its_worst_output() {
         assert_eq!(text_cost("abc"), 3);
         assert_eq!(text_cost("é€"), 5);
@@ -417,8 +631,20 @@ mod tests {
         assert!(b.spend_chars(['y']).is_err());
     }
 
+    /// A two-column table whose first row's value, `len` bytes, is merged
+    /// down its `rows` rows, each row's second cell holding a letter.
+    fn merged_down(len: usize, rows: usize) -> crate::Element {
+        let mut t = crate::Element::new("doco:Table", String::new(), "test", "test");
+        let mut cells = vec![vec!["y".repeat(len), "a".into()]];
+        cells.resize(rows, vec![String::new(), "a".into()]);
+        t.cells = Some(cells);
+        t.header_rows = Some(0);
+        t.merged_down = Some((0..rows * 2).map(|i| i >= 2 && i % 2 == 0).collect());
+        t
+    }
+
     #[test]
-    fn what_an_element_costs_follows_the_output() {
+    fn what_an_element_and_a_copy_cost_follows_the_output() {
         let at = |output| Budget::new(ELEMENT_BYTES, 0).for_output(output);
         // DoCO writes an element as a node: one fills the budget.
         assert!(at(Output::Doco).spend_elements(2).is_err());
@@ -435,18 +661,38 @@ mod tests {
         assert_eq!(cells(Output::Doco), ELEMENT_BYTES);
         assert_eq!(cells(Output::Flat), FLAT_CELL_BYTES);
         assert_eq!(cells(Output::Text), FLAT_CELL_BYTES);
-        // A record's cell, with its text; an empty one costs nothing
-        // beyond its slot.
+        // The same, with their text, for a reader that spends it with them;
+        // an empty one costs nothing beyond its slot.
         for output in [Output::Doco, Output::Flat, Output::Text] {
-            let cell = output.csv_cell_bytes();
-            assert_eq!(filled_csv_cell_bytes(output, "a&"), cell + 7 * TEXT_BYTES);
-            assert_eq!(filled_csv_cell_bytes(output, ""), 0);
+            let cell = output.text_cell_bytes();
+            assert_eq!(filled_cell_bytes(output, "a&"), cell + 7 * TEXT_BYTES);
+            assert_eq!(filled_cell_bytes(output, ""), 0);
             let need = 2 * cell + 13 * TEXT_BYTES;
             let mut b = Budget::new(need, 0).for_output(output);
-            b.spend_csv_cell_texts(["a&", "", "\u{1}"]).unwrap();
-            assert!(b.spend_csv_cell_texts([""]).is_ok());
-            assert!(b.spend_csv_cell_texts(["y"]).is_err());
+            b.spend_cell_texts(["a&", "", "\u{1}"]).unwrap();
+            assert_eq!(b.memory_left(), 0);
+            assert!(b.spend_cell_texts([""]).is_ok());
+            assert!(b.spend_cell_texts(["y"]).is_err());
         }
+        // A value merged down: DoCO copies it into each row's cell and
+        // labels the next cell with it, the text shows it on each row,
+        // Markdown, XHTML and JSON write it once.
+        let t = merged_down(1000, 10);
+        let copies = crate::doco::table_copies(&t);
+        assert_eq!(copies.merged, 9 * 1000);
+        assert_eq!(copies.text, 9 * 1000 + 10 * 1000);
+        let spend = |output, memory| {
+            Budget::new(memory, 0)
+                .for_output(output)
+                .spend_copies(&t)
+                .is_ok()
+        };
+        let doco = copies.cells * ELEMENT_BYTES + copies.text * TEXT_BYTES;
+        assert!(spend(Output::Doco, doco));
+        assert!(!spend(Output::Doco, doco - 1));
+        assert!(spend(Output::Text, copies.merged * TEXT_BYTES));
+        assert!(!spend(Output::Text, copies.merged * TEXT_BYTES - 1));
+        assert!(spend(Output::Flat, 0));
     }
 
     #[test]
@@ -479,6 +725,69 @@ mod tests {
         converting_to(Output::Flat, || {
             assert_eq!(element(&mut Budget::new(MAX_MEMORY, 0)), ELEMENT_BYTES)
         });
+    }
+
+    #[test]
+    fn bytes_inflated_share_the_memory_budget() {
+        let mut b = Budget::new(ELEMENT_BYTES + 10 * PART_BYTES, 0);
+        b.spend_elements(1).unwrap();
+        assert_eq!(b.memory_left(), 10 * PART_BYTES);
+        b.spend_bytes(10).unwrap();
+        assert_eq!(b.memory_left(), 0);
+        assert_eq!(
+            b.spend_bytes(1).unwrap_err().to_string(),
+            "bytes of parts inflated past the 0 MiB of memory a document may take"
+        );
+        assert_eq!(b.memory_left(), 0);
+    }
+
+    #[test]
+    fn a_budget_made_within_a_share_holds_no_more_than_it() {
+        let full = Budget::default().memory_left();
+        assert_eq!(full, MAX_MEMORY);
+        let inner = within(1 << 20, || {
+            // An enclosing share bounds a larger one inside it.
+            let nested = within(1 << 30, || Budget::default().memory_left());
+            (Budget::default().memory_left(), nested)
+        });
+        assert_eq!(inner, (1 << 20, 1 << 20));
+        // Put back when it returns, and when it unwinds.
+        assert_eq!(Budget::default().memory_left(), full);
+        let unwound = std::panic::catch_unwind(|| within(0, || panic!("refused")));
+        assert!(unwound.is_err());
+        assert_eq!(Budget::default().memory_left(), full);
+        // Another thread's budgets are its own.
+        within(0, || {
+            let other = std::thread::spawn(|| Budget::default().memory_left());
+            assert_eq!(other.join().unwrap(), full);
+        });
+    }
+
+    #[test]
+    fn a_bound_of_a_readers_own_scales_as_the_budget_does() {
+        // As shipped, itself; for the fuzz targets' budget, a sixteenth.
+        assert_eq!(scaled_to(1 << 22, SHIPPED_MEMORY), 1 << 22);
+        assert_eq!(scaled_to(1 << 22, SHIPPED_MEMORY >> 4), 1 << 18);
+        assert_eq!(scaled_to(250_000, SHIPPED_MEMORY >> 4), 15_625);
+        // This build's bounds follow this build's budget.
+        assert_eq!(scaled(SHIPPED_MEMORY), MAX_MEMORY);
+        assert_eq!(scaled(1 << 22), scaled_to(1 << 22, MAX_MEMORY));
+    }
+
+    #[test]
+    fn a_csv_records_cell_costs_its_own() {
+        // A record's cell, with its text; an empty one costs nothing
+        // beyond its slot.
+        for output in [Output::Doco, Output::Flat, Output::Text] {
+            let cell = output.csv_cell_bytes();
+            assert_eq!(filled_csv_cell_bytes(output, "a&"), cell + 7 * TEXT_BYTES);
+            assert_eq!(filled_csv_cell_bytes(output, ""), 0);
+            let need = 2 * cell + 13 * TEXT_BYTES;
+            let mut b = Budget::new(need, 0).for_output(output);
+            b.spend_csv_cell_texts(["a&", "", "\u{1}"]).unwrap();
+            assert!(b.spend_csv_cell_texts([""]).is_ok());
+            assert!(b.spend_csv_cell_texts(["y"]).is_err());
+        }
     }
 
     #[test]

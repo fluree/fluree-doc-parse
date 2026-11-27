@@ -2,6 +2,7 @@
 
 use crate::cli::{ConvertArgs, Format};
 use crate::commands::common::{self, TierConfig};
+use fluree_doc_model::budget::MAX_MEMORY;
 use fluree_doc_pdf::document::Element;
 use fluree_doc_pdf::{extract_bytes_with, outline, ExtractOptions};
 use std::collections::HashMap;
@@ -222,13 +223,28 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         eprintln!("error: cannot create {}: {e}", out_dir.display());
         return 1;
     }
-    let jobs = match args.jobs {
-        0 => std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1),
-        n => n,
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let per_job = match job_memory(
+        args.job_memory,
+        std::env::var("FDOC_JOB_MEMORY").ok().as_deref(),
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
+    let (jobs, lowered) = batch_jobs(args.jobs, cores, free_memory(), per_job);
+    // Each document's budget, two thirds of what it may take, as the
+    // default's whole budget is of its 3.75 GiB.
+    let share = per_job.map_or(MAX_MEMORY, |m| m / 3 * 2);
+    // Lowered to no fewer than the files there are, it changes nothing.
+    if let Some(why) = lowered.filter(|_| !quiet && jobs < files.len()) {
+        eprintln!("note: {why}");
     }
-    .min(files.len());
+    let jobs = jobs.min(files.len());
     // `report.pdf` and `report.docx` share a stem, so naming outputs by stem
     // alone makes one silently overwrite the other. Disambiguate only where
     // a stem actually repeats, so the ordinary single-format batch keeps
@@ -242,7 +258,10 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
                 let i = cursor.fetch_add(1, Ordering::Relaxed);
                 let Some(f) = files.get(i) else { break };
                 let t0 = std::time::Instant::now();
-                match convert_path(f, &slots[i], cfg, args, pages.as_deref(), quiet) {
+                let converted = fluree_doc_model::budget::within(share, || {
+                    convert_path(f, &slots[i], cfg, args, pages.as_deref(), quiet)
+                });
+                match converted {
                     Ok(out) => {
                         let dst = &out_dir.join(format!("{}.{}", slots[i], ext(args.format)));
                         if let Err(e) = std::fs::write(dst, out) {
@@ -274,6 +293,196 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     } else {
         0
     }
+}
+
+/// What one document of a batch may take at once: its whole budget
+/// (`MAX_MEMORY`), and half as much again for its input and a library's own
+/// copies, 3.75 GiB, the 4 GB a document at its budget was measured to fit in.
+const DOCUMENT_MEMORY: u64 = MAX_MEMORY + MAX_MEMORY / 2;
+
+/// What `--job-memory` (`flag`), or else `FDOC_JOB_MEMORY` (`env`), sets a
+/// batch document to take, in bytes: `None` where neither is set.
+fn job_memory(flag: Option<u64>, env: Option<&str>) -> Result<Option<u64>, String> {
+    let mib = match (flag, env.map(str::trim).filter(|v| !v.is_empty())) {
+        (Some(m), _) => m,
+        (None, Some(v)) => v
+            .parse::<u64>()
+            .map_err(|_| format!("FDOC_JOB_MEMORY={v:?} is not a whole number of MiB"))?,
+        (None, None) => return Ok(None),
+    };
+    if mib == 0 {
+        return Err("--job-memory: 0 MiB leaves a document nothing to be read with".into());
+    }
+    Ok(Some(mib.saturating_mul(1 << 20)))
+}
+
+/// How many documents a batch converts at once, and why, where it is fewer
+/// than `requested` (`0`, one per core of `cores`).
+///
+/// Each document may take its whole budget and what goes with it
+/// ([`DOCUMENT_MEMORY`], or `per_job` where the caller sets it) at once, so
+/// no more run together than `memory`, the memory free to the process,
+/// holds, and at least one; where that is not known, no more than one per
+/// core, unless `per_job` is set, which says the caller knows what the
+/// machine holds (a batch waiting on the network wants more than its
+/// cores). A document past its budget fails on its own, but documents
+/// within theirs that together pass what the machine has would abort the
+/// whole batch, or have it killed.
+fn batch_jobs(
+    requested: usize,
+    cores: usize,
+    memory: Option<u64>,
+    per_job: Option<u64>,
+) -> (usize, Option<String>) {
+    let asked = if requested == 0 { cores } else { requested };
+    let document = per_job.unwrap_or(DOCUMENT_MEMORY).max(1);
+    let (bound, why) = match (memory, per_job) {
+        (Some(free), _) => (
+            usize::try_from(free / document)
+                .unwrap_or(usize::MAX)
+                .max(1),
+            format!(
+                "{} MiB of memory free, {} MiB a document",
+                free >> 20,
+                document >> 20
+            ),
+        ),
+        (None, Some(_)) => return (asked, None),
+        (None, None) => (
+            cores,
+            "the free memory is not known; one per core".to_string(),
+        ),
+    };
+    if asked <= bound {
+        return (asked, None);
+    }
+    let jobs_flag = if requested == 0 {
+        "-j 0 (one per core)".to_string()
+    } else {
+        format!("-j {requested}")
+    };
+    (
+        bound,
+        Some(format!("{jobs_flag} lowered to {bound}: {why}")),
+    )
+}
+
+/// The memory free to this process, the least of: what the system has
+/// available (`MemAvailable`), what its control groups leave it (a
+/// container's limit), and what its address space may grow to; `None` where
+/// none is known (outside Linux).
+fn free_memory() -> Option<u64> {
+    free_memory_in(|path| std::fs::read_to_string(path).ok())
+}
+
+/// [`free_memory`], its files read by `read`.
+fn free_memory_in(read: impl Fn(&str) -> Option<String>) -> Option<u64> {
+    [
+        read("/proc/meminfo").and_then(|m| mem_available(&m)),
+        read("/proc/self/cgroup").and_then(|c| cgroup_headroom(&c, &read)),
+        read("/proc/self/limits").and_then(|l| address_space(&l)),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+}
+
+/// `MemAvailable` of `/proc/meminfo`, in bytes.
+fn mem_available(meminfo: &str) -> Option<u64> {
+    let kb = meminfo
+        .lines()
+        .find_map(|l| l.strip_prefix("MemAvailable:"))?
+        .split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()?;
+    Some(kb.saturating_mul(1024))
+}
+
+/// What the memory control groups of this process, as `/proc/self/cgroup`
+/// names them, leave it: the least, over its group and each above it, of
+/// its limit less what the group uses, a group without a limit not
+/// counting. What it uses is its working set, as docker and the kubelet
+/// count it: its use less the file cache the kernel reclaims first under
+/// the limit (`inactive_file` in its `memory.stat`), which a group that has
+/// read or written much keeps near its limit. `read` reads a file under
+/// `/sys/fs/cgroup`. cgroup v2 names one group (`0::/path`), whose
+/// `memory.max`, `memory.current` and `memory.stat` are read; v1 a group
+/// per controller, the memory one's `memory.limit_in_bytes`,
+/// `memory.usage_in_bytes` and `memory.stat` (`total_inactive_file`, its
+/// subgroups' included, as its use) read under `/sys/fs/cgroup/memory`. A container
+/// sees its own group at the root of the mount and its path from the host,
+/// so each group from the path's to the mount's root is read where it is
+/// there. `None` where no group has a limit.
+fn cgroup_headroom(cgroup: &str, read: impl Fn(&str) -> Option<String>) -> Option<u64> {
+    let number = |path: String| read(&path)?.trim().parse::<u64>().ok();
+    let mut least: Option<u64> = None;
+    for line in cgroup.lines() {
+        let mut fields = line.splitn(3, ':');
+        let (Some(id), Some(controllers), Some(path)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let (root, limit, usage, cache) = if id == "0" && controllers.is_empty() {
+            (
+                "/sys/fs/cgroup",
+                "memory.max",
+                "memory.current",
+                "inactive_file",
+            )
+        } else if controllers.split(',').any(|c| c == "memory") {
+            (
+                "/sys/fs/cgroup/memory",
+                "memory.limit_in_bytes",
+                "memory.usage_in_bytes",
+                "total_inactive_file",
+            )
+        } else {
+            continue;
+        };
+        // The group, then each above it, to the mount's root.
+        let mut dir = path.trim_end_matches('/');
+        loop {
+            // `max` (v2) is no limit, and does not parse; v1 writes a huge
+            // number, which counts for nothing beside the others.
+            if let (Some(max), Some(used)) = (
+                number(format!("{root}{dir}/{limit}")),
+                number(format!("{root}{dir}/{usage}")),
+            ) {
+                let reclaimable = read(&format!("{root}{dir}/memory.stat"))
+                    .and_then(|stat| stat_field(&stat, cache))
+                    .unwrap_or(0);
+                let left = max.saturating_sub(used.saturating_sub(reclaimable));
+                least = Some(least.map_or(left, |l| l.min(left)));
+            }
+            match dir.rfind('/') {
+                Some(i) => dir = &dir[..i],
+                None => break,
+            }
+        }
+    }
+    least
+}
+
+/// The value of `key` in a cgroup's `memory.stat` (`key value` lines).
+fn stat_field(stat: &str, key: &str) -> Option<u64> {
+    stat.lines().find_map(|l| {
+        let (k, v) = l.split_once(' ')?;
+        (k == key).then(|| v.trim().parse().ok())?
+    })
+}
+
+/// The soft limit on the address space in `/proc/self/limits`, in bytes;
+/// `None` where it is `unlimited`.
+fn address_space(limits: &str) -> Option<u64> {
+    limits
+        .lines()
+        .find_map(|l| l.strip_prefix("Max address space"))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// The first flag given that names a single document.
@@ -365,7 +574,8 @@ fn read_source(
         SourceKind::Markdown => {
             let text = String::from_utf8(data).map_err(|e| format!("not UTF-8: {e}"))?;
             (
-                fluree_doc_markdown::parse(&text),
+                fluree_doc_markdown::parse(&text)
+                    .map_err(|e| format!("Markdown document too large: {e}"))?,
                 fluree_doc_model::Notes::default(),
             )
         }
@@ -373,18 +583,21 @@ fn read_source(
         // is not code and a row of `=` makes no heading. Markdown saved
         // under a text file's name is told by its markup and read as such.
         SourceKind::Text => {
-            let text = fluree_doc_text::decode(&data);
+            let text = fluree_doc_text::decode(data);
             let elements = if fluree_doc_text::is_markdown(&text) {
                 fluree_doc_markdown::parse(&text)
+                    .map_err(|e| format!("Markdown document too large: {e}"))?
             } else {
                 fluree_doc_text::parse(&text)
+                    .map_err(|e| format!("text document too large: {e}"))?
             };
             (elements, fluree_doc_model::Notes::default())
         }
         SourceKind::Html => {
             let text = fluree_doc_html::decode(&data);
             (
-                fluree_doc_html::parse(&text),
+                fluree_doc_html::parse(&text)
+                    .map_err(|e| format!("HTML document too large: {e}"))?,
                 declared(fluree_doc_html::info(&text)),
             )
         }
@@ -503,29 +716,23 @@ fn read_source(
         SourceKind::Ppt => {
             let (mut elements, media) =
                 fluree_doc_ppt::parse_with_media(&data).map_err(|e| e.to_string())?;
-            // The deck opened once, when the first picture is read. A
-            // picture is held whole in the deck's stream, so its first bytes
-            // are cut from the picture read.
+            // The deck opened once, when the first picture is read. Each
+            // picture's first bytes are copied alone to tell its format:
+            // the entries of a deck's store may all point at one large
+            // picture, and each is looked at.
             let deck = std::cell::OnceCell::new();
-            let read = |part: &str| {
+            let opened = || {
                 deck.get_or_init(|| {
                     fluree_doc_ppt::MediaReader::open(&data).map_err(|e| e.to_string())
                 })
                 .as_ref()
-                .map_err(Clone::clone)?
-                .read(part)
+                .map_err(Clone::clone)
             };
-            let sniffed = fluree_doc_pdf::image::Format::SNIFFED;
             let media = read_media_with(
                 src.stem,
                 media,
-                &mut |part| {
-                    read(part).map(|mut b| {
-                        b.truncate(sniffed);
-                        b
-                    })
-                },
-                &mut |part| read(part),
+                &mut |part| opened()?.head(part, fluree_doc_pdf::image::Format::SNIFFED),
+                &mut |part| opened()?.read(part),
                 cfg,
                 quiet,
             );
@@ -741,6 +948,11 @@ fn save_attachments(
 /// `DIR/<slot>/<sha256>.<format>` beside the saved files: one output per
 /// file, by its bytes, however often and under whatever names it was sent.
 ///
+/// Each output is written as it is made, so no more than one is held at a
+/// time, and each file is converted within what the message itself leaves
+/// of a document's budget ([`attachments_share`]): the message is held
+/// while its files are read.
+///
 /// A file is converted as `convert` would convert it on its own, by its
 /// content and the extension of its name, but as a document of its own: the
 /// flags naming the e-mail's document (`--doc-iri`, `--base-iri`,
@@ -768,39 +980,29 @@ fn convert_attachments(
         parse_attachments: false,
         ..args.clone()
     };
-    let readable_images =
-        cfg.ocr.is_some() || cfg.ocr_words.is_some() || cfg.tier_results.is_some() || cfg.escalate;
+    // A conversion that cannot be written stops the run, as the message's
+    // own output would.
+    let mut unwritten: Option<String> = None;
     let mut read = |f: &fluree_doc_email::AttachedFile, _depth: usize| {
-        let name = f
-            .info
-            .filename
-            .clone()
-            .unwrap_or_else(|| f.info.sha256.clone());
-        let path = Path::new(&name);
-        match common::input_kind(path, &f.bytes) {
-            common::SourceKind::Unsupported => return None,
-            common::SourceKind::Image if f.info.inline || !readable_images => return None,
-            _ => {}
+        if unwritten.is_some() {
+            return Some(Err(
+                "not converted: an earlier output was not written".to_string()
+            ));
         }
-        let child = Source {
-            stem: common::stem_of(path),
-            slot: f.info.sha256.clone(),
-            named: true,
-            name: Some(name.clone()),
-            sha256: f.info.sha256.clone(),
-            carried: true,
-        };
-        Some(convert_source(
-            path,
-            f.bytes.clone(),
-            &child,
-            cfg,
-            &child_args,
-            None,
-            quiet,
-        ))
+        let out = convert_carried(f, cfg, &child_args, None, quiet)?;
+        Some(out.and_then(|out| {
+            let path = dir.join(format!("{}.{}", f.info.sha256, ext(args.format)));
+            std::fs::write(&path, out).map_err(|e| {
+                let e = format!("writing {}: {e}", path.display());
+                unwritten = Some(e.clone());
+                e
+            })
+        }))
     };
-    let children = fluree_doc_email::parse_attachments(email, &Default::default(), &mut read);
+    let children = walk_carried(email, &mut read);
+    if let Some(e) = unwritten {
+        return Err(e);
+    }
     let mut converted = 0usize;
     let mut left: Vec<String> = Vec::new();
     for c in &children {
@@ -810,12 +1012,7 @@ fn convert_attachments(
             .clone()
             .unwrap_or_else(|| c.info.content_type.clone());
         match &c.outcome {
-            Outcome::Read(out) => {
-                let path = dir.join(format!("{}.{}", c.info.sha256, ext(args.format)));
-                std::fs::write(&path, out)
-                    .map_err(|e| format!("writing {}: {e}", path.display()))?;
-                converted += 1;
-            }
+            Outcome::Read(()) => converted += 1,
             Outcome::NoReader => left.push(format!("{name}: no reader")),
             Outcome::Failed(e) => left.push(format!("{name}: {e}")),
             Outcome::Skipped(why) => left.push(format!("{name}: {why}")),
@@ -835,6 +1032,86 @@ fn convert_attachments(
         );
     }
     Ok(())
+}
+
+/// Walk the files `email` carries with `read`, as `--parse-attachments`
+/// does (`fluree_doc_email::parse_attachments`, its default bounds),
+/// within what the message leaves of the budget ([`attachments_share`]):
+/// each file, and each attached message the walk opens to follow its
+/// files, is read within that share, not on a budget of its own beside
+/// the message it came in.
+pub(crate) fn walk_carried<T>(
+    email: &fluree_doc_email::Email,
+    read: &mut fluree_doc_email::ReadAttachment<'_, T>,
+) -> Vec<fluree_doc_email::Child<T>> {
+    fluree_doc_model::budget::within(attachments_share(email), || {
+        fluree_doc_email::parse_attachments(email, &Default::default(), read)
+    })
+}
+
+/// The memory each file an e-mail carries may be converted within: a
+/// document's budget less what the message holds while they are read, its
+/// elements and their text at their costs, and its files' bytes, each held
+/// by the message and by the walk over them, at a part's two bytes a byte.
+/// Nothing where the message alone spends the whole budget.
+fn attachments_share(email: &fluree_doc_email::Email) -> u64 {
+    let mut held = fluree_doc_model::budget::Budget::default();
+    let spent = (|| {
+        held.spend_elements(email.elements.len() as u64)?;
+        for e in &email.elements {
+            held.spend_text(&e.text)?;
+        }
+        let files: usize = email.attachments.iter().map(|a| a.bytes.len()).sum();
+        held.spend_bytes(files as u64)
+    })();
+    match spent {
+        Ok(()) => held.memory_left(),
+        Err(_) => 0,
+    }
+}
+
+/// Convert a file an e-mail carries, as `--parse-attachments` does (within
+/// what [`walk_carried`] leaves it), with
+/// `args` for a child (no attachments of its own saved), its pages `pages`;
+/// `None` where no reader takes it: a format with none, or an image no
+/// tier is configured to read (a signature's logo, drawn in the body, never).
+pub(crate) fn convert_carried(
+    f: &fluree_doc_email::AttachedFile,
+    cfg: &TierConfig,
+    args: &ConvertArgs,
+    pages: Option<&[usize]>,
+    quiet: bool,
+) -> Option<Result<String, String>> {
+    let readable_images =
+        cfg.ocr.is_some() || cfg.ocr_words.is_some() || cfg.tier_results.is_some() || cfg.escalate;
+    let name = f
+        .info
+        .filename
+        .clone()
+        .unwrap_or_else(|| f.info.sha256.clone());
+    let path = Path::new(&name);
+    match common::input_kind(path, &f.bytes) {
+        common::SourceKind::Unsupported => return None,
+        common::SourceKind::Image if f.info.inline || !readable_images => return None,
+        _ => {}
+    }
+    let child = Source {
+        stem: common::stem_of(path),
+        slot: f.info.sha256.clone(),
+        named: true,
+        name: Some(name.clone()),
+        sha256: f.info.sha256.clone(),
+        carried: true,
+    };
+    Some(convert_source(
+        path,
+        f.bytes.clone(),
+        &child,
+        cfg,
+        args,
+        pages,
+        quiet,
+    ))
 }
 
 /// A safe, unique file name for an attachment: its own name with any path
@@ -2927,6 +3204,244 @@ fn parse_page(s: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_batch_runs_no_more_documents_at_once_than_memory_holds() {
+        // Room for three documents: -j 8 and one per core of 12 lowered.
+        let three = Some(3 * DOCUMENT_MEMORY + (DOCUMENT_MEMORY >> 1));
+        let (jobs, why) = batch_jobs(8, 12, three, None);
+        assert_eq!(jobs, 3);
+        assert!(why.unwrap().starts_with("-j 8 lowered to 3: "));
+        let (jobs, why) = batch_jobs(0, 12, three, None);
+        assert_eq!(jobs, 3);
+        assert!(why.unwrap().starts_with("-j 0 (one per core) lowered to 3"));
+        // Within it: as asked, unsaid.
+        assert_eq!(batch_jobs(2, 12, three, None), (2, None));
+        assert_eq!(batch_jobs(0, 2, three, None), (2, None));
+        // A budget each is not room enough: what goes with it counts.
+        assert_eq!(batch_jobs(4, 12, Some(3 * MAX_MEMORY), None).0, 2);
+        // Less than one document's room: still one.
+        assert_eq!(batch_jobs(4, 12, Some(1 << 30), None).0, 1);
+        assert_eq!(batch_jobs(1, 12, Some(0), None), (1, None));
+        // Not known: one per core at most.
+        assert_eq!(batch_jobs(0, 6, None, None), (6, None));
+        assert_eq!(batch_jobs(16, 6, None, None).0, 6);
+    }
+
+    #[test]
+    fn a_batch_can_be_told_what_a_document_takes() {
+        let gib = 1u64 << 30;
+        // An 8 GB container runs one document at the default, four at 1.5
+        // GiB each.
+        assert_eq!(batch_jobs(8, 12, Some(7 * gib), None).0, 1);
+        let (jobs, why) = batch_jobs(8, 12, Some(7 * gib), Some(3 * gib / 2));
+        assert_eq!(jobs, 4);
+        assert!(why.unwrap().ends_with("1536 MiB a document"));
+        // Free memory not known: told, the batch runs as many as asked.
+        assert_eq!(batch_jobs(32, 8, None, Some(gib)), (32, None));
+        // The flag over the environment, in MiB; 0 and nonsense refused.
+        assert_eq!(job_memory(None, None), Ok(None));
+        assert_eq!(job_memory(None, Some(" 512 ")), Ok(Some(512 << 20)));
+        assert_eq!(job_memory(Some(256), Some("512")), Ok(Some(256 << 20)));
+        assert!(job_memory(Some(0), None).is_err());
+        assert!(job_memory(None, Some("1G")).is_err());
+    }
+
+    #[test]
+    fn free_memory_is_read_from_proc() {
+        let meminfo =
+            "MemTotal:       65536000 kB\nMemFree:  1000 kB\nMemAvailable:   48000000 kB\n";
+        assert_eq!(mem_available(meminfo), Some(48_000_000 * 1024));
+        assert_eq!(mem_available("MemTotal: 1 kB\n"), None);
+        let limits = "Limit                     Soft Limit           Hard Limit           Units\n\
+                      Max stack size            8388608              unlimited            bytes\n\
+                      Max address space         4096000000           unlimited            bytes\n";
+        assert_eq!(address_space(limits), Some(4_096_000_000));
+        let unlimited =
+            "Max address space         unlimited            unlimited            bytes\n";
+        assert_eq!(address_space(unlimited), None);
+    }
+
+    #[test]
+    fn a_control_groups_limit_bounds_the_memory_free() {
+        use std::collections::HashMap;
+        let fs = |files: &[(&str, &str)]| {
+            let files: HashMap<String, String> = files
+                .iter()
+                .map(|(p, c)| (p.to_string(), c.to_string()))
+                .collect();
+            move |p: &str| files.get(p).cloned()
+        };
+        // cgroup v2: the group's limit less its use, and a group above with
+        // less left wins; the root has no limit, a group may say `max`.
+        let v2 = "0::/user.slice/batch.scope\n";
+        let read = fs(&[
+            (
+                "/sys/fs/cgroup/user.slice/batch.scope/memory.max",
+                "3221225472\n",
+            ),
+            (
+                "/sys/fs/cgroup/user.slice/batch.scope/memory.current",
+                "221225472\n",
+            ),
+            ("/sys/fs/cgroup/user.slice/memory.max", "max\n"),
+            ("/sys/fs/cgroup/user.slice/memory.current", "9000000000\n"),
+        ]);
+        assert_eq!(cgroup_headroom(v2, &read), Some(3_000_000_000));
+        let read = fs(&[
+            (
+                "/sys/fs/cgroup/user.slice/batch.scope/memory.max",
+                "3221225472\n",
+            ),
+            (
+                "/sys/fs/cgroup/user.slice/batch.scope/memory.current",
+                "221225472\n",
+            ),
+            ("/sys/fs/cgroup/user.slice/memory.max", "2000000000\n"),
+            ("/sys/fs/cgroup/user.slice/memory.current", "1500000000\n"),
+        ]);
+        assert_eq!(cgroup_headroom(v2, &read), Some(500_000_000));
+        // A container: its group at the mount's root, its path the host's.
+        let container = "0::/system.slice/docker-1234.scope\n";
+        let read = fs(&[
+            ("/sys/fs/cgroup/memory.max", "3000000000\n"),
+            ("/sys/fs/cgroup/memory.current", "1000000000\n"),
+        ]);
+        assert_eq!(cgroup_headroom(container, &read), Some(2_000_000_000));
+        // Over its limit (pages it may reclaim): nothing left, not a wrap.
+        let read = fs(&[
+            ("/sys/fs/cgroup/memory.max", "1000\n"),
+            ("/sys/fs/cgroup/memory.current", "2000\n"),
+        ]);
+        assert_eq!(cgroup_headroom("0::/\n", &read), Some(0));
+        // Its file cache the kernel reclaims first is not counted as used:
+        // 3.3 GB of a group's 3.4 GB is cache written and let go.
+        let stat_v2 = "anon 90000000\nfile 3310000000\nkernel 4000000\n\
+                       active_anon 80000000\ninactive_anon 0\n\
+                       active_file 10000000\ninactive_file 3300000000\n\
+                       shmem 0\n";
+        let read = fs(&[
+            ("/sys/fs/cgroup/batch.scope/memory.max", "9000000000\n"),
+            ("/sys/fs/cgroup/batch.scope/memory.current", "3400000000\n"),
+            ("/sys/fs/cgroup/batch.scope/memory.stat", stat_v2),
+        ]);
+        assert_eq!(
+            cgroup_headroom("0::/batch.scope\n", &read),
+            Some(8_900_000_000)
+        );
+        // More cache than use, as the counters are read apart: all of it
+        // free, not a wrap.
+        let read = fs(&[
+            ("/sys/fs/cgroup/memory.max", "1000\n"),
+            ("/sys/fs/cgroup/memory.current", "200\n"),
+            ("/sys/fs/cgroup/memory.stat", "inactive_file 300\n"),
+        ]);
+        assert_eq!(cgroup_headroom("0::/\n", &read), Some(1000));
+        // cgroup v1: the memory controller's line, its huge "no limit"
+        // beside a real one.
+        let v1 = "12:pids:/docker/abc\n4:cpu,cpuacct:/docker/abc\n\
+                  9:memory:/docker/abc\n1:name=systemd:/docker/abc\n";
+        let read = fs(&[
+            (
+                "/sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes",
+                "3000000000\n",
+            ),
+            (
+                "/sys/fs/cgroup/memory/docker/abc/memory.usage_in_bytes",
+                "500000000\n",
+            ),
+            (
+                "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+                "9223372036854771712\n",
+            ),
+            (
+                "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+                "8000000000\n",
+            ),
+        ]);
+        assert_eq!(cgroup_headroom(v1, &read), Some(2_500_000_000));
+        // v1's cache is its hierarchy's, `total_inactive_file`; the group's
+        // own `inactive_file` beside it is not what its use counts.
+        let stat_v1 = "cache 2100000000\nrss 400000000\ninactive_file 5\n\
+                       total_cache 2100000000\ntotal_rss 400000000\n\
+                       total_inactive_file 2000000000\n";
+        let read = fs(&[
+            (
+                "/sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes",
+                "3000000000\n",
+            ),
+            (
+                "/sys/fs/cgroup/memory/docker/abc/memory.usage_in_bytes",
+                "2500000000\n",
+            ),
+            ("/sys/fs/cgroup/memory/docker/abc/memory.stat", stat_v1),
+        ]);
+        assert_eq!(cgroup_headroom(v1, &read), Some(2_500_000_000));
+        // No limit anywhere, or no group: not known.
+        let read = fs(&[
+            ("/sys/fs/cgroup/memory.max", "max\n"),
+            ("/sys/fs/cgroup/memory.current", "1000\n"),
+        ]);
+        assert_eq!(cgroup_headroom("0::/\n", &read), None);
+        assert_eq!(cgroup_headroom("", &read), None);
+        // A container of 3 GB on a host with 23 GB available: the
+        // container's, and no more jobs than it leaves room for.
+        let read = fs(&[
+            ("/proc/meminfo", "MemAvailable:   23000000 kB\n"),
+            ("/proc/self/cgroup", container),
+            ("/sys/fs/cgroup/memory.max", "3000000000\n"),
+            ("/sys/fs/cgroup/memory.current", "1000000\n"),
+        ]);
+        let free = free_memory_in(&read);
+        assert_eq!(free, Some(2_999_000_000));
+        let (jobs, why) = batch_jobs(4, 12, free, None);
+        assert_eq!(jobs, 1);
+        assert!(why.unwrap().contains("2860 MiB of memory free"));
+        // Under an address space smaller still, that.
+        let read = fs(&[
+            ("/proc/meminfo", "MemAvailable:   23000000 kB\n"),
+            ("/proc/self/cgroup", container),
+            ("/sys/fs/cgroup/memory.max", "3000000000\n"),
+            ("/sys/fs/cgroup/memory.current", "1000000\n"),
+            (
+                "/proc/self/limits",
+                "Max address space         2000000000           unlimited            bytes\n",
+            ),
+        ]);
+        assert_eq!(free_memory_in(&read), Some(2_000_000_000));
+    }
+
+    #[test]
+    fn an_emails_files_share_what_the_message_leaves() {
+        use fluree_doc_model::budget::{
+            text_cost, ELEMENT_BYTES, MAX_MEMORY, PART_BYTES, TEXT_BYTES,
+        };
+        let mail = "From: Alex Sample <alex@example.com>\r\nSubject: Orders\r\nMIME-Version: 1.0\r\n\
+                    Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+                    --b\r\nContent-Type: text/plain\r\n\r\nSee attached.\r\n\
+                    --b\r\nContent-Type: text/csv\r\nContent-Disposition: attachment; filename=\"orders.csv\"\r\n\r\n\
+                    Customer,Amount\r\nAlex Sample,12.50\r\n--b--\r\n";
+        let email = fluree_doc_email::parse(mail.as_bytes()).unwrap();
+        let files: u64 = email.attachments.iter().map(|a| a.bytes.len() as u64).sum();
+        assert!(files > 0);
+        let text: u64 = email.elements.iter().map(|e| text_cost(&e.text)).sum();
+        let held =
+            email.elements.len() as u64 * ELEMENT_BYTES + text * TEXT_BYTES + files * PART_BYTES;
+        assert_eq!(attachments_share(&email), MAX_MEMORY - held);
+        // A share already given bounds it too.
+        assert_eq!(
+            fluree_doc_model::budget::within(held, || attachments_share(&email)),
+            0
+        );
+        // The walk reads each file within that share, and so opens an
+        // attached message within it too.
+        let mut left = Vec::new();
+        walk_carried(&email, &mut |_: &fluree_doc_email::AttachedFile, _| {
+            left.push(fluree_doc_model::budget::Budget::default().memory_left());
+            Some(Ok(()))
+        });
+        assert_eq!(left, [MAX_MEMORY - held]);
+    }
 
     #[test]
     fn an_attachment_cannot_take_a_conversions_name() {

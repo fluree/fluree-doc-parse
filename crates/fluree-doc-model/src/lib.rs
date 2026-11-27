@@ -15,6 +15,8 @@ pub mod media;
 pub mod merges;
 pub mod message;
 pub mod outline;
+#[cfg(any(test, feature = "test-util"))]
+pub mod scaling;
 pub mod symbols;
 
 pub use doco::{to_doco, to_text, DocoOptions};

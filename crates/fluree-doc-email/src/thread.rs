@@ -564,6 +564,12 @@ fn inline_header(text: &str) -> Option<Message> {
         if i > 0 && !body[..i].ends_with(char::is_whitespace) {
             continue;
         }
+        // Not inside the field found before: a name after a run of
+        // whitespace would otherwise start a field at each character of the
+        // run, the later starts falling before the first one's value.
+        if starts.last().is_some_and(|&(_, _, v)| i < v) {
+            continue;
+        }
         let rest = &body[i..];
         let Some(colon) = rest.find(':').filter(|&c| c <= 20) else {
             continue;
@@ -894,5 +900,9 @@ mod tests {
         assert_eq!(m.to[0].name.as_deref(), Some("Kai Moreno"));
         assert_eq!(m.subject.as_deref(), Some("RE: Budget"));
         assert!(inline_header("From: here to there, a road.").is_none());
+        // A name after two whitespace characters is one field, not a field
+        // ending before its own value starts (which panicked).
+        let m = inline_header("From: Ada Park \r de: x To: Ben <ben@example.com>").unwrap();
+        assert_eq!(m.to.len(), 1, "{m:?}");
     }
 }

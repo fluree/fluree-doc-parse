@@ -61,10 +61,13 @@ use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element};
 use std::io::{Cursor, Read};
 
-/// The most bytes the `WordDocument` stream is read to: 256 MiB.
-pub const MAX_STREAM_BYTES: u64 = 256 << 20;
-/// The most bytes the table stream is read to: 64 MiB.
-pub const MAX_TABLE_BYTES: u64 = 64 << 20;
+/// The most bytes the `WordDocument` stream is read to: 256 MiB (a
+/// sixteenth built for the fuzz targets, as the budget is,
+/// [`fluree_doc_model::budget::scaled`]).
+pub const MAX_STREAM_BYTES: u64 = fluree_doc_model::budget::scaled(256 << 20);
+/// The most bytes the table stream is read to: 64 MiB (scaled as
+/// [`MAX_STREAM_BYTES`]).
+pub const MAX_TABLE_BYTES: u64 = fluree_doc_model::budget::scaled(64 << 20);
 /// The most pieces read.
 pub const MAX_PIECES: usize = 1 << 20;
 /// The most characters read.
@@ -762,7 +765,12 @@ impl Layout {
             .collect::<Vec<_>>()
             .join("\n");
         let rows = std::mem::take(&mut self.rows);
-        self.push("doco:Table", text, start).cells = Some(rows);
+        let mut e = Element::new("doco:Table", text, "doc", self.evidence);
+        e.cells = Some(rows);
+        // Each cell's column header and row label, copied by the output.
+        budget.spend_copies(&e)?;
+        self.out.push(e);
+        self.starts.push(start);
         (self.spent, self.width) = (0, 0);
         Ok(())
     }
@@ -785,9 +793,10 @@ impl Layout {
                 .filter(|t| !t.is_empty())
                 .collect::<Vec<_>>()
                 .join(" ");
-            // A cell that holds text is a node of the output of its own.
+            // A cell that holds text, at what the output makes of it, its
+            // text spent as it was decoded.
             if !cell.is_empty() {
-                budget.spend_elements(1)?;
+                budget.spend_text_cells(1)?;
             }
             self.row.push(cell);
             return Ok(());

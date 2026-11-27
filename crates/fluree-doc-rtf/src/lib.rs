@@ -879,7 +879,7 @@ fn flush_table(f: &mut Flow, budget: &mut Budget, over: &mut Option<String>) {
     let spent = spend_element(budget, "")
         .and_then(|()| budget.spend_cells(size as u64))
         .and_then(|()| {
-            budget.spend_chars(rows.iter().flat_map(|(r, _)| r).flat_map(|c| c.chars()))
+            budget.spend_cell_texts(rows.iter().flat_map(|(r, _)| r).map(String::as_str))
         });
     if let Err(e) = spent {
         over.get_or_insert(e.to_string());
@@ -924,6 +924,11 @@ fn flush_table(f: &mut Flow, budget: &mut Budget, over: &mut Option<String>) {
     e.header_rows = (header_rows > 0).then_some(header_rows);
     e.merged_left = left.iter().any(|x| *x).then_some(left);
     e.merged_down = down.iter().any(|x| *x).then_some(down);
+    // What DoCO copies of it: a merged value in each cell it covers.
+    if let Err(err) = budget.spend_copies(&e) {
+        over.get_or_insert(err.to_string());
+        return;
+    }
     f.out.push(e);
 }
 

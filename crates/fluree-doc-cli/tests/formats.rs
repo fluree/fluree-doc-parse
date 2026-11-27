@@ -87,6 +87,49 @@ fn a_csv_and_a_tsv_are_tables_in_every_output() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn a_large_table_is_counted_at_the_output_asked_for() {
+    // An export of 50,000 rows by 15 columns, every cell filled: 750,000
+    // cells, about 80 MB as Markdown, past 2 GB as DoCO, whose graph
+    // writes each cell as a node with its labels.
+    let dir = scratch("large-table");
+    let csv = dir.join("export.csv");
+    let mut text = (0..15)
+        .map(|c| format!("col{c}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    for r in 0..50_000 {
+        text.push('\n');
+        text.push_str(
+            &(0..15)
+                .map(|c| format!("v{r}.{c}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    std::fs::write(&csv, text).unwrap();
+    for format in ["md", "xhtml", "json", "text"] {
+        let o = convert(&dir, &csv, format, &[]);
+        assert!(
+            o.status.success(),
+            "{format}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        let out = String::from_utf8_lossy(&o.stdout);
+        assert!(
+            out.contains("v49999.14"),
+            "{format}: the last cell is missing"
+        );
+    }
+    // As DoCO it is refused, cleanly and before a node is made.
+    let o = convert(&dir, &csv, "doco", &[]);
+    assert_eq!(o.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("table too large"), "{err}");
+    assert!(o.stdout.is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The graph has a cell node whose value is `text`.
 fn doc_has_cell(doco: &str, text: &str) -> bool {
     let v: serde_json::Value = serde_json::from_str(doco).unwrap();
@@ -1078,6 +1121,13 @@ fn an_rtf_document_reads_in_every_output_whatever_its_name() {
 /// picture shape showing the store's first entry, its PNG in the
 /// `Pictures` stream.
 fn ppt_with_picture(png: &[u8]) -> Vec<u8> {
+    ppt_with_pictures(png, 1)
+}
+
+/// A deck of one slide showing `n` pictures, each its own entry of the
+/// store, every entry pointing at the one picture `png` in the `Pictures`
+/// stream.
+fn ppt_with_pictures(png: &[u8], n: u32) -> Vec<u8> {
     use std::io::Write;
     let rec = |container: bool, inst: u16, typ: u16, data: &[u8]| {
         let mut v = ((inst << 4) | if container { 0x0F } else { 0 })
@@ -1100,7 +1150,12 @@ fn ppt_with_picture(png: &[u8]) -> Vec<u8> {
             true,
             0,
             0xF000,
-            &rec(true, 0, 0xF001, &rec(false, 6, 0xF007, &fbse)),
+            &rec(
+                true,
+                0,
+                0xF001,
+                &rec(false, 6, 0xF007, &fbse).repeat(n as usize),
+            ),
         ),
     );
     let persist = rec(
@@ -1133,15 +1188,19 @@ fn ppt_with_picture(png: &[u8]) -> Vec<u8> {
         ]
         .concat(),
     );
-    let mut opt = (0x0104u16 | 0x4000).to_le_bytes().to_vec();
-    opt.extend(1u32.to_le_bytes());
-    let picture = rec(
-        true,
-        0,
-        0xF004,
-        &[rec(false, 75, 0xF00A, &[0; 8]), rec(false, 1, 0xF00B, &opt)].concat(),
-    );
-    let slide = rec(true, 0, 0x03EE, &[title, picture].concat());
+    let pictures: Vec<u8> = (1..=n)
+        .flat_map(|pib| {
+            let mut opt = (0x0104u16 | 0x4000).to_le_bytes().to_vec();
+            opt.extend(pib.to_le_bytes());
+            rec(
+                true,
+                0,
+                0xF004,
+                &[rec(false, 75, 0xF00A, &[0; 8]), rec(false, 1, 0xF00B, &opt)].concat(),
+            )
+        })
+        .collect();
+    let slide = rec(true, 0, 0x03EE, &[title, pictures].concat());
     let mut s = document.clone();
     let slide_at = s.len() as u32;
     s.extend(&slide);
@@ -1178,6 +1237,30 @@ fn ppt_with_picture(png: &[u8]) -> Vec<u8> {
     }
     cf.flush().unwrap();
     cf.into_inner().into_inner()
+}
+
+#[test]
+fn a_ppt_whose_store_points_many_times_at_one_picture_lists_it_once() {
+    // 300 entries of a deck's store, each shown on the slide, all at one
+    // picture: one picture, read (or, as here, listed unread) once, not
+    // 300 copies of it held for a reader or sent to a model.
+    let dir = scratch("ppt-aliased");
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[0u8; 64]].concat();
+    let input = dir.join("deck.ppt");
+    std::fs::write(&input, ppt_with_pictures(&png, 300)).unwrap();
+    let o = convert(&dir, &input, "doco", &[]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let doco = String::from_utf8_lossy(&o.stdout).into_owned();
+    let unread: serde_json::Value =
+        serde_json::from_str(&document_value(&doco, "doc:unreadImages")).unwrap();
+    let figures = unread["@value"].as_array().unwrap();
+    assert_eq!(figures.len(), 300, "each figure is listed");
+    let images: std::collections::HashSet<(&str, &str)> = figures
+        .iter()
+        .map(|f| (f["image"].as_str().unwrap(), f["part"].as_str().unwrap()))
+        .collect();
+    assert_eq!(images, [("m1", "Pictures#1")].into(), "as one image");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]

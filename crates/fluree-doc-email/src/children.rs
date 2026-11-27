@@ -79,8 +79,10 @@ pub type ReadAttachment<'r, T> = dyn FnMut(&AttachedFile, usize) -> Option<Resul
 ///
 /// `read` is given each file and its depth, and returns `None` where it has
 /// no reader for it. An attached message (`.eml`, `.msg`) is given to
-/// `read` like any file, and its own attachments are then followed here;
-/// one that does not parse as a message is not followed.
+/// `read` like any file, and its own attachments are then followed here,
+/// taken from it without making its body into elements again (an HTML body
+/// is read for the images it shows, within the message's budget); one that
+/// does not read as a message is not followed.
 pub fn parse_attachments<T>(
     email: &Email,
     limits: &AttachmentLimits,
@@ -128,8 +130,12 @@ pub fn parse_attachments<T>(
         let followed =
             skipped.is_none() && depth < limits.max_depth && Format::sniff(&file.bytes).is_some();
         if followed {
-            if let Ok(inner) = crate::parse(&file.bytes) {
-                for f in inner.attachments.into_iter().rev() {
+            // Its files only: its body was the reader's to make, and
+            // making it again here would hold a second copy of it beside
+            // whatever the reader holds. Its HTML is parsed for the images
+            // it shows, which are not files to read, within a budget.
+            if let Ok(inner) = crate::attachments_of(&file.bytes) {
+                for f in inner.into_iter().rev() {
                     stack.push((f, depth + 1, Some(file.info.sha256.clone())));
                 }
             }
@@ -227,6 +233,62 @@ mod tests {
             &mut |_: &AttachedFile, _| Some(Ok(())),
         );
         assert_eq!(shallow.len(), 3);
+    }
+
+    #[test]
+    fn an_attached_messages_own_images_stay_inline() {
+        // The forwarded message's HTML body draws its logo by `cid:`; the
+        // part says `attachment`, as a sender's library can for its name.
+        // Shown in the message, it is not a file to read.
+        let inner = "From: Kai Moreno <kai@example.com>\r\nSubject: inner\r\nMIME-Version: 1.0\r\n\
+             Content-Type: multipart/related; boundary=\"rel\"\r\n\r\n\
+             --rel\r\nContent-Type: text/html\r\n\r\n<p>Hello</p><img src=\"cid:logo@example.org\">\r\n\
+             --rel\r\nContent-Type: image/png\r\nContent-ID: <logo@example.org>\r\n\
+             Content-Disposition: attachment; filename=\"logo.png\"\r\n\r\npixels\r\n--rel--\r\n";
+        let outer = message("outer", &[("fwd.eml", "message/rfc822", inner)]);
+        let email = crate::parse(outer.as_bytes()).unwrap();
+        let children = parse_attachments::<()>(
+            &email,
+            &AttachmentLimits::default(),
+            &mut |_: &AttachedFile, _| Some(Ok(())),
+        );
+        assert_eq!(
+            names(&children),
+            [(Some("fwd.eml"), 1), (Some("logo.png"), 2)]
+        );
+        assert!(children[1].info.inline);
+        // As the message read on its own marks it.
+        assert!(
+            crate::parse(inner.as_bytes()).unwrap().attachments[0]
+                .info
+                .inline
+        );
+    }
+
+    #[test]
+    fn an_attached_message_too_large_to_make_still_has_its_files_followed() {
+        // A body the HTML reader refuses within what is left, as the
+        // reader refused the message: its files are followed all the same,
+        // and its body is not made a second time to find them.
+        let body = "<p>Quarterly figures</p>".repeat(4000);
+        let inner = message("inner", &[("deep.txt", "text/plain", "Deeper still")]).replace(
+            "Content-Type: text/plain\r\n\r\nSee attached.",
+            &format!("Content-Type: text/html\r\n\r\n{body}"),
+        );
+        let outer = message("outer", &[("fwd.eml", "message/rfc822", &inner)]);
+        let email = crate::parse(outer.as_bytes()).unwrap();
+        let children = fluree_doc_model::budget::within(64 << 10, || {
+            assert!(crate::parse(inner.as_bytes()).is_err());
+            parse_attachments::<()>(
+                &email,
+                &AttachmentLimits::default(),
+                &mut |_: &AttachedFile, _| Some(Err("too large".to_string())),
+            )
+        });
+        assert_eq!(
+            names(&children),
+            [(Some("fwd.eml"), 1), (Some("deep.txt"), 2)]
+        );
     }
 
     #[test]

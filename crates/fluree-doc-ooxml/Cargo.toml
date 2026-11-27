@@ -8,8 +8,4 @@ description = "The Office Open XML package layer shared by the DOCX, PPTX and XL
 [dependencies]
 fluree-doc-model.workspace = true
 quick-xml = "0.36"
-zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
-# zip's `deflate-flate2` names no flate2 backend; flate2's default feature is
-# the pure-Rust one. Without this line the crate builds only when another
-# workspace member happens to enable a backend.
-flate2 = "1"
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }

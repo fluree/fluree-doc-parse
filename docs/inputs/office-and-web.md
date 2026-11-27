@@ -211,7 +211,17 @@ labels) is read as one table per group, one after the other.
 `page` is `0` throughout — a `.docx` stores a flow, not a layout, and page
 boundaries exist only once something lays it out.
 
-Returns `DocxError` for a malformed or non-archive file.
+What the document makes, its body, page header and footer, notes and
+comments, is spent from one budget
+([limits on what one document may make](../reference/limits.md)) as it is
+made: each paragraph with its text, a table's grid before it is made (a
+`w:gridSpan` of a billion asks for a billion cells), its cells and their
+text, and the copies DoCO writes of them: a value merged down (`w:vMerge`)
+in each row it covers, the fragments of a merged cell joined first, and each
+cell's labels. A document past it fails as too large.
+
+Returns `DocxError` for a malformed or non-archive file, and
+`DocxError::TooLarge` for one past its budget.
 
 ### Word 97-2003 (`.doc`)
 
@@ -281,7 +291,12 @@ header's story, a text box's) finds its first piece. The header stories and
 the text boxes are read only where their positions never go backwards, so
 none is read twice, each held to its story; the sections' properties are
 looked through once each, at most 16 MiB of them, past which the headers are
-left out and said to be. Returns `DocError`
+left out and said to be. The characters are read one at a time, never all
+held; every character kept, element made and table cell (a row padded to the
+widest included), and the copies DoCO writes of a table's cells (each cell's
+labels), is spent from the document's budget ([limits on what one document may make](../reference/limits.md))
+first, so pieces that all point at the same text cannot make millions of
+paragraphs of it. Returns `DocError`
 (`fluree_doc_doc::parse`) otherwise.
 
 ## PPTX
@@ -316,7 +331,16 @@ point with no value, and a gap stays a blank cell rather than moving the
 values after it onto earlier categories. Of a multi-level category axis, the
 level next to the plot is read.
 
-Returns `PptxError` for a malformed or non-archive file.
+What the deck makes is spent from one budget
+([limits on what one document may make](../reference/limits.md)) as it is
+made, slide by slide: each paragraph with its text, a table's or a chart's
+grid before it is made, its cells and their text, and the copies DoCO
+writes of them (a value merged down in each row it covers, each cell's
+labels). A span past the table's edge is cut there. A deck past its budget
+fails as too large.
+
+Returns `PptxError` for a malformed or non-archive file, and
+`PptxError::TooLarge` for one past its budget.
 
 ### PowerPoint 97-2003 (`.ppt`)
 
@@ -376,13 +400,18 @@ on stdin. The container is opened by the `cfb` crate, which refuses a
 looping sector chain; the stream is read to at most 256 MiB, records nest
 at most 64 deep, at most 4,096 edits are followed (each once, so an edit
 chain that loops ends), each persist directory read once and about four
-million of their entries in all, and 10,000 slides read. A slide listed
-twice, or a notes slide named by two slides, is read once; the text read,
-however many slides name one place in the stream, is at most 256 MiB.
-Each text a placeholder names is a copy, counted each time against the
-document's budget, and each record a slide's walk visits is a step of its
-work, so slides laid inside each other's records are not walked without
-end.
+million of their entries in all, and 10,000 slides read. A slide or a notes
+slide is read once however many ids the persist directory sends to its
+place in the stream, or however many slides list or name it; the text read,
+however many slides name one place in the stream, is at most 256 MiB. Each
+text a placeholder names is a copy, counted each time. Every text read,
+element made and table cell, and the copies DoCO writes of a table's cells
+(a merged value in each cell it covers, each cell's labels), is spent from
+the document's budget ([limits on what one document may make](../reference/limits.md))
+first, and each record a slide's walk visits is a step of its work, so
+slides laid inside each other's records are not walked without end. A
+picture several shapes show is read once by OCR or a model, its text placed
+after each of its figures, as a DOCX's is.
 Provenance and evidence are `ppt`. Returns `PptError`
 (`fluree_doc_ppt::parse`) otherwise.
 
@@ -424,9 +453,19 @@ flattened out of it. So this reader measures after all, but only shape.
   grid would pass about four million cells in all (cells set down a
   diagonal, touching each other, span the square of their number) is read
   as its cells' text, a paragraph each.
-- **Size.** A workbook's cells and their text are counted against the
-  memory one document may take, at what the output makes of each: a cell
-  that holds text is a node of its own in DoCO (4 KiB), a cell of its row in
+- **Bounds.** No cell past Excel's grid (row 1,048,576, column 16,384) is
+  read, and a merge is cut at its edge. Every cell read, its text (a shared
+  string once for each cell naming it), each copy the layout makes, each
+  cell a table's grid holds, each element, and the copies DoCO writes of a
+  table's cells (a merged value in each cell it covers, each cell's labels)
+  are spent from the workbook's
+  budget ([limits on what one document may make](../reference/limits.md)) before it is made, and the passes that
+  mend islands into blocks spend its work; past either the workbook fails
+  as too large. Past 2,048 islands a sheet's islands are not mended. The
+  `.xls`, `.xlsb` and `.ods` readers lay their sheets out the same way,
+  within the same budget.
+- **Size.** A cell is spent at what the output makes of it: a cell that
+  holds text is a node of its own in DoCO (4 KiB), a cell of its row in
   Markdown, XHTML, JSON and the text (512 bytes). So a sheet of 50,000 rows
   by 12 columns converts to Markdown, and is refused as DoCO. The same holds
   for `.xls`, `.xlsb` and `.ods`, laid out alike.
@@ -513,7 +552,8 @@ whose cells, sheets' grids or merged ranges pass about four million in all
 (a sheet named twice counting twice), whose cells would copy more than
 64 million characters of text, which lists more than 65,536 sheet records,
 or whose sheets' walks cover more than twice the stream (sheets laid inside
-each other, each walked to the end), fails as too large; one whose records are
+each other, each walked to the end), fails as too large, as does one whose
+cells pass the document's budget once read ([limits on what one document may make](../reference/limits.md)); one whose records are
 cut short, or whose sheet offsets point at no sheet, fails as malformed.
 calamine then reads a compound file written for it, holding a workbook
 stream of only the records it needs, each sheet once and its formulas
@@ -527,10 +567,13 @@ read here, each checked against its length, rather than by calamine, which
 indexes them unchecked; a sheet's cells are laid out the same way as an
 `.xls`'s, and provenance and evidence are `xlsb`. Numbers read as General,
 dates as ISO dates, as for `.xls`; bold cells (a font of weight 700 or
-more) and merged ranges are read as an `.xls`'s are, frozen rows are not. Every part is first inflated to nowhere against 64 MiB each and
-256 MiB in all (and at most 10,000 parts); at most about four million cells
-are read, and a shared string's text, copied for each cell that names it,
-is counted each time against 256 MiB. A file is
+more) and merged ranges are read as an `.xls`'s are, frozen rows are not.
+Every part is first inflated to nowhere against 64 MiB each and 256 MiB in
+all (and at most 10,000 parts), and lists at most 10,000 sheets; a sheet part
+is read once however many times it is listed, at most about four million
+cells are read, a cell past Excel's grid is none, and each cell and its text
+(a shared string for each cell naming it) are spent from the document's
+budget ([limits on what one document may make](../reference/limits.md)) before they are copied. A file is
 recognised by its content, a zip holding `xl/workbook.bin`, whatever its
 name and on stdin. `.ods` is read by its own reader
 ([OpenDocument](opendocument.md)).
@@ -733,7 +776,26 @@ Yahoo and Proton put around a quote. A plain `<blockquote>`, as an indent
 button writes one, does not count. The [email](email.md) reader splits a
 thread by it.
 
-Infallible: HTML is defined so that every byte sequence parses.
+Every byte sequence parses, as HTML defines it; what a page makes is spent
+from one budget ([limits on what one document may make](../reference/limits.md)).
+The parser's tree first, as the parser builds it: a page of empty tags
+makes a tree twenty times its size, and a formatting element left open
+(`<b>`) is made again at each paragraph after it. Then the parser's own
+steps, where it can be counted: each tag the square of its attributes,
+halved; each open element it looks at and each pair of nodes it compares,
+as it walks the elements open (what is in scope, what an end tag closes);
+the siblings it looks among to set a node before another; and on a
+formatting element's tag, all it holds, and each attribute it compares.
+Then, as it is made: each
+element with its text and links, a table's grid before it is made (a
+`colspan` of a billion asks for a billion cells), the cells each span
+marks, the table's cells and their text, and the copies DoCO writes of
+them (a value spanning rows in each row it covers, each cell's labels).
+What nests more than 512 deep, where a browser stops nesting, is set beside
+its ancestor at that depth and read, as a browser does.
+A page past any of these is refused: `parse` and `parse_with_quote_depth` return its
+`TooLarge` error, and an email whose HTML body is refused fails as too
+large.
 
 ## Markdown
 
@@ -746,7 +808,13 @@ and how they nest, and a table states where its header ends. Where the PDF engin
 *measurement* — `header_rows` inferred from shading and value types — this
 reports a *fact*.
 
-Infallible, for the same reason as HTML.
+Every element, table cell (a row padded to the widest included) and its
+text, link (a node of its own in DoCO), and the copies DoCO writes of a
+table's cells (each cell's column header, row label and section band: a
+bold first cell over empty ones), is spent from the document's budget
+([limits on what one document may make](../reference/limits.md)) first; a
+document past it fails as too large (`fluree_doc_markdown::parse` returns
+`TooLarge`).
 
 ## Plain text
 
@@ -783,7 +851,13 @@ A file is decoded by its byte-order mark, then as UTF-8 when it is valid
 UTF-8, then as Windows-1252. Windows (CR LF) and classic Mac (CR) line ends
 are read as line ends.
 
-Infallible: any sequence of bytes is some text.
+Any sequence of bytes is some text. Each line, as it is read into its
+paragraph, and each element are spent from the document's budget ([limits on
+what one document may make](../reference/limits.md)) first; a text past it
+fails as too large (`fluree_doc_text::parse` returns `TooLarge`). The file
+itself is held once beside the budget: valid UTF-8 is read in place, and
+line ends are told apart in it rather than rewritten into a copy. A 300 MB
+file of one-letter lines, refused, peaks at 0.3 GB.
 
 ## Why convert Markdown at all
 

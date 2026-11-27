@@ -110,6 +110,8 @@ Markdown only:
 - `fluree-doc-conform` (a dev crate: the readers depend on the model, so the
   check cannot live in it): `conform(&elements, &notes)`, a list of
   violations, each with its format, class, element index and a short excerpt.
+  A projection its reader refuses as past the document's budget is one
+  violation, `read.refused`, saying which bound it passed.
 - `fdoc dev conform <files>`: reads each file as `convert` does, runs the
   check, and reports violations by format and class (`--json`: one line per
   file). `fdoc convert -f conform` is the same check as an output format, so

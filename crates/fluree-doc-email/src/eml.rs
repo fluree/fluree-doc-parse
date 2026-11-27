@@ -3,6 +3,7 @@
 
 use crate::mime::{self, Headers, Params};
 use crate::{address, date, markup, text, AttachedFile, Body, EmailError, Read};
+use fluree_doc_model::budget::Budget;
 use fluree_doc_model::Message;
 
 /// Deep enough for any real message; a bound so a hostile one cannot
@@ -29,7 +30,11 @@ pub fn read(bytes: &[u8]) -> Result<Read, EmailError> {
         return Err(EmailError::NotAnEmail);
     }
     let mut found = Found::default();
-    walk(&headers, body, &mut found, 0);
+    // One budget for every HTML version of the message, each read once or
+    // twice: twenty alternatives of 150 KB, each with a budget of its own,
+    // took 12 s.
+    let mut budget = Budget::default();
+    walk(&headers, body, &mut found, 0, &mut budget);
     let own = message(&headers);
     let header = crate::header_text(&own, headers.get("date"));
     let body = match (found.plain, found.html) {
@@ -41,19 +46,24 @@ pub fn read(bytes: &[u8]) -> Result<Read, EmailError> {
         (None, None) => Body::None,
     };
     // The images an HTML version the body is not shows: shown in the
-    // message all the same (see `assemble`). Each version is parsed once,
-    // here or as the body.
-    let shown = found
-        .set_aside
-        .iter()
-        .flat_map(|h| fluree_doc_html::cid_ids(h))
-        .collect();
+    // message all the same (see `assemble`). One too large to read shows
+    // images no one can name.
+    let mut shown = Vec::new();
+    let mut shown_unread = false;
+    for h in &found.set_aside {
+        match fluree_doc_html::cid_ids_within(h, &mut budget) {
+            Ok(ids) => shown.extend(ids),
+            Err(_) => shown_unread = true,
+        }
+    }
     Ok(Read {
         own,
         header,
         body,
         attachments: found.attachments,
         shown,
+        shown_unread,
+        budget,
         provenance: "eml",
     })
 }
@@ -143,7 +153,7 @@ fn append(slot: &mut Option<String>, text: String) {
 
 /// Walk a part: a multipart's parts in turn, a text part into the body, and
 /// anything else into the attachments.
-fn walk(h: &Headers, body: &[u8], found: &mut Found, depth: usize) {
+fn walk(h: &Headers, body: &[u8], found: &mut Found, depth: usize, budget: &mut Budget) {
     if depth > MAX_DEPTH {
         return;
     }
@@ -182,7 +192,7 @@ fn walk(h: &Headers, body: &[u8], found: &mut Found, depth: usize) {
                 .iter()
                 .map(|(ph, pb)| {
                     let mut f = Found::default();
-                    walk(ph, pb, &mut f, depth + 1);
+                    walk(ph, pb, &mut f, depth + 1, budget);
                     f
                 })
                 .collect();
@@ -192,7 +202,8 @@ fn walk(h: &Headers, body: &[u8], found: &mut Found, depth: usize) {
             let use_html = match (plain, html) {
                 (Some(p), Some(h)) => {
                     let (p, h) = (&alts[p].plain, &alts[h].html);
-                    markup::unrendered(p.as_deref().unwrap_or(""), h.as_deref().unwrap_or(""))
+                    let (p, h) = (p.as_deref().unwrap_or(""), h.as_deref().unwrap_or(""));
+                    markup::unrendered(p, h, budget)
                 }
                 (p, _) => p.is_none(),
             };
@@ -212,7 +223,7 @@ fn walk(h: &Headers, body: &[u8], found: &mut Found, depth: usize) {
             return;
         }
         for (ph, pb) in &parts {
-            walk(ph, pb, found, depth + 1);
+            walk(ph, pb, found, depth + 1, budget);
         }
         return;
     }

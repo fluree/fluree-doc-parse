@@ -12,4 +12,5 @@ fluree-doc-ooxml.workspace = true
 fluree-doc-xlsx.workspace = true
 
 [dev-dependencies]
-zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
+fluree-doc-model = { workspace = true, features = ["test-util"] }
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }

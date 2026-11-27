@@ -1,0 +1,169 @@
+[package]
+name = "fluree-doc-parse-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+fluree-doc-model = { path = "../crates/fluree-doc-model" }
+fluree-doc-csv = { path = "../crates/fluree-doc-csv" }
+fluree-doc-xls = { path = "../crates/fluree-doc-xls" }
+fluree-doc-doc = { path = "../crates/fluree-doc-doc" }
+fluree-doc-ppt = { path = "../crates/fluree-doc-ppt" }
+fluree-doc-odf = { path = "../crates/fluree-doc-odf" }
+fluree-doc-rtf = { path = "../crates/fluree-doc-rtf" }
+fluree-doc-xps = { path = "../crates/fluree-doc-xps" }
+fluree-doc-docx = { path = "../crates/fluree-doc-docx" }
+fluree-doc-xlsx = { path = "../crates/fluree-doc-xlsx" }
+fluree-doc-pptx = { path = "../crates/fluree-doc-pptx" }
+fluree-doc-pdf = { path = "../crates/fluree-doc-pdf" }
+fluree-doc-email = { path = "../crates/fluree-doc-email" }
+fluree-doc-html = { path = "../crates/fluree-doc-html" }
+fluree-doc-markdown = { path = "../crates/fluree-doc-markdown" }
+fluree-doc-text = { path = "../crates/fluree-doc-text" }
+fluree-doc-image = { path = "../crates/fluree-doc-image" }
+fluree-doc-vision = { path = "../crates/fluree-doc-vision" }
+# Without the built-in OCR engine: detection, and the conversion of a
+# message's attachments, need none of it.
+fluree-doc-cli = { path = "../crates/fluree-doc-cli", default-features = false }
+hayro-syntax = "0.7"
+serde_json = "1"
+
+# Its own workspace, so the main build never compiles it (it needs nightly
+# and libFuzzer) and `cargo fuzz` never builds the main workspace's members.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "csv"
+path = "fuzz_targets/csv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xls"
+path = "fuzz_targets/xls.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xlsb"
+path = "fuzz_targets/xlsb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "doc"
+path = "fuzz_targets/doc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ppt"
+path = "fuzz_targets/ppt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "odf"
+path = "fuzz_targets/odf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rtf"
+path = "fuzz_targets/rtf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xps"
+path = "fuzz_targets/xps.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "docx"
+path = "fuzz_targets/docx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xlsx"
+path = "fuzz_targets/xlsx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pptx"
+path = "fuzz_targets/pptx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pdf"
+path = "fuzz_targets/pdf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "email"
+path = "fuzz_targets/email.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "detect"
+path = "fuzz_targets/detect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "html"
+path = "fuzz_targets/html.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "markdown"
+path = "fuzz_targets/markdown.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text"
+path = "fuzz_targets/text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "image"
+path = "fuzz_targets/image.rs"
+test = false
+doc = false
+bench = false

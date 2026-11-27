@@ -22,10 +22,12 @@ use fluree_doc_xlsx::{GridCell, GridSheet};
 use fluree_doc_xlsx::{MAX_COLUMNS, MAX_ROWS};
 use std::io::{Cursor, Read};
 
-/// The most bytes one part inflates to: 64 MiB.
-pub const MAX_PART_BYTES: u64 = 64 << 20;
-/// The most bytes all parts inflate to: 256 MiB.
-pub const MAX_TOTAL_BYTES: u64 = 256 << 20;
+/// The most bytes one part inflates to: 64 MiB (a sixteenth built for the
+/// fuzz targets, as the budget is, [`fluree_doc_model::budget::scaled`]).
+pub const MAX_PART_BYTES: u64 = fluree_doc_model::budget::scaled(64 << 20);
+/// The most bytes all parts inflate to: 256 MiB (scaled as
+/// [`MAX_PART_BYTES`]).
+pub const MAX_TOTAL_BYTES: u64 = fluree_doc_model::budget::scaled(256 << 20);
 /// The most entries the archive may hold.
 pub const MAX_ENTRIES: usize = 10_000;
 
@@ -269,9 +271,11 @@ fn cell_formats(part: &[u8]) -> Result<Vec<CellFormat>, XlsError> {
 }
 
 /// The shared strings, in order: no more text than their part holds, which
-/// is read to at most [`MAX_PART_BYTES`]. A copy of one is spent where a
+/// is read to at most [`MAX_PART_BYTES`], and each entry spent from
+/// `budget` as a cell slot before it is kept (an empty one is a record of
+/// seven bytes, and a string in the table). A copy of one is spent where a
 /// cell names it.
-fn shared_strings(part: &[u8]) -> Result<Vec<String>, XlsError> {
+fn shared_strings(part: &[u8], budget: &mut Budget) -> Result<Vec<String>, XlsError> {
     let mut out = Vec::new();
     for r in records(part) {
         let r = r?;
@@ -279,6 +283,7 @@ fn shared_strings(part: &[u8]) -> Result<Vec<String>, XlsError> {
         if r.typ == 0x0013 {
             let (s, _) =
                 wide(r.data, 1).ok_or_else(|| malformed("a shared string record is cut short"))?;
+            budget.spend_cells(1).map_err(too_large)?;
             out.push(s);
         }
     }
@@ -364,14 +369,21 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
     let names = pkg.part_names();
     let has = |n: &str| names.iter().any(|p| p == n);
     let strings = match has("xl/sharedStrings.bin") {
-        true => shared_strings(&part(&mut pkg, "xl/sharedStrings.bin")?)?,
+        true => shared_strings(&part(&mut pkg, "xl/sharedStrings.bin")?, budget)?,
         false => Vec::new(),
     };
     let formats = match has("xl/styles.bin") {
         true => cell_formats(&part(&mut pkg, "xl/styles.bin")?)?,
         false => Vec::new(),
     };
-    let rels = pkg.relationships(book);
+    let rels = pkg.relationships(book).map_err(XlsError::Package)?;
+    // Each sheet's part by its relationship id, the first internal one
+    // that has it: found in one lookup per sheet listed, where a scan of
+    // every relationship for each made the listing's cost its square.
+    let mut targets = std::collections::HashMap::new();
+    for r in rels.iter().filter(|r| !r.external) {
+        targets.entry(r.id.as_str()).or_insert(r.target.as_str());
+    }
     let mut sheets = Vec::new();
     let mut total = 0u64;
     let mut merged = 0u64;
@@ -379,15 +391,13 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
     // any name, it would be inflated and laid out again for each.
     let mut read = std::collections::HashSet::new();
     for (name, rel) in listed {
-        let target = rels
-            .iter()
-            .find(|r| r.id == rel && !r.external)
-            .map(|r| r.target.clone())
+        let target = *targets
+            .get(rel.as_str())
             .ok_or_else(|| malformed(&format!("sheet {name} names no part")))?;
-        if !read.insert(target.clone()) {
+        if !read.insert(target) {
             continue;
         }
-        let data = part(&mut pkg, &target)?;
+        let data = part(&mut pkg, target)?;
         let mut cells = Vec::new();
         let mut merges = Vec::new();
         let mut row = 0u32;
@@ -625,6 +635,12 @@ pub(crate) mod tests {
 
     /// [`sheet_book`], its one sheet listed `times` times.
     fn listed_book(strings: &[String], cells: &[Vec<u8>], times: usize) -> Vec<u8> {
+        related_book(strings, cells, times, 0)
+    }
+
+    /// [`listed_book`], its workbook relating `others` ids no sheet names
+    /// before the sheet's.
+    fn related_book(strings: &[String], cells: &[Vec<u8>], times: usize, others: usize) -> Vec<u8> {
         let mut sst = rec(0x9F, &[0u8; 8]);
         for s in strings {
             sst.extend(rec(0x13, &[vec![0u8], wide(s)].concat()));
@@ -640,7 +656,10 @@ pub(crate) mod tests {
             rec(0x92, &[]),
         ]
         .concat();
-        let rels = "<Relationships><Relationship Id=\"rId1\" Target=\"worksheets/sheet1.bin\"/></Relationships>";
+        let rels = format!(
+            "<Relationships>{}<Relationship Id=\"rId1\" Target=\"worksheets/sheet1.bin\"/></Relationships>",
+            "<Relationship Id=\"p\" Target=\"a\"/>".repeat(others)
+        );
         let mut buf = Cursor::new(Vec::new());
         let mut z = zip::ZipWriter::new(&mut buf);
         for (name, data) in [
@@ -730,6 +749,39 @@ pub(crate) mod tests {
             parse_xlsb(&listed_book(&[], &cells, MAX_ENTRIES + 1)),
             Err(XlsError::TooLarge(ref m)) if m.contains("sheets")
         ));
+    }
+
+    #[test]
+    fn each_shared_string_is_spent_before_it_is_kept() {
+        // An empty one is a record of seven bytes and a string in the
+        // table: nine million of them in 100 KB zipped.
+        use fluree_doc_model::budget::CELL_BYTES;
+        let part: Vec<u8> = (0..1_000)
+            .flat_map(|_| rec(0x13, &[vec![0u8], wide("")].concat()))
+            .collect();
+        let slots = |n: u64| Budget::new(n * CELL_BYTES, 0);
+        assert_eq!(
+            shared_strings(&part, &mut slots(1_000)).unwrap().len(),
+            1_000
+        );
+        assert!(matches!(
+            shared_strings(&part, &mut slots(999)),
+            Err(XlsError::TooLarge(ref m)) if m.contains("cells")
+        ));
+    }
+
+    #[test]
+    fn a_sheet_is_found_among_the_relationships_in_one_lookup() {
+        // 10,000 listings and 500,000 relationships: each listing scanning
+        // them all, 1.9 million of them took 28 s in a release build.
+        let bytes = related_book(&[], &[inline(0, "a")], MAX_ENTRIES, 500_000);
+        assert!(parse_xlsb(&bytes).is_ok());
+        fluree_doc_model::scaling::assert_linear(
+            "sheets listed among relationships",
+            500,
+            |n| related_book(&[], &[inline(0, "a")], n, 50 * n),
+            |b| assert!(parse_xlsb(b).is_ok()),
+        );
     }
 
     #[test]

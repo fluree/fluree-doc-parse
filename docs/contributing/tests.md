@@ -87,6 +87,23 @@ list or one it lists that the set does not hold, or a list it lacks.
 [`eval/scanned/README.md`](https://github.com/fluree/fluree-doc-parse/blob/main/eval/scanned/README.md)
 has the details, and [Scanned PDFs](../benchmarks/scanned.md) the numbers.
 
+## Fuzzing
+
+Every reader that takes a file's bytes, but the transcript reader, has a
+cargo-fuzz target under `fuzz/`, a workspace of its own that needs a nightly toolchain. A target
+fails when a reader panics, hangs, runs out of memory or makes more than
+one document's budget allows (see [Limits](../reference/limits.md)).
+
+```bash
+cd fuzz
+cargo +nightly fuzz run xls corpus/xls seeds/xls -O -a -s none -- \
+    -rss_limit_mb=320 -timeout=10 -max_len=262144 -max_total_time=600
+```
+
+[`fuzz/README.md`](https://github.com/fluree/fluree-doc-parse/blob/main/fuzz/README.md)
+lists the targets, how their seeds are made, and how a crash becomes a
+regression test.
+
 ## Adding tests
 
 - **A bug fix** gets a test reproducing the geometry that caused it, not the

@@ -265,7 +265,15 @@ flags naming the e-mail's document (`--doc-iri`, `--base-iri`,
 (see below), not again; another image only when something is configured to
 read it. At most 200 files, of 64 MiB each and 256 MiB in all, are
 converted; one note on stderr counts what was and says why each other was
-not (`no reader`, its error, `TooLarge`, `TooMany`).
+not (`no reader`, its error, `TooLarge`, `TooMany`). Each output is written
+as soon as it is made, and each file is converted within what the message
+leaves of a document's memory budget, since the message is held while its
+files are read: a file the message leaves too little room for fails as too
+large, and the others still convert. A message attached is opened again
+for its own files within that share too, without its body being made a
+second time, so its files are followed even where it was too large to
+convert (see
+[Limits](../reference/limits.md#files-an-e-mail-carries)).
 
 ```bash
 fdoc convert reply.eml --attachments ./att --parse-attachments -f doco
@@ -418,5 +426,7 @@ need only one message header to be read. The same content check applies to
 
 A file with no message headers is not an email: `EmailError::NotAnEmail`.
 A compound file that is not an Outlook message, or cannot be read, is
-`EmailError::Msg`. A message with no body is not an error; its header and
-attachments are still read.
+`EmailError::Msg`. An HTML body that makes more than one document may
+([limits on what one document may make](../reference/limits.md)) is
+`EmailError::TooLarge`. A message with no body is not an error; its header
+and attachments are still read.

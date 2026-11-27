@@ -53,14 +53,33 @@ pub struct Violation {
 pub fn conform(elements: &[Element], notes: &Notes) -> Vec<Violation> {
     let md =
         fluree_doc_model::to_markdown_with_options(elements, notes, &MarkdownOptions::default());
-    let mut out = check(elements, Format::Md, &fluree_doc_markdown::parse(&md));
+    let mut out = check_read(elements, Format::Md, fluree_doc_markdown::parse(&md));
     let xhtml = fluree_doc_model::to_xhtml_with(elements, notes);
-    out.extend(check(
+    out.extend(check_read(
         elements,
         Format::Xhtml,
-        &fluree_doc_html::parse(&xhtml),
+        fluree_doc_html::parse(&xhtml),
     ));
     out
+}
+
+/// [`check`] a read-back, or, where the reader refused the projection as
+/// past the document's budget, one `read.refused` violation saying why:
+/// what the writer made, its reader will not read.
+fn check_read(
+    elements: &[Element],
+    format: Format,
+    read: Result<Vec<Element>, fluree_doc_model::budget::TooLarge>,
+) -> Vec<Violation> {
+    match read {
+        Ok(read) => check(elements, format, &read),
+        Err(e) => vec![Violation {
+            format,
+            class: "read.refused",
+            element: None,
+            detail: e.to_string(),
+        }],
+    }
 }
 
 /// Violations counted by format and class.
@@ -237,7 +256,9 @@ fn reference(elements: &[Element], format: Format) -> Vec<Unit> {
                 } else if !e.text.trim().is_empty() {
                     // A model's table reading, already HTML: the writers
                     // pass it through, and it means what it reads as.
-                    for r in fluree_doc_html::parse(&e.text) {
+                    // One too large to read has nothing to hold the
+                    // read-back to.
+                    for r in fluree_doc_html::parse(&e.text).unwrap_or_default() {
                         out.extend(read_unit(i, &r));
                     }
                 }

@@ -21,10 +21,35 @@
 //!
 //! There is no geometry: HTML positions nothing until it is laid out, so
 //! `bbox` is `None` rather than a zeroed box.
+//!
+//! What a page makes is spent from one [`Budget`]: the parser's tree, its
+//! nodes as the parser makes them; the parser's work where it can be
+//! counted, the attributes its tokenizer compares on each tag, counted from
+//! the tags before it starts, the elements it walks and the siblings it
+//! looks among, and what it does on each formatting element's tag; then as
+//! it is made each element with its links, its text counted before it is
+//! gathered, a table's grid before it is made (a `colspan` of
+//! a billion asks for a billion cells), the cells its spans mark, and what
+//! DoCO copies of its cells. Past it, the page is refused ([`TooLarge`]).
+//! What nests past [`MAX_DEPTH`] is read beside its ancestor at that depth.
+//! The walk that reads the tree is linear in it.
 
+use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
+use std::rc::Rc;
+
+use fluree_doc_model::budget::{char_cost, Budget, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element, Link};
-use html5ever::tendril::TendrilSink;
-use markup5ever_rcdom::{Handle, NodeData, RcDom};
+use html5ever::interface::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
+use html5ever::tendril::StrTendril;
+use html5ever::tokenizer::{
+    BufferQueue, Tag, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
+};
+use html5ever::tree_builder::{Tracer, TreeBuilder, TreeBuilderOpts};
+use html5ever::{Attribute, ExpandedName, LocalName, QualName, TokenizerResult};
+use markup5ever_rcdom::{Handle, Node, NodeData, RcDom};
 
 /// Subtrees that never carry document content. A `<form>` is not one of
 /// them: older pages, and every ASP.NET page, wrap the whole body in one, so
@@ -84,49 +109,209 @@ fn role_of(h: &Handle) -> Option<String> {
         .map(|r| r.to_ascii_lowercase())
 }
 
-/// Is this element furniture? A landmark role can say so, and so does an
-/// `<aside>` that belongs to the page rather than to an article or section —
-/// the rule by which browsers make it a complementary landmark: a sidebar of
-/// other stories, not a factbox inside the story.
-fn is_chrome(h: &Handle) -> bool {
+/// Is this element, with the tag `tag`, furniture? A landmark role can say
+/// so, and so does an `<aside>` that belongs to the page rather than to an
+/// article or section (`in_article`, whether one is among its ancestors) —
+/// the rule by which browsers make it a complementary landmark: a sidebar
+/// of other stories, not a factbox inside the story.
+fn is_chrome(h: &Handle, tag: &str, in_article: bool) -> bool {
     if let Some(role) = role_of(h) {
         return CHROME_ROLES.contains(&role.as_str());
     }
-    tag_of(h).as_deref() == Some("aside") && !has_ancestor(h, &["article", "section"])
+    tag == "aside" && !in_article
 }
 
-fn has_ancestor(h: &Handle, tags: &[&str]) -> bool {
-    let mut at = h.parent.take();
-    h.parent.set(at.clone());
-    while let Some(weak) = at {
-        let Some(p) = weak.upgrade() else { break };
-        if tag_of(&p).is_some_and(|t| tags.contains(&t.as_str())) {
-            return true;
+/// Is this element, with the tag `tag`, a subtree left out of the reading:
+/// never content, undrawn, or the page's furniture? Asked once of each
+/// element, by [`Facts::of`].
+fn left_out(h: &Handle, tag: &str, in_article: bool) -> bool {
+    SKIP.contains(&tag) || undrawn(h) || is_chrome(h, tag, in_article)
+}
+
+/// What the walk asks of an element of the tree, beyond its own tag.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Fact {
+    /// It is left out of the reading, and what is under it ([`left_out`]).
+    skipped: bool,
+    /// An element under it, not left out, lays out as a block.
+    holds_block: bool,
+    /// A table is under it.
+    holds_table: bool,
+}
+
+/// The [`Fact`] of each element of a page's tree, worked out once for the
+/// whole tree before it is walked, in one pass down it and back up.
+///
+/// Asked as the walk went, each was a walk of its own, of a size the page
+/// chooses: whether an element holds a block, down its subtree, at each
+/// level of the walk above it (500 `<span>` around a million `<br>x`, a 5
+/// MB page, took 54 s, and without the `x` 111 s); and whether an `<aside>`
+/// is in an article, up its ancestors (a million of them 500 elements
+/// deep, 18 s). Worked out here, the walk is linear in the tree, which the
+/// budget counts as the parser makes it ([`Sink`]). Only an element with a
+/// fact has an entry: about 70 bytes at the peak, as the table grows (a
+/// million `<aside>`, each left out), within the 112 its node is counted at
+/// beyond the 144 it takes ([`node_slots`]). The map of the others, most
+/// of a page's elements, stays small, and a page of nothing but them reads
+/// as fast as it did.
+#[derive(Default)]
+struct Facts(HashMap<*const Node, Fact, BuildHasherDefault<ByAddress>>);
+
+/// An element on the way down [`Facts::of`]: what it gives the element it
+/// is in, once its own children have given theirs.
+struct Open {
+    node: Handle,
+    block: bool,
+    table: bool,
+    fact: Fact,
+}
+
+impl Facts {
+    fn of(root: &Handle) -> Self {
+        let mut facts = Facts::default();
+        // The nodes still to go down to, each with whether it is in an
+        // article or a section; `None` where the element last opened is
+        // done.
+        let mut todo: Vec<Option<(Handle, bool)>> = Vec::new();
+        down_to(&mut todo, root, false);
+        let mut open: Vec<Open> = Vec::new();
+        while let Some(next) = todo.pop() {
+            let Some((h, in_article)) = next else {
+                let Some(done) = open.pop() else { break };
+                if done.fact != Fact::default() {
+                    facts.0.insert(Rc::as_ptr(&done.node), done.fact);
+                }
+                if let Some(parent) = open.last_mut() {
+                    parent.fact.holds_block |=
+                        !done.fact.skipped && (done.block || done.fact.holds_block);
+                    parent.fact.holds_table |= done.table || done.fact.holds_table;
+                }
+                continue;
+            };
+            let Some(tag) = tag_of(&h) else { continue };
+            let inside = in_article || matches!(tag.as_str(), "article" | "section");
+            todo.push(None);
+            down_to(&mut todo, &h, inside);
+            open.push(Open {
+                fact: Fact {
+                    skipped: left_out(&h, &tag, in_article),
+                    ..Fact::default()
+                },
+                block: is_block(&tag),
+                table: tag == "table",
+                node: h,
+            });
         }
-        at = p.parent.take();
-        p.parent.set(at.clone());
+        facts
     }
-    false
+
+    /// `h`'s facts.
+    fn of_node(&self, h: &Handle) -> Fact {
+        self.0.get(&Rc::as_ptr(h)).copied().unwrap_or_default()
+    }
+
+    /// Is this subtree left out of the reading?
+    fn skipped(&self, h: &Handle) -> bool {
+        self.of_node(h).skipped
+    }
+
+    /// Does anything under this node lay out as a block?
+    fn holds_block(&self, h: &Handle) -> bool {
+        self.of_node(h).holds_block
+    }
+
+    /// Is a table under this node?
+    fn holds_table(&self, h: &Handle) -> bool {
+        self.of_node(h).holds_table
+    }
+
+    /// Content that flows inline: text, and elements with no block inside.
+    fn is_inline(&self, h: &Handle) -> bool {
+        match tag_of(h) {
+            Some(t) => !is_block(&t) && !self.holds_block(h),
+            None => true,
+        }
+    }
 }
 
-/// Is this subtree left out of the reading: never content, undrawn, or the
-/// page's furniture?
-fn skipped(h: &Handle) -> bool {
-    tag_of(h).is_some_and(|t| SKIP.contains(&t.as_str())) || undrawn(h) || is_chrome(h)
+/// Set `h`'s children to be gone down to next, in order, each with
+/// `in_article`.
+fn down_to(todo: &mut Vec<Option<(Handle, bool)>>, h: &Handle, in_article: bool) {
+    let children = h.children.borrow();
+    todo.extend(children.iter().rev().map(|c| Some((c.clone(), in_article))));
 }
 
-/// Parse an HTML document into elements in reading order.
+/// Hashes a node by its address, all a [`Facts`] key is: the default
+/// hasher took a third of the pass.
+#[derive(Default)]
+struct ByAddress(u64);
+
+impl Hasher for ByAddress {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.write_u64(u64::from(*b));
+        }
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        // Spread over the high bits, then folded into the low ones, which
+        // an address, aligned, leaves at zero.
+        let x = (self.0 ^ n).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        self.0 = x ^ (x >> 29);
+    }
+}
+
+/// Parse an HTML document into elements in reading order, or say why it
+/// makes more than one document may.
 ///
 /// A page that declares no headings but shows them by keyword and number,
 /// as a statute or a contract does (`CHAPTER IV`, `Article 30`), has them
 /// read as section titles: see [`fluree_doc_model::outline`]. A mail body,
 /// read through [`parse_with_quote_depth`], is not.
-pub fn parse(src: &str) -> Vec<Element> {
-    let mut elements = read(src, false).0;
+pub fn parse(src: &str) -> Result<Vec<Element>, TooLarge> {
+    parse_within(src, &mut Budget::default())
+}
+
+/// [`parse`], spending `budget`, which is left with what the page leaves
+/// of it. The pages of one document share its budget this way, as the
+/// HTML versions of an e-mail do; a page refused spends all of it, since
+/// the parser did that much work before it stopped.
+pub fn parse_within(src: &str, budget: &mut Budget) -> Result<Vec<Element>, TooLarge> {
+    let mut elements = shared(budget, |b| read_within(src, false, b))?.0;
     if fluree_doc_model::outline::infer_headings(&mut elements) {
         number(&mut elements);
     }
-    elements
+    Ok(elements)
+}
+
+/// Run `read` on a copy of `budget`, then leave `budget` with what the
+/// copy has left; or, where `read` refuses, with nothing left to work: the
+/// parser and walk ran to where they stopped, and a document that asks
+/// for another read of the same size is refused at once, not after as
+/// long again.
+fn shared<T>(
+    budget: &mut Budget,
+    read: impl FnOnce(&mut Budget) -> Result<T, TooLarge>,
+) -> Result<T, TooLarge> {
+    let mut copy = budget.clone();
+    match read(&mut copy) {
+        Ok(t) => {
+            *budget = copy;
+            Ok(t)
+        }
+        Err(e) => {
+            let _ = budget.spend_work(u64::MAX);
+            Err(e)
+        }
+    }
 }
 
 fn number(elements: &mut [Element]) {
@@ -206,7 +391,7 @@ fn repair_c1(c: char) -> char {
 /// alternative text and its `figure` the `cid:` URL as the message writes
 /// it, for the e-mail reader to resolve to the part. An image on the web is
 /// not in the message, and is left out as [`parse`] leaves every image out.
-pub fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
+pub fn parse_with_quote_depth(src: &str) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
     read(src, true)
 }
 
@@ -215,24 +400,48 @@ pub fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
 /// scheme in any case, percent signs decoded, an image the page does not
 /// draw left out, and so is one outside the content the page marks as its
 /// main, which the body is read for alone. What tells which of a message's
-/// files its HTML shows.
+/// files its HTML shows. A page too large to read shows none: reading it is
+/// refused.
 pub fn cid_ids(src: &str) -> Vec<String> {
-    ids_in(&dom(src))
+    cid_ids_within(src, &mut Budget::default()).unwrap_or_default()
 }
+
+/// [`cid_ids`], spending `budget` as [`parse_within`] does, and saying
+/// when the page is too large to read rather than showing none.
+pub fn cid_ids_within(src: &str, budget: &mut Budget) -> Result<Vec<String>, TooLarge> {
+    shared(budget, |b| {
+        let (dom, left) = build(src, b.clone())?;
+        *b = left;
+        Ok(ids_in(&dom))
+    })
+}
+
+/// What [`parse_message`] reads in a message's HTML body: its elements,
+/// how many quotations enclose each, and the content ids it shows.
+pub type MessageBody = (Vec<Element>, Vec<usize>, Vec<String>);
 
 /// [`parse_with_quote_depth`] and [`cid_ids`] from one parse of the page:
 /// what a message's HTML body is read for.
-pub fn parse_message(src: &str) -> (Vec<Element>, Vec<usize>, Vec<String>) {
-    let dom = dom(src);
-    let (elements, depths) = read_dom(&dom, true);
-    (elements, depths, ids_in(&dom))
+pub fn parse_message(src: &str) -> Result<MessageBody, TooLarge> {
+    parse_message_within(src, &mut Budget::default())
+}
+
+/// [`parse_message`], spending `budget` as [`parse_within`] does.
+pub fn parse_message_within(src: &str, budget: &mut Budget) -> Result<MessageBody, TooLarge> {
+    shared(budget, |b| {
+        let (dom, left) = build(src, b.clone())?;
+        *b = left;
+        let (elements, depths) = read_dom(&dom, b, true)?;
+        Ok((elements, depths, ids_in(&dom)))
+    })
 }
 
 fn ids_in(dom: &RcDom) -> Vec<String> {
+    let facts = Facts::of(&dom.document);
     let mut found = Vec::new();
-    for root in read_roots(dom) {
+    for root in read_roots(dom, &facts) {
         for c in root.children.borrow().iter() {
-            cid_images(c, &mut found);
+            cid_images(c, &facts, &mut found);
         }
     }
     found.into_iter().map(|(id, _)| id).collect()
@@ -242,10 +451,10 @@ fn ids_in(dom: &RcDom) -> Vec<String> {
 /// it holds text, else the whole page. What lies outside a main is the site
 /// around the document. One whose main holds no text has marked it wrongly,
 /// and is read whole.
-fn read_roots(dom: &RcDom) -> Vec<Handle> {
+fn read_roots(dom: &RcDom, facts: &Facts) -> Vec<Handle> {
     let mut mains = Vec::new();
-    find_mains(&dom.document, &mut mains);
-    mains.retain(|m| !text_of(m).0.is_empty());
+    find_mains(&dom.document, facts, &mut mains);
+    mains.retain(|m| has_text(m, facts));
     if mains.is_empty() {
         vec![dom.document.clone()]
     } else {
@@ -253,42 +462,639 @@ fn read_roots(dom: &RcDom) -> Vec<Handle> {
     }
 }
 
-fn dom(src: &str) -> RcDom {
-    html5ever::parse_document(RcDom::default(), Default::default())
-        .from_utf8()
-        .read_from(&mut src.as_bytes())
-        .unwrap_or_default()
-}
-
 /// The walk, with or without a message's own images.
-fn read(src: &str, cid_images: bool) -> (Vec<Element>, Vec<usize>) {
-    read_dom(&dom(src), cid_images)
+fn read(src: &str, cid_images: bool) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
+    read_within(src, cid_images, &mut Budget::default())
 }
 
-fn read_dom(dom: &RcDom, cid_images: bool) -> (Vec<Element>, Vec<usize>) {
+/// [`read`], against `budget`, which is left with what the page leaves.
+fn read_within(
+    src: &str,
+    cid_images: bool,
+    budget: &mut Budget,
+) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
+    let (dom, left) = build(src, budget.clone())?;
+    *budget = left;
+    read_dom(&dom, budget, cid_images)
+}
+
+/// The walk of a page's tree, spending `budget`, which is left with what
+/// the walk leaves.
+fn read_dom(
+    dom: &RcDom,
+    budget: &mut Budget,
+    cid_images: bool,
+) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
+    let facts = Facts::of(&dom.document);
     let mut out = Out {
         cid_images,
+        budget: budget.clone(),
+        facts,
         ..Out::default()
     };
     // A page that marks its main content is read for that alone.
-    for root in read_roots(dom) {
+    for root in read_roots(dom, &out.facts) {
         walk(&root, &mut out);
     }
+    *budget = out.budget.clone();
+    if let Some(e) = out.over {
+        return Err(e);
+    }
     number(&mut out.elements);
-    (out.elements, out.depths)
+    Ok((out.elements, out.depths))
+}
+
+/// Parse `src` into a tree, spending `budget` on what the parser does: its
+/// tokenizer's work the tree does not show, counted before it starts
+/// ([`attribute_steps`]); the tree builder's, as it does it, on each
+/// formatting element's tag ([`Tokens`]) and through the sink ([`Sink`]);
+/// and the tree as the parser makes it ([`Sink`]). Then set what nests past
+/// [`MAX_DEPTH`] beside its ancestor at that depth. The budget comes back
+/// with what is left of it.
+fn build(src: &str, mut budget: Budget) -> Result<(RcDom, Budget), TooLarge> {
+    budget.spend_work(attribute_steps(src))?;
+    let sink = Sink {
+        dom: RcDom::default(),
+        budget: RefCell::new(budget),
+        over: RefCell::new(None),
+    };
+    // What `html5ever::parse_document` puts together, with the tree builder
+    // behind [`Tokens`].
+    let builder = TreeBuilder::new(sink, TreeBuilderOpts::default());
+    let tokenizer = Tokenizer::new(Tokens { builder }, TokenizerOpts::default());
+    let input = BufferQueue::default();
+    // Fed a little at a time, so that a page past its budget stops being
+    // parsed close to where it passed it: the tokenizer goes on to the end
+    // of what it was given, and a run of short blocks under many formatting
+    // elements re-makes them all at each block.
+    let mut rest = src;
+    while !rest.is_empty() && tokenizer.sink.builder.sink.live() {
+        let mut at = rest.len().min(FEED_BYTES);
+        while !rest.is_char_boundary(at) {
+            at += 1;
+        }
+        input.push_back(StrTendril::from_slice(&rest[..at]));
+        // The tokenizer pauses on a `<script>` it has closed and on a
+        // charset a `<meta>` declares, with the rest of the chunk still
+        // queued: the page is decoded already, so neither changes what is
+        // read, and it is fed again until it has read all it was given.
+        // Stopped at a charset, a short page lost everything after its
+        // `<meta charset>`, its whole body.
+        while !matches!(tokenizer.feed(&input), TokenizerResult::Done) {}
+        rest = &rest[at..];
+    }
+    tokenizer.end();
+    let sink = tokenizer.sink.builder.sink;
+    if let Some(e) = sink.over.into_inner() {
+        return Err(e);
+    }
+    flatten(&sink.dom.document);
+    Ok((sink.dom, sink.budget.into_inner()))
+}
+
+/// How much of a page the parser is given at once: the most it does past
+/// the page's budget, before it is stopped.
+const FEED_BYTES: usize = 256;
+
+/// The deepest a page's elements nest as it is read: a browser stops
+/// nesting at 512 (Chromium sets deeper elements beside their parent), and
+/// so does the reader, once the page is parsed. The walk recurses down the
+/// tree, each level a few hundred bytes of stack, and a table four levels
+/// (`table`, `tbody`, `tr`, `td`): 1,000 tables nested, a 30 KB page,
+/// overflowed a 2 MiB stack.
+pub const MAX_DEPTH: usize = 512;
+
+/// Set each node nested past [`MAX_DEPTH`] beside its ancestor at that
+/// depth, in the order the page has them, as a browser does: what is
+/// inside them is read, only no longer inside them.
+fn flatten(root: &Handle) {
+    let mut stack = vec![(root.clone(), 0usize)];
+    while let Some((h, d)) = stack.pop() {
+        if d + 1 < MAX_DEPTH {
+            stack.extend(h.children.borrow().iter().map(|c| (c.clone(), d + 1)));
+            continue;
+        }
+        // Its children are at the deepest a page nests: their descendants
+        // become their siblings, each after the node it was inside.
+        let children = std::mem::take(&mut *h.children.borrow_mut());
+        let mut flat = Vec::with_capacity(children.len());
+        let mut pending: Vec<Handle> = children.into_iter().rev().collect();
+        while let Some(n) = pending.pop() {
+            let below = std::mem::take(&mut *n.children.borrow_mut());
+            pending.extend(below.into_iter().rev());
+            n.parent.set(Some(Rc::downgrade(&h)));
+            flat.push(n);
+        }
+        *h.children.borrow_mut() = flat;
+    }
+}
+
+/// What the parser makes of a page, spent from the page's budget as it is
+/// made: each node at two cell slots (a node is 144 bytes, an element's,
+/// a text's or a comment's, and its place among its parent's children),
+/// and one for each 128 bytes of its text; an element's attributes at one
+/// slot each and one for each 128 bytes of its value. Counted here rather
+/// than from the page's tags, because the parser makes elements the page
+/// does not write: a formatting element left open (`<b>`) is made again at
+/// each block after it, so 400 of them over N short paragraphs are 400 × N
+/// elements, a 91 KB page that aborted the process at 4 GB.
+///
+/// The tree builder's own work is spent here too, as steps, where it asks
+/// the sink: the name of each open element it looks at and each pair of
+/// nodes it compares, one step each. That is how it walks the elements
+/// open around a node, to know what is in scope (40,000 nested `<div>`
+/// took 3 s, 200,000 over two minutes), to find what an end tag closes
+/// (20,000 `<span>` left open, then 200,000 `</zz>`, ran past a minute),
+/// or to find a formatting element among those open; and finding a node
+/// among its siblings, to set a node before another (a table's misplaced
+/// content, set before it) or to take one out, costs a step for each of
+/// them. What the tree builder does on a formatting element's tag without
+/// asking the sink is spent by [`Tokens`].
+///
+/// Once the budget is spent, the sink keeps nothing more: it makes what the
+/// parser asks for bare, attaches nothing, and changes nothing in the tree,
+/// so that the parser runs on to where it is stopped ([`build`]) and the
+/// page is refused.
+struct Sink {
+    dom: RcDom,
+    budget: RefCell<Budget>,
+    /// Why the page is refused, once its budget is spent.
+    over: RefCell<Option<TooLarge>>,
+}
+
+/// What finding `h` among its parent's children takes: a step for each
+/// [`SIBLINGS_A_STEP`] of them.
+fn sibling_steps(h: &Handle) -> u64 {
+    let parent = h.parent.take();
+    h.parent.set(parent.clone());
+    let siblings = parent
+        .and_then(|w| w.upgrade())
+        .map_or(0, |p| p.children.borrow().len() as u64);
+    siblings.div_ceil(SIBLINGS_A_STEP)
+}
+
+/// Siblings looked at for a step: each is a pointer compared, half a
+/// nanosecond, where a step of the parser's is several. 500,000 nodes set
+/// before a table, among 200,000 siblings and those set before, took 105
+/// s; an old layout page sets a few hundred, among a few thousand.
+const SIBLINGS_A_STEP: u64 = 32;
+
+/// Cell slots a node of the tree takes with `bytes` of its own text.
+fn node_slots(bytes: usize) -> u64 {
+    2 + bytes as u64 / 128
+}
+
+/// Cell slots an attribute takes with a value of `bytes`.
+fn attribute_slots(bytes: usize) -> u64 {
+    1 + bytes as u64 / 128
+}
+
+impl Sink {
+    /// Spend from the budget; `false`, and the page refused, where it is
+    /// spent.
+    fn spend(&self, f: impl FnOnce(&mut Budget) -> Result<(), TooLarge>) -> bool {
+        let mut over = self.over.borrow_mut();
+        if over.is_some() {
+            return false;
+        }
+        match f(&mut self.budget.borrow_mut()) {
+            Ok(()) => true,
+            Err(e) => {
+                *over = Some(e);
+                false
+            }
+        }
+    }
+
+    fn live(&self) -> bool {
+        self.over.borrow().is_none()
+    }
+
+    /// Spend a step of the tree builder's.
+    fn step(&self) {
+        self.spend(|b| b.spend_work(1));
+    }
+
+    /// Spend what setting `child` in the tree costs: `steps`, and a text
+    /// node, where it is text.
+    fn spend_child(&self, steps: u64, child: &NodeOrText<Handle>) -> bool {
+        if !self.spend(|b| b.spend_work(steps)) {
+            return false;
+        }
+        match child {
+            NodeOrText::AppendText(t) => self.spend(|b| b.spend_cells(node_slots(t.len()))),
+            NodeOrText::AppendNode(_) => true,
+        }
+    }
+
+    fn spend_attrs(&self, attrs: &[Attribute]) -> bool {
+        let slots = attrs.iter().fold(0u64, |n, a| {
+            n.saturating_add(attribute_slots(a.value.len()))
+        });
+        self.spend(|b| b.spend_cells(slots))
+    }
+}
+
+impl TreeSink for Sink {
+    type Handle = Handle;
+    type Output = Self;
+    type ElemName<'a> = ExpandedName<'a>;
+
+    fn finish(self) -> Self {
+        self
+    }
+
+    // A page's errors are not reported, and a page can make one at each
+    // byte.
+    fn parse_error(&self, _: Cow<'static, str>) {}
+
+    fn get_document(&self) -> Handle {
+        self.dom.get_document()
+    }
+
+    fn elem_name<'a>(&'a self, target: &'a Handle) -> ExpandedName<'a> {
+        self.step();
+        self.dom.elem_name(target)
+    }
+
+    fn create_element(&self, name: QualName, attrs: Vec<Attribute>, flags: ElementFlags) -> Handle {
+        if self.spend(|b| b.spend_cells(node_slots(0))) && self.spend_attrs(&attrs) {
+            self.dom.create_element(name, attrs, flags)
+        } else {
+            self.dom.create_element(name, Vec::new(), flags)
+        }
+    }
+
+    fn create_comment(&self, text: StrTendril) -> Handle {
+        if self.spend(|b| b.spend_cells(node_slots(text.len()))) {
+            self.dom.create_comment(text)
+        } else {
+            self.dom.create_comment(StrTendril::new())
+        }
+    }
+
+    fn create_pi(&self, target: StrTendril, data: StrTendril) -> Handle {
+        if self.spend(|b| b.spend_cells(node_slots(target.len() + data.len()))) {
+            self.dom.create_pi(target, data)
+        } else {
+            self.dom.create_pi(StrTendril::new(), StrTendril::new())
+        }
+    }
+
+    fn append(&self, parent: &Handle, child: NodeOrText<Handle>) {
+        if self.spend_child(1, &child) {
+            self.dom.append(parent, child);
+        }
+    }
+
+    fn append_based_on_parent_node(
+        &self,
+        element: &Handle,
+        prev_element: &Handle,
+        child: NodeOrText<Handle>,
+    ) {
+        // Set before `element` where it has a parent, found among its
+        // children.
+        if self.spend_child(sibling_steps(element).saturating_add(1), &child) {
+            self.dom
+                .append_based_on_parent_node(element, prev_element, child);
+        }
+    }
+
+    fn append_doctype_to_document(
+        &self,
+        name: StrTendril,
+        public_id: StrTendril,
+        system_id: StrTendril,
+    ) {
+        let bytes = name.len() + public_id.len() + system_id.len();
+        if self.spend(|b| b.spend_cells(node_slots(bytes))) {
+            self.dom
+                .append_doctype_to_document(name, public_id, system_id);
+        }
+    }
+
+    fn get_template_contents(&self, target: &Handle) -> Handle {
+        self.dom.get_template_contents(target)
+    }
+
+    fn same_node(&self, x: &Handle, y: &Handle) -> bool {
+        self.step();
+        self.dom.same_node(x, y)
+    }
+
+    fn set_quirks_mode(&self, mode: QuirksMode) {
+        self.dom.set_quirks_mode(mode);
+    }
+
+    fn append_before_sibling(&self, sibling: &Handle, new_node: NodeOrText<Handle>) {
+        if self.spend_child(sibling_steps(sibling).saturating_add(1), &new_node) {
+            self.dom.append_before_sibling(sibling, new_node);
+        }
+    }
+
+    fn add_attrs_if_missing(&self, target: &Handle, attrs: Vec<Attribute>) {
+        // Each is looked for among the element's own: a page that repeats
+        // `<html>` or `<body>`, each time with an attribute of its own,
+        // costs the square of their number.
+        let NodeData::Element { attrs: own, .. } = &target.data else {
+            return;
+        };
+        let held = own.borrow().len() as u64;
+        let n = attrs.len() as u64;
+        if self.spend(|b| b.spend_work(held.saturating_add(n))) && self.spend_attrs(&attrs) {
+            self.dom.add_attrs_if_missing(target, attrs);
+        }
+    }
+
+    fn remove_from_parent(&self, target: &Handle) {
+        if self.spend(|b| b.spend_work(sibling_steps(target))) {
+            self.dom.remove_from_parent(target);
+        }
+    }
+
+    fn reparent_children(&self, node: &Handle, new_parent: &Handle) {
+        let moved = node.children.borrow().len() as u64;
+        if self.spend(|b| b.spend_work(moved)) {
+            self.dom.reparent_children(node, new_parent);
+        }
+    }
+
+    fn is_mathml_annotation_xml_integration_point(&self, handle: &Handle) -> bool {
+        self.dom.is_mathml_annotation_xml_integration_point(handle)
+    }
+
+    // A `<select>` is never read, and copying its chosen option into it
+    // would make a copy the budget does not see.
+    fn maybe_clone_an_option_into_selectedcontent(&self, _: &Handle) {}
+}
+
+/// Formatting elements: those the tree builder keeps in its list of active
+/// formatting elements, to make again where they are left open.
+const FORMATTING: &[&str] = &[
+    "a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u",
+];
+
+/// The tree builder, given the page's tokens through this, which spends
+/// what it does on a formatting element's tag without asking the sink,
+/// before it does it. A start tag is compared with each formatting element
+/// of its name in the list, attributes and all: each comparison copies and
+/// sorts the attributes of both (5,000 `<b>` of 100 attributes each, 2 MB,
+/// ran past two minutes; without attributes, 0.1 s). An end tag looks for
+/// its formatting element down the list by name alone, which may hold many
+/// no longer open: 20,000 `<i>` closed by a `</p>`, then a million `</b>`,
+/// took 55 s. The list is not in reach, so all the tree builder holds is
+/// counted, its open elements with it: a step each, and for a start tag the
+/// comparison with each of its name. Once the page is refused the tree
+/// builder is given nothing more.
+struct Tokens {
+    builder: TreeBuilder<Handle, Sink>,
+}
+
+/// Steps to copy and sort `n` attributes.
+fn sorting(n: u64) -> u64 {
+    n.saturating_mul(1 + u64::from(u64::BITS - n.leading_zeros()))
+}
+
+/// What a tag of a formatting element costs, from what the tree builder
+/// holds: a step each, and for a start tag, comparing its attributes with
+/// those of each element of its name, once each (one both open and in the
+/// list is held twice).
+struct Held<'a> {
+    name: &'a LocalName,
+    /// The start tag's attributes, sorted at each comparison; `None` for
+    /// an end tag, which compares none.
+    attrs: Option<u64>,
+    compared: RefCell<HashSet<*const Node>>,
+    steps: Cell<u64>,
+}
+
+impl Tracer for Held<'_> {
+    type Handle = Handle;
+
+    fn trace_handle(&self, h: &Handle) {
+        let mut n = 1u64;
+        if let (Some(k), NodeData::Element { name, attrs, .. }) = (self.attrs, &h.data) {
+            let compare = sorting(k).saturating_add(sorting(attrs.borrow().len() as u64));
+            if compare > 0
+                && name.local == *self.name
+                && self.compared.borrow_mut().insert(Rc::as_ptr(h))
+            {
+                n = n.saturating_add(compare);
+            }
+        }
+        self.steps.set(self.steps.get().saturating_add(n));
+    }
+}
+
+impl Tokens {
+    fn spend_formatting(&self, tag: &Tag) {
+        if !FORMATTING.contains(&&*tag.name) {
+            return;
+        }
+        let held = Held {
+            name: &tag.name,
+            attrs: (tag.kind == html5ever::tokenizer::StartTag).then_some(tag.attrs.len() as u64),
+            compared: RefCell::default(),
+            steps: Cell::new(0),
+        };
+        self.builder.trace_handles(&held);
+        let steps = held.steps.get();
+        self.builder.sink.spend(|b| b.spend_work(steps));
+    }
+}
+
+impl TokenSink for Tokens {
+    type Handle = Handle;
+
+    fn process_token(&self, token: Token, line: u64) -> TokenSinkResult<Handle> {
+        if let Token::TagToken(tag) = &token {
+            self.spend_formatting(tag);
+        }
+        if !self.builder.sink.live() {
+            return TokenSinkResult::Continue;
+        }
+        self.builder.process_token(token, line)
+    }
+
+    fn end(&self) {
+        self.builder.end();
+    }
+
+    fn adjusted_current_node_present_but_not_in_html_namespace(&self) -> bool {
+        self.builder
+            .adjusted_current_node_present_but_not_in_html_namespace()
+    }
+}
+
+/// Elements whose content is text up to their end tag, not markup.
+const RAW_TEXT: &[&str] = &[
+    "iframe", "noembed", "noframes", "noscript", "script", "style", "textarea", "title", "xmp",
+];
+
+/// What the parser's tokenizer costs that the tree does not show, in steps,
+/// counted before the page is parsed: for each tag, the square of its
+/// attributes, halved, since each is looked for among those before it (two
+/// million on one tag ran past five minutes; an end tag's are looked for
+/// too, then dropped). Read from a scan of the tags, comments and the text
+/// of a `<script>` passed over.
+///
+/// The scan passes over no more than the tokenizer does, so as never to
+/// count less: a comment ends at the first place it may (`-->`, `--!>`, or
+/// at once, `<!-->` and `<!--->`), and an element's text up to its end tag
+/// (`<script>`, `<title>`) is passed over only until the page opens an
+/// `<svg>`, a `<math>` or a `<frameset>`, where such a tag may open no
+/// such text. Passing over too little counts tags that are not, which only
+/// counts more: 100,000 attributes behind `<!-->` or `<svg><title>` took
+/// 15 to 19 s.
+///
+/// The rest of what parsing costs is counted as the tree is built
+/// ([`Sink`], [`Tokens`]), where the parser makes it.
+fn attribute_steps(src: &str) -> u64 {
+    let b = src.as_bytes();
+    let find = |from: usize, pat: &[u8]| {
+        b.get(from..)
+            .and_then(|s| s.windows(pat.len()).position(|w| w == pat))
+            .map(|k| from + k)
+    };
+    let name_end = |from: usize| {
+        from + b[from..]
+            .iter()
+            .take_while(|c| !c.is_ascii_whitespace() && !matches!(c, b'/' | b'>'))
+            .count()
+    };
+    // A tag's attributes from `i`, its name's end, to the tag's end: each
+    // name, then its value, quoted or not. Where the tag ends, and how many
+    // attributes it has.
+    let attributes = |mut i: usize| {
+        let mut attrs = 0u64;
+        while i < b.len() {
+            match b[i] {
+                b'>' => return (i + 1, attrs),
+                c if c.is_ascii_whitespace() || c == b'/' => i += 1,
+                _ => {
+                    attrs += 1;
+                    i += b[i..]
+                        .iter()
+                        .take_while(|c| {
+                            !c.is_ascii_whitespace() && !matches!(c, b'=' | b'>' | b'/')
+                        })
+                        .count()
+                        .max(1);
+                    while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+                        i += 1;
+                    }
+                    if b.get(i) != Some(&b'=') {
+                        continue;
+                    }
+                    i += 1;
+                    while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+                        i += 1;
+                    }
+                    match b.get(i) {
+                        Some(&q @ (b'"' | b'\'')) => {
+                            i = b[i + 1..]
+                                .iter()
+                                .position(|&c| c == q)
+                                .map_or(b.len(), |k| i + 1 + k + 1);
+                        }
+                        _ => {
+                            i += b[i..]
+                                .iter()
+                                .take_while(|c| !c.is_ascii_whitespace() && **c != b'>')
+                                .count();
+                        }
+                    }
+                }
+            }
+        }
+        (b.len(), attrs)
+    };
+    let pairs = |n: u64| n.saturating_mul(n.saturating_sub(1)) / 2;
+    let mut steps = 0u64;
+    // Whether a tag of an element of text may no longer open its text: in
+    // SVG or MathML it is markup, and a frameset ignores the tag.
+    let mut foreign = false;
+    let mut i = 0;
+    while let Some(k) = b[i..].iter().position(|&c| c == b'<') {
+        i += k + 1;
+        match b.get(i) {
+            Some(b'!') if b[i..].starts_with(b"!--") => {
+                // From the opening's own dashes, which `<!-->` and `<!--->`
+                // end on, to the first `--` a `>` or `!>` follows: one pass
+                // forward. Looked for each on its own, the ending a page
+                // never writes (`--!>`) was looked for to the end of the
+                // page from every comment: 600 KB of `<!-- c -->` took 78 s.
+                let mut at = i + 1;
+                i = loop {
+                    let Some(e) = find(at, b"--") else {
+                        break b.len();
+                    };
+                    match b.get(e + 2) {
+                        Some(b'>') => break e + 3,
+                        Some(b'!') if b.get(e + 3) == Some(&b'>') => break e + 4,
+                        _ => at = e + 1,
+                    }
+                };
+            }
+            Some(b'!' | b'?') => {
+                i = find(i, b">").map_or(b.len(), |e| e + 1);
+            }
+            Some(b'/') if b.get(i + 1).is_some_and(u8::is_ascii_alphabetic) => {
+                let (to, attrs) = attributes(name_end(i + 1));
+                steps = steps.saturating_add(pairs(attrs));
+                i = to;
+            }
+            Some(c) if c.is_ascii_alphabetic() => {
+                let end = name_end(i);
+                let tag = &b[i..end];
+                let (to, attrs) = attributes(end);
+                steps = steps.saturating_add(pairs(attrs));
+                i = to;
+                foreign |= [&b"svg"[..], b"math", b"frameset"]
+                    .iter()
+                    .any(|t| t.eq_ignore_ascii_case(tag));
+                if foreign {
+                    continue;
+                }
+                if tag.eq_ignore_ascii_case(b"plaintext") {
+                    break;
+                }
+                if RAW_TEXT
+                    .iter()
+                    .any(|t| t.as_bytes().eq_ignore_ascii_case(tag))
+                {
+                    // Its text runs to the first end tag of its name.
+                    let mut at = i;
+                    i = loop {
+                        let Some(e) = find(at, b"</") else {
+                            break b.len();
+                        };
+                        let close = b.get(e + 2..e + 2 + tag.len());
+                        if close.is_some_and(|c| c.eq_ignore_ascii_case(tag)) {
+                            break e;
+                        }
+                        at = e + 2;
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+    steps
 }
 
 /// The outermost `<main>` elements, or elements in the `main` role, that the
 /// page draws.
-fn find_mains(h: &Handle, out: &mut Vec<Handle>) {
+fn find_mains(h: &Handle, facts: &Facts, out: &mut Vec<Handle>) {
     for c in h.children.borrow().iter() {
-        if tag_of(c).is_none() || skipped(c) {
+        if tag_of(c).is_none() || facts.skipped(c) {
             continue;
         }
         if tag_of(c).as_deref() == Some("main") || role_of(c).as_deref() == Some("main") {
             out.push(c.clone());
         } else {
-            find_mains(c, out);
+            find_mains(c, facts, out);
         }
     }
 }
@@ -302,6 +1108,13 @@ struct Out {
     depth: usize,
     /// Read a message's own images (`<img src="cid:…">`) as figures.
     cid_images: bool,
+    /// What the page may still make.
+    budget: Budget,
+    /// Why the page is refused, once its budget is spent: nothing more is
+    /// kept.
+    over: Option<TooLarge>,
+    /// What the walk asks of each node of the page.
+    facts: Facts,
     /// How many list items the walk is inside: a list item's depth.
     items: usize,
     /// Whether the walk is directly in a list, not in one of its items.
@@ -309,12 +1122,89 @@ struct Out {
 }
 
 impl Out {
-    fn push(&mut self, mut e: Element) {
+    /// Keep `e`, it, its text and its links spent first.
+    fn push(&mut self, e: Element) {
+        if self.spend(|b| b.spend_text(&e.text)) {
+            self.push_gathered(e);
+        }
+    }
+
+    /// Keep `e`, whose text was spent as it was gathered ([`Out::text`]),
+    /// it and its links spent first.
+    fn push_gathered(&mut self, e: Element) {
+        let links = e.links.as_deref().unwrap_or_default();
+        if self.spend(|b| {
+            b.spend_elements(1)?;
+            b.spend_links(links)
+        }) {
+            self.keep(e);
+        }
+    }
+
+    /// The text `gather` gathers, with its links, spent before it is made:
+    /// gathered once to count it, copying nothing, then made. `None` once
+    /// the page is refused.
+    ///
+    /// Made first and spent after, with a map of each of its bytes to
+    /// place its links by, a paragraph took 20 bytes of memory for each
+    /// byte of it before it was spent: one of 193 MB, which the budget
+    /// refuses, aborted the process under 4 GB.
+    fn text(&mut self, gather: impl Fn(&mut Gather)) -> Option<(String, Vec<Link>)> {
+        if self.over.is_some() {
+            return None;
+        }
+        let mut count = Gather::new(&self.facts, false);
+        gather(&mut count);
+        let cost = count.cost;
+        if !self.spend(|b| b.spend_text_cost(cost)) {
+            return None;
+        }
+        let mut made = Gather::new(&self.facts, true);
+        gather(&mut made);
+        Some(made.finish())
+    }
+
+    /// An element of `kind` of the text `gather` gathers, where it has any.
+    fn paragraph(&mut self, kind: &str, level: Option<usize>, gather: impl Fn(&mut Gather)) {
+        if let Some((text, links)) = self.text(gather).filter(|(text, _)| !text.is_empty()) {
+            self.push_gathered(linked(kind, text, level, links));
+        }
+    }
+
+    /// A paragraph of a `<pre>`'s text as it is drawn ([`pre_text`]),
+    /// spent at [`pre_cost`] before it is made.
+    fn pre(&mut self, h: &Handle) {
+        let cost = pre_cost(h, &self.facts);
+        if !self.spend(|b| b.spend_text_cost(cost)) {
+            return;
+        }
+        let (text, links) = pre_text(h, &self.facts);
+        if !text.is_empty() {
+            self.push_gathered(linked("doco:Paragraph", text, None, links));
+        }
+    }
+
+    fn keep(&mut self, mut e: Element) {
         if e.kind == "doc:ListItem" {
             e.depth = self.items;
         }
         self.elements.push(e);
         self.depths.push(self.depth);
+    }
+
+    /// Spend from the page's budget; `false`, and the page refused, where
+    /// it is spent.
+    fn spend(&mut self, f: impl FnOnce(&mut Budget) -> Result<(), TooLarge>) -> bool {
+        if self.over.is_some() {
+            return false;
+        }
+        match f(&mut self.budget) {
+            Ok(()) => true,
+            Err(e) => {
+                self.over = Some(e);
+                false
+            }
+        }
     }
 
     /// A figure for each of a message's own images drawn under `nodes`
@@ -325,7 +1215,7 @@ impl Out {
         }
         let mut found = Vec::new();
         for n in nodes {
-            cid_images(n, &mut found);
+            cid_images(n, &self.facts, &mut found);
         }
         for (cid, alt) in found {
             let mut f = element("doco:Figure", alt, None);
@@ -339,9 +1229,9 @@ impl Out {
 /// its own parts: `<img src="cid:…">`, by content id (RFC 2392, percent
 /// signs decoded), with their alternative text. An image the page does not
 /// draw is not shown.
-fn cid_images(h: &Handle, out: &mut Vec<(String, String)>) {
+fn cid_images(h: &Handle, facts: &Facts, out: &mut Vec<(String, String)>) {
     let Some(tag) = tag_of(h) else { return };
-    if skipped(h) {
+    if facts.skipped(h) {
         return;
     }
     if tag == "img" {
@@ -361,7 +1251,7 @@ fn cid_images(h: &Handle, out: &mut Vec<(String, String)>) {
         return;
     }
     for c in h.children.borrow().iter() {
-        cid_images(c, out);
+        cid_images(c, facts, out);
     }
 }
 
@@ -413,13 +1303,13 @@ fn is_citation(h: &Handle) -> bool {
 /// An element node's lowercase tag name, or `None` for text and the rest.
 /// What a page declares about itself in its `<head>`: its `<title>` and a
 /// `<meta name="author">`. Read from the head alone, because a `<title>`
-/// in the body is an SVG drawing's.
+/// in the body is an SVG drawing's. A page too large to read declares
+/// nothing.
 pub fn info(src: &str) -> DocumentInfo {
-    let dom = html5ever::parse_document(RcDom::default(), Default::default())
-        .from_utf8()
-        .read_from(&mut src.as_bytes())
-        .unwrap_or_default();
     let mut info = DocumentInfo::default();
+    let Ok((dom, _)) = build(src, Budget::default()) else {
+        return info;
+    };
     let html = children_of(&dom.document)
         .into_iter()
         .find(|h| tag_of(h).as_deref() == Some("html"));
@@ -430,7 +1320,9 @@ pub fn info(src: &str) -> DocumentInfo {
     for h in head.iter().flat_map(children_of) {
         match tag_of(&h).as_deref() {
             Some("title") if info.title.is_none() => {
-                info.title = Some(text_of(&h).0).filter(|t| !t.is_empty());
+                // Its own facts: a title's text is all it holds.
+                let facts = Facts::of(&h);
+                info.title = Some(text_of(&h, &facts).0).filter(|t| !t.is_empty());
             }
             Some("meta") => {
                 let named_author =
@@ -479,47 +1371,213 @@ fn element(kind: &str, text: String, level: Option<usize>) -> Element {
 /// All text under a node, whitespace-collapsed, with any `<a href>` inside it
 /// located. Inline markup (`<em>`, `<a>`, `<span>`) is transparent: it styles
 /// a phrase, it does not divide one — but an `<a>` also says something about
-/// the phrase it styles, and that survives here as a span.
-fn text_of(h: &Handle) -> (String, Vec<Link>) {
-    let mut raw = String::new();
-    let mut anchors = Vec::new();
-    collect(h, &mut raw, &mut anchors);
-    squeeze(&raw, &anchors)
+/// the phrase it styles, and that survives here as a span. Not spent: the
+/// text the walk keeps is gathered by [`Out::text`].
+fn text_of(h: &Handle, facts: &Facts) -> (String, Vec<Link>) {
+    let mut g = Gather::new(facts, true);
+    g.children(h);
+    g.finish()
 }
 
-fn collect(h: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize, String)>) {
-    for child in h.children.borrow().iter() {
-        collect_node(child, out, anchors);
+/// Is there text under this node, once its whitespace is collapsed?
+/// Counted, not copied.
+fn has_text(h: &Handle, facts: &Facts) -> bool {
+    let mut g = Gather::new(facts, false);
+    g.children(h);
+    g.n > 0
+}
+
+/// Text gathered from a page's nodes, its whitespace collapsed as it is
+/// gathered, the way the readers always have, and each `<a href>` in it
+/// located by the characters it spans; or only counted, at [`char_cost`],
+/// to be spent before it is made ([`Out::text`]).
+///
+/// One copy, made as the nodes are read. The text was gathered whole, then
+/// collapsed with a map from each of its bytes to the character it lands
+/// on, to place the links: 18 bytes for each byte of it.
+struct Gather<'f> {
+    facts: &'f Facts,
+    /// The text, or `None` where it is only counted.
+    text: Option<String>,
+    /// What the text costs, each character at [`char_cost`].
+    cost: u64,
+    /// The characters of the text.
+    n: usize,
+    /// Whitespace met since the last character: a space before the next.
+    pending: bool,
+    /// Where the last character is.
+    last: usize,
+    /// Each anchor met.
+    anchors: Vec<Anchor>,
+    /// The anchors no character has started yet.
+    awaiting: Vec<usize>,
+    /// The anchors, in the order they end.
+    ended: Vec<usize>,
+    /// The last of the text, at least [`MARK_CONTEXT`] bytes of it where
+    /// there is as much, to tell a note's mark by.
+    tail: String,
+}
+
+/// An `<a href>` met as text is gathered.
+struct Anchor {
+    href: String,
+    /// Where its first and last characters are, once it has one.
+    span: Option<(usize, usize)>,
+    /// Its end is not met yet.
+    open: bool,
+}
+
+impl<'f> Gather<'f> {
+    /// Text to `make`, or only to count.
+    fn new(facts: &'f Facts, make: bool) -> Self {
+        Gather {
+            facts,
+            text: make.then(String::new),
+            cost: 0,
+            n: 0,
+            pending: false,
+            last: 0,
+            anchors: Vec::new(),
+            awaiting: Vec::new(),
+            ended: Vec::new(),
+            tail: String::new(),
+        }
     }
-}
 
-/// One node's contribution to the text [`collect`] gathers.
-fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize, String)>) {
-    match &node.data {
-        NodeData::Text { contents } => out.push_str(&contents.borrow()),
-        NodeData::Element { .. } => {
-            let Some(tag) = tag_of(node) else { return };
-            if skipped(node) {
-                return;
-            }
-            if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
-                out.push(' ');
-            }
-            let raised = tag == "sup" || (tag == "a" && note_link(node));
-            if raised && fluree_doc_model::marks::note_mark(out, &text_of(node).0) {
-                out.push(' ');
-            }
-            // Recorded around the recursion: an anchor's text is whatever
-            // its subtree contributes, and nesting is legal markup.
-            let start = out.chars().count();
-            collect(node, out, anchors);
-            if tag == "a" {
-                if let Some(href) = attr_of(node, "href").filter(|h| !h.trim().is_empty()) {
-                    anchors.push((start, out.chars().count(), href));
-                }
+    fn push_str(&mut self, s: &str) {
+        for c in s.chars() {
+            self.push(c);
+        }
+    }
+
+    fn push(&mut self, raw: char) {
+        let c = repair_c1(raw);
+        if c.is_whitespace() {
+            self.pending = self.n > 0;
+            return;
+        }
+        if std::mem::take(&mut self.pending) {
+            self.put(' ');
+        }
+        for i in self.awaiting.drain(..) {
+            let a = &mut self.anchors[i];
+            if a.open {
+                a.span = Some((self.n, self.n));
             }
         }
-        _ => {}
+        self.last = self.n;
+        self.put(c);
+    }
+
+    fn put(&mut self, c: char) {
+        self.tail.push(c);
+        if self.tail.len() >= 2 * MARK_CONTEXT {
+            let mut cut = self.tail.len() - MARK_CONTEXT;
+            while !self.tail.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            self.tail.drain(..cut);
+        }
+        self.cost = self.cost.saturating_add(char_cost(c));
+        if let Some(t) = &mut self.text {
+            t.push(c);
+        }
+        self.n += 1;
+    }
+
+    /// The text of `node`'s children, located as an anchor's where `node`
+    /// is one: an anchor's text is whatever its subtree contributes, and
+    /// nesting is legal markup. Counted text locates none.
+    fn around(&mut self, node: &Handle, tag: &str) {
+        let href = (tag == "a" && self.text.is_some())
+            .then(|| attr_of(node, "href"))
+            .flatten()
+            .filter(|h| !h.trim().is_empty());
+        let Some(href) = href else {
+            self.children(node);
+            return;
+        };
+        let at = self.anchors.len();
+        self.anchors.push(Anchor {
+            href,
+            span: None,
+            open: true,
+        });
+        self.awaiting.push(at);
+        self.children(node);
+        let last = self.last;
+        let a = &mut self.anchors[at];
+        a.open = false;
+        if let Some((_, end)) = &mut a.span {
+            *end = last;
+        }
+        self.ended.push(at);
+    }
+
+    fn children(&mut self, h: &Handle) {
+        for child in h.children.borrow().iter() {
+            self.node(child);
+        }
+    }
+
+    /// One node's contribution to the text.
+    fn node(&mut self, node: &Handle) {
+        match &node.data {
+            NodeData::Text { contents } => self.push_str(&contents.borrow()),
+            NodeData::Element { .. } => {
+                let Some(tag) = tag_of(node) else { return };
+                if self.facts.skipped(node) {
+                    return;
+                }
+                if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
+                    self.push(' ');
+                }
+                // A note's mark is read apart from the word it marks.
+                let raised = tag == "sup" || (tag == "a" && note_link(node));
+                if raised && self.n > 0 && !self.pending {
+                    let mark = mark_text(node, self.facts);
+                    if mark.is_some_and(|m| fluree_doc_model::marks::note_mark(&self.tail, &m)) {
+                        self.push(' ');
+                    }
+                }
+                self.around(node, &tag);
+            }
+            _ => {}
+        }
+    }
+
+    /// An element's text excluding nested block containers, so a list item
+    /// that holds a sub-list contributes only its own label.
+    fn own(&mut self, h: &Handle) {
+        for child in h.children.borrow().iter() {
+            match &child.data {
+                NodeData::Text { contents } => self.push_str(&contents.borrow()),
+                NodeData::Element { .. } => {
+                    let Some(tag) = tag_of(child) else { continue };
+                    if self.facts.skipped(child) || matches!(tag.as_str(), "ul" | "ol" | "table") {
+                        continue;
+                    }
+                    self.push(' ');
+                    self.around(child, &tag);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The text, and its links [`ordered`].
+    fn finish(self) -> (String, Vec<Link>) {
+        let mut anchors = self.anchors;
+        let links: Vec<Link> = self
+            .ended
+            .iter()
+            .filter_map(|&i| {
+                let a = &mut anchors[i];
+                let (first, last) = a.span?;
+                Some(Link::uri(std::mem::take(&mut a.href)).spanning(first, last + 1))
+            })
+            .collect();
+        (self.text.unwrap_or_default(), ordered(links))
     }
 }
 
@@ -605,33 +1663,15 @@ fn is_block(tag: &str) -> bool {
     BLOCK.contains(&tag) || SKIP.contains(&tag)
 }
 
-/// Does anything under this node lay out as a block?
-fn holds_block(h: &Handle) -> bool {
-    h.children.borrow().iter().any(|c| match tag_of(c) {
-        Some(_) if skipped(c) => false,
-        Some(t) => is_block(&t) || holds_block(c),
-        None => false,
-    })
-}
-
-/// Content that flows inline: text, and elements with no block inside.
-fn is_inline(h: &Handle) -> bool {
-    match tag_of(h) {
-        Some(t) => !is_block(&t) && !holds_block(h),
-        None => true,
-    }
-}
-
 /// A paragraph from a run of inline siblings, when it has any text.
 fn flush_run(run: &mut Vec<Handle>, out: &mut Out) {
-    let mut raw = String::new();
-    let mut anchors = Vec::new();
-    for node in run.iter() {
-        collect_node(node, &mut raw, &mut anchors);
-    }
-    let (text, links) = squeeze(&raw, &anchors);
-    if !text.is_empty() {
-        out.push(linked("doco:Paragraph", text, None, links));
+    let gathered = out.text(|g| {
+        for node in run.iter() {
+            g.node(node);
+        }
+    });
+    if let Some((text, links)) = gathered.filter(|(text, _)| !text.is_empty()) {
+        out.push_gathered(linked("doco:Paragraph", text, None, links));
     }
     out.figures(run.iter());
     run.clear();
@@ -649,7 +1689,7 @@ fn walk_container(h: &Handle, out: &mut Out) {
     let mut run: Vec<Handle> = Vec::new();
     let mut last_br = false;
     for c in children_of(h) {
-        if !is_inline(&c) {
+        if !out.facts.is_inline(&c) {
             flush_run(&mut run, out);
             last_br = false;
             walk(&c, out);
@@ -672,103 +1712,57 @@ fn walk_container(h: &Handle, out: &mut Out) {
     flush_run(&mut run, out);
 }
 
-/// An element's text excluding nested block containers, so a list item that
-/// holds a sub-list contributes only its own label.
-fn own_text(h: &Handle) -> (String, Vec<Link>) {
-    let mut raw = String::new();
-    let mut anchors = Vec::new();
-    for child in h.children.borrow().iter() {
-        match &child.data {
-            NodeData::Text { contents } => raw.push_str(&contents.borrow()),
-            NodeData::Element { .. } => {
-                let Some(tag) = tag_of(child) else { continue };
-                if skipped(child) || matches!(tag.as_str(), "ul" | "ol" | "table") {
-                    continue;
-                }
-                raw.push(' ');
-                let start = raw.chars().count();
-                collect(child, &mut raw, &mut anchors);
-                if tag == "a" {
-                    if let Some(href) = attr_of(child, "href").filter(|h| !h.trim().is_empty()) {
-                        anchors.push((start, raw.chars().count(), href));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    squeeze(&raw, &anchors)
-}
-
-/// Collapse whitespace the way the readers always have, carrying the anchor
-/// offsets through the collapse.
-///
-/// The offsets are taken against the raw concatenation, and normalising it
-/// deletes characters — so they cannot simply be copied across. Each raw
-/// character keeps the position it lands on, and an anchor's range becomes the
-/// first and last positions its characters occupy.
-fn squeeze(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>) {
-    let mut out = String::new();
-    let mut at: Vec<Option<usize>> = Vec::with_capacity(raw.len());
-    let (mut n, mut pending) = (0usize, false);
-    for c in raw.chars().map(repair_c1) {
-        if c.is_whitespace() {
-            pending = n > 0;
-            at.push(None);
-            continue;
-        }
-        if pending {
-            out.push(' ');
-            n += 1;
-            pending = false;
-        }
-        at.push(Some(n));
-        out.push(c);
-        n += 1;
-    }
-    let links = spans(&at, anchors);
-    (out, links)
-}
-
-/// The anchors located in the text a raw concatenation became, given where
-/// each raw character landed (`None` for one the text left out).
-fn spans(at: &[Option<usize>], anchors: &[(usize, usize, String)]) -> Vec<Link> {
-    let mut links: Vec<Link> = anchors
-        .iter()
-        .filter_map(|(b, e, href)| {
-            let range = at.get(*b..(*e).min(at.len()))?;
-            let first = range.iter().flatten().next()?;
-            let last = range.iter().flatten().next_back()?;
-            Some(Link::uri(href.clone()).spanning(*first, last + 1))
-        })
-        .collect();
-    // Emitters splice in one pass, so the spans have to arrive ordered and
-    // disjoint. Nested anchors are invalid markup but do occur; the outer one
-    // is the one the document drew.
-    links.sort_by_key(|l| (l.begin.unwrap_or(0), std::cmp::Reverse(l.end.unwrap_or(0))));
-    let mut end = 0usize;
-    links.retain(|l| match l.span() {
-        Some((b, e)) if b >= end => {
-            end = e;
-            true
-        }
-        _ => false,
-    });
-    links
-}
-
 /// A `<pre>`'s text as it is drawn, with any `<a href>` inside it located.
 ///
 /// In a `<pre>` the line breaks, the blank lines and the runs of spaces are
 /// the content (HTML, the `pre` element): a hearing transcript or a public
 /// law is published as one, its letterhead centred and its witness list set
 /// in columns by spaces alone. So nothing is collapsed. A `<br>` is a line
-/// break, and a block set inside one starts a line of its own.
-fn pre_text(h: &Handle) -> (String, Vec<Link>) {
+/// break, and a block set inside one starts a line of its own. Not spent:
+/// [`Out::pre`] spends it, at [`pre_cost`], before it is made.
+fn pre_text(h: &Handle, facts: &Facts) -> (String, Vec<Link>) {
     let mut raw = Raw::default();
     let mut anchors = Vec::new();
-    collect_pre(h, &mut raw, &mut anchors);
+    collect_pre(h, facts, &mut raw, &mut anchors);
     verbatim(&raw.text, &anchors)
+}
+
+/// What a `<pre>`'s text can cost at most, each character at
+/// [`char_cost`] as it is drawn, counted down the tree without a copy: no
+/// less than [`pre_text`] makes, which leaves out some of the whitespace
+/// counted here, and adds no line break beyond the one counted for each
+/// `<br>` and each side of a block.
+fn pre_cost(h: &Handle, facts: &Facts) -> u64 {
+    let mut cost = 0u64;
+    let mut todo: Vec<Handle> = h.children.borrow().iter().rev().cloned().collect();
+    while let Some(node) = todo.pop() {
+        match &node.data {
+            NodeData::Text { contents } => {
+                for c in contents.borrow().chars() {
+                    cost = cost.saturating_add(char_cost(drawn(c)));
+                }
+            }
+            NodeData::Element { .. } => {
+                let Some(tag) = tag_of(&node) else { continue };
+                if facts.skipped(&node) {
+                    continue;
+                }
+                let breaks = if tag == "br" {
+                    1
+                } else if is_block(&tag) {
+                    2
+                } else {
+                    0
+                };
+                cost = cost.saturating_add(breaks * char_cost('\n'));
+                if tag != "br" {
+                    todo.extend(node.children.borrow().iter().rev().cloned());
+                }
+            }
+            _ => {}
+        }
+    }
+    cost
 }
 
 /// Text gathered in order, with its length in characters kept as it grows:
@@ -794,13 +1788,18 @@ impl Raw {
     }
 }
 
-fn collect_pre(h: &Handle, out: &mut Raw, anchors: &mut Vec<(usize, usize, String)>) {
+fn collect_pre(
+    h: &Handle,
+    facts: &Facts,
+    out: &mut Raw,
+    anchors: &mut Vec<(usize, usize, String)>,
+) {
     for node in h.children.borrow().iter() {
         match &node.data {
             NodeData::Text { contents } => out.push_str(&contents.borrow()),
             NodeData::Element { .. } => {
                 let Some(tag) = tag_of(node) else { continue };
-                if skipped(node) {
+                if facts.skipped(node) {
                     continue;
                 }
                 if tag == "br" {
@@ -812,7 +1811,7 @@ fn collect_pre(h: &Handle, out: &mut Raw, anchors: &mut Vec<(usize, usize, Strin
                     out.break_line();
                 }
                 let start = out.chars;
-                collect_pre(node, out, anchors);
+                collect_pre(node, facts, out, anchors);
                 if tag == "a" {
                     if let Some(href) = attr_of(node, "href").filter(|h| !h.trim().is_empty()) {
                         anchors.push((start, out.chars, href));
@@ -827,61 +1826,172 @@ fn collect_pre(h: &Handle, out: &mut Raw, anchors: &mut Vec<(usize, usize, Strin
     }
 }
 
+/// A character of preformatted text as it is drawn: a tab stays a tab,
+/// since it sets a column, and any other space character, a no-break space
+/// among them, is a space.
+fn drawn(c: char) -> char {
+    match repair_c1(c) {
+        '\n' => '\n',
+        '\t' => '\t',
+        c if c.is_whitespace() => ' ',
+        c => c,
+    }
+}
+
 /// Preformatted text as written, carrying the anchor offsets through.
 ///
 /// Only what is never drawn goes: the whitespace before the first character
 /// and after the last, as every element's text is trimmed, and the spaces a
-/// line ends in. A tab stays a tab, since it sets a column; any other space
-/// character, a no-break space among them, is a space.
+/// line ends in. Each anchor, a range of `raw`'s characters, spans the
+/// characters kept from it. A flag for each character of `raw` says whether
+/// it is kept, and the anchors are placed in one pass over it, in the order
+/// they start and end: a map from each character to where it lands took 16
+/// bytes for each.
 fn verbatim(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>) {
-    let chars: Vec<char> = raw
-        .chars()
-        .map(repair_c1)
-        .map(|c| match c {
-            '\n' | '\t' => c,
-            c if c.is_whitespace() => ' ',
-            c => c,
-        })
-        .collect();
-    let Some(first) = chars.iter().position(|c| !c.is_whitespace()) else {
-        return (String::new(), Vec::new());
-    };
-    let last = chars
-        .iter()
-        .rposition(|c| !c.is_whitespace())
-        .unwrap_or(first);
-    let mut keep = vec![false; chars.len()];
+    let n = raw.chars().count();
+    let mut keep = vec![false; n];
     // Walked backwards, so a run of spaces knows whether a line break or
-    // the end follows it.
-    let mut line_end = true;
-    for i in (first..=last).rev() {
-        match chars[i] {
-            '\n' => {
+    // the end follows it. Nothing after the last character is kept.
+    let (mut line_end, mut first) = (true, None);
+    for (back, c) in raw.chars().rev().map(drawn).enumerate() {
+        let i = n - 1 - back;
+        match c {
+            '\n' if first.is_some() => {
                 keep[i] = true;
                 line_end = true;
             }
-            ' ' | '\t' if line_end => {}
+            '\n' | ' ' | '\t' if first.is_none() || line_end => {}
+            c if c.is_whitespace() => keep[i] = true,
             _ => {
                 keep[i] = true;
                 line_end = false;
+                first = Some(i);
             }
         }
     }
+    // Nor anything before the first.
+    if let Some(first) = first {
+        keep[..first].fill(false);
+    }
+    let mut by_start: Vec<usize> = (0..anchors.len()).collect();
+    by_start.sort_by_key(|&a| anchors[a].0);
+    let mut by_end = by_start.clone();
+    by_end.sort_by_key(|&a| anchors[a].1);
+    let mut placed: Vec<Option<(usize, usize)>> = vec![None; anchors.len()];
+    let (mut started, mut ended) = (0, 0);
+    let mut awaiting = Vec::new();
+    let mut last_kept = 0usize;
     let mut out = String::with_capacity(raw.len());
-    let mut at = Vec::with_capacity(chars.len());
-    let mut n = 0usize;
-    for (c, k) in chars.iter().zip(&keep) {
-        if *k {
-            out.push(*c);
-            at.push(Some(n));
-            n += 1;
-        } else {
-            at.push(None);
+    let mut at = 0usize;
+    for (i, c) in raw.chars().map(drawn).enumerate() {
+        while let Some(&a) = by_end.get(ended).filter(|&&a| anchors[a].1 <= i) {
+            if let Some((_, last)) = &mut placed[a] {
+                *last = last_kept;
+            }
+            ended += 1;
+        }
+        while let Some(&a) = by_start.get(started).filter(|&&a| anchors[a].0 <= i) {
+            awaiting.push(a);
+            started += 1;
+        }
+        if keep[i] {
+            for a in awaiting.drain(..) {
+                if anchors[a].1 > i {
+                    placed[a] = Some((at, at));
+                }
+            }
+            out.push(c);
+            last_kept = at;
+            at += 1;
         }
     }
-    (out, spans(&at, anchors))
+    for &a in &by_end[ended..] {
+        if let Some((_, last)) = &mut placed[a] {
+            *last = last_kept;
+        }
+    }
+    let links = anchors
+        .iter()
+        .zip(placed)
+        .filter_map(|((_, _, href), at)| {
+            let (first, last) = at?;
+            Some(Link::uri(href.clone()).spanning(first, last + 1))
+        })
+        .collect();
+    (out, ordered(links))
 }
 
+/// Links ordered and disjoint: emitters splice in one pass. Nested anchors
+/// are invalid markup but do occur; the outer one is the one the document
+/// drew.
+fn ordered(mut links: Vec<Link>) -> Vec<Link> {
+    links.sort_by_key(|l| (l.begin.unwrap_or(0), std::cmp::Reverse(l.end.unwrap_or(0))));
+    let mut end = 0usize;
+    links.retain(|l| match l.span() {
+        Some((b, e)) if b >= end => {
+            end = e;
+            true
+        }
+        _ => false,
+    });
+    links
+}
+
+/// The bytes of text before a raised mark [`Gather`] keeps to tell a note's
+/// mark from raised text that belongs to its word
+/// ([`note_mark`](fluree_doc_model::marks::note_mark)), which looks at the
+/// word before the mark and the character before that word. Asked of all
+/// the text gathered so far, a run of a million raised digits after one
+/// unbroken word looked at the word again at each: kept to its last
+/// stretch, a word longer than any a mark follows is told by its end.
+const MARK_CONTEXT: usize = 256;
+
+/// The text of a raised element read as a note's mark, whitespace
+/// collapsed, as [`text_of`] would gather it; `None` where it holds more
+/// than a mark could ([`note_mark`](fluree_doc_model::marks::note_mark)
+/// takes four characters at most), and the walk stops there. Gathered
+/// whole at each raised element, nested ones each walked again what the
+/// one inside them holds.
+fn mark_text(h: &Handle, facts: &Facts) -> Option<String> {
+    /// Nodes looked at, and characters other than whitespace, past which
+    /// it is no mark.
+    const NODES: usize = 64;
+    const CHARS: usize = 8;
+    let mut raw = String::new();
+    let (mut nodes, mut chars) = (0usize, 0usize);
+    let mut todo: Vec<Handle> = h.children.borrow().iter().rev().cloned().collect();
+    while let Some(node) = todo.pop() {
+        nodes += 1;
+        if nodes > NODES {
+            return None;
+        }
+        match &node.data {
+            NodeData::Text { contents } => {
+                for c in contents.borrow().chars().map(repair_c1) {
+                    if !c.is_whitespace() {
+                        chars += 1;
+                        if chars > CHARS {
+                            return None;
+                        }
+                    }
+                    raw.push(c);
+                }
+            }
+            NodeData::Element { .. } => {
+                let Some(tag) = tag_of(&node) else { continue };
+                if facts.skipped(&node) {
+                    continue;
+                }
+                if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
+                    raw.push(' ');
+                }
+                todo.extend(node.children.borrow().iter().rev().cloned());
+            }
+            _ => {}
+        }
+    }
+    Some(raw.split_whitespace().collect::<Vec<_>>().join(" "))
+}
 /// An element carrying whatever links its text contained.
 fn linked(kind: &str, text: String, level: Option<usize>, links: Vec<Link>) -> Element {
     let mut e = element(kind, text, level);
@@ -922,21 +2032,18 @@ fn walk(h: &Handle, out: &mut Out) {
 fn walk_node(h: &Handle, out: &mut Out) {
     if let Some(tag) = tag_of(h) {
         let t = tag.as_str();
-        if skipped(h) {
+        if out.facts.skipped(h) {
             return;
         }
         if t == "table" {
-            if is_layout(h) {
+            if is_layout(h, &out.facts) {
                 walk_container(h, out);
             } else {
                 // The caption is where a table states its subject or unit
                 // (`Price list, prices in EUR`); it reads before the table.
                 for c in children_of(h) {
                     if tag_of(&c).as_deref() == Some("caption") {
-                        let (text, links) = text_of(&c);
-                        if !text.is_empty() {
-                            out.push(linked("doco:Paragraph", text, None, links));
-                        }
+                        out.paragraph("doco:Paragraph", None, |g| g.children(&c));
                     }
                 }
                 emit_table(h, out); // innermost wins: cells own their text
@@ -945,10 +2052,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
             return;
         }
         if let Some(level) = heading_level(t) {
-            let (text, links) = text_of(h);
-            if !text.is_empty() {
-                out.push(linked("doco:SectionTitle", text, Some(level), links));
-            }
+            out.paragraph("doco:SectionTitle", Some(level), |g| g.children(h));
             out.figures([h]);
             return;
         }
@@ -956,10 +2060,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
             "li" => {
                 // A nested list inside an item is walked separately; the
                 // item's own text stops at it.
-                let (own, links) = own_text(h);
-                if !own.is_empty() {
-                    out.push(linked("doc:ListItem", own, None, links));
-                }
+                out.paragraph("doc:ListItem", None, |g| g.own(h));
                 let children = children_of(h);
                 out.figures(
                     children
@@ -987,21 +2088,16 @@ fn walk_node(h: &Handle, out: &mut Out) {
             }
             // A quotation or a caption that holds paragraphs of its own is a
             // container of them, not one paragraph run together.
-            "blockquote" | "figcaption" | "dd" | "dt" if holds_block(h) => {}
+            "blockquote" | "figcaption" | "dd" | "dt" if out.facts.holds_block(h) => {}
             // One paragraph, its lines and spacing kept, as a Markdown code
             // block is read.
             "pre" => {
-                let (text, links) = pre_text(h);
-                if !text.is_empty() {
-                    out.push(linked("doco:Paragraph", text, None, links));
-                }
+                out.pre(h);
+                out.figures([h]);
                 return;
             }
             "p" | "blockquote" | "figcaption" | "dd" | "dt" => {
-                let (text, links) = text_of(h);
-                if !text.is_empty() {
-                    out.push(linked("doco:Paragraph", text, None, links));
-                }
+                out.paragraph("doco:Paragraph", None, |g| g.children(h));
                 out.figures([h]);
                 return;
             }
@@ -1014,14 +2110,14 @@ fn walk_node(h: &Handle, out: &mut Out) {
 /// Every `tr` under a node, at any depth — `thead`/`tbody`/`tfoot` are
 /// transparent, and html5ever inserts a `tbody` even where the source had
 /// none. This is the one query the reader needs, as a descendant walk.
-fn rows_under(h: &Handle, out: &mut Vec<Handle>) {
+fn rows_under(h: &Handle, facts: &Facts, out: &mut Vec<Handle>) {
     for c in h.children.borrow().iter() {
         match tag_of(c).as_deref() {
-            Some(_) if skipped(c) => {}
+            Some(_) if facts.skipped(c) => {}
             Some("tr") => out.push(c.clone()),
             // Do not descend into a nested table: its rows are its own.
             Some("table") => {}
-            _ => rows_under(c, out),
+            _ => rows_under(c, facts, out),
         }
     }
 }
@@ -1036,16 +2132,16 @@ fn rows_under(h: &Handle, out: &mut Vec<Handle>) {
 /// table holding a table, or of one row, is laid out whatever its cells are
 /// called, because email frameworks set their columns in `<th>`. A layout
 /// table's cells are read as the containers they are.
-fn is_layout(table: &Handle) -> bool {
+fn is_layout(table: &Handle, facts: &Facts) -> bool {
     let role = attr_of(table, "role").map(|r| r.trim().to_ascii_lowercase());
     if matches!(role.as_deref(), Some("presentation" | "none")) {
         return true;
     }
-    if holds_table(table) {
+    if facts.holds_table(table) {
         return true;
     }
     let mut trs = Vec::new();
-    rows_under(table, &mut trs);
+    rows_under(table, facts, &mut trs);
     let widths: Vec<usize> = trs
         .iter()
         .map(|tr| {
@@ -1053,7 +2149,7 @@ fn is_layout(table: &Handle) -> bool {
                 .iter()
                 .filter(|c| matches!(tag_of(c).as_deref(), Some("td" | "th")))
                 .map(|c| num_attr(c, "colspan"))
-                .sum::<usize>()
+                .fold(0usize, usize::saturating_add)
         })
         .filter(|w| *w > 0)
         .collect();
@@ -1071,13 +2167,6 @@ fn is_layout(table: &Handle) -> bool {
     // One column is a stack of boxes, unless a header says it is a list of
     // values.
     !headed && widths.iter().all(|w| *w <= 1)
-}
-
-fn holds_table(h: &Handle) -> bool {
-    h.children
-        .borrow()
-        .iter()
-        .any(|c| tag_of(c).as_deref() == Some("table") || holds_table(c))
 }
 
 fn num_attr(h: &Handle, name: &str) -> usize {
@@ -1275,8 +2364,8 @@ fn lists_fields(rows: &[Vec<(String, usize, usize)>]) -> bool {
 }
 
 /// Is this cell set as a header: ruled beneath, or bold throughout?
-fn header_styled(cell: &Handle) -> bool {
-    ruled_below(cell) || bold_throughout(cell, false) == Some(true)
+fn header_styled(cell: &Handle, facts: &Facts) -> bool {
+    ruled_below(cell) || bold_throughout(cell, false, facts) == Some(true)
 }
 
 /// An element's inline style, lowercase and without whitespace.
@@ -1326,21 +2415,29 @@ fn bold_style(h: &Handle) -> bool {
 }
 
 /// Is every word under this node set bold? `None` where it holds no text.
-fn bold_throughout(h: &Handle, inherited: bool) -> Option<bool> {
-    throughout(h, inherited, &|h| {
-        bold_style(h) || matches!(tag_of(h).as_deref(), Some("b" | "strong"))
-    })
+fn bold_throughout(h: &Handle, inherited: bool, facts: &Facts) -> Option<bool> {
+    throughout(
+        h,
+        inherited,
+        &|h| bold_style(h) || matches!(tag_of(h).as_deref(), Some("b" | "strong")),
+        facts,
+    )
 }
 
 /// Is every word under this node set as `set` says, by the node itself or
 /// one around it? `None` where it holds no text.
-fn throughout(h: &Handle, inherited: bool, set: &dyn Fn(&Handle) -> bool) -> Option<bool> {
+fn throughout(
+    h: &Handle,
+    inherited: bool,
+    set: &dyn Fn(&Handle) -> bool,
+    facts: &Facts,
+) -> Option<bool> {
     let on = inherited || set(h);
     let mut seen = None;
     for c in h.children.borrow().iter() {
         let here = match &c.data {
             NodeData::Text { contents } if !contents.borrow().trim().is_empty() => Some(on),
-            NodeData::Element { .. } if !skipped(c) => throughout(c, on, set),
+            NodeData::Element { .. } if !facts.skipped(c) => throughout(c, on, set, facts),
             _ => None,
         };
         match here {
@@ -1412,24 +2509,36 @@ fn left_indent(h: &Handle) -> f64 {
 
 /// The indent of the text in this node: its own, and each one's on the way
 /// down to its first word.
-fn text_indent(h: &Handle) -> f64 {
-    let own = left_indent(h);
-    for c in h.children.borrow().iter() {
+///
+/// The way down is found in one walk to the first word, not by asking each
+/// node on it whether it holds text: asked at each level, a word under
+/// 100,000 nested elements was gathered 100,000 times.
+fn text_indent(h: &Handle, facts: &Facts) -> f64 {
+    // The nodes from `h` down to the one being walked, each with the next
+    // of its children to go down to.
+    let mut path: Vec<(Handle, usize)> = vec![(h.clone(), 0)];
+    while let Some((node, next)) = path.last_mut() {
+        let child = node.children.borrow().get(*next).cloned();
+        *next += 1;
+        let Some(c) = child else {
+            path.pop();
+            continue;
+        };
         match &c.data {
-            NodeData::Text { contents } if !contents.borrow().trim().is_empty() => return own,
-            NodeData::Element { .. } if !skipped(c) && !text_of(c).0.is_empty() => {
-                return own + text_indent(c);
+            NodeData::Text { contents } if !contents.borrow().trim().is_empty() => {
+                return path.iter().map(|(n, _)| left_indent(n)).sum();
             }
+            NodeData::Element { .. } if !facts.skipped(&c) => path.push((c, 0)),
             _ => {}
         }
     }
-    own
+    left_indent(h)
 }
 
 /// The one size, in points, all the text under this node is set in, where
 /// it says: `None` where it says nothing or its words differ.
-fn size_throughout(h: &Handle) -> Option<f64> {
-    fn sizes(h: &Handle, inherited: Option<f64>, out: &mut Vec<Option<f64>>) {
+fn size_throughout(h: &Handle, facts: &Facts) -> Option<f64> {
+    fn sizes(h: &Handle, inherited: Option<f64>, facts: &Facts, out: &mut Vec<Option<f64>>) {
         let mut size = inherited;
         for (k, v) in declarations(h) {
             if k == "font-size" {
@@ -1441,13 +2550,13 @@ fn size_throughout(h: &Handle) -> Option<f64> {
                 NodeData::Text { contents } if !contents.borrow().trim().is_empty() => {
                     out.push(size)
                 }
-                NodeData::Element { .. } if !skipped(c) => sizes(c, size, out),
+                NodeData::Element { .. } if !facts.skipped(c) => sizes(c, size, facts, out),
                 _ => {}
             }
         }
     }
     let mut out = Vec::new();
-    sizes(h, None, &mut out);
+    sizes(h, None, facts, &mut out);
     let first = (*out.first()?)?;
     out.iter()
         .all(|s| s.is_some_and(|s| (s - first).abs() < 0.01))
@@ -1469,7 +2578,7 @@ struct BandStyle {
 }
 
 impl BandStyle {
-    fn of(cell: &Handle, th: bool) -> BandStyle {
+    fn of(cell: &Handle, th: bool, facts: &Facts) -> BandStyle {
         let underline = |h: &Handle| {
             tag_of(h).as_deref() == Some("u")
                 || declarations(h).iter().any(|(k, v)| {
@@ -1484,11 +2593,11 @@ impl BandStyle {
                     .any(|(k, v)| k == "font-style" && (v == "italic" || v == "oblique"))
         };
         BandStyle {
-            strong: th || bold_throughout(cell, false) == Some(true),
-            underline: throughout(cell, false, &underline) == Some(true),
-            italic: throughout(cell, false, &italic) == Some(true),
-            size: size_throughout(cell),
-            indent: text_indent(cell),
+            strong: th || bold_throughout(cell, false, facts) == Some(true),
+            underline: throughout(cell, false, &underline, facts) == Some(true),
+            italic: throughout(cell, false, &italic, facts) == Some(true),
+            size: size_throughout(cell, facts),
+            indent: text_indent(cell, facts),
         }
     }
 
@@ -1539,15 +2648,23 @@ impl BandStyle {
 ///
 /// Blank rows hold no data, and the last row has nothing beneath it to
 /// label.
+///
+/// The rows each band is looked for over are counted by `work` as they
+/// are walked, `None` once it says no more: bands set each over the next,
+/// down a table of them, are each walked down to the first row of data.
 fn bands(
     cells: &[Vec<String>],
     full_width: &[bool],
     styles: &[Option<BandStyle>],
     header_rows: usize,
-) -> Vec<usize> {
+    work: &mut dyn FnMut(u64) -> bool,
+) -> Option<Vec<usize>> {
     let n = cells.len();
     let has_text = |r: usize| cells[r].iter().any(|t| !t.trim().is_empty());
-    let data_above = |r: usize| (header_rows..r).any(|s| !full_width[s] && has_text(s));
+    // The first row of data, found once rather than looked for above each
+    // row.
+    let first_data = (header_rows..n).find(|&s| !full_width[s] && has_text(s));
+    let data_above = |r: usize| first_data.is_some_and(|d| d < r);
     // Rows of one cell across, which end the rows a band labels where it
     // does not stand over them, whether or not they can be bands.
     let one_cell: Vec<bool> = (0..n)
@@ -1563,11 +2680,16 @@ fn bands(
     // From the foot up: whether a row is a band rests on the rows under it.
     let mut band = vec![false; n];
     for r in (0..n).rev().filter(|&r| candidate(r)) {
+        let mut walked = 0u64;
         band[r] = (r + 1..n)
+            .inspect(|_| walked += 1)
             .take_while(|&s| !one_cell[s] || style(r).stands_over(&style(s)))
             .any(|s| has_text(s) && !band[s]);
+        if !work(walked) {
+            return None;
+        }
     }
-    (0..n).filter(|&r| band[r]).collect()
+    Some((0..n).filter(|&r| band[r]).collect())
 }
 
 /// Does a line open on a note's mark: a number or a letter in brackets
@@ -1607,11 +2729,20 @@ fn opens_on_note_mark(text: &str) -> bool {
 /// flags — the same convention DOCX's gridSpan/vMerge map to and the PDF
 /// engine derives from ruling.
 fn emit_table(table: &Handle, out: &mut Out) {
+    if out.over.is_some() {
+        return;
+    }
     let mut trs = Vec::new();
-    rows_under(table, &mut trs);
+    rows_under(table, &out.facts, &mut trs);
 
     let mut rows: Vec<Vec<(String, usize, usize)>> = Vec::new();
     let mut kinds: Vec<RowKind> = Vec::new();
+    // The text of the cells gathered so far, at its cost: each cell's is
+    // checked to fit in what is left of the budget with them before it is
+    // gathered, and spent with the table ([`spend_table`]). Gathered
+    // unchecked, a table's text was all copied before any of it was
+    // counted.
+    let mut gathered = 0u64;
     // How each row's first cell with text is set, to rank the rows that are
     // one cell across the table.
     let mut styles: Vec<Option<BandStyle>> = Vec::new();
@@ -1625,9 +2756,15 @@ fn emit_table(table: &Handle, out: &mut Out) {
                 Some("td") => false,
                 _ => continue,
             };
+            let mut count = Gather::new(&out.facts, false);
+            count.children(&cell);
+            gathered = gathered.saturating_add(count.cost);
+            if !out.spend(|b| b.clone().spend_text_cost(gathered)) {
+                return;
+            }
             // A table cell's text becomes a grid position, which has no
             // room for an anchor span; the link is dropped with it.
-            let text = text_of(&cell).0;
+            let text = text_of(&cell, &out.facts).0;
             let caption = {
                 let t = text.trim();
                 t.len() > 2 && t.starts_with('(') && t.ends_with(')')
@@ -1635,15 +2772,15 @@ fn emit_table(table: &Handle, out: &mut Out) {
             marks.push(CellMark {
                 filled: !text.is_empty(),
                 th,
-                styled: !th && !text.is_empty() && header_styled(&cell),
+                styled: !th && !text.is_empty() && header_styled(&cell, &out.facts),
                 caption,
                 figure: !th
                     && text.chars().any(|c| c.is_ascii_digit())
                     && !text.chars().any(char::is_alphabetic)
-                    && bold_throughout(&cell, false) != Some(true),
+                    && bold_throughout(&cell, false, &out.facts) != Some(true),
             });
             if style.is_none() && !text.is_empty() {
-                style = Some(BandStyle::of(&cell, th));
+                style = Some(BandStyle::of(&cell, th, &out.facts));
             }
             cells.push((text, num_attr(&cell, "colspan"), num_attr(&cell, "rowspan")));
         }
@@ -1661,7 +2798,7 @@ fn emit_table(table: &Handle, out: &mut Out) {
     let mut thead_trs = Vec::new();
     for c in children_of(table) {
         if tag_of(&c).as_deref() == Some("thead") {
-            rows_under(&c, &mut thead_trs);
+            rows_under(&c, &out.facts, &mut thead_trs);
         }
     }
     let thead = thead_trs
@@ -1689,11 +2826,16 @@ fn emit_table(table: &Handle, out: &mut Out) {
     }
     let width = rows
         .iter()
-        .map(|r| r.iter().map(|c| c.1).sum::<usize>())
+        .map(|r| r.iter().fold(0usize, |w, c| w.saturating_add(c.1)))
         .max()
         .unwrap_or(0)
         .max(1);
     let n = rows.len();
+    // The grid, as wide as the widest row's spans make it, before it is
+    // made.
+    if !out.spend(|b| b.spend_cells((n as u64).saturating_mul(width as u64))) {
+        return;
+    }
     let mut grid = vec![String::new(); n * width];
     let mut m_left = vec![false; n * width];
     let mut m_down = vec![false; n * width];
@@ -1703,9 +2845,12 @@ fn emit_table(table: &Handle, out: &mut Out) {
     // Rows that are one cell across the whole width, as laid out.
     let mut full_width = vec![false; n];
 
-    for (r, cells) in rows.iter().enumerate() {
+    // Each cell's text is moved into the grid, then into its row: a copy
+    // of a table's text is as large as its tree.
+    for (r, cells) in rows.iter_mut().enumerate() {
+        let lone = cells.len() == 1;
         let mut c = 0usize;
-        for (text, colspan, rowspan) in cells {
+        for (text, colspan, rowspan) in cells.iter_mut() {
             while c < width && taken[r * width + c] {
                 c += 1;
             }
@@ -1714,8 +2859,12 @@ fn emit_table(table: &Handle, out: &mut Out) {
             }
             let cs = (*colspan).min(width - c);
             let rs = (*rowspan).min(n - r);
-            full_width[r] = cells.len() == 1 && c == 0 && cs == width && width > 1;
-            grid[r * width + c] = text.clone();
+            // Each cell the span marks, overlapping spans each time.
+            if !out.spend(|b| b.spend_work((cs as u64).saturating_mul(rs as u64))) {
+                return;
+            }
+            full_width[r] = lone && c == 0 && cs == width && width > 1;
+            grid[r * width + c] = std::mem::take(text);
             for dr in 0..rs {
                 for dc in 0..cs {
                     taken[(r + dr) * width + c + dc] = true;
@@ -1767,8 +2916,10 @@ fn emit_table(table: &Handle, out: &mut Out) {
     } else {
         (grid, m_left, m_down, full_width, header_rows, n)
     };
+    drop(rows);
+    let mut grid = grid.into_iter();
     let cells: Vec<Vec<String>> = (0..n)
-        .map(|r| grid[r * width..(r + 1) * width].to_vec())
+        .map(|_| grid.by_ref().take(width).collect())
         .collect();
     let text = cells
         .iter()
@@ -1776,19 +2927,49 @@ fn emit_table(table: &Handle, out: &mut Out) {
         .collect::<Vec<_>>()
         .join("\n");
     let header_rows = header_rows.min(n);
-    let sub_headers = bands(&cells, &full_width, &styles, header_rows);
+    let Some(sub_headers) = bands(&cells, &full_width, &styles, header_rows, &mut |steps| {
+        out.spend(|b| b.spend_work(steps))
+    }) else {
+        return;
+    };
     let mut e = element("doco:Table", text, None);
     e.header_rows = Some(header_rows);
     e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
     e.cells = Some(cells);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
-    out.push(e);
+    let spent = out.spend(|b| spend_table(b, &e));
+    if spent {
+        out.keep(e);
+    }
+}
+
+/// Spend the table `e`, its cells that hold text and their text, as every
+/// reader spends a table's cells ([`Budget::spend_cell_texts`]), and what
+/// DoCO copies of them. About 510 bytes a cell were measured from the
+/// parser's tree to the Markdown written, the tree spent apart.
+fn spend_table(b: &mut Budget, e: &Element) -> Result<(), TooLarge> {
+    b.spend_elements(1)?;
+    b.spend_cell_texts(e.cells.iter().flatten().flatten().map(String::as_str))?;
+    b.spend_copies(e)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluree_doc_model::budget::{
+        converting_to, output, Output, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, MAX_MEMORY, MAX_WORK,
+        TEXT_BYTES,
+    };
+    use fluree_doc_model::scaling::assert_linear;
+
+    fn parse(src: &str) -> Vec<Element> {
+        super::parse(src).unwrap()
+    }
+
+    fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
+        super::parse_with_quote_depth(src).unwrap()
+    }
 
     fn kinds(e: &[Element]) -> Vec<&str> {
         e.iter().map(|x| x.kind.as_str()).collect()
@@ -1806,6 +2987,41 @@ mod tests {
         // A drawing's title is not the page's.
         let bare = super::info("<p>Text</p><svg><title>a chart</title></svg>");
         assert_eq!(bare.title, None);
+    }
+
+    #[test]
+    fn pages_read_within_one_budget_share_it() {
+        let page = "<p>x</p>".repeat(1_000);
+        let mut probe = Budget::new(MAX_MEMORY, MAX_WORK);
+        super::parse_within(&page, &mut probe).unwrap();
+        let one = MAX_MEMORY - probe.memory_left();
+        let mut budget = Budget::new(one * 3 / 2, MAX_WORK);
+        assert!(super::parse_within(&page, &mut budget).is_ok());
+        assert!(super::parse_message_within(&page, &mut budget).is_err());
+        // A page refused spent the work it was read with: what follows is
+        // refused at once, not after as long again.
+        assert!(super::cid_ids_within("<p>x</p>", &mut budget).is_err());
+    }
+
+    #[test]
+    fn a_short_page_is_read_past_the_charset_it_declares() {
+        // All of it in the parser's first chunk: the tokenizer pauses at
+        // each declared charset with the rest of the chunk still queued.
+        for meta in [
+            "<meta charset=\"utf-8\">",
+            "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">",
+        ] {
+            let src = format!(
+                "<!DOCTYPE html><html><head>{meta}<title>X</title></head>\
+                 <body><h1>Head</h1><p>Hello world</p></body></html>"
+            );
+            assert!(src.len() < FEED_BYTES);
+            let els = parse(&src);
+            let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+            assert_eq!(texts, ["Head", "Hello world"], "{meta}");
+            let (els, _, _) = super::parse_message(&src).unwrap();
+            assert_eq!(els.len(), 2, "{meta}");
+        }
     }
 
     #[test]
@@ -1840,7 +3056,7 @@ mod tests {
         assert_eq!(els[1].text, "Record screen");
         assert_eq!(els[8].text, "Loose text");
         // One parse for both, as a message's body is read.
-        let (body, _, ids) = parse_message(src);
+        let (body, _, ids) = parse_message(src).unwrap();
         assert_eq!(body.len(), els.len());
         assert_eq!(ids, ["shot1@example.org", "logo@x", "i@x", "j@x", "k@x"]);
         assert_eq!(ids, cid_ids(src));
@@ -1857,7 +3073,7 @@ mod tests {
         let src = "<div><img src=\"cid:banner@x\"></div>\
                    <main><p>Totals below.</p><p><img src=\"cid:shot@x\"></p></main>\
                    <footer><img src=\"cid:logo@x\"></footer>";
-        let (els, _, ids) = parse_message(src);
+        let (els, _, ids) = parse_message(src).unwrap();
         let figures: Vec<&str> = els.iter().filter_map(|e| e.figure.as_deref()).collect();
         assert_eq!(figures, ["cid:shot@x"]);
         assert_eq!(ids, ["shot@x"]);
@@ -2727,5 +3943,663 @@ mod tests {
         assert_eq!(decode(b"\xef\xbb\xbf<p>x</p>"), "<p>x</p>");
         // No declaration and not UTF-8: Windows-1252.
         assert_eq!(decode(b"<p>\x93q\x94</p>"), "<p>\u{201c}q\u{201d}</p>");
+    }
+
+    #[test]
+    fn a_long_value_spanning_rows_is_refused_rather_than_copied_into_each() {
+        let table = |rows: usize| {
+            format!(
+                "<table><tr><td rowspan=\"{rows}\">{}</td><td>a</td></tr>{}</table>",
+                "y".repeat(200_000),
+                "<tr><td>b</td></tr>".repeat(rows - 1)
+            )
+        };
+        assert!(super::parse(&table(3)).is_ok());
+        let err = super::parse(&table(3_000)).unwrap_err();
+        assert!(err.to_string().contains("copies"), "{err}");
+    }
+
+    #[test]
+    fn a_span_of_a_billion_columns_is_refused_before_its_grid_is_made() {
+        let table = |span: &str| {
+            format!(
+                "<table>{}</table>",
+                format!("<tr><td colspan=\"{span}\">x</td></tr><tr><td>a</td></tr>").repeat(50)
+            )
+        };
+        assert!(super::parse(&table("3")).is_ok());
+        assert!(super::parse(&table("1000000000")).is_err());
+        assert!(super::parse(&table(&usize::MAX.to_string())).is_err());
+        // Spans past what a number holds add up without wrapping: the
+        // greatest and two more are not one column.
+        let wrapped = format!(
+            "<table><tr><td colspan=\"{}\">x</td><td colspan=\"2\">y</td></tr><tr><td>a</td></tr></table>",
+            usize::MAX
+        );
+        assert!(super::parse(&wrapped).is_err());
+        // Read as a message's body, the same.
+        assert!(super::parse_with_quote_depth(&table("1000000000")).is_err());
+    }
+
+    #[test]
+    fn each_element_spends_the_pages_budget() {
+        let page = "<p>word</p>".repeat(10_000_000 / 11);
+        // Each paragraph is a node of the output: 4 KiB of the budget.
+        assert!(super::parse(&page).is_err());
+        assert!(super::parse(&"<p>word</p>".repeat(1_000)).is_ok());
+    }
+
+    #[test]
+    fn the_attributes_of_each_tag_are_counted_from_the_tags() {
+        // Each attribute is looked for among those before it on its tag,
+        // an end tag's too; quoted values hold what would be markup, and
+        // comments and a script's text hold no tags.
+        let steps = attribute_steps(
+            "<!doctype html><div class=\"a>b\" hidden data-x=1><p a b>one</p c d e>\
+             <!-- <p a b c> --><script>if (a<b c d) x('<p a b c>')</script>",
+        );
+        assert_eq!(steps, 3 + 1 + 3);
+        assert_eq!(attribute_steps("<p>x</p>"), 0);
+    }
+
+    #[test]
+    fn the_scan_passes_over_no_text_the_tokenizer_reads_as_tags() {
+        // A comment ends at the first place it may, and an element's text
+        // up to its end tag is markup in SVG and MathML, and in a frameset,
+        // which ignores the tag. Passed over, 100,000 attributes behind
+        // `<!-->` or `<svg><title>` took 15 to 19 s.
+        let tag = "<p a b c>";
+        for before in [
+            "<!-->",
+            "<!--->",
+            "<!-- x --!>",
+            "<svg><title>",
+            "<svg><plaintext>",
+            "<math><style>",
+            "<frameset><script>",
+            "<SVG><Script>",
+        ] {
+            assert_eq!(attribute_steps(&format!("{before}{tag}")), 3, "{before}");
+        }
+        // Before any of them, a script's text is passed over.
+        assert_eq!(attribute_steps(&format!("<script>{tag}</script><svg>")), 0);
+        // A comment's dashes run on to its end, which may come late.
+        for comment in [
+            "<!-- a -- b ---->",
+            "<!-- a --- b --!>",
+            "<!-- a -!> -- >-->",
+        ] {
+            assert_eq!(attribute_steps(&format!("{comment}{tag}")), 3, "{comment}");
+        }
+        assert_eq!(attribute_steps(&format!("<!-- a -- {tag}")), 0);
+    }
+
+    #[test]
+    fn comments_are_passed_over_in_one_pass() {
+        // Each comment's ending was looked for to the end of the page in
+        // both its forms: 600 KB of comments took 78 s.
+        assert_linear(
+            "comments",
+            20_000,
+            |n| "<!-- c -->".repeat(n),
+            |page| {
+                std::hint::black_box(attribute_steps(page));
+            },
+        );
+    }
+
+    #[test]
+    fn a_tag_of_many_thousand_attributes_is_refused_before_it_is_parsed() {
+        // The parser looks for each among those before it: two million on
+        // one tag ran past five minutes.
+        let tag = |n: usize| {
+            let attrs: Vec<String> = (0..n).map(|i| format!("a{i}=1")).collect();
+            format!("<p {}>x</p>", attrs.join(" "))
+        };
+        // 200,000 took 37 s, and as long behind what the scan of the tags
+        // passed over and the tokenizer did not.
+        for before in ["", "<!-->", "<svg><title>"] {
+            let err = super::parse(&format!("{before}{}", tag(200_000)))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("steps"), "{err}");
+            assert_linear(
+                &format!("refusing a tag of many attributes after {before:?}"),
+                50_000,
+                |n| format!("{before}{}", tag(n)),
+                |page| assert!(super::parse(page).is_err()),
+            );
+        }
+        assert_eq!(super::parse(&tag(1_000)).unwrap().len(), 1);
+    }
+
+    /// [`read_within`] a budget of `memory`, its work unbounded, at the
+    /// costs of the output converted to.
+    fn within(src: &str, memory: u64) -> Result<Vec<Element>, TooLarge> {
+        let mut budget = Budget::new(memory, u64::MAX).for_output(output());
+        read_within(src, false, &mut budget).map(|(e, _)| e)
+    }
+
+    #[test]
+    fn a_tables_cell_text_is_checked_before_it_is_gathered() {
+        // Two cells of 300 KB each, in a budget that holds the page's tree
+        // and little more: refused for the text before it is copied out of
+        // the tree, not once the table holding it is made.
+        let long = "w".repeat(300_000);
+        let page = format!(
+            "<table><tr><th>Name</th><th>Note</th></tr><tr><td>{long}</td><td>{long}</td></tr></table>"
+        );
+        assert_eq!(kinds(&parse(&page)), ["doco:Table"]);
+        let (_, left) = build(
+            &page,
+            Budget::new(MAX_MEMORY, u64::MAX).for_output(output()),
+        )
+        .unwrap();
+        let tree = MAX_MEMORY - left.memory_left();
+        let err = within(&page, tree + 100_000).unwrap_err().to_string();
+        assert!(err.contains("text past"), "{err}");
+        assert!(within(&page, tree + 20 * MAX_MEMORY / 1000).is_ok());
+    }
+
+    #[test]
+    fn the_tree_is_spent_as_the_parser_builds_it() {
+        // Empty tags make a tree twenty times the page: 24 million made
+        // 3.9 GB of it from 168 MB.
+        let page = "<i></i>".repeat(10_000);
+        // Two slots an element, `<html>`, `<head>` and `<body>` among them.
+        let need = (10_000 + 3) * 2 * 128;
+        assert!(within(&page, need).is_ok());
+        let err = within(&page, need - 1).unwrap_err().to_string();
+        assert!(err.starts_with("cells past"), "{err}");
+    }
+
+    #[test]
+    fn a_text_node_spends_its_node_as_the_parser_makes_it() {
+        // Each `x` between two `<br>` is a node of the tree, as an element
+        // is, spent as the parser makes it.
+        let n = 10_000;
+        let memory_to_read = |page: &str| {
+            let (mut refused, mut read) = (0, MAX_MEMORY);
+            while refused + 1 < read {
+                let mid = refused + (read - refused) / 2;
+                match within(page, mid) {
+                    Ok(_) => read = mid,
+                    Err(_) => refused = mid,
+                }
+            }
+            read
+        };
+        let more = memory_to_read(&"<br>x".repeat(n)) - memory_to_read(&"<br>".repeat(n));
+        let nodes = (n as u64) * node_slots(1) * fluree_doc_model::budget::CELL_BYTES;
+        assert!(more >= nodes, "{more} < {nodes}");
+    }
+
+    #[test]
+    fn formatting_elements_the_parser_makes_again_are_spent() {
+        // Each `<p>` closes the `<b>` left open, and the text after it
+        // makes them all again: 400 of them over 30,000 paragraphs, a
+        // 124 KB page, made 12 million elements and 2.8 GB, and 1,000 over
+        // 20,000 aborted the process.
+        let page = |n: usize| {
+            let open: String = (0..200).map(|i| format!("<b id=b{i}>")).collect();
+            format!("<p>{open}{}", "<p>x".repeat(n))
+        };
+        // Two slots a node: 200 elements made again a paragraph.
+        let memory = 2_000 * 200 * 2 * 128;
+        assert!(within(&page(100), memory).is_ok());
+        let err = within(&page(2_000), memory).unwrap_err().to_string();
+        assert!(err.starts_with("cells past"), "{err}");
+    }
+
+    #[test]
+    fn nesting_the_parser_walks_is_spent_as_steps() {
+        // The parser checks what is in scope by walking the elements open
+        // around each one, so nested ones cost the square of their depth:
+        // 40,000 took 3 s, 200,000 over two minutes. So do formatting
+        // elements it re-makes inside each other, the page closing each
+        // one around another left open (`<b><i></b>`), which nest none in
+        // the page.
+        // Within a sixty-fourth of the steps, as a test is built
+        // unoptimized: 5,000 deep is past them, as 23,000 are past all.
+        let steps = |page: &str| {
+            let mut budget = Budget::new(MAX_MEMORY, MAX_WORK >> 6);
+            read_within(page, false, &mut budget).map(|(e, _)| e)
+        };
+        let nested = format!("{}x{}", "<div>".repeat(5_000), "</div>".repeat(5_000));
+        let misnested: String = (0..5_000)
+            .map(|k| format!("<b id={k}><i id={k}></b>"))
+            .collect();
+        // A repeated `<html>` gives the first its attributes, each looked
+        // for among those it has.
+        let repeated: String = (0..5_000).map(|k| format!("<html a{k}=1>")).collect();
+        for page in [nested, misnested, repeated] {
+            let err = steps(&page).unwrap_err().to_string();
+            assert!(err.contains("steps"), "{err}");
+        }
+        assert!(steps(&format!("{}x", "<div>".repeat(1_000))).is_ok());
+        // A page of ordinary depth and size is read.
+        let ordinary = format!(
+            "<div>{}</div>",
+            "<section><div><p>Some <b>text</b> and <a href=\"/x\">a link</a>.</p></div></section>"
+                .repeat(20_000)
+        );
+        assert_eq!(super::parse(&ordinary).unwrap().len(), 20_000);
+    }
+
+    #[test]
+    fn bands_each_over_the_next_are_walked_as_steps() {
+        // Each band set further in than the one over it stands over all the
+        // bands under it, so each is walked down to the first row of data:
+        // the square of their number, counted as steps of the page.
+        let stacked = |k: usize| {
+            let bands: String = (0..k)
+                .map(|i| {
+                    format!("<tr><td colspan=\"2\" style=\"padding-left:{i}pt\">B{i}</td></tr>")
+                })
+                .collect();
+            format!(
+                "<table><tr><th>Item</th><th>Value</th></tr>{bands}<tr><td>a</td><td>1</td></tr></table>"
+            )
+        };
+        let t = &parse(&stacked(4))[0];
+        assert_eq!(t.sub_headers, Some(vec![1, 2, 3, 4]));
+        // Twice the bands, four times the walk: well over twice the steps.
+        let (once, twice) = (steps_to_read(&stacked(400)), steps_to_read(&stacked(800)));
+        assert!(twice > 3 * once, "{once} then {twice}");
+    }
+
+    /// [`read_within`] `work` steps, as [`nesting_the_parser_walks_is_spent_as_steps`].
+    fn within_steps(page: &str, work: u64) -> Result<Vec<Element>, TooLarge> {
+        read_within(page, false, &mut Budget::new(MAX_MEMORY, work)).map(|(e, _)| e)
+    }
+
+    /// The fewest steps `page` is read within.
+    fn steps_to_read(page: &str) -> u64 {
+        let (mut refused, mut read) = (0, MAX_WORK);
+        assert!(within_steps(page, read).is_ok());
+        while refused + 1 < read {
+            let mid = refused + (read - refused) / 2;
+            match within_steps(page, mid) {
+                Ok(_) => read = mid,
+                Err(_) => refused = mid,
+            }
+        }
+        read
+    }
+
+    #[test]
+    fn end_tags_that_close_nothing_are_spent_as_steps() {
+        // Each looks for an open element of its name down all those open:
+        // 20,000 `<span>`, then 200,000 `</zz>`, ran past a minute.
+        let page = |close: &str| format!("{}{}", "<span>".repeat(2_000), close.repeat(5_000));
+        let err = within_steps(&page("</zz>"), MAX_WORK >> 6)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("steps"), "{err}");
+        // Refused as soon, however many there are of each.
+        assert_linear(
+            "end tags that close nothing",
+            2_000,
+            |n| format!("{}{}", "<span>".repeat(n), "</zz>".repeat(n * 5 / 2)),
+            |page| assert!(within_steps(page, MAX_WORK >> 6).is_err()),
+        );
+        // Closing the innermost each time is read.
+        assert!(within_steps(&page("</span>"), MAX_WORK >> 6).is_ok());
+    }
+
+    #[test]
+    fn formatting_elements_made_again_are_each_looked_for_among_those_open() {
+        // Before making again the formatting elements a paragraph closed,
+        // the parser looks for each among the elements open, a comparison
+        // of two nodes each.
+        let page = |depth: usize| {
+            let held: String = (0..50).map(|i| format!("<i id={i}>")).collect();
+            format!("{}<p>{held}x{}", "<span>".repeat(depth), "<p>x".repeat(100))
+        };
+        let err = within_steps(&page(2_000), MAX_WORK >> 6)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("steps"), "{err}");
+        assert!(within_steps(&page(20), MAX_WORK >> 6).is_ok());
+    }
+
+    #[test]
+    fn a_node_set_before_its_sibling_spends_the_siblings_looked_at() {
+        // What a table holds out of place is set before it, found among
+        // its siblings: 500,000 among 200,000 took 105 s.
+        let (before, inputs) = (6_400, 1_000);
+        let paragraphs = "<p>x</p>".repeat(before);
+        let set_before = format!("{paragraphs}<table>{}", "<input>".repeat(inputs));
+        let after = format!("{paragraphs}<table></table>{}", "<input>".repeat(inputs));
+        let looked_at = (before / SIBLINGS_A_STEP as usize * inputs) as u64;
+        let more = steps_to_read(&set_before) - steps_to_read(&after);
+        assert!(more >= looked_at, "{more} < {looked_at}");
+    }
+
+    #[test]
+    fn the_children_a_formatting_element_takes_are_spent() {
+        // Closing the `<b>` around a block gives the block's children to a
+        // new `<b>` inside it, each moved.
+        let moved = 10_000;
+        let page = |close: &str| format!("<b><div>{}{close}", "<br>".repeat(moved));
+        let more = steps_to_read(&page("</b>")) - steps_to_read(&page("</i>"));
+        assert!(more >= moved as u64, "{more} < {moved}");
+    }
+
+    #[test]
+    fn formatting_elements_compared_by_their_attributes_are_spent() {
+        // Each start tag is compared with each formatting element of its
+        // name the parser holds, attributes copied and sorted: 5,000 `<b>`
+        // of 100 attributes took over two minutes, as did a million end
+        // tags looking past 20,000 `<i>` the parser holds, closed.
+        let attrs: String = (0..40).map(|k| format!(" a{k}")).collect();
+        let compared =
+            |n: usize| -> String { (0..n).map(|i| format!("<b id={i}{attrs}>")).collect() };
+        let held = |n: usize| -> String { (0..n).map(|i| format!("<i id={i}>")).collect() };
+        let looked_past = |held: &str, n: usize| format!("<p>{held}</p>{}", "</b>".repeat(n));
+        for page in [compared(1_000), looked_past(&held(500), 10_000)] {
+            let err = within_steps(&page, MAX_WORK >> 6).unwrap_err().to_string();
+            assert!(err.contains("steps"), "{err}");
+        }
+        assert!(within_steps(&looked_past(&held(500), 1_000), MAX_WORK >> 6).is_ok());
+        // Refused as soon, however many there are.
+        assert_linear("start tags compared", 1_000, compared, |page| {
+            assert!(within_steps(page, MAX_WORK >> 6).is_err())
+        });
+        assert_linear(
+            "end tags looking past those held",
+            10_000,
+            |n| looked_past(&held(n / 20), n),
+            |page| assert!(within_steps(page, MAX_WORK >> 6).is_err()),
+        );
+        // Formatting elements closed, or left open around a mail's
+        // paragraphs, are read.
+        let closed = "<p><font face=Arial size=2 color=#1F497D><b class=x>a</b> b</font></p>";
+        let open: String = (0..50)
+            .map(|i| format!("<font face=Arial size=2 color=#{i:06x}><p>a"))
+            .collect();
+        let ordinary = format!("{}{open}{}", closed.repeat(5_000), "<p>b".repeat(5_000));
+        assert!(within_steps(&ordinary, MAX_WORK >> 6).is_ok());
+    }
+
+    #[test]
+    fn a_page_nested_past_the_depth_a_browser_keeps_is_read_flat() {
+        // A batch's worker has a 2 MiB stack: 1,000 tables nested, 33 KB,
+        // overflowed it and aborted the batch. Past 512 levels the page's
+        // elements are set beside their ancestor, as a browser sets them,
+        // and the walk goes no deeper.
+        let tables = |n: usize| {
+            format!(
+                "{}x{}",
+                "<table><tr><td>".repeat(n),
+                "</td></tr></table>".repeat(n)
+            )
+        };
+        let divs = |n: usize| format!("{}deep{}", "<div>".repeat(n), "</div>".repeat(n));
+        let read = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || {
+                let (dom, _) = build(&tables(1_000), Budget::default()).unwrap();
+                let deepest = {
+                    let mut stack = vec![(dom.document.clone(), 0)];
+                    let mut deepest = 0;
+                    while let Some((h, d)) = stack.pop() {
+                        deepest = deepest.max(d);
+                        stack.extend(h.children.borrow().iter().map(|c| (c.clone(), d + 1)));
+                    }
+                    deepest
+                };
+                (
+                    deepest,
+                    super::parse(&tables(1_000)).unwrap(),
+                    super::parse(&divs(520)).unwrap(),
+                    super::parse(&tables(100)).unwrap(),
+                )
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        let (deepest, tables, divs, shallow) = read;
+        assert_eq!(deepest, MAX_DEPTH);
+        assert!(tables.iter().any(|e| e.text.contains('x')));
+        assert_eq!(texts(&divs), ["deep"]);
+        assert!(shallow.iter().any(|e| e.text.contains('x')));
+    }
+
+    #[test]
+    fn each_link_is_spent_before_it_is_kept() {
+        // DoCO writes each as a node of its own: 4.2 KB a link.
+        let page = format!("<p>{}</p>", "<a href=b>a</a> ".repeat(1_000));
+        let read = |output| converting_to(output, || within(&page, 3 << 20));
+        assert_eq!(
+            read(Output::Flat).unwrap()[0].links.as_ref().unwrap().len(),
+            1_000
+        );
+        let err = read(Output::Doco).unwrap_err().to_string();
+        assert!(err.starts_with("links past"), "{err}");
+    }
+
+    #[test]
+    fn a_table_written_once_spends_its_cells_not_an_element_each() {
+        // DoCO makes a node of each cell that holds text; Markdown writes
+        // it once. 50,000 rows of 30 cells, 1.5 million, were refused as
+        // Markdown, which takes about 510 bytes a cell.
+        let row = format!("<tr>{}</tr>", "<td>12.50</td>".repeat(10));
+        let page = format!("<table>{}</table>", row.repeat(2_000));
+        let read = |output| converting_to(output, || within(&page, 32 << 20));
+        assert_eq!(read(Output::Flat).unwrap().len(), 1);
+        assert!(read(Output::Doco).is_err());
+        // Written once, a cell that holds text costs what a sheet's does, at
+        // the output its budget counts at, whatever the thread converts to.
+        let mut e = element("doco:Table", String::new(), None);
+        e.cells = Some(vec![vec!["a".into(), String::new()]]);
+        let need = FLAT_ELEMENT_BYTES + FLAT_CELL_BYTES + TEXT_BYTES;
+        let spend = |memory| spend_table(&mut Budget::new(memory, 0).for_output(Output::Flat), &e);
+        assert!(spend(need).is_ok());
+        assert!(spend(need - 1).is_err());
+    }
+
+    #[test]
+    fn a_long_run_of_inline_elements_is_read_in_linear_time() {
+        // Each element counted the characters of the run before it, for a
+        // link's offsets: a million `<span>` took 12 s.
+        let word = "é".repeat(100);
+        let page = |n: usize| {
+            format!(
+                "<div>{}<a href=\"/é\">çà</a> ü</div>",
+                format!("<span>{word}</span>").repeat(n)
+            )
+        };
+        assert_linear("a run of spans", 5_000, page, |page| {
+            assert_eq!(super::parse(page).unwrap().len(), 1);
+        });
+        let n = 5_000;
+        let els = super::parse(&page(n)).unwrap();
+        let n = n * 100;
+        assert_eq!(els.len(), 1);
+        // The link is where its characters are, past the multi-byte ones.
+        let l = &els[0].links.as_ref().unwrap()[0];
+        assert_eq!(l.span(), Some((n, n + 2)));
+        assert_eq!(
+            els[0].text.chars().skip(n).take(2).collect::<String>(),
+            "çà"
+        );
+    }
+    #[test]
+    fn the_walk_asks_each_element_once_what_is_under_and_above_it() {
+        // Whether an element held a block was a walk down it at each level
+        // of the walk above it, and whether an `<aside>` was in an article
+        // a walk up its ancestors: 500 `<span>` around a million `<br>x`
+        // took 54 s, a million `<aside>` 500 elements deep 18 s.
+        // Deeper and longer together: either walk alone grows with their
+        // product.
+        assert_linear(
+            "inline elements around many lines",
+            10_000,
+            |n| {
+                format!(
+                    "{}{}<div>y</div>",
+                    "<span>".repeat(n / 100),
+                    "<br>x".repeat(n)
+                )
+            },
+            |page| assert!(super::parse(page).is_ok()),
+        );
+        assert_linear(
+            "asides deep down",
+            40_000,
+            |n| {
+                format!(
+                    "{}<table><tr><td>{}",
+                    "<div>".repeat(n / 400),
+                    "<aside></aside>".repeat(n)
+                )
+            },
+            |page| assert!(super::parse(page).is_ok()),
+        );
+        // What is under and above is read as it was.
+        let els = parse(
+            "<section><div><span><aside><p>Factbox.</p></aside></span></div></section>\
+             <div><span><span><aside><p>Sidebar.</p></aside></span></span></div>\
+             <span><b>Loose <i>run</i></b></span><span><em><div>Block</div></em></span>\
+             <div>One <span>run<script>x</script> with</span> a script</div>",
+        );
+        assert_eq!(
+            texts(&els),
+            ["Factbox.", "Loose run", "Block", "One run with a script"]
+        );
+    }
+
+    #[test]
+    fn a_text_past_the_budget_is_refused_before_it_is_made() {
+        // Made, then spent, with a map of each of its bytes to place its
+        // links by, a paragraph took 20 bytes for each of its own before it
+        // was spent: one of 193 MB aborted the process under 4 GB.
+        let word = "abcdefgh ";
+        let page = format!("<p>{}</p>", word.repeat(10_000));
+        let (dom, budget) = build(&page, Budget::default()).unwrap();
+        let p = {
+            let mut stack = vec![dom.document.clone()];
+            loop {
+                let h = stack.pop().unwrap();
+                if tag_of(&h).as_deref() == Some("p") {
+                    break h;
+                }
+                stack.extend(children_of(&h));
+            }
+        };
+        // Its text, collapsed: the last space is dropped.
+        let cost = (word.len() * 10_000 - 1) as u64 * TEXT_BYTES;
+        let spent = MAX_MEMORY - budget.memory_left();
+        let gather = |memory: u64| {
+            let mut out = Out {
+                budget: Budget::new(memory, u64::MAX),
+                facts: Facts::of(&dom.document),
+                ..Out::default()
+            };
+            let made = Cell::new(false);
+            let text = out.text(|g| {
+                made.set(made.get() || g.text.is_some());
+                g.children(&p);
+            });
+            (text.map(|(t, _)| t.len()), made.get())
+        };
+        assert_eq!(gather(cost), (Some(word.len() * 10_000 - 1), true));
+        assert_eq!(gather(cost - 1), (None, false));
+        // And the page with it, as a page.
+        let err = within(&page, spent + cost - 1).unwrap_err().to_string();
+        assert!(err.starts_with("text past"), "{err}");
+    }
+
+    #[test]
+    fn anchors_are_placed_as_their_text_is_gathered() {
+        // An anchor of whitespace alone spans nothing; one whose text ends
+        // in whitespace ends at its last character; anchors in a list
+        // item's own text are its own.
+        let els = parse(
+            "<p>a <a href=\"/w\"> </a> b <a href=\"/x\">c d </a> e</p>\
+             <ul><li>Go <a href=\"/y\">here</a><ul><li><a href=\"/z\">in</a></li></ul></li></ul>",
+        );
+        assert_eq!(els[0].text, "a b c d e");
+        let spans = |e: &Element| -> Vec<(Option<(usize, usize)>, String)> {
+            e.links
+                .iter()
+                .flatten()
+                .map(|l| (l.span(), l.href().to_string()))
+                .collect()
+        };
+        assert_eq!(spans(&els[0]), [(Some((4, 7)), "/x".to_string())]);
+        assert_eq!(els[1].text, "Go here");
+        assert_eq!(spans(&els[1]), [(Some((3, 7)), "/y".to_string())]);
+        assert_eq!(spans(&els[2]), [(Some((0, 2)), "/z".to_string())]);
+    }
+
+    #[test]
+    fn raised_marks_are_told_in_time_linear_in_the_page() {
+        // Each raised element's text was gathered whole, and nested ones
+        // each gathered again what the one inside them holds; and each was
+        // told by all the text before it, a word of a million raised
+        // digits looked at again at each.
+        // Deeper and longer together, the nested ones.
+        assert_linear(
+            "nested raised elements",
+            4_000,
+            |n| {
+                format!(
+                    "<p>Revenue{}{}{}</p>",
+                    "<sup>".repeat(n / 40),
+                    "<br>x".repeat(n),
+                    "</sup>".repeat(n / 40)
+                )
+            },
+            |page| assert_eq!(parse(page).len(), 1),
+        );
+        assert_linear(
+            "a word of raised digits",
+            5_000,
+            |n| format!("<p>\u{3c1}w{}</p>", "<sup>2</sup>".repeat(n)),
+            |page| assert_eq!(parse(page).len(), 1),
+        );
+        // A mark is still told apart, and a power kept with its value.
+        assert_eq!(
+            texts(&parse(
+                "<p>Revenue<sup>1</sup> rose; 10<sup>6</sup> m<sup>2</sup></p>"
+            )),
+            ["Revenue 1 rose; 106 m2"]
+        );
+    }
+
+    #[test]
+    fn a_pre_past_the_budget_is_refused_before_it_is_made() {
+        let page = format!("<pre>{}</pre>", "abcdefgh\n".repeat(10_000));
+        let (dom, _) = build(&page, Budget::default()).unwrap();
+        let pre = {
+            let mut stack = vec![dom.document.clone()];
+            loop {
+                let h = stack.pop().unwrap();
+                if tag_of(&h).as_deref() == Some("pre") {
+                    break h;
+                }
+                stack.extend(children_of(&h));
+            }
+        };
+        let facts = Facts::of(&dom.document);
+        // Counted as it is drawn, a line break at the cost of a control
+        // character: no less than what is made, the last line break left
+        // out of it.
+        let cost = pre_cost(&pre, &facts);
+        assert_eq!(cost, 80_000 + 10_000 * 6);
+        assert_eq!(pre_text(&pre, &facts).0.len(), 89_999);
+        let read = |memory: u64| {
+            let mut out = Out {
+                budget: Budget::new(memory, u64::MAX),
+                facts: Facts::of(&dom.document),
+                ..Out::default()
+            };
+            out.pre(&pre);
+            (out.elements.len(), out.over.is_some())
+        };
+        assert_eq!(read(2 * cost * TEXT_BYTES), (1, false));
+        assert_eq!(read(cost * TEXT_BYTES - 1), (0, true));
     }
 }

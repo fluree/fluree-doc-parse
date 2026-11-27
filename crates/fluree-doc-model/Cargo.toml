@@ -9,3 +9,13 @@ description = "Document element model and DoCO/Markdown/XHTML emitters, independ
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+
+[features]
+# `fluree_doc_model::scaling`, for the readers' tests that their work grows
+# with their input, not faster. Enabled by their dev-dependencies only.
+test-util = []
+
+# `cargo fuzz` builds with `--cfg fuzzing`, under which the budget is smaller
+# (`src/budget.rs`).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }

@@ -38,11 +38,11 @@ PDF layout.
 
 | crate | contains |
 |---|---|
-| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Attachment`, `Media` (an image placed in the flow) and `read_pictures`, the loop every container's pictures are read through, each once within a document's `Allowance`, `UnreadPage` and `UnreadImage` (what nothing read), `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization, `outline::infer_headings` (headings shown by keyword and number) |
-| `fluree-doc-markdown` | `parse(&str) -> Vec<Element>` |
-| `fluree-doc-text` | `parse(&str) -> Vec<Element>`; `decode(&[u8])`; `is_markdown` |
-| `fluree-doc-html` | `parse(&str) -> Vec<Element>`, via html5ever; `parse_with_quote_depth`, a message's body, its own images (`cid:`) as figures; `cid_ids`, the content ids its HTML shows; `parse_message`, both from one parse |
-| `fluree-doc-ooxml` | `Package`: a `.docx`, `.pptx` or `.xlsx` opened as parts, its relationships with targets resolved to part names, its main part and core properties as the package declares them; `PartNames` (a relationship's image, found as the format finds it), `read_media` (an image part of an opened `Package`, capped), `read_pictures` (each image once within a per-document `Allowance`), `alt_text` |
+| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Attachment`, `Media` (an image placed in the flow) and `read_pictures`, the loop every container's pictures are read through, each once within a document's `Allowance`, `UnreadPage` and `UnreadImage` (what nothing read), `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization, `outline::infer_headings` (headings shown by keyword and number); `budget`, what one document may make ([Limits](limits.md)) |
+| `fluree-doc-markdown` | `parse(&str) -> Result<Vec<Element>, TooLarge>` |
+| `fluree-doc-text` | `parse(&str) -> Result<Vec<Element>, TooLarge>`; `decode(impl Into<Vec<u8>>)`, owned UTF-8 kept without a copy; `is_markdown` |
+| `fluree-doc-html` | `parse(&str) -> Result<Vec<Element>, TooLarge>`, via html5ever; `parse_with_quote_depth`, a message's body, its own images (`cid:`) as figures; `cid_ids`, the content ids its HTML shows; `parse_message`, both from one parse |
+| `fluree-doc-ooxml` | `Package`: a `.docx`, `.pptx` or `.xlsx` opened as parts, its relationships with targets resolved to part names, its main part and core properties as the package declares them, a part read whole within the document's budget (`read_within`) or a bound (`read_capped`); `Relations` (a part's relationships by id, each found in one lookup), `PartNames` (a relationship's image, found as the format finds it), `read_media` (an image part of an opened `Package`, capped), `read_pictures` (each image once within a per-document `Allowance`), `alt_text` |
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening, `parse_with_media` where each figure's images are, `read_pictures` each image once within a per-document `Allowance`, `read_media` one image's bytes from an opened `Package`; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts; `parse_with_info` |
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info`; `grid_elements`, sheets another workbook format's reader read, laid out as an XLSX sheet; `parse_with_media` the pictures anchored to its cells, `read_media` one image's bytes; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
@@ -59,6 +59,66 @@ PDF layout.
 | `fluree-doc-image` | `decode` (PNG, JPEG, TIFF, upright by EXIF, at most 128 million pixels), `header` and `upright_size` (size upright, one-bit, page count: header only), `document`, `read` and `elements`: a bare image read by an `OcrEngine` and laid out as a scanned page; `elements_from_words` the same from words already read; `read_placed` the images a document places in its flow, read one at a time; `place_after_figures` puts a document's image text after its figures |
 | `fluree-doc-vision` | `WordReading`, `OcrWord`, `Coords`: the words an OCR engine read in one image, and the `--ocr-words` sidecar format (`from_json`, `to_json`); `OcrEngine` and `Pixels`, the engine interface. Feature `oar`: `oar::OarEngine` (PP-OCRv6 through oar-ocr, ONNX Runtime loaded at run time) and `assets`, the checked assets directory |
 | `fluree-doc-cli` | argument parsing and the commands |
+
+## Changes for library callers
+
+The per-document budget ([Limits](limits.md), issue #6) changed these
+public items; the workspace is still at 0.1.0, with no changelog of its
+own, so they are listed here.
+
+- `fluree_doc_markdown::parse` and `fluree_doc_text::parse` return
+  `Result<Vec<Element>, TooLarge>`: a document past its budget is refused
+  rather than made.
+- `fluree_doc_html::parse`, `parse_with_quote_depth` and `parse_message`
+  return a `Result` whose error is `TooLarge` (`parse_message`'s value is
+  `MessageBody`); `fluree_doc_email::EmailError` has a new variant,
+  `TooLarge`, for an HTML body past its budget.
+- `fluree_doc_pptx::parse_chart_xml` returns
+  `Result<Option<ChartData>, PptxError>`: a chart is read within a
+  budget of its own, and one past it is an error, not a chart.
+- `fluree_doc_ooxml::Package::read` is gone: a part read whole goes
+  through `Package::read_within(part, &mut Budget)`, spent from the
+  document's budget, or `Package::read_capped(part, max)`.
+- `fluree_doc_ooxml::PartNames::resolve` takes the part's relationships
+  as a `Relations` (new: `Relations::new(&rels)`), which finds an id in
+  one lookup; it replaces `fluree_doc_ooxml::by_id`, which is gone.
+- `fluree_doc_xls::XlsError` has a new variant, `Package`, for an `.xlsb`
+  that is no readable zip; the enum is not `#[non_exhaustive]`, so an
+  exhaustive `match` on it needs the arm.
+- `fluree_doc_xlsx::CellStyle::format` is an `Arc<NumFmt>`: the cell
+  styles that name a number format share it. `parse_styles` and
+  `parse_shared_strings` read within a default budget, and return
+  `XlsxError::TooLarge` past it.
+- `fluree_doc_odf::MAX_PART_BYTES`, `MAX_TEXT_CELLS` and
+  `MAX_TEXT_CELL_BYTES` are gone: an OpenDocument part and its tables are
+  spent from the budget instead.
+- `fluree_doc_html::MAX_DEPTH` (`usize`, 512) is new: what nests deeper is
+  set beside its ancestor at that depth.
+- `fluree_doc_model::budget` gains `Output` (with `element_bytes`,
+  `text_cell_bytes` and `csv_cell_bytes`), `converting_to` and `output` (the output a document
+  is converted to, whose costs it is counted at), `within` (a share of the
+  budget, for a file read beside another), `filled_cell_bytes`,
+  `filled_csv_cell_bytes`, `scaled`
+  (a `const fn`), `char_cost`, `FLAT_ELEMENT_BYTES`, `FLAT_CELL_BYTES`,
+  `CSV_CELL_BYTES`, `PART_BYTES`, and `Budget::for_output`, `spend_text_cells`,
+  `spend_cell_texts`, `spend_csv_cell_texts`, `spend_text_cost`, `spend_links`, `memory_left` and
+  `spend_bytes`.
+- `Budget::default()` is no longer always `MAX_MEMORY` at DoCO's costs:
+  it reads what the thread was given, the output inside `converting_to`
+  and at most the share inside `within`. A budget made outside either is
+  as before.
+- `fluree_doc_model::doco::Copies` has a new public field, `merged`; the
+  struct is not `#[non_exhaustive]`, so a struct literal of it needs the
+  field.
+- Built with `cfg(fuzzing)`, as `MAX_MEMORY` and `MAX_WORK` already
+  were, the public bounds that scale with the budget are a sixteenth of
+  what ships (`budget::scaled`): the `MAX_*` byte, cell, glyph and pixel
+  bounds of `fluree-doc-xls`, `-doc`, `-ppt`,
+  `-ooxml`, `-xps`, `-image` and `-pdf`'s annotations. A shipped build is
+  unchanged.
+- `fluree_doc_cli::convert_attachments(email, each)` is new, for the fuzz
+  targets and hidden from the docs: it hands each file an e-mail carries,
+  converted, to `each` as it is made.
 
 ## Inside fluree-doc-pdf
 

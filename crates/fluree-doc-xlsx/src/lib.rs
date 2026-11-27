@@ -41,19 +41,22 @@
 //! wanting the address has the table's row and column.
 //!
 //! **Bounds.** A cell past Excel's grid ([`MAX_ROWS`], [`MAX_COLUMNS`]) is
-//! not read. Every cell read and every copy the layout makes of it, every
-//! cell a merge covers or a table's grid holds, every element made and the
-//! text of each cell are spent from the workbook's [`Budget`] before they
-//! are allocated, and the passes that mend islands into blocks, which
-//! compare them pairwise, spend its work; past either, the workbook is
-//! refused. A sheet's merges past about a million cells are read unmerged,
+//! not read. Every part read whole, every shared string, cell style and
+//! sheet listed, every cell read and every copy the layout makes of it,
+//! every cell a merge covers or a table's grid holds, every element made
+//! and the text of each cell are spent from the workbook's [`Budget`]
+//! before they are allocated, and the passes that mend islands into blocks,
+//! which compare them pairwise, spend its work; past either, the workbook
+//! is refused. A number format is kept once, however many cell styles name
+//! it, and a sheet's part read once, however many times the workbook lists
+//! it. A sheet's merges past about a million cells are read unmerged,
 //! its tables past about four million cells of grid as their cells' text,
 //! and past 2,048 islands no island is mended.
 
 use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{Datum, DocumentInfo, Element};
 pub use fluree_doc_ooxml::Package;
-use fluree_doc_ooxml::{attr, local, PartNames};
+use fluree_doc_ooxml::{attr, local, PartNames, Relations};
 
 /// A picture anchored to a sheet's cells: the figure it is drawn as and
 /// where each of its images is. Its bytes are read on demand, each image
@@ -69,6 +72,7 @@ pub use fluree_doc_ooxml::{read_media, read_media_head, read_pictures, MAX_MEDIA
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum XlsxError {
@@ -176,8 +180,13 @@ pub fn parse_package(
     pkg: &mut Package<'_>,
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), XlsxError> {
     let main = pkg.main_part("xl/workbook.xml");
-    let workbook = pkg.read(&main).ok_or(XlsxError::NoWorkbook)?;
-    let rels = pkg.relationships(&main);
+    // The parts the workbook is read from, each inflated whole, are spent
+    // from its budget before what it makes.
+    let mut budget = Budget::default();
+    let workbook = pkg
+        .read_within(&main, &mut budget)?
+        .ok_or(XlsxError::NoWorkbook)?;
+    let rels = pkg.relationships(&main).map_err(XlsxError::Zip)?;
     let part = |name: &str, fallback: &str| {
         rels.iter()
             .find(|r| r.is(name) && !r.external)
@@ -187,28 +196,36 @@ pub fn parse_package(
         part("sharedStrings", "xl/sharedStrings.xml"),
         part("styles", "xl/styles.xml"),
     );
-    let shared = pkg
-        .read(&shared)
-        .map(|x| parse_shared_strings(&x))
-        .transpose()?
-        .unwrap_or_default();
-    let styles = pkg
-        .read(&styles)
-        .map(|x| parse_styles(&x))
-        .transpose()?
-        .unwrap_or_default();
-    let (sheets, date1904) = parse_workbook_xml(&workbook)?;
+    let shared = match pkg.read_within(&shared, &mut budget)? {
+        Some(x) => read_shared_strings(&x, &mut budget)?,
+        None => Vec::new(),
+    };
+    let styles = match pkg.read_within(&styles, &mut budget)? {
+        Some(x) => read_styles(&x, &mut budget)?,
+        None => Styles::default(),
+    };
+    let (sheets, date1904) = parse_workbook_xml(&workbook, &mut budget)?;
     let names = PartNames::new(pkg);
-    let mut budget = Budget::default();
+    // Each sheet's part by its relationship id, the first internal one
+    // that has it: found in one lookup per sheet listed, where a scan of
+    // every relationship for each made the listing's cost its square.
+    let targets = Relations::new(&rels);
+    // A sheet part is read once, at its first listing: listed again, under
+    // any name, its part, its drawing and their relationships would be
+    // read and laid out again for each.
+    let mut read = HashSet::new();
 
     let mut out = Vec::new();
     let mut media = Vec::new();
     let mut figure_count = 0usize;
     for (page, sheet_ref) in sheets.iter().enumerate() {
-        let Some(target) = rels.iter().find(|r| r.id == sheet_ref.rid && !r.external) else {
+        let Some(target) = targets.part(&sheet_ref.rid) else {
             continue;
         };
-        let Some(xml) = pkg.read(&target.target) else {
+        if !read.insert(target) {
+            continue;
+        }
+        let Some(xml) = pkg.read_within(target, &mut budget)? else {
             continue;
         };
         let ctx = Context {
@@ -222,14 +239,19 @@ pub fn parse_package(
         let mut figures = Vec::new();
         if let Some(rid) = &sheet.drawing {
             let drawing = pkg
-                .relationships(&target.target)
+                .relationships(target)
+                .map_err(XlsxError::Zip)?
                 .into_iter()
                 .find(|r| r.id == *rid && !r.external)
                 .map(|r| r.target);
-            if let Some((xml, part)) = drawing.and_then(|d| Some((pkg.read(&d)?, d))) {
-                let drawing_rels = pkg.relationships(&part);
-                let by_id = fluree_doc_ooxml::by_id(&drawing_rels);
-                for pic in pictures(&xml) {
+            let xml = match &drawing {
+                Some(d) => pkg.read_within(d, &mut budget)?,
+                None => None,
+            };
+            if let Some((xml, part)) = xml.zip(drawing) {
+                let drawing_rels = pkg.relationships(&part).map_err(XlsxError::Zip)?;
+                let drawing_rels = Relations::new(&drawing_rels);
+                for pic in pictures(&xml, &mut budget)? {
                     budget.spend_elements(1)?;
                     budget.spend_text(&pic.alt)?;
                     figure_count += 1;
@@ -237,7 +259,7 @@ pub fn parse_package(
                     for (index, rid) in pic.rids.iter().enumerate() {
                         media.push(Media {
                             figure: id.clone(),
-                            source: names.resolve(&by_id, rid),
+                            source: names.resolve(&drawing_rels, rid),
                             index,
                         });
                     }
@@ -379,14 +401,19 @@ struct Anchor {
     descr: String,
     title: String,
     rids: Vec<String>,
+    /// The ids in `rids`, each kept once: a scan of `rids` for each made
+    /// an anchor's cost the square of the images it names.
+    named: HashSet<String>,
 }
 
 /// The pictures of a drawing part (`xl/drawings/drawing1.xml`), in the
 /// order it anchors them. Only a picture (`xdr:pic`) has an image to read:
 /// a chart has data, and a shape's image fill is a texture. The fallback
 /// copy of an alternate content is not read twice. A drawing that does not
-/// parse anchors nothing: the cells are read without it.
-fn pictures(xml: &str) -> Vec<Picture> {
+/// parse anchors nothing: the cells are read without it. Each image a
+/// picture names is spent from `budget` before it is kept: one may name
+/// millions.
+fn pictures(xml: &str, budget: &mut Budget) -> Result<Vec<Picture>, TooLarge> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut out = Vec::new();
@@ -397,7 +424,7 @@ fn pictures(xml: &str) -> Vec<Picture> {
     let mut reading: Option<&'static str> = None;
     loop {
         let (e, start) = match r.read_event_into(&mut buf) {
-            Err(_) => return Vec::new(),
+            Err(_) => return Ok(Vec::new()),
             Ok(Event::Eof) => break,
             Ok(Event::Start(e)) => (e.into_owned(), true),
             Ok(Event::Empty(e)) => (e.into_owned(), false),
@@ -478,7 +505,9 @@ fn pictures(xml: &str) -> Vec<Picture> {
                     anchor.as_mut(),
                     attr(&e, "embed").or_else(|| attr(&e, "link")),
                 ) {
-                    if !a.rids.contains(&rid) {
+                    if !a.named.contains(&rid) {
+                        budget.spend_media(&rid)?;
+                        a.named.insert(rid.clone());
                         a.rids.push(rid);
                     }
                 }
@@ -487,7 +516,7 @@ fn pictures(xml: &str) -> Vec<Picture> {
         }
         buf.clear();
     }
-    out
+    Ok(out)
 }
 
 /// What the file declares about itself in its core properties: title,
@@ -510,7 +539,10 @@ struct SheetRef {
     rid: String,
 }
 
-fn parse_workbook_xml(xml: &str) -> Result<(Vec<SheetRef>, bool), XlsxError> {
+/// The sheets the workbook lists, each and its name and relationship id
+/// spent from `budget` before it is kept, and whether it counts dates from
+/// 1904.
+fn parse_workbook_xml(xml: &str, budget: &mut Budget) -> Result<(Vec<SheetRef>, bool), XlsxError> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut sheets = Vec::new();
@@ -523,6 +555,9 @@ fn parse_workbook_xml(xml: &str) -> Result<(Vec<SheetRef>, bool), XlsxError> {
                 "sheet" => {
                     let name = attr(&e, "name").unwrap_or_default();
                     let rid = attr(&e, "id").unwrap_or_default();
+                    budget.spend_cells(1)?;
+                    budget.spend_text(&name)?;
+                    budget.spend_text(&rid)?;
                     sheets.push(SheetRef { name, rid });
                 }
                 "workbookPr" => {
@@ -541,6 +576,14 @@ fn parse_workbook_xml(xml: &str) -> Result<(Vec<SheetRef>, bool), XlsxError> {
 /// The shared string table, one entry per `<si>`, rich-text runs joined and
 /// phonetic guides (`<rPh>`) left out.
 pub fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
+    read_shared_strings(xml, &mut Budget::default())
+}
+
+/// [`parse_shared_strings`], each entry spent from `budget` as a cell slot
+/// before it is kept: `<si/>` is five bytes of the part, and a string in
+/// the table. Their text is no more than the part's, which is spent as it
+/// is read; a copy of one is spent where a cell names it.
+fn read_shared_strings(xml: &str, budget: &mut Budget) -> Result<Vec<String>, XlsxError> {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -560,6 +603,7 @@ pub fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
             },
             Ok(Event::Empty(e)) => {
                 if local(e.name().as_ref()) == "si" {
+                    budget.spend_cells(1)?;
                     out.push(String::new());
                 }
             }
@@ -571,7 +615,14 @@ pub fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
                 }
             }
             Ok(Event::End(e)) => match local(e.name().as_ref()) {
-                "si" => out.push(cur.take().unwrap_or_default()),
+                "si" => {
+                    budget.spend_cells(1)?;
+                    // Runs joined leave room behind them; the table keeps
+                    // the text only.
+                    let mut s = cur.take().unwrap_or_default();
+                    s.shrink_to_fit();
+                    out.push(s);
+                }
                 "rPh" => phonetic = phonetic.saturating_sub(1),
                 "t" => in_t = false,
                 _ => {}
@@ -585,9 +636,12 @@ pub fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
 
 /// What a cell's style index resolves to: how its number displays, and
 /// whether its font is bold and how large.
+///
+/// The format is shared: every cell style that names a number format holds
+/// the one the workbook declares, not a copy of it with its literals.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellStyle {
-    pub format: NumFmt,
+    pub format: Arc<NumFmt>,
     pub bold: bool,
     pub size: f32,
 }
@@ -595,7 +649,7 @@ pub struct CellStyle {
 impl Default for CellStyle {
     fn default() -> Self {
         Self {
-            format: NumFmt::General,
+            format: Arc::new(NumFmt::General),
             bold: false,
             size: 11.0,
         }
@@ -662,6 +716,9 @@ fn builtin_fmt(id: u32) -> NumFmt {
         _ => NumFmt::General,
     }
 }
+
+/// The last id [`builtin_fmt`] knows: every id past it is General.
+const LAST_BUILTIN_FMT: u32 = 58;
 
 /// Classify a custom format code. Quoted literals, bracketed conditions and
 /// locale tags, and escaped characters say nothing about the value, so they
@@ -978,9 +1035,20 @@ fn round_decimal(v: f64, decimals: usize) -> (String, String) {
 /// `xl/styles.xml`: custom number formats, fonts, and the cell style table
 /// that indexes both.
 pub fn parse_styles(xml: &str) -> Result<Styles, XlsxError> {
+    read_styles(xml, &mut Budget::default())
+}
+
+/// [`parse_styles`], each number format (its literals as text) and each
+/// cell style spent from `budget` before it is kept. A cell style holds
+/// its number format shared, so one format's literals are kept once
+/// however many styles name it.
+fn read_styles(xml: &str, budget: &mut Budget) -> Result<Styles, XlsxError> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
-    let mut custom: HashMap<u32, NumFmt> = HashMap::new();
+    // The number formats the file declares, by id, and the built-in ones
+    // named so far, each made once.
+    let mut custom: HashMap<u32, Arc<NumFmt>> = HashMap::new();
+    let mut builtin: HashMap<u32, Arc<NumFmt>> = HashMap::new();
     let mut fonts: Vec<(bool, f32)> = Vec::new();
     let mut xfs: Vec<CellStyle> = Vec::new();
     let mut in_fonts = false;
@@ -1022,7 +1090,9 @@ pub fn parse_styles(xml: &str) -> Result<Styles, XlsxError> {
                 });
                 if let (Some(id), Some(code)) = (attr(&e, "numFmtId"), code) {
                     if let Ok(id) = id.parse::<u32>() {
-                        custom.insert(id, custom_fmt(&code));
+                        budget.spend_cells(1)?;
+                        budget.spend_text(&code)?;
+                        custom.insert(id, Arc::new(custom_fmt(&code)));
                     }
                 }
             }
@@ -1051,10 +1121,18 @@ pub fn parse_styles(xml: &str) -> Result<Styles, XlsxError> {
                 let num = attr(&e, "numFmtId")
                     .and_then(|v| v.parse::<u32>().ok())
                     .unwrap_or(0);
-                let format = custom
-                    .get(&num)
-                    .cloned()
-                    .unwrap_or_else(|| builtin_fmt(num));
+                budget.spend_cells(1)?;
+                let format = match custom.get(&num) {
+                    Some(f) => f.clone(),
+                    // Every id past the last built-in is General, one of them.
+                    None => {
+                        let id = num.min(LAST_BUILTIN_FMT + 1);
+                        builtin
+                            .entry(id)
+                            .or_insert_with(|| Arc::new(builtin_fmt(id)))
+                            .clone()
+                    }
+                };
                 let (bold, size) = attr(&e, "fontId")
                     .and_then(|v| v.parse::<usize>().ok())
                     .and_then(|i| fonts.get(i).copied())
@@ -1243,7 +1321,7 @@ pub fn format_number(raw: &str, style: &CellStyle, date1904: bool) -> String {
     let Ok(v) = raw.trim().parse::<f64>() else {
         return raw.trim().to_string();
     };
-    match &style.format {
+    match &*style.format {
         NumFmt::General => format_general(v),
         NumFmt::Percent(decimals) => format!("{:.*}%", decimals, v * 100.0),
         NumFmt::Number(f) => f.format(v),
@@ -1268,7 +1346,7 @@ pub fn cell_datum(kind: &str, value: &str, style: &CellStyle, date1904: bool) ->
         "d" => fluree_doc_model::xsd_temporal(v).map(|(ty, v)| Datum::new(ty, v)),
         "" | "n" => {
             let n = v.parse::<f64>().ok().filter(|n| n.is_finite())?;
-            let serial = match style.format {
+            let serial = match *style.format {
                 NumFmt::Date | NumFmt::Time | NumFmt::DateTime => {
                     serial_datum(n, &style.format, date1904)
                 }
@@ -2138,6 +2216,8 @@ fn island_elements(
     e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
+    // What DoCO copies of it: a merged value in each cell it covers.
+    budget.spend_copies(&e)?;
     out.push(((range.r0, range.c0), e));
     Ok(out)
 }
@@ -2248,7 +2328,8 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
 mod tests {
     use super::*;
     use fluree_doc_model::budget::{
-        Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+        text_cost, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
+        TEXT_BYTES,
     };
 
     /// [`grid_elements`] within the default budget.
@@ -2538,10 +2619,13 @@ mod tests {
             }]
         };
         // The sheet's title, the table and its cells, each a node of the
-        // output, and the title's text, besides.
+        // output, and the title's text, besides; and the labels DoCO copies
+        // onto each cell below the header, its column's (a byte) and, past
+        // the first, its row's (another).
+        let labels = 99 * 100 + 99 * 99;
         let cells = |n: u64| {
             Budget::new(
-                10_002 * ELEMENT_BYTES + TEXT_BYTES + n * CELL_BYTES,
+                10_002 * ELEMENT_BYTES + (1 + labels) * TEXT_BYTES + n * CELL_BYTES,
                 u64::MAX,
             )
         };
@@ -2585,6 +2669,63 @@ mod tests {
             parse_sheet_xml("S", &xml(4_000), 0, &ctx),
             Err(XlsxError::TooLarge(_))
         ));
+    }
+
+    #[test]
+    fn each_shared_string_is_spent_before_it_is_kept() {
+        // `<si/>` is five bytes of the part and a string in the table: two
+        // hundred million of them, 1.5 MB zipped, took the process down.
+        let xml = |n: usize| format!("<sst {NS}>{}<si><t>a</t></si></sst>", "<si/>".repeat(n - 1));
+        let slots = |n: u64| Budget::new(n * CELL_BYTES, 0);
+        let table = read_shared_strings(&xml(1_000), &mut slots(1_000)).unwrap();
+        assert_eq!(table.len(), 1_000);
+        assert_eq!(table[999], "a");
+        assert!(matches!(
+            read_shared_strings(&xml(1_000), &mut slots(999)),
+            Err(XlsxError::TooLarge(_))
+        ));
+    }
+
+    #[test]
+    fn a_number_format_is_kept_once_however_many_styles_name_it() {
+        // A format's literals named by every style: copied into each, a
+        // megabyte of them under 5,000 styles, 3 KB zipped, took the
+        // process down.
+        let xml = |literal: &str, n: usize| {
+            format!(
+                "<styleSheet {NS}><numFmts count=\"1\"><numFmt numFmtId=\"200\" formatCode=\"&quot;{literal}&quot;0\"/></numFmts><cellXfs>{}</cellXfs></styleSheet>",
+                "<xf numFmtId=\"200\"/><xf numFmtId=\"3\"/><xf numFmtId=\"9999\"/>".repeat(n)
+            )
+        };
+        let st = parse_styles(&xml(&"A".repeat(1 << 20), 1_000)).unwrap();
+        assert_eq!(st.xfs.len(), 3_000);
+        assert!(st
+            .xfs
+            .chunks(3)
+            .all(|x| { (0..3).all(|k| Arc::ptr_eq(&x[k].format, &st.xfs[k].format)) }));
+        assert_eq!(format_number("7", &st.xfs[2_999], false), "7");
+        assert_eq!(format_number("1234", &st.xfs[2_998], false), "1,234");
+        // The format, its literals as text, and each style, spent before
+        // they are kept.
+        let format = CELL_BYTES + text_cost("\"AB\"0") * TEXT_BYTES;
+        let spent = |n: u64| Budget::new(format + n * CELL_BYTES, 0);
+        assert!(read_styles(&xml("AB", 100), &mut spent(300)).is_ok());
+        assert!(matches!(
+            read_styles(&xml("AB", 100), &mut spent(299)),
+            Err(XlsxError::TooLarge(_))
+        ));
+    }
+
+    #[test]
+    fn each_sheet_listed_is_spent_before_it_is_kept() {
+        let xml = format!(
+            "<workbook {NS}><sheets>{}</sheets></workbook>",
+            "<sheet name=\"Sheet\" r:id=\"rId1\"/>".repeat(100)
+        );
+        let each = CELL_BYTES + (text_cost("Sheet") + text_cost("rId1")) * TEXT_BYTES;
+        let (sheets, _) = parse_workbook_xml(&xml, &mut Budget::new(100 * each, 0)).unwrap();
+        assert_eq!(sheets.len(), 100);
+        assert!(parse_workbook_xml(&xml, &mut Budget::new(100 * each - 1, 0)).is_err());
     }
 
     const NS: &str = r#"xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
@@ -2633,7 +2774,11 @@ mod tests {
     /// Styles 0: body; 1: bold body; 2: bold 16pt; 3: 9pt; 4: percent with
     /// one decimal; 5: date; 6: date-time.
     fn styles() -> Styles {
-        let st = |format, bold, size| CellStyle { format, bold, size };
+        let st = |format, bold, size| CellStyle {
+            format: Arc::new(format),
+            bold,
+            size,
+        };
         Styles {
             xfs: vec![
                 st(NumFmt::General, false, 11.0),
@@ -2884,7 +3029,7 @@ mod tests {
         assert_eq!(
             st.xfs[0],
             CellStyle {
-                format: NumFmt::General,
+                format: Arc::new(NumFmt::General),
                 bold: false,
                 size: 11.0
             }
@@ -2892,12 +3037,12 @@ mod tests {
         assert_eq!(
             st.xfs[1],
             CellStyle {
-                format: NumFmt::Date,
+                format: Arc::new(NumFmt::Date),
                 bold: true,
                 size: 14.0
             }
         );
-        assert_eq!(st.xfs[2].format, NumFmt::Percent(2));
+        assert_eq!(*st.xfs[2].format, NumFmt::Percent(2));
         // A quoted currency arrives entity-escaped in the attribute.
         let xml = format!(
             "<styleSheet {NS}><numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"&quot;$&quot;#,##0.00\"/></numFmts>\
@@ -2905,7 +3050,7 @@ mod tests {
         );
         let quoted = parse_styles(&xml).unwrap();
         assert_eq!(format_number("14.5", &quoted.xfs[0], false), "$14.50");
-        assert_eq!(st.xfs[3].format, NumFmt::DateTime);
+        assert_eq!(*st.xfs[3].format, NumFmt::DateTime);
         assert!(st.xfs[3].bold);
     }
 
@@ -2948,7 +3093,7 @@ mod tests {
     #[test]
     fn a_cell_stores_its_value_typed_beneath_what_it_shows() {
         let st = |format| CellStyle {
-            format,
+            format: Arc::new(format),
             ..Default::default()
         };
         let datum = |kind: &str, v: &str, format| cell_datum(kind, v, &st(format), false);
@@ -3683,6 +3828,64 @@ mod tests {
         assert!(matches!(parse(b"not a zip"), Err(XlsxError::Zip(_))));
     }
 
+    /// A workbook listing `listed` sheets, each by the relationship id
+    /// `rId1`, and relating `rels` ids no sheet names before the sheet's
+    /// part, `rId1`, once external and then within the package.
+    fn listing(listed: usize, rels: usize) -> Vec<u8> {
+        use std::io::Write;
+        let list: String = (0..listed)
+            .map(|i| format!("<sheet name=\"S{i}\" r:id=\"rId1\"/>"))
+            .collect();
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+        let others = "<Relationship Id=\"p\" Target=\"a\"/>".repeat(rels);
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, body) in [
+            (
+                "xl/workbook.xml",
+                format!("<workbook {NS}><sheets>{list}</sheets></workbook>"),
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                format!(
+                    "<Relationships>{others}\
+                     <Relationship Id=\"rId1\" Type=\"{rel}\" Target=\"https://example.com/x.xml\" TargetMode=\"External\"/>\
+                     <Relationship Id=\"rId1\" Type=\"{rel}\" Target=\"worksheets/sheet1.xml\"/></Relationships>"
+                ),
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                sheet(&[text("A1", 0, "cell")], ""),
+            ),
+        ] {
+            zw.start_file(name, opts).unwrap();
+            zw.write_all(body.as_bytes()).unwrap();
+        }
+        zw.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn a_sheet_listed_again_is_read_once() {
+        // Its first internal relationship names its part; listed again,
+        // under any name, it is not read again.
+        let els = parse(&listing(3, 0)).unwrap();
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, vec!["S0", "cell"]);
+    }
+
+    #[test]
+    fn a_sheet_is_found_among_the_relationships_in_one_lookup() {
+        // 20,000 listings and 200,000 relationships, 21 KB zipped: each
+        // listing scanning them all took 15 s in a release build.
+        assert_eq!(parse(&listing(2_000, 20_000)).unwrap().len(), 2);
+        fluree_doc_model::scaling::assert_linear(
+            "sheets listed among relationships",
+            1_000,
+            |n| listing(n, 10 * n),
+            |b| assert_eq!(parse(b).unwrap().len(), 2),
+        );
+    }
+
     const XDR: &str = r#"xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
 
     /// A picture anchored at (row, col), 0-based, of the image `rid`.
@@ -3844,6 +4047,40 @@ mod tests {
     }
 
     #[test]
+    fn a_pictures_images_are_each_kept_once_in_one_lookup_and_spent() {
+        // One picture naming 200,000 images, each its own id, and the first
+        // named again: a scan of those kept for each took 15 s in a release
+        // build, and none of them was spent.
+        let blips: String = (0..200_000)
+            .map(|i| format!("<a:blip r:embed=\"r{i}\"/>"))
+            .collect();
+        let xml = format!(
+            "<xdr:wsDr><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from>\
+             <xdr:pic><xdr:blipFill>{blips}<a:blip r:embed=\"r0\"/></xdr:blipFill></xdr:pic>\
+             </xdr:twoCellAnchor></xdr:wsDr>"
+        );
+        let got = pictures(&xml, &mut Budget::default()).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].rids.len(), 200_000);
+        assert_eq!(got[0].rids[199_999], "r199999");
+        let drawing = |n: usize| {
+            let blips: String = (0..n)
+                .map(|i| format!("<a:blip r:embed=\"r{i}\"/>"))
+                .collect();
+            format!(
+                "<xdr:wsDr><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from>\
+                 <xdr:pic><xdr:blipFill>{blips}<a:blip r:embed=\"r0\"/></xdr:blipFill></xdr:pic>\
+                 </xdr:twoCellAnchor></xdr:wsDr>"
+            )
+        };
+        fluree_doc_model::scaling::assert_linear("a picture of many images", 5_000, drawing, |x| {
+            pictures(x, &mut Budget::default()).unwrap();
+        });
+        // Each spent before it is kept.
+        assert!(pictures(&xml, &mut Budget::new(16 << 20, 0)).is_err());
+    }
+
+    #[test]
     fn only_a_drawings_pictures_are_read_once_each() {
         let pic = |rid: &str, attr: &str| {
             format!(
@@ -3874,7 +4111,8 @@ mod tests {
             pic("rId6", "embed"),
             pic("rId4", "link"),
         );
-        let got: Vec<((u32, u32), String, Vec<String>)> = pictures(&xml)
+        let got: Vec<((u32, u32), String, Vec<String>)> = pictures(&xml, &mut Budget::default())
+            .unwrap()
             .into_iter()
             .map(|p| (p.at, p.alt, p.rids))
             .collect();
@@ -3887,7 +4125,11 @@ mod tests {
                 ((u32::MAX, u32::MAX), "TrId4".to_string(), rids(&["rId4"])),
             ]
         );
-        assert!(pictures("<xdr:wsDr><xdr:twoCellAnchor>").is_empty());
+        assert!(
+            pictures("<xdr:wsDr><xdr:twoCellAnchor>", &mut Budget::default())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -4000,5 +4242,30 @@ mod tests {
             ),
             ("m2", "Failed")
         );
+    }
+
+    #[test]
+    fn a_long_value_merged_down_is_refused_rather_than_copied_into_each_row() {
+        // A2 merged down to the last row, beside columns of numbers, the
+        // cells it covers written (their text hidden): DoCO writes A2's
+        // value in each row of the merge, and beside it as each row's
+        // label.
+        const LONG: usize = 20_000;
+        let workbook = |rows: u32| {
+            let mut cells = vec![
+                text("A1", 0, "Name"),
+                text("B1", 0, "Q1"),
+                text("C1", 0, "Q2"),
+            ];
+            cells.push(text("A2", 0, &"y".repeat(LONG)));
+            cells.extend((3..=rows).map(|r| text(&format!("A{r}"), 0, "x")));
+            cells.extend((2..=rows).map(|r| num(&format!("B{r}"), 0, "1")));
+            cells.extend((2..=rows).map(|r| num(&format!("C{r}"), 0, "2")));
+            let merge = format!("<mergeCells><mergeCell ref=\"A2:A{rows}\"/></mergeCells>");
+            package(&[("S", &sheet(&cells, &merge))])
+        };
+        assert!(parse(&workbook(4)).is_ok());
+        let err = parse(&workbook(5_000)).unwrap_err();
+        assert!(err.to_string().contains("copies"), "{err}");
     }
 }

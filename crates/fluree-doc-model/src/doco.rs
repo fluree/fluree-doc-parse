@@ -523,38 +523,646 @@ fn column_headers(
     };
     // One header row: a column the row leaves empty, inside a label's span,
     // is under that label. A column with text of its own keeps it, since a
-    // PDF's merged run can set its words across the columns it spans.
+    // PDF's merged run can set its words across the columns it spans. The
+    // owner is carried along the row, as below.
     if n_header == 1 {
-        return (0..ncols)
-            .map(|c| {
-                let mut owner = c;
-                while owner > 0 && continues_left(0, owner) && rows[0][owner].trim().is_empty() {
-                    owner -= 1;
-                }
+        let mut owner = 0;
+        let mut names = Vec::with_capacity(ncols);
+        for c in 0..ncols {
+            if c == 0
+                || !continues_left(0, c)
+                || !rows[0].get(c).is_some_and(|t| t.trim().is_empty())
+            {
+                owner = c;
+            }
+            names.push(
                 rows[0]
                     .get(owner)
                     .map(|t| t.trim())
                     .unwrap_or("")
-                    .to_string()
-            })
-            .collect();
+                    .to_string(),
+            );
+        }
+        return names;
     }
-    (0..ncols)
-        .map(|c| {
-            let mut path: Vec<&str> = Vec::new();
-            for (r, row) in rows.iter().enumerate().take(n_header) {
-                let mut owner = c;
-                while owner > 0 && continues_left(r, owner) {
-                    owner -= 1;
-                }
-                let label = row.get(owner).map(|t| t.trim()).unwrap_or("");
-                if !label.is_empty() && !path.contains(&label) {
-                    path.push(label);
+    let mut paths: Vec<Vec<&str>> = vec![Vec::new(); ncols];
+    // The labels on each column's path, looked up rather than searched for
+    // along it: a header of thousands of rows made that the square of
+    // their number in each column.
+    let mut on_path: Vec<std::collections::HashSet<&str>> =
+        vec![std::collections::HashSet::new(); ncols];
+    for (r, row) in rows.iter().enumerate().take(n_header) {
+        // The cell holding the label over column `c`, carried along the
+        // row rather than walked back to from each column.
+        let mut owner = 0;
+        for (c, (path, seen)) in paths.iter_mut().zip(&mut on_path).enumerate() {
+            if c == 0 || !continues_left(r, c) {
+                owner = c;
+            }
+            let label = row.get(owner).map(|t| t.trim()).unwrap_or("");
+            if !label.is_empty() && seen.insert(label) {
+                path.push(label);
+            }
+        }
+    }
+    paths.into_iter().map(|path| path.join(" / ")).collect()
+}
+
+/// What the DoCO output copies of a table's cells, beyond the cells a
+/// reader made: see [`table_copies`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Copies {
+    /// Cells left empty by a merge that a copy fills, each a `doc:TableCell`
+    /// node of its own: the nodes the output makes past the cells that hold
+    /// text of their own.
+    pub cells: u64,
+    /// Text copied, at [`text_cost`](crate::budget::text_cost): a merged
+    /// value repeated into each cell it covers, and the labels each cell
+    /// node carries (`doc:columnHeader`, `doc:rowHeader`,
+    /// `doc:sectionLabel`).
+    pub text: u64,
+    /// The part of `text` the merges copy, the labels left out: what the
+    /// text projection copies too, a value merged down shown on each row
+    /// ([`projected_cells`]), where DoCO copies the labels as well.
+    pub merged: u64,
+}
+
+/// What [`to_doco`] copies of `e`'s cells, sized without making a copy.
+///
+/// A cell DoCO writes must describe itself, so a value merged down is
+/// repeated into each row of its span (the fragments of a merged cell joined
+/// first, `merges::denormalize`), the projection shows it on each row too
+/// ([`projected_cells`]), and every cell node carries its column's header,
+/// its row's first cell and its section's band. A file states none of these
+/// copies: a few kilobytes of merges, or one long label over many rows, make
+/// gigabytes of output. A reader spends them from the document's budget
+/// ([`Budget::spend_copies`](crate::budget::Budget::spend_copies)) before
+/// the table is kept.
+///
+/// This walks the table as the writer does, with each cell's text replaced
+/// by its cost: the vertical runs, the horizontal runs and the full-width
+/// bands of `denormalize`, then the labels of each cell that becomes a node.
+/// A stacked header's path is counted at every label on it, the repeats
+/// the writer drops included, so it is never under the writer's.
+///
+/// This counts a table standing alone. A part that carries on another
+/// (`continues`, a PDF's page break) takes that one's header, the band open
+/// at its end and the value its last row holds in a cell the break cut:
+/// [`TableCopies`] counts those, given the parts in the order they are
+/// written.
+pub fn table_copies(e: &Element) -> Copies {
+    part_copies(e, None).0
+}
+
+/// What [`to_doco`] copies of a document's tables, counted table by table
+/// in the order they are written, each part a page break carried on with
+/// what it takes from the part before ([`table_copies`] counts a table
+/// alone).
+///
+/// The writer copies onto a part's rows the column names in force at the
+/// end of the part it carries on (`doc:columnHeader`), the band open there
+/// (`doc:sectionLabel`, on each row until the part's own first band or
+/// break), and, at the top of a part with no header, the value the part
+/// before ends on in a cell the break cut. None is in the part's own cells:
+/// a band of a few kilobytes at the foot of one page, over ten thousand
+/// rows on the next, is tens of megabytes written. So each is counted on
+/// every cell node it lands on, at its text's cost, as the part's own
+/// labels are: each part keeps what the next would take from it, the names
+/// and header rows shared with the part before where it has none of its
+/// own, so the count stays linear in the parts' cells.
+#[derive(Debug, Clone, Default)]
+pub struct TableCopies {
+    parts: HashMap<String, PartEnd>,
+}
+
+impl TableCopies {
+    /// The copies the table `e` makes, with what it takes from the part it
+    /// carries on, where that one was counted before it.
+    pub fn count(&mut self, e: &Element) -> Copies {
+        let before = e.continues.as_ref().and_then(|id| self.parts.get(id));
+        let (copies, end) = part_copies(e, before);
+        // The writer keeps only tables for a later part to carry on.
+        if let Some(end) = end.filter(|_| e.kind == "doco:Table") {
+            self.parts.insert(e.id.clone(), end);
+        }
+        copies
+    }
+}
+
+/// What a part of a table hands the part a page break carries on from it,
+/// as the writer's [`TablePart`] does: its header rows (with which of their
+/// cells continue the one to the left), whether it is all header, the
+/// column names in force at its last row, that row read whole, and the cost
+/// of the band open over it (at most: the band the writer carries is this
+/// one or none).
+#[derive(Debug, Clone)]
+struct PartEnd {
+    head: std::sync::Arc<Vec<Vec<String>>>,
+    head_left: std::sync::Arc<Vec<bool>>,
+    header_only: bool,
+    names: std::sync::Arc<Vec<String>>,
+    last: Vec<String>,
+    band: u64,
+}
+
+/// Row `s` of `raw` as the writer reads it once the merges are applied
+/// (`merges::denormalize`, the values merged down joined from their
+/// fragments, then across, then a band's whole row), without reading the
+/// other rows: `top`, where given, is the first row as the writer fills it
+/// from the part before. The runs through the row are walked once each, so
+/// this is linear in the table's cells.
+fn read_row(e: &Element, raw: &[Vec<String>], top: Option<&[String]>, s: usize) -> Vec<String> {
+    let at = |r: usize| -> &[String] {
+        match top {
+            Some(t) if r == 0 => t,
+            _ => &raw[r],
+        }
+    };
+    let mut row = at(s).to_vec();
+    if e.merged_down.is_none() && e.merged_left.is_none() && e.sub_headers.is_none() {
+        return row;
+    }
+    let (n, cols) = (raw.len(), raw[0].len());
+    let flag = |m: &Option<Vec<bool>>, i: usize| m.as_ref().and_then(|m| m.get(i)) == Some(&true);
+    for c in 0..cols.min(row.len()) {
+        let (mut a, mut b) = (s, s);
+        while a > 0 && flag(&e.merged_down, a * cols + c) {
+            a -= 1;
+        }
+        while b + 1 < n && flag(&e.merged_down, (b + 1) * cols + c) {
+            b += 1;
+        }
+        if b > a {
+            row[c] = (a..=b)
+                .map(|i| at(i).get(c).map_or("", |t| t.trim()))
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
+    let m = crate::merges::Merges {
+        continues_above: vec![false; row.len()],
+        continues_left: (0..cols)
+            .map(|c| flag(&e.merged_left, s * cols + c))
+            .collect(),
+        full_width_row: vec![e.sub_headers.iter().flatten().any(|&b| b == s)],
+    };
+    crate::merges::denormalize(std::slice::from_mut(&mut row), &m);
+    row
+}
+
+/// [`table_copies`] for a part carrying on `before` (the part it continues,
+/// counted before it), and what this part hands the next one.
+fn part_copies(e: &Element, before: Option<&PartEnd>) -> (Copies, Option<PartEnd>) {
+    use crate::budget::text_cost;
+    use std::sync::Arc;
+    let Some(raw) = &e.cells else {
+        return (Copies::default(), None);
+    };
+    let n = raw.len();
+    let cols = raw.first().map_or(0, Vec::len);
+    // A table whose first row has no cell names no column, and its cells
+    // are not counted: nor is what a part carrying it on takes from it.
+    if n == 0 || cols == 0 {
+        return (Copies::default(), None);
+    }
+    // The writer carries a part on only where its columns line up.
+    let before = before.filter(|p| p.last.len() == cols);
+    // A cell the page break cut, empty at the top of a part with no header
+    // of its own and spanning down or labelling the row: the writer fills
+    // it with the value the part before ends on.
+    let top: Option<Vec<String>> = match before {
+        Some(p) if e.header_rows == Some(0) => {
+            let spans =
+                |c: usize| e.merged_down.as_ref().and_then(|m| m.get(cols + c)) == Some(&true);
+            let labels = raw[0].iter().skip(1).any(|t| !t.trim().is_empty());
+            let mut row = raw[0].clone();
+            for (c, value) in p.last.iter().enumerate() {
+                if row[c].trim().is_empty() && (spans(c) || (c == 0 && labels)) {
+                    row[c].clone_from(value);
                 }
             }
-            path.join(" / ")
+            Some(row)
+        }
+        _ => None,
+    };
+    // Each cell's trimmed text by its cost; 0 is an empty cell. A value
+    // filled from the part before is read as the cell's, and counted as a
+    // copy below.
+    let own: Vec<u64> = raw
+        .iter()
+        .enumerate()
+        .flat_map(|(r, row)| {
+            let row = match &top {
+                Some(t) if r == 0 => t,
+                _ => row,
+            };
+            (0..cols).map(move |c| row.get(c).map_or(0, |t| text_cost(t.trim())))
         })
-        .collect()
+        .collect();
+    let filled_in = own[..cols]
+        .iter()
+        .zip(&raw[0])
+        .map(|(&o, t)| o - text_cost(t.trim()))
+        .sum::<u64>();
+    // Texts joined by one space, as `denormalize` joins them.
+    let joined = |parts: &mut dyn Iterator<Item = u64>| {
+        let (sum, k) = parts
+            .filter(|&p| p > 0)
+            .fold((0u64, 0u64), |(s, k), p| (s.saturating_add(p), k + 1));
+        sum.saturating_add(k.saturating_sub(1))
+    };
+    let mut text = 0u64;
+    let mut d = own.clone();
+    let subs = e.sub_header_rows(n);
+    let n_header = e.header_rows.unwrap_or(1).min(n);
+    if e.merged_down.is_some() || e.merged_left.is_some() || e.sub_headers.is_some() {
+        let flag = |m: &Option<Vec<bool>>, i: usize| {
+            m.as_ref().and_then(|m| m.get(i)).copied().unwrap_or(false)
+        };
+        for c in 0..cols {
+            let mut r = 0;
+            while r < n {
+                let mut end = r + 1;
+                while end < n && flag(&e.merged_down, end * cols + c) {
+                    end += 1;
+                }
+                if end > r + 1 {
+                    let v = joined(&mut (r..end).map(|i| d[i * cols + c]));
+                    for i in r..end {
+                        text = text.saturating_add(v.saturating_sub(own[i * cols + c]));
+                        d[i * cols + c] = v;
+                    }
+                }
+                r = end;
+            }
+        }
+        for r in 0..n {
+            let row = r * cols;
+            let mut c = 0;
+            while c < cols {
+                let mut end = c + 1;
+                while end < cols && flag(&e.merged_left, row + end) {
+                    end += 1;
+                }
+                if end > c + 1 {
+                    // The text moves to the first cell; the spaces it is
+                    // joined by are new.
+                    let v = joined(&mut (c..end).map(|k| d[row + k]));
+                    let parts = d[row + c..row + end].iter().sum::<u64>();
+                    // A value set across data columns may be copied into
+                    // each of them ([`spread_across_columns`]): count a copy
+                    // in every column of the run.
+                    let spread =
+                        c > 0 && r >= n_header && !subs[r] && flag(&e.spread_left, row + c);
+                    let copies = if spread { (end - c) as u64 } else { 1 };
+                    text = text.saturating_add(v.saturating_mul(copies).saturating_sub(parts));
+                    d[row + c] = v;
+                    if spread {
+                        d[row + c + 1..row + end].fill(v);
+                    } else {
+                        d[row + c + 1..row + end].fill(0);
+                    }
+                }
+                c = end;
+            }
+            if subs[r] {
+                // The band is the whole row, cells past the first row's
+                // width included.
+                let past = raw[r].iter().skip(cols).map(|t| text_cost(t.trim()));
+                let past = past.collect::<Vec<_>>();
+                let v = joined(&mut d[row..row + cols].iter().chain(&past).copied());
+                let parts = d[row..row + cols].iter().chain(&past).sum::<u64>();
+                text = text.saturating_add(v.saturating_sub(parts));
+                d[row] = v;
+                d[row + 1..row + cols].fill(0);
+            }
+        }
+    }
+    // The text projection shows no value filled from the part before.
+    let merged = text;
+    text = text.saturating_add(filled_in);
+    // The header block, as the writer takes it: this part's own, the part
+    // before's where this one has none, or both where the break fell inside
+    // it (the part before is nothing but header).
+    let left = e.merged_left.as_deref().filter(|m| m.len() == n * cols);
+    let own_left = left.map_or_else(
+        || vec![false; n_header * cols],
+        |m| m[..n_header * cols].to_vec(),
+    );
+    let (head, head_left, column_names) = match before {
+        Some(p) if p.header_only && n_header > 0 => {
+            let mut h = (*p.head).clone();
+            h.extend(header_block(e, raw, n_header, &subs));
+            let mut l = (*p.head_left).clone();
+            l.extend(own_left);
+            let names = column_headers(&h, h.len(), Some(&l));
+            (Arc::new(h), Arc::new(l), Arc::new(names))
+        }
+        Some(p) if n_header == 0 => (p.head.clone(), p.head_left.clone(), p.names.clone()),
+        _ => {
+            let h = header_block(e, raw, n_header, &subs);
+            let names = column_headers(&h, n_header, left.map(|m| &m[..n_header * cols]));
+            (Arc::new(h), Arc::new(own_left), Arc::new(names))
+        }
+    };
+    // Each column's name as the writer gives it ([`column_headers`]), and
+    // the record a wrapped table's cell belongs to ([`record_width`]): its
+    // row label is the record's first cell, not the row's.
+    let header: Vec<u64> = column_names.iter().map(|h| text_cost(h)).collect();
+    let width = record_width(&column_names).unwrap_or(cols).max(1);
+    // A row restated partway down names the columns beneath it, each label
+    // under the header's upper rows' (`K25W951 / By wt`): at most that
+    // much, or the header's own name where the row leaves it empty.
+    let slash = text_cost(" / ");
+    let upper_names = if head.len() > 1 {
+        let k = head.len() - 1;
+        let l = head_left.get(..k * cols).unwrap_or(&[]);
+        column_headers(&head[..k], k, Some(l))
+    } else {
+        Vec::new()
+    };
+    let upper: Vec<u64> = upper_names.iter().map(|h| text_cost(h)).collect();
+    let mut restated_rows = vec![false; n];
+    for &s in e
+        .restated_headers
+        .iter()
+        .flatten()
+        .filter(|&&s| s >= n_header && s < n)
+    {
+        restated_rows[s] = true;
+    }
+    let mut restated: Option<usize> = None;
+    let column_label = |c: usize, restated: Option<usize>| {
+        let own = header.get(c).copied().unwrap_or(0);
+        match restated.map(|s| d.get(s * cols + c).copied().unwrap_or(0)) {
+            Some(label) if label > 0 => own.max(
+                upper
+                    .get(c)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(slash)
+                    .saturating_add(label),
+            ),
+            _ => own,
+        }
+    };
+    let flag = |m: &Option<Vec<bool>>, i: usize| {
+        m.as_ref().and_then(|m| m.get(i)).copied().unwrap_or(false)
+    };
+    // A band no data row follows is a row of its own, written as one.
+    let last_data = (0..n).rposition(|r| !subs[r]);
+    // The band open at the foot of the part before lands on each row of
+    // this one, until a band or a break of this part's own: at most, as
+    // the writer may find a row there that names something else.
+    let band_before = before.map_or(0, |p| p.band);
+    let first_band = (n_header..n).find(|&s| subs[s]).unwrap_or(n);
+    let first_break = (e.section_breaks.iter().flatten().copied().min()).unwrap_or(usize::MAX);
+    // A header restated beside a label set down its rows names those rows
+    // alone (the label's last row kept with it); any other, every row
+    // after it. Which one is in force at the last row names the rows the
+    // next part carries on.
+    let stub_span_end = |s: usize| -> Option<usize> {
+        let at = |r: usize| flag(&e.merged_down, r * cols);
+        at(s + 1).then(|| (s + 1..n).take_while(|&r| at(r)).last().unwrap_or(s + 1))
+    };
+    let mut restated_now: Option<usize> = None;
+    let mut nested_now: Vec<(usize, usize)> = Vec::new();
+    // The nodes: each cell below the header, outside a band, that holds
+    // text once the merges are read; each with its labels. The bands over a
+    // row are joined from the top down, a group's over its sub-group's.
+    let mut nodes = 0u64;
+    let mut section = 0u64;
+    for r in 0..n {
+        if r < n_header {
+            continue;
+        }
+        if subs[r] {
+            let above = if r > n_header && subs[r - 1] {
+                section
+            } else {
+                0
+            };
+            let own = d[r * cols];
+            section = match (above, own) {
+                (0, x) | (x, 0) => x,
+                (a, x) => a.saturating_add(slash).saturating_add(x),
+            };
+            if last_data.is_some_and(|l| l > r) {
+                continue;
+            }
+        }
+        if restated_rows[r] {
+            restated = Some(r);
+            match stub_span_end(r) {
+                Some(end) => nested_now.push((end, r)),
+                None => {
+                    restated_now = Some(r);
+                    nested_now.clear();
+                }
+            }
+            continue;
+        }
+        let section_here = if subs[r] {
+            0
+        } else if r < first_band && r < first_break {
+            band_before
+        } else {
+            section
+        };
+        let cost = |c: usize| {
+            if c < cols {
+                d[r * cols + c]
+            } else {
+                raw[r].get(c).map_or(0, |t| text_cost(t.trim()))
+            }
+        };
+        // A row longer than the first keeps its cells past it as they are.
+        // A cell's row is named by the groups set down the columns before
+        // it in its record and by the row's own label beside them: at most
+        // every column from the record's first to the last one spanning
+        // down, and the one after it, joined by ` / `.
+        let spans_down = |k: usize| {
+            (r > n_header && flag(&e.merged_down, r * cols + k))
+                || (r + 1 < n && flag(&e.merged_down, (r + 1) * cols + k))
+        };
+        let mut record = usize::MAX;
+        let mut last_group = 0;
+        let (mut names, mut joins) = (0u64, 0u64);
+        for c in 0..raw[r].len() {
+            let first = c - c % width;
+            if first != record {
+                record = first;
+                (names, joins) = (0, 0);
+                last_group = first;
+                while last_group + 1 < first + width && spans_down(last_group) {
+                    last_group += 1;
+                }
+            }
+            if c > first && c - 1 <= last_group {
+                if c - 1 > first {
+                    joins += 1;
+                }
+                names = names.saturating_add(cost(c - 1));
+            }
+            let value = cost(c);
+            if value == 0 {
+                continue;
+            }
+            nodes += 1;
+            let row_header = if c > first {
+                names.saturating_add(slash.saturating_mul(joins))
+            } else {
+                0
+            };
+            let labels = column_label(c, restated)
+                .saturating_add(row_header)
+                .saturating_add(section_here);
+            text = text.saturating_add(labels);
+        }
+    }
+    let filled = raw
+        .iter()
+        .flatten()
+        .filter(|t| !t.trim().is_empty())
+        .count() as u64;
+    let copies = Copies {
+        cells: nodes.saturating_sub(filled),
+        text,
+        merged,
+    };
+    // What names the rows the next part carries on: the header restated
+    // in force at the last row, read as the writer reads it, else the
+    // part's own names.
+    while nested_now.last().is_some_and(|&(end, _)| end < n - 1) {
+        nested_now.pop();
+    }
+    let names_at_end = match nested_now.pop().map(|(_, s)| s).or(restated_now) {
+        Some(s) => {
+            let row = read_row(e, raw, top.as_deref(), s);
+            let nested = stub_span_end(s).is_some();
+            let names = (0..cols).map(|c| {
+                let label = row.get(c).map_or("", |t| t.trim());
+                if label.is_empty() || (nested && c == 0) {
+                    return column_names.get(c).cloned().unwrap_or_default();
+                }
+                match (upper_names.get(c).map(|u| u.trim())).filter(|u| !u.is_empty()) {
+                    Some(u) if u != label => format!("{u} / {label}"),
+                    _ => label.to_string(),
+                }
+            });
+            Arc::new(names.collect())
+        }
+        None => column_names.clone(),
+    };
+    // The last row, as the writer keeps it: its merges read, and a value
+    // set across data columns copied into each ([`spread_across_columns`]).
+    let s = n - 1;
+    let mut last = read_row(e, raw, top.as_deref(), s);
+    let set_apart = (e.sub_headers.iter().flatten())
+        .chain(e.restated_headers.iter().flatten())
+        .any(|&b| b == s);
+    if let (Some(ml), Some(sl), false, true) = (
+        left,
+        e.spread_left.as_deref().filter(|m| m.len() == n * cols),
+        set_apart || s < n_header,
+        last.len() >= cols,
+    ) {
+        let row = vec![last[..cols].to_vec()];
+        let spread = spread_across_columns(
+            &row,
+            &raw[s..],
+            &column_names,
+            0,
+            Some(&ml[s * cols..]),
+            Some(&sl[s * cols..]),
+            &[],
+        );
+        if let Some(rows) = spread.rows {
+            last[..cols].clone_from_slice(&rows[0]);
+        }
+    }
+    // The band over a row past the last: this part's last, where it has
+    // one, else the one carried in, unless a break of its own ends it.
+    let band = if first_band < n {
+        section
+    } else if first_break <= n {
+        0
+    } else {
+        band_before
+    };
+    let end = PartEnd {
+        head,
+        head_left,
+        header_only: e.header_only(),
+        names: names_at_end,
+        last,
+        band,
+    };
+    (copies, Some(end))
+}
+
+/// The header rows [`to_doco`] names a table's columns by
+/// ([`column_headers`]): its first `n_header` rows, their merges read as
+/// the writer reads them (`subs`, each row's band). Only the header rows
+/// are copied.
+///
+/// A value merged down from the header into the rows below it is joined
+/// from all its fragments, those below the header too. They are gathered
+/// once per column into one row set under the header, which the value
+/// runs into, rather than the rows below copied and the value repeated
+/// into each: a `<th rowspan=20000>` of 300 KB made 6 GB of copies here,
+/// before the budget, which counts them by cost alone, refused the table.
+fn header_block(
+    e: &Element,
+    raw: &[Vec<String>],
+    n_header: usize,
+    subs: &[bool],
+) -> Vec<Vec<String>> {
+    let Some(cols) = raw.first().map(Vec::len).filter(|_| n_header > 0) else {
+        return Vec::new();
+    };
+    let flag = |m: &Option<Vec<bool>>, i: usize| m.as_ref().and_then(|m| m.get(i)) == Some(&true);
+    let k = n_header * cols;
+    let mut head = raw[..n_header].to_vec();
+    if e.merged_down.is_some() || e.merged_left.is_some() || e.sub_headers.is_some() {
+        let mut continues_above: Vec<bool> = (0..k).map(|i| flag(&e.merged_down, i)).collect();
+        let mut continues_left: Vec<bool> = (0..k).map(|i| flag(&e.merged_left, i)).collect();
+        let mut full_width_row = subs[..n_header].to_vec();
+        // Below the header, each column's run on from it, its fragments
+        // joined as `denormalize` joins them: in one row, they join the
+        // header's fragments into the same value.
+        let mut below = vec![String::new(); cols];
+        let mut runs_on = vec![false; cols];
+        for (c, (tail, on)) in below.iter_mut().zip(&mut runs_on).enumerate() {
+            let mut r = n_header;
+            while r < raw.len() && flag(&e.merged_down, r * cols + c) {
+                let t = raw[r].get(c).map_or("", |t| t.trim());
+                if !t.is_empty() {
+                    if !tail.is_empty() {
+                        tail.push(' ');
+                    }
+                    tail.push_str(t);
+                }
+                *on = true;
+                r += 1;
+            }
+        }
+        if runs_on.iter().any(|&on| on) {
+            head.push(below);
+            continues_above.extend(runs_on);
+            continues_left.extend(std::iter::repeat_n(false, cols));
+            full_width_row.push(false);
+        }
+        let m = crate::merges::Merges {
+            continues_above,
+            continues_left,
+            full_width_row,
+        };
+        crate::merges::denormalize(&mut head, &m);
+        head.truncate(n_header);
+    }
+    head
 }
 
 /// Minimal tag stripper for model-arbitrated tables whose text is HTML.
@@ -613,7 +1221,8 @@ struct Emitter<'a> {
 /// restated partway down, where one is), and the band open over them, with
 /// the label its last row holds alone where it does; and
 /// the table's opening rows (its header and the rows over its first band,
-/// as its first part sets them), which a later page may set again.
+/// as its first part sets them), which a later page may set again: shared
+/// by every part of the table, not copied into each.
 struct TablePart {
     iri: String,
     head: Vec<Vec<String>>,
@@ -624,7 +1233,7 @@ struct TablePart {
     names_at_end: Vec<String>,
     band_at_end: Option<String>,
     lone_end: Option<String>,
-    opening: Vec<Vec<String>>,
+    opening: std::rc::Rc<Vec<Vec<String>>>,
     page: usize,
     placed: bool,
 }
@@ -912,6 +1521,16 @@ impl<'a> Emitter<'a> {
         // The projection trims the element's text, so offsets into it have
         // to trim with it.
         let lead = e.text.chars().take_while(|c| c.is_whitespace()).count();
+        // Where each character starts, and the text's end: an anchor is cut
+        // by its offsets in one step, where skipping to each anchor is
+        // quadratic in an element of many links (600,000 on one line).
+        let starts: Vec<usize> = e
+            .text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(e.text.len()))
+            .collect();
+        let at = |c: usize| starts[c.min(starts.len() - 1)];
         let mut iris = Vec::new();
         for l in &links {
             let node = self.node("link", "doc:Link", None);
@@ -932,7 +1551,7 @@ impl<'a> Emitter<'a> {
             if let (Some(start), Some((b, end))) = (text_start, l.span()) {
                 if b >= lead {
                     self.set_offsets(node, start + b - lead, start + end - lead);
-                    let anchor: String = e.text.chars().skip(b).take(end - b).collect();
+                    let anchor = e.text[at(b)..at(end.max(b))].to_string();
                     self.nodes[node].insert("nif:isString".into(), Value::String(anchor));
                 }
             }
@@ -1291,9 +1910,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 .merged_left
                                 .clone()
                                 .unwrap_or_else(|| vec![false; rows.len() * ncols]),
-                            full_width_row: (0..rows.len())
-                                .map(|r| e.sub_headers.as_ref().is_some_and(|s| s.contains(&r)))
-                                .collect(),
+                            full_width_row: e.sub_header_rows(rows.len()),
                         };
                         crate::merges::denormalize(&mut rows, &m);
                     }
@@ -1328,7 +1945,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             column_headers(rows, n_header, e.merged_left.as_deref()),
                         ),
                     };
-                    let subs = e.sub_headers.clone().unwrap_or_default();
+                    let sub_rows = e.sub_headers.clone().unwrap_or_default();
                     // A value set once across data columns that each have a
                     // header of their own is each column's value.
                     let spread = spread_across_columns(
@@ -1339,12 +1956,13 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         e.merged_left.as_deref(),
                         e.spread_left.as_deref(),
                         &[
-                            subs.as_slice(),
+                            sub_rows.as_slice(),
                             e.restated_headers.as_deref().unwrap_or(&[]),
                         ]
                         .concat(),
                     );
                     let rows = spread.rows.as_ref().unwrap_or(rows);
+                    let subs = e.sub_header_rows(rows.len());
                     // A row set like the header, partway down, names the
                     // columns of the rows beneath it in the header's place:
                     // its labels stand for the header's lowest row, under
@@ -1390,41 +2008,35 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             })
                             .collect()
                     };
-                    let restated_headers: Vec<(usize, Vec<String>)> = restated
+                    let mut is_restated = vec![false; rows.len()];
+                    for &s in restated
                         .iter()
                         .filter(|&&s| s >= n_header && s < rows.len())
-                        .map(|&s| (s, restated_header(s)))
-                        .collect();
+                    {
+                        is_restated[s] = true;
+                    }
                     // A table wrapped into side-by-side copies of its columns
                     // holds one record per copy on each row.
                     let width = record_width(&header).unwrap_or(ncols).max(1);
                     // A band labels the rows beneath it: no data row follows
                     // the last band, or the band is a row of its own.
-                    let data_after = |s: usize| (s + 1..rows.len()).any(|r| !subs.contains(&r));
-                    // The band over row `r` (any index up to `rows.len()`):
-                    // the nearest above it in the body, with each band set
-                    // directly over that one, unless a break the table set
-                    // between its groups (a blank row) ends it first.
-                    let breaks = e.section_breaks.as_deref().unwrap_or(&[]);
-                    let band_over = |r: usize| -> Option<String> {
-                        subs.iter()
-                            .filter(|s| **s < r && **s >= n_header)
-                            .max()
-                            .filter(|&&s| !breaks.iter().any(|&b| b > s && b <= r))
-                            .map(|&s| {
-                                let mut top = s;
-                                while top > n_header && subs.contains(&(top - 1)) {
-                                    top -= 1;
-                                }
-                                (top..=s)
-                                    .filter_map(|b| rows[b].first())
-                                    .map(|t| t.trim())
-                                    .filter(|t| !t.is_empty())
-                                    .collect::<Vec<_>>()
-                                    .join(" / ")
-                            })
-                            .filter(|t| !t.is_empty())
-                    };
+                    let last_data = (0..rows.len()).rposition(|r| !subs[r]);
+                    let data_after = |s: usize| last_data.is_some_and(|d| d > s);
+                    // Carried down the table rather than searched for at each
+                    // row: the header restated last, and the bands over the
+                    // rows below the last band, joined once per band.
+                    let mut restated_now: Option<Vec<String>> = None;
+                    // The headers restated beside a label set down their
+                    // rows, each with the last row it names, the latest on
+                    // top: one that ends is never read again.
+                    let mut nested_now: Vec<(usize, Vec<String>)> = Vec::new();
+                    let mut section_now: Option<String> = None;
+                    let mut is_break = vec![false; rows.len()];
+                    for &b in e.section_breaks.as_deref().unwrap_or(&[]) {
+                        if let Some(x) = is_break.get_mut(b) {
+                            *x = true;
+                        }
+                    }
                     // The part before ending on a label alone, no band: part
                     // of this part's first label, cut by the break, and the
                     // band before it goes on. That label holds it
@@ -1452,16 +2064,27 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     // unit lines under the column names) are the head's,
                     // under no band. Only at the top: further down, a row
                     // like one of the opening ones (`Frequency | Annual`) is
-                    // data.
-                    let same_row = |a: &[String], b: &[String]| {
-                        a.len() == b.len()
-                            && a.iter().any(|t| !t.trim().is_empty())
-                            && a.iter().zip(b).all(|(x, y)| x.trim() == y.trim())
+                    // data. The opening rows are looked up by their trimmed
+                    // text, not compared one by one with each row: a part
+                    // repeating thousands of them was their product.
+                    let trimmed = |row: &[String]| -> Option<Vec<String>> {
+                        row.iter()
+                            .any(|t| !t.trim().is_empty())
+                            .then(|| row.iter().map(|t| t.trim().to_string()).collect())
                     };
-                    let opening = opening_before.as_deref().unwrap_or(&[]);
-                    let repeated_to = (n_header..rows.len())
-                        .find(|&r| !opening.iter().any(|o| same_row(&rows[r], o)))
-                        .unwrap_or(rows.len());
+                    let opening: std::collections::HashSet<Vec<String>> = opening_before
+                        .as_deref()
+                        .map_or(&[][..], Vec::as_slice)
+                        .iter()
+                        .filter_map(|o| trimmed(o))
+                        .collect();
+                    let repeated_to = if opening.is_empty() {
+                        n_header
+                    } else {
+                        (n_header..rows.len())
+                            .find(|&r| !trimmed(&rows[r]).is_some_and(|t| opening.contains(&t)))
+                            .unwrap_or(rows.len())
+                    };
                     let opening_again = |r: usize| r >= n_header && r < repeated_to;
                     // And only while they name themselves in their first
                     // cell, as the band's rows on the page before do: a row
@@ -1475,10 +2098,14 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 && rows[r].iter().any(|t| !t.trim().is_empty())
                         })
                         .unwrap_or(rows.len());
+                    // The part's first band and first break, for the rows
+                    // a band of its own comes over.
+                    let first_band = (n_header..rows.len()).find(|&s| subs[s]);
+                    let first_break = e.section_breaks.as_deref().and_then(|b| b.iter().min());
                     let carried_band = |r: usize| -> Option<String> {
-                        let own = subs.iter().any(|s| *s < r && *s >= n_header)
-                            || subs.contains(&r)
-                            || breaks.iter().any(|&b| b <= r)
+                        let own = first_band.is_some_and(|s| s < r)
+                            || subs.get(r).copied().unwrap_or(false)
+                            || first_break.is_some_and(|&b| b <= r)
                             || opening_again(r)
                             || (named_to < rows.len() && r >= named_to);
                         if own {
@@ -1486,6 +2113,35 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         }
                         band_before.clone()
                     };
+                    // The run a value merged down makes in each column: for
+                    // each cell, the first and last rows of the run it is
+                    // in, below the header. Found once for the table, not
+                    // walked again for each cell beside a group.
+                    let merged_at = |r: usize, c: usize| {
+                        e.merged_down
+                            .as_ref()
+                            .and_then(|m| m.get(r * ncols + c))
+                            .copied()
+                            .unwrap_or(false)
+                    };
+                    let mut run_top = vec![0usize; rows.len() * ncols];
+                    let mut run_end = vec![0usize; rows.len() * ncols];
+                    for c in 0..ncols {
+                        for r in 0..rows.len() {
+                            run_top[r * ncols + c] = if r > n_header && merged_at(r, c) {
+                                run_top[(r - 1) * ncols + c]
+                            } else {
+                                r
+                            };
+                        }
+                        for r in (0..rows.len()).rev() {
+                            run_end[r * ncols + c] = if r + 1 < rows.len() && merged_at(r + 1, c) {
+                                run_end[(r + 1) * ncols + c]
+                            } else {
+                                r
+                            };
+                        }
+                    }
                     for (r, row) in rows.iter().enumerate().skip(n_header) {
                         // A sub-header band labels the rows beneath it; it is
                         // not itself data. Its text rides on those rows as
@@ -1493,30 +2149,62 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         // the section it belongs to. A band no data row
                         // follows labels nothing, and is a cell of its own:
                         // a table's closing notes.
-                        if subs.contains(&r) && data_after(r) {
-                            continue;
-                        }
-                        if restated.contains(&r) {
-                            continue;
-                        }
-                        let header = restated_headers
-                            .iter()
-                            .rev()
-                            .find(|(s, _)| *s < r && stub_span_end(*s).is_none_or(|end| r <= end))
-                            .map_or(&header, |(_, h)| h);
-                        // The bands over a row: the nearest above it, and
-                        // each band set directly over that one, a group over
-                        // its sub-group (`Power Management` over `Average
-                        // power requirements (W)`), joined from the top down
-                        // as a stacked header's labels are.
                         // A section runs on to the next band, or to a break the
                         // table set between its groups (a blank row), where
                         // the rows go on with no section over them.
-                        let section = (!subs.contains(&r))
-                            .then(|| band_over(r))
+                        if is_break[r] && !subs[r] {
+                            section_now = None;
+                        }
+                        if subs[r] {
+                            // The bands over a row: the nearest above it,
+                            // and each band set directly over that one, a
+                            // group over its sub-group (`Power Management`
+                            // over `Average power requirements (W)`), joined
+                            // from the top down as a stacked header's labels
+                            // are.
+                            let mut joined = if r > n_header && subs[r - 1] {
+                                section_now.take().unwrap_or_default()
+                            } else {
+                                String::new()
+                            };
+                            if let Some(label) =
+                                rows[r].first().map(|t| t.trim()).filter(|t| !t.is_empty())
+                            {
+                                if !joined.is_empty() {
+                                    joined.push_str(" / ");
+                                }
+                                joined.push_str(label);
+                            }
+                            section_now = Some(joined);
+                            if data_after(r) {
+                                continue;
+                            }
+                        }
+                        if is_restated[r] {
+                            // A header restated beside a label set down its
+                            // rows names those rows alone; any other names
+                            // every row after it, until the next.
+                            match stub_span_end(r) {
+                                Some(end) => nested_now.push((end, restated_header(r))),
+                                None => {
+                                    restated_now = Some(restated_header(r));
+                                    nested_now.clear();
+                                }
+                            }
+                            continue;
+                        }
+                        while nested_now.last().is_some_and(|(end, _)| *end < r) {
+                            nested_now.pop();
+                        }
+                        let header = (nested_now.last().map(|(_, h)| h))
+                            .or(restated_now.as_ref())
+                            .unwrap_or(&header);
+                        let own_section = (!subs[r])
+                            .then_some(section_now.as_deref())
                             .flatten()
-                            .or_else(|| carried_band(r));
-                        let section = section.as_deref();
+                            .filter(|t| !t.is_empty());
+                        let carried = own_section.is_none().then(|| carried_band(r)).flatten();
+                        let section = own_section.or(carried.as_deref());
                         // A group label set down the first column, a span
                         // over the rows it groups, beside each row's own
                         // label: the row is named by both, group first
@@ -1534,8 +2222,11 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             (r > n_header && at(r)) || (r + 1 < rows.len() && at(r + 1))
                         };
                         // The rows the cell at `r`, `c` spans: its first and
-                        // last.
+                        // last, as found for the whole table above.
                         let span = |r: usize, c: usize| {
+                            if c < ncols {
+                                return (run_top[r * ncols + c], run_end[r * ncols + c]);
+                            }
                             let at = |r: usize| {
                                 e.merged_down
                                     .as_ref()
@@ -1562,6 +2253,11 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                     c.is_ascii_digit() || ",.$€£¥%()-+\u{2212}/<>≤≥± ".contains(c)
                                 })
                         };
+                        // The groups of the record a cell is in, found once
+                        // for the record.
+                        let mut record = usize::MAX;
+                        let mut groups: Vec<(usize, &str)> = Vec::new();
+                        let mut k = 0;
                         for (c, cell) in row.iter().enumerate() {
                             let first = c - c % width;
                             let group = row.get(first).map(|t| t.trim()).unwrap_or("");
@@ -1574,24 +2270,27 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             // more of the group (its colour, its volumes
                             // carried down), and is read as the row's own, as
                             // is the first column spanning nothing.
-                            let mut groups: Vec<(usize, &str)> = Vec::new();
-                            let mut k = first;
-                            let mut outer: Option<(usize, usize)> = None;
-                            while k + 1 < first + width && spans_down(r, k) {
-                                let t = row.get(k).map(|t| t.trim()).unwrap_or("");
-                                let rows_spanned = span(r, k);
-                                if t.is_empty()
-                                    || outer.is_some_and(|o| {
-                                        rows_spanned.1 - rows_spanned.0 >= o.1 - o.0
-                                    })
-                                {
-                                    break;
+                            if first != record {
+                                record = first;
+                                groups.clear();
+                                k = first;
+                                let mut outer: Option<(usize, usize)> = None;
+                                while k + 1 < first + width && spans_down(r, k) {
+                                    let t = row.get(k).map(|t| t.trim()).unwrap_or("");
+                                    let rows_spanned = span(r, k);
+                                    if t.is_empty()
+                                        || outer.is_some_and(|o| {
+                                            rows_spanned.1 - rows_spanned.0 >= o.1 - o.0
+                                        })
+                                    {
+                                        break;
+                                    }
+                                    if groups.last().map(|g| g.1) != Some(t) {
+                                        groups.push((k, t));
+                                    }
+                                    outer = Some(rows_spanned);
+                                    k += 1;
                                 }
-                                if groups.last().map(|g| g.1) != Some(t) {
-                                    groups.push((k, t));
-                                }
-                                outer = Some(rows_spanned);
-                                k += 1;
                             }
                             // The groups set left of column `c`.
                             let left_of = |c: usize| {
@@ -1632,8 +2331,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             // does not name it.
                             let whole_row = c == 0
                                 && ncols > 1
-                                && (subs.contains(&r)
-                                    || (1..ncols).all(|k| own_left[r * ncols + k]));
+                                && (subs[r] || (1..ncols).all(|k| own_left[r * ncols + k]));
                             if let Some(h) = spread
                                 .heads
                                 .get(&(r, c))
@@ -1697,25 +2395,23 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             .to_string();
                         // What names the rows the break carries on: a header
                         // restated down to the last row (or on it), else the
-                        // part's own; the band open over them.
+                        // part's own; the band open over them. The loop above
+                        // left both as they stand at the last row.
                         let end = rows.len() - 1;
-                        let names_at_end = restated_headers
-                            .iter()
-                            .rev()
-                            .find(|(s, _)| {
-                                *s <= end && stub_span_end(*s).is_none_or(|span| end <= span)
-                            })
-                            .map_or_else(|| header.clone(), |(_, h)| h.clone());
+                        while nested_now.last().is_some_and(|(last, _)| *last < end) {
+                            nested_now.pop();
+                        }
+                        let names_at_end = (nested_now.pop().map(|(_, h)| h))
+                            .or(restated_now)
+                            .unwrap_or_else(|| header.clone());
                         // A band whose rows under it are all unlabelled
                         // figures is a label set on a line of its own over
                         // them (`Total, General science` over `17,114 …`), no
                         // band:
                         // it names nothing the next page carries on. A band
                         // at the very foot, with no rows under it, does.
-                        let open = subs.iter().copied().filter(|&s| s >= n_header).max();
+                        let open = (n_header..rows.len()).rev().find(|&s| subs[s]);
                         let over_figures = open.is_some_and(|s| {
-                            let under: Vec<usize> =
-                                (s + 1..rows.len()).filter(|r| !subs.contains(r)).collect();
                             let figure = |t: &str| {
                                 let t = t.trim();
                                 t.is_empty()
@@ -1724,27 +2420,36 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                             c.is_ascii_digit() || ",.()-–—%$ ".contains(c)
                                         }))
                             };
-                            !under.is_empty()
-                                && under.iter().all(|&r| {
+                            let mut under = (s + 1..rows.len()).filter(|&r| !subs[r]).peekable();
+                            under.peek().is_some()
+                                && under.all(|r| {
                                     rows[r].first().is_none_or(|t| t.trim().is_empty())
                                         && rows[r].iter().all(|t| figure(t))
                                 })
                         });
+                        // The band over a row past the last: the one the
+                        // loop left open, else the one carried in.
                         let band_at_end = if over_figures {
                             None
                         } else {
-                            band_over(rows.len()).or_else(|| carried_band(rows.len()))
+                            // A break set after the last row ends it too.
+                            let broken = e
+                                .section_breaks
+                                .as_deref()
+                                .is_some_and(|b| b.contains(&rows.len()));
+                            (section_now.filter(|t| !t.is_empty() && !broken))
+                                .or_else(|| carried_band(rows.len()))
                         };
                         // A last row holding its first cell alone, no band.
-                        let lone_end = (!subs.contains(&end)
+                        let lone_end = (!subs[end]
                             && rows[end].iter().skip(1).all(|t| t.trim().is_empty()))
                         .then(|| rows[end].first().map(|t| t.trim().to_string()))
                         .flatten()
                         .filter(|t| !t.is_empty());
                         // The table's opening rows, as its first part set them.
                         let opening = opening_before.clone().unwrap_or_else(|| {
-                            let first_band = subs.iter().copied().filter(|&s| s >= n_header).min();
-                            rows[..first_band.unwrap_or(n_header).min(rows.len())].to_vec()
+                            let first_band = first_band.unwrap_or(n_header).min(rows.len());
+                            std::rc::Rc::new(rows[..first_band].to_vec())
                         });
                         em.tables.insert(
                             e.id.clone(),
@@ -3600,6 +4305,18 @@ mod tests {
     }
 
     #[test]
+    fn anchors_are_cut_by_characters_past_multi_byte_ones() {
+        let mut e = el("doco:Paragraph", "é ç ü €", None);
+        let uri = crate::element::Link::uri;
+        // The last one runs past the text, and is cut at its end.
+        e.links = Some(vec![uri("a").spanning(2, 3), uri("b").spanning(6, 9)]);
+        let g = graph(&[e]);
+        let link = find(&g, "doc:Link");
+        assert_eq!(link[0]["nif:isString"], "ç");
+        assert_eq!(link[1]["nif:isString"], "€");
+    }
+
+    #[test]
     fn an_internal_jump_carries_a_page_rather_than_an_address() {
         let mut e = el("doco:Paragraph", "see Chapter 4", None);
         e.links = Some(vec![crate::element::Link::page(11).spanning(4, 13)]);
@@ -3681,5 +4398,625 @@ mod tests {
         let slice: String = projection.chars().skip(b).take(e - b).collect();
         assert_eq!(slice, "--\n\nKai Moreno\n1 Main Street, Springfield");
         assert_eq!(sig["nif:isString"], slice.as_str());
+    }
+
+    /// A one-column table of `rows`, no header, each row continuing the
+    /// one above but the first.
+    fn merged_column(rows: Vec<String>) -> Element {
+        let n = rows.len();
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(rows.into_iter().map(|r| vec![r]).collect());
+        t.header_rows = Some(0);
+        t.merged_down = Some((0..n).map(|r| r > 0).collect());
+        t
+    }
+
+    #[test]
+    fn a_long_value_merged_down_is_counted_once_a_row() {
+        let n = 50;
+        let long = "v".repeat(1000);
+        let mut rows = vec![long.clone()];
+        rows.resize(n, String::new());
+        let t = merged_column(rows);
+        let copies = table_copies(&t);
+        // Each covered row is a node of its own, holding the whole value.
+        assert_eq!(
+            copies,
+            Copies {
+                cells: (n - 1) as u64,
+                text: (n as u64 - 1) * 1000,
+                merged: (n as u64 - 1) * 1000
+            }
+        );
+        let g = graph(std::slice::from_ref(&t));
+        let cells = find(&g, "doc:TableCell");
+        assert_eq!(cells.len(), n);
+        assert!(cells.iter().all(|c| c["doc:cellValue"] == long.as_str()));
+    }
+
+    #[test]
+    fn fragments_merged_down_are_joined_then_counted_on_each_row() {
+        // A run of n fragments is one value of 2n - 1 characters, on each
+        // of its n rows: the square of the run, not the run.
+        let n = 1000u64;
+        let t = merged_column(vec!["x".into(); n as usize]);
+        let copies = table_copies(&t);
+        assert_eq!(
+            copies,
+            Copies {
+                cells: 0,
+                text: n * (2 * n - 1) - n,
+                merged: n * (2 * n - 1) - n
+            }
+        );
+        let small = merged_column(vec!["x".into(); 4]);
+        let g = graph(&[small]);
+        assert!(find(&g, "doc:TableCell")
+            .iter()
+            .all(|c| c["doc:cellValue"] == "x x x x"));
+    }
+
+    #[test]
+    fn each_cell_counts_the_labels_it_carries() {
+        let long = "w".repeat(100);
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["Name".into(), "Code".into()],
+            vec![long.clone(), "".into()],
+            vec![long.clone(), "".into()],
+            vec!["Alpha".into(), "1".into()],
+            vec!["Beta".into(), "2".into()],
+        ]);
+        t.header_rows = Some(1);
+        // Row 1 is a band; rows 3 and 4 fall under it.
+        t.sub_headers = Some(vec![1]);
+        t.merged_left = Some(vec![
+            false, false, false, true, false, false, false, false, false, false,
+        ]);
+        let copies = table_copies(&t);
+        // Each cell under the band carries its column's header and the
+        // band's text, and each but the first its row's first cell.
+        let row2 = 4 + 100;
+        let row3 = (4 + 100) + (4 + 5 + 100);
+        let row4 = (4 + 100) + (4 + 4 + 100);
+        assert_eq!(
+            copies,
+            Copies {
+                cells: 0,
+                text: row2 + row3 + row4,
+                // The band is one cell's text already: nothing is joined.
+                merged: 0
+            }
+        );
+    }
+
+    #[test]
+    fn a_table_of_many_bands_is_written_in_linear_time() {
+        // Each row searched the list of bands, twice, for whether it is one
+        // and for the last above it: 170,000 bands took 28 s.
+        let table = |n: usize| {
+            let mut t = el("doco:Table", "", None);
+            let mut rows = vec![vec!["Name".to_string(), "Code".to_string()]];
+            for i in 0..n {
+                rows.push(vec![format!("Band {i}"), String::new()]);
+                rows.push(vec![format!("Item {i}"), i.to_string()]);
+            }
+            t.cells = Some(rows);
+            t.header_rows = Some(1);
+            t.sub_headers = Some((0..n).map(|i| 1 + 2 * i).collect());
+            t
+        };
+        crate::scaling::assert_linear("a table of many bands", 2_000, table, |t| {
+            graph(std::slice::from_ref(t));
+            crate::emit::to_xhtml(std::slice::from_ref(t));
+        });
+        let n = 2_000;
+        let t = table(n);
+        let g = graph(std::slice::from_ref(&t));
+        let xhtml = crate::emit::to_xhtml(std::slice::from_ref(&t));
+        let cells = find(&g, "doc:TableCell");
+        assert_eq!(cells.len(), 2 * n);
+        let last = cells.last().unwrap();
+        assert_eq!(last["doc:sectionLabel"], format!("Band {}", n - 1));
+        assert_eq!(last["doc:cellValue"], (n - 1).to_string());
+        assert_eq!(xhtml.matches("<th colspan=\"2\">Band").count(), n);
+    }
+
+    #[test]
+    fn a_group_merged_down_many_rows_is_named_in_linear_time() {
+        // Each cell beside a group walked the group's run up and down to
+        // find the rows it spans: a group over 100,000 rows walked them
+        // for each of them, for 84 s.
+        let table = |n: usize| {
+            let mut t = el("doco:Table", "", None);
+            let mut rows = vec![vec![
+                "Group".to_string(),
+                "Item".to_string(),
+                "Code".to_string(),
+            ]];
+            for i in 0..n {
+                let group = if i == 0 { "All" } else { "" };
+                rows.push(vec![group.to_string(), format!("Item {i}"), i.to_string()]);
+            }
+            t.cells = Some(rows);
+            t.header_rows = Some(1);
+            let mut down = vec![false; (n + 1) * 3];
+            for r in 2..=n {
+                down[r * 3] = true;
+            }
+            t.merged_down = Some(down);
+            t
+        };
+        crate::scaling::assert_linear("a group merged down many rows", 2_000, table, |t| {
+            graph(std::slice::from_ref(t));
+        });
+        let n = 2_000;
+        let g = graph(std::slice::from_ref(&table(n)));
+        let cells = find(&g, "doc:TableCell");
+        let last = cells.last().unwrap();
+        assert_eq!(last["doc:cellValue"], (n - 1).to_string());
+        assert_eq!(last["doc:rowHeader"], format!("All / Item {}", n - 1));
+    }
+
+    #[test]
+    fn a_tall_stacked_header_is_named_in_time_linear_in_its_cells() {
+        // Each column walked back along its row to the cell holding its
+        // label: 128 rows merged across 16,384 columns took 4 s.
+        let h = 16;
+        let table = |cols: usize| {
+            let mut t = el("doco:Table", "", None);
+            let mut rows: Vec<Vec<String>> = (0..h)
+                .map(|r| {
+                    let mut row = vec![String::new(); cols];
+                    row[0] = format!("Level {r}");
+                    row
+                })
+                .collect();
+            rows.push((0..cols).map(|c| c.to_string()).collect());
+            t.cells = Some(rows);
+            t.header_rows = Some(h);
+            let mut left = vec![true; (h + 1) * cols];
+            for r in 0..=h {
+                left[r * cols] = false;
+            }
+            left[h * cols..].fill(false);
+            t.merged_left = Some(left);
+            t
+        };
+        crate::scaling::assert_linear("a tall header over many columns", 1_000, table, |t| {
+            graph(std::slice::from_ref(t));
+        });
+        let cols = 1_000;
+        let g = graph(std::slice::from_ref(&table(cols)));
+        let cells = find(&g, "doc:TableCell");
+        assert_eq!(cells.len(), cols);
+        let path = (0..h).map(|r| format!("Level {r}")).collect::<Vec<_>>();
+        assert_eq!(cells[cols - 1]["doc:columnHeader"], path.join(" / "));
+    }
+
+    /// What the DoCO output writes for a table's cells, at the budget's
+    /// costs: the nodes, and the text of their values and labels.
+    fn written(t: &Element) -> (u64, u64) {
+        written_all(std::slice::from_ref(t))
+    }
+
+    /// [`written`], for the cells of every table of `ts`.
+    fn written_all(ts: &[Element]) -> (u64, u64) {
+        let g = graph(ts);
+        let cells = find(&g, "doc:TableCell");
+        let text = cells
+            .iter()
+            .flat_map(|c| {
+                [
+                    "doc:cellValue",
+                    "doc:columnHeader",
+                    "doc:rowHeader",
+                    "doc:sectionLabel",
+                ]
+                .map(|k| c[k].as_str().map_or(0, crate::budget::text_cost))
+            })
+            .sum();
+        (cells.len() as u64, text)
+    }
+
+    #[test]
+    fn a_value_spread_across_columns_is_counted_in_each() {
+        // A long value set across four models' columns is written in each
+        // of them: the estimate must not be under the output.
+        let long = "w".repeat(1000);
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            ["Spec", "A", "B", "C", "D"].map(String::from).to_vec(),
+            vec![
+                "Warranty".into(),
+                long.clone(),
+                "".into(),
+                "".into(),
+                "".into(),
+            ],
+        ]);
+        t.header_rows = Some(1);
+        let mut left = vec![false; 10];
+        left[7..10].fill(true);
+        t.merged_left = Some(left);
+        let mut spread = vec![false; 10];
+        spread[6] = true;
+        t.spread_left = Some(spread);
+        let (nodes, text) = written(&t);
+        assert_eq!(nodes, 5, "the label and four copies");
+        let copies = table_copies(&t);
+        let raw = ["Spec", "A", "B", "C", "D", "Warranty", long.as_str()]
+            .map(crate::budget::text_cost)
+            .iter()
+            .sum::<u64>();
+        assert!(nodes <= 7 + copies.cells, "{nodes} nodes, {copies:?}");
+        assert!(text <= raw + copies.text, "{text} written, {copies:?}");
+    }
+
+    #[test]
+    fn a_wrapped_table_is_counted_by_its_records_and_its_spanned_header() {
+        // Two records a row: each cell after a record's first is labelled
+        // by that first cell, which the row's own first does not bound.
+        let long = "a label far longer than the row's own first cell";
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["Name".into(), "Value".into(), "Name".into(), "Value".into()],
+            vec!["".into(), "1".into(), long.into(), "2".into()],
+        ]);
+        t.header_rows = Some(1);
+        let raw = 4 + 5 + 4 + 5 + 1 + long.len() as u64 + 1;
+        let (_, text) = written(&t);
+        assert!(text <= raw + table_copies(&t).text, "{text} written");
+        // One header row: an empty cell a label spans is named by it.
+        let mut s = el("doco:Table", "", None);
+        s.cells = Some(vec![
+            vec!["Quarterly revenue by region".into(), "".into(), "".into()],
+            vec!["x".into(), "y".into(), "z".into()],
+        ]);
+        s.header_rows = Some(1);
+        s.merged_left = Some(vec![false, true, true, false, false, false]);
+        let (_, text) = written(&s);
+        assert!(text <= 27 + 3 + table_copies(&s).text, "{text} written");
+    }
+
+    /// A small xorshift generator, seeded alike on every run: `next(m)` is
+    /// below `m`.
+    fn rng() -> impl FnMut(u64) -> u64 {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        move |m: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        }
+    }
+
+    /// A table of every shape a small grid takes: merges each way, bands
+    /// and stacks of them, headers stacked or restated partway down, texts
+    /// with spaces and escapes; `cols` columns where given.
+    fn random_table(next: &mut dyn FnMut(u64) -> u64, cols: Option<usize>) -> Element {
+        let texts = ["", "", "a", "bb", " c d ", "\"&<", "é"];
+        let n = 1 + next(6) as usize;
+        let cols = cols.unwrap_or_else(|| 1 + next(4) as usize);
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            (0..n)
+                .map(|_| {
+                    (0..cols)
+                        .map(|_| texts[next(7) as usize].to_string())
+                        .collect()
+                })
+                .collect(),
+        );
+        let flags = |p: u64, next: &mut dyn FnMut(u64) -> u64| {
+            (next(2) == 0).then(|| (0..n * cols).map(|_| next(100) < p).collect())
+        };
+        t.merged_down = flags(40, next);
+        t.merged_left = flags(30, next);
+        t.sub_headers = (next(3) == 0).then(|| (0..n).filter(|_| next(3) == 0).collect());
+        t.restated_headers = (next(4) == 0).then(|| (0..n).filter(|_| next(4) == 0).collect());
+        t.header_rows = [None, Some(0), Some(1), Some(2), Some(3)][next(5) as usize];
+        t
+    }
+
+    #[test]
+    fn the_copies_counted_are_never_fewer_than_those_written() {
+        // Tables of every shape a small grid takes: merges each way, bands
+        // and stacks of them, headers stacked or restated partway down,
+        // texts with spaces and escapes.
+        let mut next = rng();
+        for _ in 0..3000 {
+            let t = random_table(&mut next, None);
+            let (n, cols) = (
+                t.cells.as_ref().unwrap().len(),
+                t.cells.as_ref().unwrap()[0].len(),
+            );
+            let raw: u64 = t
+                .cells
+                .iter()
+                .flatten()
+                .flatten()
+                .map(|c| crate::budget::text_cost(c.trim()))
+                .sum();
+            let filled = t
+                .cells
+                .iter()
+                .flatten()
+                .flatten()
+                .filter(|c| !c.trim().is_empty())
+                .count();
+            let copies = table_copies(&t);
+            let (nodes, text) = written(&t);
+            assert!(
+                nodes <= filled as u64 + copies.cells,
+                "{t:?}: {nodes} nodes, {copies:?}"
+            );
+            assert!(
+                text <= raw + copies.text,
+                "{t:?}: {text} written, {raw} + {copies:?}"
+            );
+            // The text projection copies the merges' text, not the labels.
+            let shown: u64 = projected_cells(&t)
+                .unwrap()
+                .iter()
+                .flatten()
+                .map(|c| crate::budget::text_cost(c.trim()))
+                .sum();
+            assert!(
+                shown <= raw + copies.merged,
+                "{t:?}: {shown} shown, {raw} + {copies:?}"
+            );
+            assert!(copies.merged <= copies.text, "{copies:?}");
+            // The header is named as the whole table, denormalized, names it.
+            let subs = t.sub_header_rows(n);
+            for n_header in 1..=t.header_rows.unwrap_or(1).min(n) {
+                let mut whole = t.cells.clone().unwrap();
+                let flag = |m: &Option<Vec<bool>>| {
+                    (0..n * cols)
+                        .map(|i| m.as_ref().is_some_and(|m| m[i]))
+                        .collect()
+                };
+                let m = crate::merges::Merges {
+                    continues_above: flag(&t.merged_down),
+                    continues_left: flag(&t.merged_left),
+                    full_width_row: subs.clone(),
+                };
+                crate::merges::denormalize(&mut whole, &m);
+                assert_eq!(
+                    column_headers(
+                        &header_block(&t, t.cells.as_ref().unwrap(), n_header, &subs),
+                        n_header,
+                        t.merged_left.as_deref().map(|m| &m[..n_header * cols])
+                    ),
+                    column_headers(&whole, n_header, t.merged_left.as_deref()),
+                    "{t:?}: {n_header} header rows"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_copies_counted_of_parts_carried_on_are_never_fewer_than_those_written() {
+        // Tables split over two or three pages: each part carrying on the
+        // one before takes its header (the part before all header, or this
+        // one with none), the band open at its foot, the value it ends on
+        // in a cell the break cut, and the names a header restated there
+        // left in force.
+        let mut next = rng();
+        let mut carried = 0;
+        for _ in 0..3000 {
+            let mut parts = vec![random_table(&mut next, None)];
+            let cols = parts[0].cells.as_ref().unwrap()[0].len();
+            for i in 1..2 + next(2) as usize {
+                parts.push(random_table(&mut next, Some(cols)));
+                if next(2) == 0 {
+                    parts[i].header_rows = Some(0);
+                }
+            }
+            for (i, t) in parts.iter_mut().enumerate() {
+                let n = t.cells.as_ref().unwrap().len();
+                t.id = format!("t{i}");
+                t.page = i + 1;
+                if i > 0 {
+                    t.continues = Some(format!("t{}", i - 1));
+                }
+                // A band at or near the foot, open over the next page.
+                if next(2) == 0 {
+                    let at = n - 1 - next(2.min(n as u64)) as usize;
+                    t.sub_headers.get_or_insert_with(Vec::new).push(at);
+                }
+                // A part that is all header, its columns named on the next.
+                if next(6) == 0 {
+                    t.header_rows = Some(n);
+                }
+                if next(4) == 0 {
+                    t.section_breaks = Some(vec![next(n as u64 + 1) as usize]);
+                }
+                if next(4) == 0 {
+                    t.spread_left = Some((0..n * cols).map(|_| next(2) == 0).collect());
+                }
+            }
+            let cells = || {
+                parts
+                    .iter()
+                    .flat_map(|t| t.cells.iter().flatten().flatten())
+            };
+            let raw: u64 = cells().map(|c| crate::budget::text_cost(c.trim())).sum();
+            let filled = cells().filter(|c| !c.trim().is_empty()).count() as u64;
+            let mut counter = TableCopies::default();
+            let (mut nodes_counted, mut text_counted) = (filled, raw);
+            for t in &parts {
+                let copies = counter.count(t);
+                nodes_counted += copies.cells;
+                text_counted += copies.text;
+            }
+            let alone: u64 = parts.iter().map(|t| table_copies(t).text).sum();
+            if text_counted > raw + alone {
+                carried += 1;
+            }
+            let (nodes, text) = written_all(&parts);
+            assert!(
+                nodes <= nodes_counted,
+                "{parts:?}: {nodes} nodes, {nodes_counted}"
+            );
+            assert!(
+                text <= text_counted,
+                "{parts:?}: {text} written, {text_counted}"
+            );
+        }
+        // The cases carry something on, as the parts counted alone do not.
+        assert!(carried > 500, "{carried} cases carry copies on");
+    }
+
+    #[test]
+    fn a_value_the_break_cuts_is_counted_as_the_part_before_ends_on_it() {
+        // The part before ends on a value set across two models' columns,
+        // copied into each ([`spread_across_columns`]); the break cut it,
+        // and the next part's first rows, empty and spanning down, take it
+        // in both columns, on each of their rows.
+        let long = "w".repeat(1000);
+        let mut first = el("doco:Table", "", None);
+        first.id = "t0".into();
+        first.page = 1;
+        first.cells = Some(vec![
+            ["Spec", "A", "B"].map(String::from).to_vec(),
+            vec!["Warranty".into(), long.clone(), String::new()],
+        ]);
+        first.header_rows = Some(1);
+        first.merged_left = Some(vec![false, false, false, false, false, true]);
+        first.spread_left = Some(vec![false, false, false, false, true, false]);
+        let mut second = el("doco:Table", "", None);
+        second.id = "t1".into();
+        second.page = 2;
+        second.continues = Some("t0".into());
+        second.cells = Some(vec![vec![String::new(); 3]; 2]);
+        second.header_rows = Some(0);
+        second.merged_down = Some(vec![false, false, false, true, true, true]);
+        let parts = [first, second];
+        let g = graph(&parts);
+        let cells = find(&g, "doc:TableCell");
+        let b: Vec<_> = (cells.iter())
+            .filter(|c| c["doc:columnHeader"] == "B" && c["doc:cellValue"] == long.as_str())
+            .collect();
+        assert_eq!(b.len(), 3, "the copy, and the two rows it is carried onto");
+        let mut counter = TableCopies::default();
+        let counted: u64 = parts.iter().map(|t| counter.count(t).text).sum();
+        let raw = 4 + 1 + 1 + 8 + 1000;
+        let (_, text) = written_all(&parts);
+        assert!(text <= raw + counted, "{text} written, {raw} + {counted}");
+    }
+
+    #[test]
+    fn a_band_or_header_carried_onto_many_rows_spends_the_budget() {
+        // A band of a few kilobytes at the foot of one page lands on every
+        // row of the next as its `doc:sectionLabel`; so does a long column
+        // name, as the `doc:columnHeader` of a part with no header of its
+        // own. Counted with the part alone, neither was spent: 12 KB of
+        // cells wrote hundreds of megabytes.
+        let parts = |rows: usize, len: usize| {
+            let mut first = el("doco:Table", "", None);
+            first.id = "t0".into();
+            first.page = 1;
+            first.cells = Some(vec![
+                vec!["h".repeat(len), "Value".into()],
+                vec!["Item".into(), "1".into()],
+                vec!["b".repeat(len), String::new()],
+            ]);
+            first.header_rows = Some(1);
+            first.sub_headers = Some(vec![2]);
+            let mut second = el("doco:Table", "", None);
+            second.id = "t1".into();
+            second.page = 2;
+            second.continues = Some("t0".into());
+            second.cells = Some(
+                (0..rows)
+                    .map(|i| vec![format!("I{i}"), "1".into()])
+                    .collect(),
+            );
+            second.header_rows = Some(0);
+            vec![first, second]
+        };
+        // As written: each cell of the next page carries both.
+        let small = parts(20, 100);
+        let g = graph(&small);
+        let cells = find(&g, "doc:TableCell");
+        let last = cells.last().unwrap();
+        assert_eq!(last["doc:sectionLabel"], "b".repeat(100));
+        assert_eq!(cells[cells.len() - 2]["doc:columnHeader"], "h".repeat(100));
+        let mut counter = TableCopies::default();
+        let counted: u64 = small.iter().map(|t| counter.count(t).text).sum();
+        let raw: u64 = small
+            .iter()
+            .flat_map(|t| t.cells.iter().flatten().flatten())
+            .map(|c| crate::budget::text_cost(c.trim()))
+            .sum();
+        assert!(written_all(&small).1 <= raw + counted);
+        // Counted on each of the next part's 40 cells: 100 B of band and,
+        // on the first column's 20, 100 B of name.
+        let alone = table_copies(&small[1]).text;
+        assert!(counted >= alone + 40 * 100 + 20 * 100, "{counted}, {alone}");
+
+        // 10,000 rows under a band and a name of 6,000 characters: 12 KB
+        // of text in the file, 180 MB of labels written. Alone, the part
+        // fits in a budget of two megabytes; carried on, it is refused there.
+        let big = parts(10_000, 6_000);
+        let budget = || crate::budget::Budget::new(2 << 20, 0);
+        let mut b = budget();
+        assert!(b.spend_copies(&big[1]).is_ok(), "the part alone");
+        let mut b = budget();
+        assert!(b.spend_copies(&big[0]).is_ok(), "the part before");
+        let refused = b.spend_copies(&big[1]).unwrap_err();
+        assert!(
+            refused.to_string().contains("copies of table cells"),
+            "{refused}"
+        );
+        // And counted in time linear in the rows.
+        crate::scaling::assert_linear(
+            "a band carried onto many rows",
+            2_000,
+            |rows| parts(rows, 1_000),
+            |ts| {
+                let mut counter = TableCopies::default();
+                for t in ts {
+                    std::hint::black_box(counter.count(t));
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn a_header_of_many_rows_is_named_in_linear_time() {
+        // Each row's label was looked for along the column's path so far.
+        let rows =
+            |n: usize| -> Vec<Vec<String>> { (0..n).map(|i| vec![format!("L{i}")]).collect() };
+        assert_eq!(column_headers(&rows(3), 3, None), ["L0 / L1 / L2"]);
+        let mut repeated = rows(2);
+        repeated.push(vec!["L0".into()]);
+        assert_eq!(column_headers(&repeated, 3, None), ["L0 / L1"]);
+        crate::scaling::assert_linear("a header's rows", 4_000, rows, |rows| {
+            std::hint::black_box(column_headers(rows, rows.len(), None));
+        });
+    }
+
+    #[test]
+    fn a_header_merged_down_a_long_table_is_not_copied_into_its_rows() {
+        // A label of `n` characters over `n` rows: copied into each, as the
+        // header was once named, it was `n²` of text before the budget,
+        // which counts the copies by their cost, could refuse them.
+        let table = |n: usize| {
+            let mut t = el("doco:Table", "", None);
+            let mut cells = vec![vec!["h".repeat(n), "Value".into()]];
+            cells.extend((1..n).map(|_| vec![String::new(), "1".into()]));
+            t.cells = Some(cells);
+            t.header_rows = Some(1);
+            t.merged_down = Some((0..2 * n).map(|i| i >= 2 && i % 2 == 0).collect());
+            t
+        };
+        let small = table(4);
+        let copies = table_copies(&small);
+        assert!(copies.text >= 3 * 4, "{copies:?}");
+        crate::scaling::assert_linear("a header merged down", 4_000, table, |t| {
+            std::hint::black_box(table_copies(t));
+        });
     }
 }

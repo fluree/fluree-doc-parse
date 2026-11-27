@@ -378,11 +378,9 @@ fn html_table_rows(
     out: &mut String,
 ) {
     let th_rows = e.header_rows.unwrap_or(0);
-    let subs = e.sub_headers.clone().unwrap_or_default();
+    let subs = e.sub_header_rows(rows.len());
     let ncols = rows.first().map(Vec::len).unwrap_or(0);
-    let band = |ri: usize| {
-        subs.contains(&ri) || (ri < th_rows && rows[ri][1..].iter().all(|c| c.is_empty()))
-    };
+    let band = |ri: usize| subs[ri] || (ri < th_rows && rows[ri][1..].iter().all(|c| c.is_empty()));
     let (md, ml) = spans_kept(
         rows,
         e.merged_down
