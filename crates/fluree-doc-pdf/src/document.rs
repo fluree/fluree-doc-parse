@@ -1837,6 +1837,11 @@ fn layout_boxes(
 /// The size most of a page's text is set in: its prose, against which a
 /// drawing's labels are set smaller.
 fn prose_size(blocks: &[Block]) -> f32 {
+    prose_size_of(blocks.iter())
+}
+
+/// [`prose_size`] over some of a page's blocks.
+fn prose_size_of<'a>(blocks: impl Iterator<Item = &'a Block>) -> f32 {
     let mut by_size: Vec<(f32, usize)> = Vec::new();
     for b in blocks {
         let size = (b.font_size * 2.0).round() / 2.0;
@@ -1860,6 +1865,10 @@ const RULED_TABLE_FILL: f64 = 0.5;
 /// How far, as a share of the page's height, a block may stand from a
 /// running line's row and still be on it: a baseline's wobble between pages.
 const FURNITURE_ROW_SLACK: f64 = 0.005;
+
+/// Least share of a page's text lying on its pictures for the page to be
+/// pictures and a caption: all but a caption's or a title's line or two.
+const PICTURE_PAGE_TEXT: f64 = 0.9;
 
 /// Fraction of a block that must lie inside a figure's drawing for the
 /// block to belong to it without being taken as a label. High enough that a
@@ -2193,6 +2202,38 @@ pub(crate) fn axis_scale(cells: &[String]) -> bool {
 
 /// Fewest numbers a grid's column holds for it to be read as a chart's scale.
 const SCALE_VALUES: usize = 3;
+
+/// Most rows a displayed equation lined up into a grid takes: its
+/// numerators', its denominators' under the bars, and a line between them
+/// for an index or a term set level with the bars.
+const EQUATION_ROWS: usize = 3;
+
+/// Fewest cells of a displayed equation that open or close on an operator,
+/// its terms joined across the grid's cuts.
+const EQUATION_JOINS: usize = 2;
+
+/// Is the grid a displayed equation, its numerators set in a row over their
+/// denominators (`A_spl / A_s × C_s × 1 mg / 1×10⁶ ng`)? That is
+/// [`EQUATION_ROWS`] rows or fewer, a relation (`=`) in a cell, and
+/// [`EQUATION_JOINS`] cells or more opening or closing on an operator (`×`,
+/// `÷`, `·`, `+`) or holding one alone: the terms run on across the cuts
+/// (`× Cs ×`, `× 10`, `+ 1000]`). A table's cell may hold an equality
+/// (`R² = 0.9976`, or a header's `(2021 = 100)` its grid cuts after the
+/// sign) or a product (`2 × 10⁶`); its cells do not open or close on an
+/// operator.
+fn equation_grid(rows: usize, cells: &[String]) -> bool {
+    if rows > EQUATION_ROWS {
+        return false;
+    }
+    let operator = |c: char| matches!(c, '×' | '÷' | '·' | '∙' | '+');
+    let relation = cells.iter().any(|c| c.contains('='));
+    let joins = cells
+        .iter()
+        .map(|c| c.trim())
+        .filter(|c| c.starts_with(operator) || c.ends_with(operator))
+        .count();
+    relation && joins >= EQUATION_JOINS
+}
 
 /// Fewest words in a line of prose, as a cell reads one.
 const PROSE_WORDS: usize = 5;
@@ -4156,12 +4197,42 @@ fn find_figures(
                     .any(|t| figure::share_inside(im, t) > 0.5)
             })
             .collect();
+        // A page that is pictures and a caption, nine-tenths of its text
+        // lying on its pictures (a figure of charts set as images, each
+        // lettered by a text layer of its own), has no prose of its own: its
+        // labels, measured against themselves, read as display type. Its
+        // text off the pictures, the caption or the title, is its prose.
+        let on_pictures = |b: &&Block| {
+            images
+                .iter()
+                .any(|im| figure::share_inside(&b.bbox, im) >= FIGURE_CONTAINMENT)
+        };
+        let chars = |bs: &mut dyn Iterator<Item = &Block>| -> usize {
+            bs.map(|b| {
+                b.lines
+                    .iter()
+                    .map(|l| l.text.chars().count())
+                    .sum::<usize>()
+            })
+            .sum()
+        };
+        let lettered = chars(&mut blocks.iter().filter(on_pictures)) as f64
+            >= PICTURE_PAGE_TEXT * chars(&mut blocks.iter()).max(1) as f64;
+        let off_pictures = if lettered {
+            prose_size_of(blocks.iter().filter(|b| !on_pictures(b)))
+        } else {
+            0.0
+        };
         let labelled = figure::pictures(
             &images,
             &block_boxes,
             pi,
             (page.width, page.height),
-            prose_size(blocks),
+            if off_pictures > 0.0 {
+                off_pictures
+            } else {
+                prose_size(blocks)
+            },
             &figures,
         );
         figures.extend(labelled);
@@ -6663,6 +6734,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // An axis's scale ruled by its ticks: a row or a column of
             // numbers stepping evenly, `160 140 … 0`, set against a plot.
             let scale = (g.rows() == 1 || g.cols() == 1) && axis_scale(&flat);
+            // A displayed equation lined up into a grid by its fraction bars
+            // and terms.
+            let equation = equation_grid(g.rows(), &flat);
             let drawn_as_table = ruled && !line_art && {
                 let (occ, vertical, horizontal) =
                     table_confidence_signals(g, &raw.pages[pi].glyphs, &raw.pages[pi].rules);
@@ -6675,6 +6749,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 ALIGNED_IN_DRAWING
             } else {
                 FIGURE_CONTAINMENT
+            };
+            // Or on charts set side by side, each holding part of it: a grid
+            // read across two plots' ticks lies on their drawings together as
+            // one inside one drawing does. The figure holding most of it takes
+            // its text.
+            let across_drawings = || {
+                let mut on: Vec<(usize, f64)> = figures
+                    .iter()
+                    .enumerate()
+                    .map(|(fi, f)| (fi, figure::share_inside(&g.bbox, &f.drawing)))
+                    .filter(|(_, share)| *share > 0.0)
+                    .collect();
+                if on.len() < 2 || figure::share_under(&g.bbox, figures) < containment {
+                    return None;
+                }
+                on.sort_by(|a, b| b.1.total_cmp(&a.1));
+                Some(on[0].0)
             };
             let drawn_in = figures
                 .iter()
@@ -6721,8 +6812,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             } else {
                 None
             };
-            let drawn_in = drawn_in.or(scaled).or(paneled);
-            if layout.demoted_tables[gi] || drawn_in.is_some() || line_art || scale {
+            let drawn_in = drawn_in
+                .or(scaled)
+                .or(paneled)
+                .or_else(|| across_drawings().filter(|_| !drawn_as_table));
+            if layout.demoted_tables[gi]
+                || drawn_in.is_some()
+                || line_art
+                || scale
+                || (equation && !drawn_as_table)
+            {
                 // Judged non-table by the layout arbiter: same reading
                 // order, prose form.
                 let text = (0..g.rows())
@@ -9038,6 +9137,46 @@ mod tests {
         assert_eq!(t.merged_down.as_ref().map(Vec::len), Some(12));
         assert_eq!(t.merged_down.as_ref().map(|m| m[8]), Some(true));
         assert!(t.text.starts_with("Mode | Constant flow\nHeadspace | "));
+    }
+
+    #[test]
+    fn an_equation_set_over_its_bars_is_no_table() {
+        let cells = |rows: &[&[&str]]| -> Vec<String> {
+            rows.iter()
+                .flat_map(|r| r.iter().map(|c| c.to_string()))
+                .collect()
+        };
+        // The terms run on across the cuts, an operator at a cell's edge.
+        assert!(equation_grid(
+            2,
+            &cells(&[
+                &["Aspl", "1 mg", "", "1", "6"],
+                &["N-nitroso-bumetanide (ppm) = × Cs ×", "6", "×", "", "× 10"],
+            ])
+        ));
+        assert!(equation_grid(
+            3,
+            &cells(&[
+                &["", "PBD", "", ""],
+                &["Fi (%) =", "", "", "× 100"],
+                &["", "[(δ13C + 1000) × R", "+ 1000]", ""],
+            ])
+        ));
+        // A table's cells hold an equality or a product whole.
+        assert!(!equation_grid(
+            2,
+            &cells(&[&["Curve", "R² = 0.9976"], &["Dilution", "2 × 10⁶"]])
+        ));
+        // A header wrapped across two cells, cut after its sign.
+        assert!(!equation_grid(
+            2,
+            &cells(&[&["Index (2021 =", "100)"], &["Imports", "102,922"]])
+        ));
+        // Four rows or more is no displayed equation.
+        assert!(!equation_grid(
+            4,
+            &cells(&[&["a =", "× b"], &["+ c", "d"], &["e", "f"], &["g", "h"]])
+        ));
     }
 
     #[test]
