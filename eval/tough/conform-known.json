@@ -45,6 +45,13 @@
   "xhtml text.extra": 2,
   "xhtml text.lost": 9
  },
+ "census-p60-covered-continued": {
+  "md table.header_rows": 15,
+  "md table.sub_headers": 15,
+  "xhtml block.merged": 7,
+  "xhtml table.header_rows": 15,
+  "xhtml table.sub_headers": 15
+ },
  "census-p60-glyph-names": {
   "md table.header_rows": 15,
   "md table.sub_headers": 15,
@@ -495,6 +502,9 @@
   "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
+ },
+ "hmrc-sa100-clipped-notes": {
+  "xhtml block.merged": 13
  },
  "hmrc-sa100-pound-before-box": {
   "xhtml block.merged": 13
@@ -1093,7 +1103,7 @@
  "stat-japan-katakana-dot-bullets": {
   "md table.grid": 1,
   "md table.shape": 1,
-  "xhtml block.merged": 20,
+  "xhtml block.merged": 19,
   "xhtml table.grid": 1,
   "xhtml table.shape": 1
  },
@@ -1107,6 +1117,9 @@
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 4,
   "xhtml table.sub_headers": 35
+ },
+ "thermo-m-series-badge-lettering": {
+  "xhtml block.merged": 2
  },
  "thermo-m-series-callout-line": {
   "xhtml block.merged": 2
@@ -1356,6 +1369,13 @@
  },
  "worldbank-line-sample-legend": {
   "xhtml block.merged": 9
+ },
+ "worldbank-pad-template-markers": {
+  "md table.header_rows": 2,
+  "md table.sub_headers": 5,
+  "xhtml block.merged": 1,
+  "xhtml table.header_rows": 2,
+  "xhtml table.sub_headers": 5
  },
  "wto-template-heads-not-furniture": {
   "md table.grid": 7,
