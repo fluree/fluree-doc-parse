@@ -213,7 +213,9 @@ pub fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
 /// The content ids of the images a message's HTML shows from its own parts
 /// (`<img src="cid:…">`), as [`parse_with_quote_depth`] reads them: the
 /// scheme in any case, percent signs decoded, an image the page does not
-/// draw left out. What tells which of a message's files its HTML shows.
+/// draw left out, and so is one outside the content the page marks as its
+/// main, which the body is read for alone. What tells which of a message's
+/// files its HTML shows.
 pub fn cid_ids(src: &str) -> Vec<String> {
     ids_in(&dom(src))
 }
@@ -228,10 +230,27 @@ pub fn parse_message(src: &str) -> (Vec<Element>, Vec<usize>, Vec<String>) {
 
 fn ids_in(dom: &RcDom) -> Vec<String> {
     let mut found = Vec::new();
-    for c in dom.document.children.borrow().iter() {
-        cid_images(c, &mut found);
+    for root in read_roots(dom) {
+        for c in root.children.borrow().iter() {
+            cid_images(c, &mut found);
+        }
     }
     found.into_iter().map(|(id, _)| id).collect()
+}
+
+/// What a page is read for: the content it marks as its main, where some of
+/// it holds text, else the whole page. What lies outside a main is the site
+/// around the document. One whose main holds no text has marked it wrongly,
+/// and is read whole.
+fn read_roots(dom: &RcDom) -> Vec<Handle> {
+    let mut mains = Vec::new();
+    find_mains(&dom.document, &mut mains);
+    mains.retain(|m| !text_of(m).0.is_empty());
+    if mains.is_empty() {
+        vec![dom.document.clone()]
+    } else {
+        mains
+    }
 }
 
 fn dom(src: &str) -> RcDom {
@@ -251,18 +270,9 @@ fn read_dom(dom: &RcDom, cid_images: bool) -> (Vec<Element>, Vec<usize>) {
         cid_images,
         ..Out::default()
     };
-    // A page that marks its main content is read for that alone: what lies
-    // outside it is the site around the document. One whose main holds no
-    // text has marked it wrongly, and is read whole.
-    let mut mains = Vec::new();
-    find_mains(&dom.document, &mut mains);
-    mains.retain(|m| !text_of(m).0.is_empty());
-    if mains.is_empty() {
-        walk(&dom.document, &mut out);
-    } else {
-        for m in &mains {
-            walk(m, &mut out);
-        }
+    // A page that marks its main content is read for that alone.
+    for root in read_roots(dom) {
+        walk(&root, &mut out);
     }
     number(&mut out.elements);
     (out.elements, out.depths)
@@ -1572,6 +1582,25 @@ mod tests {
         assert_eq!(ids, cid_ids(src));
         // Read as a page, not a message, no image is anything.
         assert!(parse(src).iter().all(|e| e.kind != "doco:Figure"));
+    }
+
+    #[test]
+    fn a_messages_image_outside_its_main_content_is_not_shown() {
+        // A body that marks its main content is read for that alone: an
+        // image of the template around it is not shown in the message, so
+        // no figure draws it and the e-mail reader is not told it is shown
+        // (it would draw it at the end of the message).
+        let src = "<div><img src=\"cid:banner@x\"></div>\
+                   <main><p>Totals below.</p><p><img src=\"cid:shot@x\"></p></main>\
+                   <footer><img src=\"cid:logo@x\"></footer>";
+        let (els, _, ids) = parse_message(src);
+        let figures: Vec<&str> = els.iter().filter_map(|e| e.figure.as_deref()).collect();
+        assert_eq!(figures, ["cid:shot@x"]);
+        assert_eq!(ids, ["shot@x"]);
+        assert_eq!(cid_ids(src), ["shot@x"]);
+        // A main with no text is no main: the page is read whole.
+        let src = "<main><img src=\"cid:shot@x\"></main><p>Hi <img src=\"cid:logo@x\"></p>";
+        assert_eq!(cid_ids(src), ["shot@x", "logo@x"]);
     }
 
     #[test]

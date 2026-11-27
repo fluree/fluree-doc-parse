@@ -50,7 +50,7 @@ not). A large image the pixel probe does not take for text (a photograph, a
 chart) is cropped for no reader and listed with `NotTexty`. Neither is
 warned about, since each is a logo or a photograph as often as content. A
 run that neither escalates nor reads with OCR decodes no image: it lists
-them all as `Unprobed`, with one warning by page (`--probe-images` probes
+them all as `Unprobed`, without a warning either (`--probe-images` probes
 without reading).
 
 The probe takes a screen capture with a few lines on a wide, light ground
