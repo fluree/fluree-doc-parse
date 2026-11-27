@@ -2781,11 +2781,16 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     }
     let is_title = |l: &Line| titles.iter().any(|t| std::ptr::eq(*t, l));
     let is_restated = |l: &Line| restated.iter().any(|t| std::ptr::eq(*t, l));
+    // The baselines of a block of totals under the items.
+    let mut totals_bases: Vec<f64> = Vec::new();
     let cols = {
         let rows: Vec<&Line> = body.iter().filter(|l| !is_title(l)).copied().collect();
         // A block of totals under the items casts no vote here either.
         match items_over_totals(&rows, x0, x1) {
-            Some((items, _)) => columns(&items, x0, x1),
+            Some((items, block)) => {
+                totals_bases = block;
+                columns(&items, x0, x1)
+            }
             None => columns(&rows, x0, x1),
         }
     };
@@ -3954,6 +3959,35 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                 prev = Some((k, c));
             }
         }
+    }
+    // A total's label set over the items' figures, its amount further on
+    // (`Totaal exclusief BTW | € 156,20` under `Prijs/st`): it names the
+    // row's amount, as a statement's total names its line from the stub.
+    // Read into the first column and spanning the columns to its own, it is
+    // the row's label, not a value of the column it stands over.
+    for (r, ls) in all_rows.iter().enumerate().skip(header_rows) {
+        let in_block = |l: &&Line| totals_bases.iter().any(|&b| (b - l.base).abs() < 0.01);
+        if sub_headers.contains(&r) || ls.is_empty() || !ls.iter().all(in_block) {
+            continue;
+        }
+        let chunks: Vec<&Chunk> = ls.iter().flat_map(|l| l.chunks.iter()).collect();
+        let [label, amount] = chunks[..] else {
+            continue;
+        };
+        let k = column_of(&cols, label).unwrap_or(0);
+        let after = column_of(&cols, amount).is_some_and(|a| a > k);
+        if k == 0
+            || !after
+            || (0..k).any(|c| !cells[r * ncols + c].is_empty())
+            || spans
+                .iter()
+                .any(|&(sr, c0, c1)| sr == r && c0 <= k && k < c1)
+        {
+            continue;
+        }
+        let moved = std::mem::take(&mut cells[r * ncols + k]);
+        cells[r * ncols].extend(moved);
+        spans.push((r, 0, k + 1));
     }
     // The lines carried into the first row of the rows they span.
     let mut carried_downs: Vec<(usize, usize, usize)> = Vec::new();
