@@ -8118,21 +8118,20 @@ fn drop_field_line(g: &mut Grid, glyphs: &[crate::glyph::Glyph], rules: &[Rule])
 
 /// The runs of words in row `r` of a grid where the row names its columns
 /// in words: two runs or more, parted by a cell's gap, letters in them and
-/// no figure. Empty where the row is no such row. Read from the glyphs, not
-/// the cells: edges cutting through the names regroup their words.
+/// no figure. Empty where the row is no such row. Read from the row's
+/// glyphs, not its cells' text: edges cutting through the names regroup
+/// their words.
 fn head_runs(g: &Grid, glyphs: &[crate::glyph::Glyph], r: usize) -> Vec<(f64, f64)> {
-    let (x0, x1, y0, y1) = (g.xs[0], g.xs[g.cols()], g.ys[r], g.ys[r + 1]);
     let mut inked: Vec<(f64, f64, f64)> = Vec::new();
     let mut letters = false;
-    for gl in glyphs
+    // The row's glyphs as its cells take them, whole words by their
+    // centres of mass ([`Grid::row_glyphs`]).
+    for gl in g
+        .row_glyphs(glyphs, r)
         .iter()
-        .filter(|gl| !gl.text.trim().is_empty() && gl.is_horizontal())
+        .filter(|gl| gl.is_horizontal())
     {
         let Some(b) = gl.bbox else { continue };
-        let (x, y) = gl.center();
-        if x < x0 || x > x1 || y < y0 || y >= y1 {
-            continue;
-        }
         if gl.text.chars().any(|c| c.is_ascii_digit()) {
             return Vec::new();
         }
