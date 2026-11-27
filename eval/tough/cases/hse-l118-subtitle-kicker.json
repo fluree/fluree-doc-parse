@@ -1,0 +1,34 @@
+{
+  "document": {
+    "file": "hse-l118.pdf",
+    "url": "https://www.hse.gov.uk/pubns/priced/l118.pdf",
+    "sha256": "6c33d6148dd19877d80276537dccd87dfc51fba1bccae0a9637acf9ee98e8c97",
+    "about": "HSE L118, Health and safety at quarries. Its outline lists the parts and regulations at one depth, under the booklet's title; each regulation sets `Regulation`, `ACOP`, `Guidance` and its topics in 12pt bold."
+  },
+  "notes": [
+    "2026-11-26 (#456): read as a heading by its size, the line under the title opened a section holding the front matter or nothing. The title's subtitle is a `doco:Subtitle`, directly after the `doco:Title`, and opens no section.",
+    "2026-11-26 (#456): a kicker over the title was a paragraph like any other. It is a `doco:Paragraph` with evidence `kicker`, so a consumer can tell it from the body."
+  ],
+  "checks": [
+    {
+      "id": "subtitle",
+      "found": "2026-11-26",
+      "issue": "#456: the booklet's subtitle, the regulations it guides on, was a heading.",
+      "element": {
+        "type": "doco:Subtitle",
+        "text": "Quarries Regulations 1999",
+        "evidence": "subtitle"
+      }
+    },
+    {
+      "id": "kicker",
+      "found": "2026-11-26",
+      "issue": "#456: the publisher's name over the title was a plain paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Health and Safety Executive",
+        "evidence": "kicker"
+      }
+    }
+  ]
+}

@@ -32,6 +32,7 @@ those dates, so a store compares them as times.
 |---|---|
 | `foaf:Document` | the root |
 | `doco:Title` | the document's own title, held as the root's header |
+| `doco:Subtitle` | the title's subtitle, the element after the title; contained, not a header |
 | `doco:BodyMatter` | the body partition |
 | `doco:Section` | a minted node per heading, containing its subtree |
 | `doco:SectionTitle` | the heading itself, held as its section's header |

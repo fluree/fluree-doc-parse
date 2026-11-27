@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "cree-noctura-install.pdf",
+    "url": "https://cree.widen.net/content/9yzz8vhx6p/original/Noctura-Series-B-Wall-Mount-Install-Guide---Small_LPN00628X0001A1_A.pdf?u=wk1zzb&download=true",
+    "sha256": "e2f1f1f18974f51e54a258713f2185e037bdd5e39353c79adcd59be79086d482",
+    "about": "Cree Lighting Noctura Series B wall-mount install guide (EN/ES/FR, 9 pages). The same figure, with callout numbers 1 to 7, is repeated in each language, so the callouts are taken for furniture, and the step layouts are read as tables. Each language numbers its three pages from 1, in its own words, and sets its step numbers at the top of its second and third pages."
+  },
+  "notes": [
+    "2026-11-26 (#456): read as a heading by its size, the line under the title opened a section holding the front matter or nothing. The title's subtitle is a `doco:Subtitle`, directly after the `doco:Title`, and opens no section."
+  ],
+  "checks": [
+    {
+      "id": "subtitle",
+      "found": "2026-11-26",
+      "issue": "#456: the product's kind under its series name was a heading.",
+      "element": {
+        "type": "doco:Subtitle",
+        "text": "LED Wall Pack",
+        "evidence": "subtitle"
+      }
+    }
+  ]
+}
