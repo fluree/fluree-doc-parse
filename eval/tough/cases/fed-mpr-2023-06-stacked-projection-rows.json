@@ -1,0 +1,16 @@
+{
+  "document": {
+    "file": "fed-mpr-2023-06.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20230616_mprfullreport.pdf",
+    "sha256": "802da7277bbf874e0a5531999d9b1f8a7046211e63ab0a486beb92f59e674d81",
+    "about": "Federal Reserve Monetary Policy Report, June 2023: the projections table sets each variable's median and its March projection one over the other in one ruled row."
+  },
+  "checks": [
+    {
+      "id": "funds-rate-median-apart-from-march-projection",
+      "found": "2026-11-27",
+      "issue": "The projections table's `Federal funds rate` row stacks the median over the March projection, one line each, in every column: read whole, each cell ran the two together (`5.6 5.1`).",
+      "cell": {"value": "5.1", "row": "March projection", "column": "Median¹ / 2023"}
+    }
+  ]
+}

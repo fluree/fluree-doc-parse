@@ -2264,6 +2264,34 @@ fn heads_over_figures(rows: &[Vec<(String, usize, usize)>], kinds: &mut [RowKind
     }
 }
 
+/// Fewest rows of a list of fields that set a label beside a value.
+const MIN_FIELDS: usize = 2;
+
+/// Do the rows list fields: every row that sets a label in its first filled
+/// cell beside a value in a later one ends the label on a colon (`FOR:`,
+/// `CONTACT:`), [`MIN_FIELDS`] of them or more? A row with no value (`News
+/// Release`), or a value with no label (a contact's second line), says
+/// nothing either way.
+fn lists_fields(rows: &[Vec<(String, usize, usize)>]) -> bool {
+    let mut fields = 0usize;
+    for row in rows {
+        let filled: Vec<&str> = row
+            .iter()
+            .map(|(t, ..)| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect();
+        let starts_on_label = row.first().is_some_and(|(t, ..)| !t.trim().is_empty());
+        if filled.len() < 2 || !starts_on_label {
+            continue;
+        }
+        if !filled[0].ends_with(':') {
+            return false;
+        }
+        fields += 1;
+    }
+    fields >= MIN_FIELDS
+}
+
 /// Is this cell set as a header: ruled beneath, or bold throughout?
 fn header_styled(cell: &Handle, facts: &Facts) -> bool {
     ruled_below(cell) || bold_throughout(cell, false, facts) == Some(true)
@@ -2399,7 +2427,20 @@ fn emit_table(table: &Handle, out: &mut Out) {
         })
         .count()
         .min(rows.len());
-    let header_rows = header_rows(&kinds, thead);
+    let mut header_rows = header_rows(&kinds, thead);
+    // A list of fields has no header: under bold `<td>` cells at its top (a
+    // press release's letterhead, `FOR IMMEDIATE RELEASE` beside `EXHIBIT
+    // 99.1`), each row that sets a label beside a value labels it with a
+    // colon (`FOR:`, `CONTACT:`). Read as a header, the letterhead named
+    // every field's value. A header a `<thead>` or `<th>` states stands.
+    if thead == 0
+        && kinds[..header_rows]
+            .iter()
+            .all(|k| matches!(k, RowKind::Styled { .. } | RowKind::Blank))
+        && lists_fields(&rows[header_rows..])
+    {
+        header_rows = 0;
+    }
     let width = rows
         .iter()
         .map(|r| r.iter().fold(0usize, |w, c| w.saturating_add(c.1)))
@@ -2455,6 +2496,41 @@ fn emit_table(table: &Handle, out: &mut Out) {
             c += cs;
         }
     }
+    // A row holding nothing of its own, every cell either one above it
+    // running down into it or an empty spacer, is the second line of the
+    // record over it, not a row: a page laying each record over two rows
+    // (`rowspan="2"` on every column) sets the second row as a lone spacer
+    // cell, and read as a row it repeated the record. Not where a cell
+    // starting in it runs on down: it is that cell's first row.
+    let hollow: Vec<bool> = (0..n)
+        .map(|r| {
+            let row = r * width..(r + 1) * width;
+            r > 0
+                && row.clone().any(|i| m_down[i])
+                && row.clone().all(|i| m_down[i] || grid[i].trim().is_empty())
+                && (r + 1 >= n
+                    || (0..width).all(|c| !m_down[(r + 1) * width + c] || m_down[r * width + c]))
+        })
+        .collect();
+    let (grid, m_left, m_down, full_width, header_rows, n) = if hollow.iter().any(|h| *h) {
+        let keep = |r: usize| !hollow[r];
+        let rows_of = |v: &[bool]| -> Vec<bool> {
+            (0..n)
+                .filter(|&r| keep(r))
+                .flat_map(|r| v[r * width..(r + 1) * width].iter().copied())
+                .collect()
+        };
+        let grid: Vec<String> = (0..n)
+            .filter(|&r| keep(r))
+            .flat_map(|r| grid[r * width..(r + 1) * width].iter().cloned())
+            .collect();
+        let full: Vec<bool> = (0..n).filter(|&r| keep(r)).map(|r| full_width[r]).collect();
+        let header = header_rows - (0..header_rows.min(n)).filter(|&r| hollow[r]).count();
+        let kept = full.len();
+        (grid, rows_of(&m_left), rows_of(&m_down), full, header, kept)
+    } else {
+        (grid, m_left, m_down, full_width, header_rows, n)
+    };
     drop(rows);
     let mut grid = grid.into_iter();
     let cells: Vec<Vec<String>> = (0..n)
@@ -2832,6 +2908,54 @@ mod tests {
             .find(|e| e.kind == "doco:Table")
             .expect("a table");
         (t.header_rows, t.cells.clone().unwrap())
+    }
+
+    #[test]
+    fn a_records_second_row_of_spanned_cells_and_a_spacer_is_no_row() {
+        // Each record over two rows, every column spanning both, the second
+        // row a lone spacer cell; a group label spanning the records.
+        let (heads, cells) = header(
+            "<table><tr><th>Brand</th><th>Model</th><th>Price</th><td>&nbsp;</td></tr>\
+             <tr><td rowspan=\"4\">Acme</td><td rowspan=\"2\">A-1</td>\
+                 <td rowspan=\"2\">$5</td><td>&nbsp;</td></tr><tr><td>&nbsp;</td></tr>\
+             <tr><td rowspan=\"2\">A-2</td><td rowspan=\"2\">$7</td><td>&nbsp;</td></tr>\
+                 <tr><td>&nbsp;</td></tr></table>",
+        );
+        assert_eq!(heads, Some(1));
+        let rows: Vec<Vec<&str>> = cells
+            .iter()
+            .map(|r| r.iter().map(|c| c.trim()).collect())
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                vec!["Brand", "Model", "Price", ""],
+                vec!["Acme", "A-1", "$5", ""],
+                vec!["", "A-2", "$7", ""],
+            ]
+        );
+        // A row whose cell starts a span of its own is that cell's first row.
+        let (_, cells) = header(
+            "<table><tr><th>A</th><th>B</th></tr>\
+             <tr><td rowspan=\"2\">x</td><td>1</td></tr>\
+             <tr><td rowspan=\"2\"></td></tr><tr><td>y</td></tr></table>",
+        );
+        assert_eq!(cells.len(), 4);
+    }
+
+    #[test]
+    fn a_letterhead_over_a_list_of_fields_is_no_header() {
+        let letterhead = "<table><tr><td style=\"font-weight:700\">FOR IMMEDIATE RELEASE</td>\
+             <td></td><td style=\"font-weight:700\">EXHIBIT 99.1</td></tr>\
+             <tr><td>FOR:</td><td>&#160;</td><td>EMCOR GROUP, INC.</td></tr>\
+             <tr><td>News Release</td><td></td><td></td></tr>\
+             <tr><td>CONTACT:</td><td></td><td>Andy Backman</td></tr></table>";
+        assert_eq!(header(letterhead).0, Some(0));
+        // Bold heads over values that are not fields stay the header.
+        let heads = "<table><tr><td style=\"font-weight:700\">Item</td>\
+             <td style=\"font-weight:700\">Amount</td></tr>\
+             <tr><td>Rent:</td><td>100</td></tr><tr><td>Heat</td><td>20</td></tr></table>";
+        assert_eq!(header(heads).0, Some(1));
     }
 
     #[test]

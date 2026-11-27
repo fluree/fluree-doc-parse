@@ -833,6 +833,7 @@ mod tests {
                     line("Account 4417-0093-21", 0.2),
                     line("Date of birth 15-OCT-1997", 0.4),
                 ],
+                rules: Vec::new(),
             })
         }
     }
@@ -932,6 +933,7 @@ mod tests {
                     conf,
                 })
                 .collect(),
+            rules: Vec::new(),
         }
     }
 
@@ -1257,6 +1259,7 @@ mod tests {
             height: Some(600.0),
             engine: None,
             words,
+            rules: Vec::new(),
         };
         let read = elements_from_words(&png(200, 600), reading).unwrap();
         assert_eq!(read.ocr[0].words, 3, "{:?}", read.ocr);

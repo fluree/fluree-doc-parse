@@ -155,7 +155,7 @@ pub fn parse_with_media(
     let styles = pkg.read_within(&styles, &mut budget)?;
     let (header_styles, title_styles) = match &styles {
         Some(styles) => (header_row_styles(styles), title_styles(styles)),
-        None => (HashSet::new(), HashSet::new()),
+        None => (HashSet::new(), TitleStyles::new()),
     };
     // List numbering, which Word computes rather than stores; without the
     // part the document numbers nothing.
@@ -453,7 +453,7 @@ fn read_notes(
     document_xml: &str,
     settings: Option<&str>,
     header_styles: &HashSet<String>,
-    title_styles: &HashSet<String>,
+    title_styles: &TitleStyles,
     budget: &mut Budget,
 ) -> Result<Vec<Element>, DocxError> {
     let bodies = note_bodies(part_xml, kind.item);
@@ -602,14 +602,19 @@ fn shown_parts(document_xml: &str, kind: &str, even_odd: bool) -> Vec<String> {
     out
 }
 
-/// The paragraph styles that are Word's built-in Title.
+/// Paragraph styles by id, each with the DoCO class it declares: `doco:Title`
+/// or `doco:Subtitle`.
+type TitleStyles = HashMap<String, &'static str>;
+
+/// The paragraph styles that are Word's built-in Title and Subtitle.
 ///
-/// A localised Word writes its own id for the style (`Titel`) but keeps the
-/// built-in name, `Title`, so the name is what says which style it is.
-fn title_styles(xml: &str) -> HashSet<String> {
+/// A localised Word writes its own id for the style (`Titel`, `Untertitel`)
+/// but keeps the built-in name, `Title` or `Subtitle`, so the name is what
+/// says which style it is.
+fn title_styles(xml: &str) -> TitleStyles {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
-    let mut out = HashSet::new();
+    let mut out = TitleStyles::new();
     let mut style: Option<String> = None;
     loop {
         match r.read_event_into(&mut buf) {
@@ -620,8 +625,15 @@ fn title_styles(xml: &str) -> HashSet<String> {
                         .then(|| attr(&e, "styleId"))
                         .flatten();
                 }
-                "name" if attr(&e, "val").is_some_and(|v| v.eq_ignore_ascii_case("title")) => {
-                    out.extend(style.clone());
+                "name" => {
+                    let kind = match attr(&e, "val").map(|v| v.to_ascii_lowercase()).as_deref() {
+                        Some("title") => Some("doco:Title"),
+                        Some("subtitle") => Some("doco:Subtitle"),
+                        _ => None,
+                    };
+                    if let (Some(id), Some(kind)) = (style.clone(), kind) {
+                        out.insert(id, kind);
+                    }
                 }
                 _ => {}
             },
@@ -839,7 +851,12 @@ pub fn info(bytes: &[u8]) -> DocumentInfo {
 }
 
 pub fn parse_document_xml(xml: &str) -> Result<Vec<Element>, DocxError> {
-    parse_with_styles(xml, &HashSet::new(), &HashSet::new(), Numbering::default())
+    parse_with_styles(
+        xml,
+        &HashSet::new(),
+        &TitleStyles::new(),
+        Numbering::default(),
+    )
 }
 
 /// [`parse_document_xml`], knowing which table styles set their first row
@@ -849,7 +866,7 @@ pub fn parse_document_xml(xml: &str) -> Result<Vec<Element>, DocxError> {
 fn parse_with_styles(
     xml: &str,
     header_styles: &HashSet<String>,
-    title_styles: &HashSet<String>,
+    title_styles: &TitleStyles,
     numbering: Numbering,
 ) -> Result<Vec<Element>, DocxError> {
     let mut budget = Budget::default();
@@ -861,7 +878,7 @@ fn parse_with_styles(
 fn parse_part(
     xml: &str,
     header_styles: &HashSet<String>,
-    title_styles: &HashSet<String>,
+    title_styles: &TitleStyles,
     numbering: Numbering,
     budget: &mut Budget,
 ) -> Result<Vec<Element>, DocxError> {
@@ -878,7 +895,7 @@ type FigureImage = (String, String, usize);
 fn parse_body(
     xml: &str,
     header_styles: &HashSet<String>,
-    title_styles: &HashSet<String>,
+    title_styles: &TitleStyles,
     mut numbering: Numbering,
     budget: &mut Budget,
 ) -> Result<(Vec<Element>, Vec<FigureImage>), DocxError> {
@@ -1472,7 +1489,7 @@ struct Numbered {
 fn flush_para(
     out: &mut Vec<Element>,
     para: &mut Para,
-    title_styles: &HashSet<String>,
+    title_styles: &TitleStyles,
     budget: &mut Budget,
 ) -> Result<(), TooLarge> {
     let p = std::mem::take(para);
@@ -1505,9 +1522,21 @@ fn flush_para(
     let title = first.join(" ");
     let lines = first.join("\n");
     // The title Word's Title style declares: the document's own, which
-    // DoCO holds as the document's header rather than as a section's.
-    let e = if p.style == "Title" || title_styles.contains(&p.style) {
-        element("doco:Title", title, None)
+    // DoCO holds as the document's header rather than as a section's. Its
+    // Subtitle style declares the title's subtitle, directly after it; a
+    // paragraph in the style anywhere else is text.
+    let declared = match p.style.as_str() {
+        "Title" => Some("doco:Title"),
+        "Subtitle" => Some("doco:Subtitle"),
+        style => title_styles.get(style).copied(),
+    }
+    .filter(|&kind| {
+        kind != "doco:Subtitle"
+            || (out.last().is_some_and(|e| e.kind == "doco:Title")
+                && !out.iter().any(|e| e.kind == "doco:Subtitle"))
+    });
+    let e = if let Some(kind) = declared {
+        element(kind, title, None)
     } else if let Some(level) = heading_level(&p.style) {
         element("doco:SectionTitle", title, Some(level))
     } else if numbered || is_list_style(&p.style) {
@@ -1933,7 +1962,7 @@ mod tests {
 
     fn numbered(body: &str, numbering: &str, styles: Option<&str>) -> Vec<String> {
         let n = Numbering::new(Some(numbering), styles);
-        parse_with_styles(&doc(body), &HashSet::new(), &HashSet::new(), n)
+        parse_with_styles(&doc(body), &HashSet::new(), &TitleStyles::new(), n)
             .unwrap()
             .into_iter()
             .map(|e| e.text)
@@ -1977,7 +2006,7 @@ mod tests {
             item("1", 0, "Vegetables"),
         );
         let n = Numbering::new(Some(&numbering), Some(&styles));
-        let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &TitleStyles::new(), n).unwrap();
         let got: Vec<(&str, usize)> = els.iter().map(|e| (e.text.as_str(), e.depth)).collect();
         assert_eq!(
             got,
@@ -2067,6 +2096,7 @@ mod tests {
                         angle: None,
                         conf: Some(0.9),
                     }],
+                    rules: Vec::new(),
                 })
             }
         }
@@ -2382,7 +2412,7 @@ mod tests {
             parse_body(
                 &body,
                 &HashSet::new(),
-                &HashSet::new(),
+                &TitleStyles::new(),
                 Numbering::default(),
                 budget,
             )
@@ -2674,6 +2704,7 @@ mod tests {
                         angle: None,
                         conf: Some(0.9),
                     }],
+                    rules: Vec::new(),
                 })
             }
         }
@@ -3124,7 +3155,7 @@ mod tests {
                 &body,
                 None,
                 &HashSet::new(),
-                &HashSet::new(),
+                &TitleStyles::new(),
                 budget,
             )
         };
@@ -3285,7 +3316,7 @@ mod tests {
             item("1", 2, "Compare the lot number."),
         ]
         .concat();
-        let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &TitleStyles::new(), n).unwrap();
         let got: Vec<(&str, Option<usize>, &str)> = els
             .iter()
             .map(|e| (e.kind.as_str(), e.level, e.text.as_str()))
@@ -3336,7 +3367,7 @@ mod tests {
             item("1", 1, "Appendix Notes"),
         ]
         .concat();
-        let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &TitleStyles::new(), n).unwrap();
         let titles: Vec<&str> = els
             .iter()
             .filter(|e| e.kind == "doco:SectionTitle")
@@ -3539,7 +3570,7 @@ mod tests {
         ]
         .concat();
         let n = Numbering::new(Some(&nx), None);
-        let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &TitleStyles::new(), n).unwrap();
         assert_eq!(els[1].text, "no longer listed");
         assert_eq!(els[1].kind, "doco:Paragraph");
         assert_eq!(els[2].text, "2. second");
@@ -3566,7 +3597,7 @@ mod tests {
             item("1", 1, "after the table")
         );
         let n = Numbering::new(Some(&nx), None);
-        let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &TitleStyles::new(), n).unwrap();
         let cells = els[0].cells.as_ref().unwrap();
         assert_eq!(cells[0][0].trim(), "1.");
         assert_eq!(cells[1][0].trim(), "2.");
@@ -3583,7 +3614,7 @@ mod tests {
                     <w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr></w:pPrChange></w:pPr>\
                     <w:r><w:t>Was a numbered heading</w:t></w:r></w:p>";
         let n = Numbering::new(Some(&nx), None);
-        let els = parse_with_styles(&doc(body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        let els = parse_with_styles(&doc(body), &HashSet::new(), &TitleStyles::new(), n).unwrap();
         assert_eq!(els[0].text, "Was a numbered heading");
         assert_eq!(els[0].kind, "doco:Paragraph");
     }
@@ -3614,6 +3645,55 @@ mod tests {
         )
         .unwrap();
         assert_eq!(els[0].kind, "doco:Title");
+    }
+
+    #[test]
+    fn the_subtitle_style_is_the_titles_subtitle() {
+        let x = doc(&format!(
+            "{}{}{}",
+            para(Some("Title"), "Annual Report"),
+            para(Some("Subtitle"), "Fiscal year 2026"),
+            para(None, "Body text")
+        ));
+        let kinds: Vec<String> = parse_document_xml(&x)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(kinds, ["doco:Title", "doco:Subtitle", "doco:Paragraph"]);
+        // Away from the title, the style sets text.
+        let x = doc(&format!(
+            "{}{}{}",
+            para(Some("Subtitle"), "Prepared for the board"),
+            para(Some("Title"), "Annual Report"),
+            para(Some("Heading1"), "Overview")
+        ));
+        let kinds: Vec<String> = parse_document_xml(&x)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(kinds, ["doco:Paragraph", "doco:Title", "doco:SectionTitle"]);
+        // A localised Word's own id for the style, by its built-in name.
+        let styles = format!(
+            "<w:styles {NS}><w:style w:type=\"paragraph\" w:styleId=\"Titel\">\
+             <w:name w:val=\"Title\"/></w:style><w:style w:type=\"paragraph\" \
+             w:styleId=\"Untertitel\"><w:name w:val=\"Subtitle\"/></w:style></w:styles>"
+        );
+        let localised = title_styles(&styles);
+        let els = parse_with_styles(
+            &doc(&format!(
+                "{}{}",
+                para(Some("Titel"), "Jahresbericht"),
+                para(Some("Untertitel"), "Geschäftsjahr 2026")
+            )),
+            &HashSet::new(),
+            &localised,
+            Numbering::default(),
+        )
+        .unwrap();
+        assert_eq!(els[0].kind, "doco:Title");
+        assert_eq!(els[1].kind, "doco:Subtitle");
     }
 
     #[test]
@@ -3932,7 +4012,7 @@ mod tests {
             ))
         };
         let header = |xml: String| {
-            parse_with_styles(&xml, &marked, &HashSet::new(), Numbering::default()).unwrap()[0]
+            parse_with_styles(&xml, &marked, &TitleStyles::new(), Numbering::default()).unwrap()[0]
                 .header_rows
         };
         assert_eq!(header(x("Mine", "w:firstRow=\"1\"")), Some(1));
@@ -4033,7 +4113,7 @@ mod tests {
             parse_part(
                 &xml,
                 &HashSet::new(),
-                &HashSet::new(),
+                &TitleStyles::new(),
                 Numbering::default(),
                 &mut budget,
             )
@@ -4061,7 +4141,7 @@ mod tests {
             parse_part(
                 &xml,
                 &HashSet::new(),
-                &HashSet::new(),
+                &TitleStyles::new(),
                 Numbering::default(),
                 &mut budget,
             )

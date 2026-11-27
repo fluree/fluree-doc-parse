@@ -166,6 +166,11 @@ pub struct Element {
     /// matrix into sections. Empty where there are none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_headers: Option<Vec<usize>>,
+    /// Row indices where a section the sub-headers open ends: the table set
+    /// a blank row there between its groups, and the rows from it on are no
+    /// part of the section over them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section_breaks: Option<Vec<usize>>,
     /// Row indices, below the header block, set like a header row: they
     /// name the columns afresh for the rows beneath them, until the next
     /// such row (`By wt | By vol` under a `LB/Gal | g/L` header). They are
@@ -353,6 +358,7 @@ impl Element {
             cells: None,
             header_rows: None,
             sub_headers: None,
+            section_breaks: None,
             restated_headers: None,
             merged_down: None,
             merged_left: None,

@@ -1,30 +1,30 @@
 # fluree-doc-parse
 
-Adaptive document parsing: a deterministic Rust engine first, with
-model-arbitrated upgrade tiers a document walks through only as far as it
-needs. PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, a raster image, a
-meeting transcript or an email in; Markdown, XHTML, JSON, plain text or a DoCO JSON-LD
-graph out.
+Adaptive document parsing: a deterministic Rust engine first, with OCR and a
+vision-language model a document uses only as far as it needs. PDF, Markdown,
+plain text, HTML, DOCX, PPTX, XLSX, a raster image, a meeting transcript or an
+email in; Markdown, XHTML, JSON, plain text or a DoCO JSON-LD graph out.
 
-| tier | adds | overall¹ | typical cost/document |
+| mode | adds | overall¹ | s/doc² |
 |---|---|---|---|
-| 1 | deterministic extraction + layout | 0.901319 | **8 ms** (CPU) |
-| 2 | layout-detector arbitration (headings, table regions) | 0.908607 | ~0.2 s³ |
-| 3 | deep reading of pixels-only content and doubted structure | **0.940703** | ~1.5 s² |
+| deterministic | the document's own text, layout, tables and headings | 0.922007 | **0.0067** (CPU) |
+| + OCR | the built-in OCR engine, for text set as pixels | 0.947430 | 0.340 (CPU) |
+| + VLM | a vision-language model, for the pages and regions OCR cannot settle | **0.951650** | 1.580 |
 
-¹ 200-document public evaluation corpus, measured 2026-11-23 — the standings
-[below](#where-it-stands). Every rung reproduces from the committed
-model-output caches with no GPU and no API key.
+¹ 200-document public evaluation corpus, measured 2026-11-26: the standings
+[below](#where-it-stands). The deterministic and OCR scores reproduce with no
+GPU and no API key. The VLM score needs a model provider, and a run is billed
+per call.
 
-² Averaged across the corpus: 87 of the 200 documents escalate (median
-1.7 s), the other 113 never leave tier 1 at 8 ms. Tiers 1 and 2 are CPU-only,
-so the deep reader is the sole reason to think about a GPU or an API key. The
-full timing accounting is on [the benchmarks page](docs/benchmarks/README.md).
-
-³ A page through the layout detector on a GPU host. It runs on CPU too, at
-about 0.8 s a page on an Apple M4 Max, whose GPU it cannot use. `fdoc` reads
-the detector's boxes rather than running it: see
-[Producing layout boxes](docs/integration/escalation-tiers.md#producing-layout-boxes).
+² One `fdoc convert` process over all 200 documents with `-j 1`, its wall
+time divided by 200, on an Apple M4 Max. No process is started per document.
+The median of five runs (deterministic) or three (+ OCR) after a warm-up run,
+and one run (+ VLM). With `-j 8` the same machine reads 833, 11.0 and
+6.4 documents a second. With + VLM, 35 of the 200 documents call the
+model; the others read as they do with + OCR. The deterministic engine and
+OCR are CPU-only, so the vision-language model is the sole reason to think
+about an API key. The full timing accounting is on [the benchmarks
+page](docs/benchmarks/README.md).
 
 Two principles produced those numbers:
 
@@ -34,8 +34,8 @@ Two principles produced those numbers:
   model win. Where the deterministic pass is what failed — no usable glyph
   layer, or a hierarchy resting on nothing — the reading owns the page
   outright, because there is no good text to prefer to it.
-- **Escalation is earned, not configured.** Each tier's outputs are the
-  sensors that decide whether the next tier runs, per document, per region,
+- **Escalation is earned, not configured.** Each step's outputs are the
+  sensors that decide whether the next one runs, per document, per region,
   per table.
 
 ## Quick start
@@ -78,7 +78,7 @@ yourself — see [`fdoc config`](docs/cli/config.md).
 
 ## Where it stands
 
-Measured 2026-11-23 on
+Measured 2026-11-26 on
 [opendataloader-bench](https://github.com/opendataloader-project/opendataloader-bench):
 200 public PDFs with hand-checked ground truth, scored by a harness neither
 written nor tuned by this project. NID scores reading order and text, TEDS
@@ -86,35 +86,42 @@ table structure, MHS heading structure; `overall` is their per-document mean.
 The reference writes a link as its words alone, so our scores are taken with
 [`--md-links text`](docs/formats/markdown.md#links-as-plain-text), which does the same.
 
-![Overall score against seconds per page for 17 engines on opendataloader-bench: fluree-doc-parse tier 1 scores 0.901 at 11 ms per page, tier 2 scores 0.909 at 0.2 s and tier 3 scores 0.941 at about 1.5 s; markitdown and liteparse, below 0.65, are listed in a note](docs/assets/accuracy-vs-speed.svg)
+![Overall score against seconds per page for 16 engines on opendataloader-bench: fluree-doc-parse scores 0.922 deterministic at 6.7 ms per page, 0.947 with OCR at 0.34 s and 0.952 with a vision-language model at 1.58 s; markitdown and liteparse, below 0.65, are listed in a note](docs/assets/accuracy-vs-speed.svg)
 
-All 17 engines scored:
+All 16 engines scored, fluree-doc-parse in each of its three modes:
 
-| # | engine | overall | NID | TEDS | MHS | s/doc |
+| # | engine | overall | NID | TEDS | MHS | s/doc³ |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse** (cascade) | **0.940703** | 0.9512 | 0.9420 | 0.9012 | ~1.5 |
-| 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.901319** | 0.9264 | 0.8616 | 0.8402 | **~0.011** |
-| 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
-| 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
-| 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
-| 7 | pdf-inspector | 0.875348 | 0.9147 | 0.8141 | 0.7879 | 0.006 |
-| 8 | marker | 0.860836 | 0.8897 | 0.8076 | 0.7956 | 53.932 |
-| 9 | opendataloader-hybrid-helium | 0.845058 | 0.8789 | 0.8068 | 0.7549 | 8.620 |
-| 10 | unstructured-hires | 0.841377 | 0.9038 | 0.5883 | 0.7486 | 3.008 |
-| 11 | edgeparse | 0.836959 | 0.8938 | 0.7174 | 0.7061 | 0.036 |
-| 12 | opendataloader | 0.831209 | 0.9023 | 0.4887 | 0.7395 | 0.015 |
-| 13 | mineru | 0.831135 | 0.8574 | 0.8730 | 0.7430 | 5.962 |
-| 14 | pymupdf4llm | 0.731621 | 0.8851 | 0.4010 | 0.4122 | 0.091 |
-| 15 | unstructured | 0.685777 | 0.8818 | 0.0000 | 0.3877 | 0.077 |
-| 16 | markitdown | 0.588504 | 0.8437 | 0.2729 | 0.0000 | 0.114 |
-| 17 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
+| 1 | **fluree-doc-parse** (+ VLM) | **0.951650** | 0.9584 | 0.9678 | 0.9217 | 1.580 |
+| 2 | **fluree-doc-parse** (+ OCR) | **0.947430** | 0.9582 | 0.9619 | 0.9060 | 0.340 |
+| 3 | **fluree-doc-parse** (deterministic) | **0.922007** | 0.9343 | 0.9166 | 0.8866 | **0.0067** |
+| 4 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
+| 5 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
+| 6 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
+| 7 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
+| 8 | pdf-inspector | 0.875348 | 0.9147 | 0.8141 | 0.7879 | 0.006 |
+| 9 | marker | 0.860836 | 0.8897 | 0.8076 | 0.7956 | 53.932 |
+| 10 | opendataloader-hybrid-helium | 0.845058 | 0.8789 | 0.8068 | 0.7549 | 8.620 |
+| 11 | unstructured-hires | 0.841377 | 0.9038 | 0.5883 | 0.7486 | 3.008 |
+| 12 | edgeparse | 0.836959 | 0.8938 | 0.7174 | 0.7061 | 0.036 |
+| 13 | opendataloader | 0.831209 | 0.9023 | 0.4887 | 0.7395 | 0.015 |
+| 14 | mineru | 0.831135 | 0.8574 | 0.8730 | 0.7430 | 5.962 |
+| 15 | pymupdf4llm | 0.731621 | 0.8851 | 0.4010 | 0.4122 | 0.091 |
+| 16 | unstructured | 0.685777 | 0.8818 | 0.0000 | 0.3877 | 0.077 |
+| 17 | markitdown | 0.588504 | 0.8437 | 0.2729 | 0.0000 | 0.114 |
+| 18 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
 
-The deterministic engine, which uses no model, GPU or API key, places third
-on its own. With the layout detector, still on CPU alone, it would place
-second. The full cascade places first, 0.034 ahead of the next engine.
+³ Ours: one `fdoc convert` process over all 200 documents, its wall time
+divided by 200, as in the table at the top. The other engines' times are the
+harness's own: one process per document, each process's start-up included.
 
-Notes on how both `s/doc` figures were timed, and the caveats that apply to
+All three modes place above every other engine. The deterministic engine,
+which uses no model, GPU or API key, is 0.015 ahead of the next engine on its
+own. The built-in OCR engine, still on CPU with no key, adds 0.025. A
+vision-language model, called only for what OCR cannot settle, adds
+0.004 more.
+
+Notes on how our `s/doc` figures were timed, and the caveats that apply to
 these scores, are on [the benchmarks page](docs/benchmarks/README.md). That
 page also lists [where our output differs from the
 reference](docs/benchmarks/where-we-differ.md) and is scored lower as a

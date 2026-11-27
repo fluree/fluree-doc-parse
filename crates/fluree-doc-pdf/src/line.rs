@@ -1359,6 +1359,52 @@ fn attach_scripts(clusters: &mut [Vec<usize>], glyphs: &[Glyph], vertical: bool,
         let mut kept: Vec<usize> = Vec::new();
         for run in runs {
             let first = &glyphs[run[0]];
+            // A run that puts no ink down, set wholly within one letter's
+            // advance of the text it would join and half that text's size or
+            // more off its baseline, past any script's raise, is an empty
+            // line's spaces, no space of that text: set beside display type a
+            // line off the title's, they fell inside the title's letters and
+            // parted it (`C` from `ar Wash Chain`, `Compa` from `ny`). A word
+            // space, on whatever baseline, starts where a letter's advance
+            // ends.
+            if run.iter().all(|&i| glyphs[i].text.trim().is_empty()) {
+                let end = &glyphs[*run.last().unwrap()];
+                let (from, to) = (
+                    adv.at(first.origin),
+                    adv.at(end.origin) + end.advance.unwrap_or(0.0),
+                );
+                let across = |g: &Glyph| {
+                    if vertical {
+                        (g.origin.0 - first.origin.0).abs()
+                    } else {
+                        (g.origin.1 - first.origin.1).abs()
+                    }
+                };
+                // The text it would join: the nearest base by baseline.
+                let inked = |b: usize| {
+                    clusters[b]
+                        .iter()
+                        .filter(|&&i| !glyphs[i].text.trim().is_empty())
+                        .map(|&i| &glyphs[i])
+                };
+                let near = bases.iter().copied().min_by(|&x, &y| {
+                    let d = |b: usize| inked(b).map(&across).fold(f64::MAX, f64::min);
+                    cmp(d(x), d(y))
+                });
+                let on_letter = near.is_some_and(|b| {
+                    inked(b).any(|g| {
+                        let size = g.font_size.max(1.0) as f64;
+                        let start = adv.at(g.origin);
+                        g.advance.is_some_and(|a| {
+                            from > start + size * 0.05 && to < start + a - size * 0.05
+                        }) && across(g) >= size * 0.5
+                    })
+                });
+                if on_letter {
+                    kept.extend(run);
+                    continue;
+                }
+            }
             let last = &glyphs[*run.last().unwrap()];
             // A raised sign is a word's: a base whose ink it stands beside
             // comes before one it reaches only through a space, which the
@@ -3378,6 +3424,34 @@ mod tests {
         let mut v = sized_word("PRICE", 0.0, 100.0, 24.0);
         v.extend(sized_word("each", 70.0, 100.0, 10.0));
         assert_eq!(assemble(&v).len(), 1);
+    }
+
+    #[test]
+    fn an_empty_lines_spaces_beside_display_type_part_nothing() {
+        // A 22pt title, the spaces of empty 11pt lines set at its first
+        // letter on baselines a line above and below its own, and a 16pt
+        // space of the line above set between two of its letters.
+        // A space's advance is about a quarter of its size.
+        let space = |x: f64, baseline: f64, size: f32| Glyph {
+            bbox: None,
+            advance: Some(size as f64 * 0.28),
+            ..sized(" ", x, baseline, size)
+        };
+        let mut v = sized_word("Car", 52.0, 94.7, 22.0);
+        v.extend(sized_word("Wash", 96.0, 94.7, 22.0));
+        for baseline in [82.2, 94.8, 107.5] {
+            v.push(space(54.0, baseline, 11.0));
+        }
+        v.push(space(109.0, 82.6, 16.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(texts.iter().any(|t| t == "Car Wash"), "{texts:?}");
+        // A word space raised off the baseline, set where a letter's advance
+        // ends, is the line's own.
+        let mut v = sized_word("70", 52.0, 94.7, 12.0);
+        v.push(space(64.0, 90.2, 8.0));
+        v.extend(sized_word("percent", 66.2, 94.7, 12.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(texts.iter().any(|t| t == "70 percent"), "{texts:?}");
     }
 
     #[test]
