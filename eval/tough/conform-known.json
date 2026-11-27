@@ -1,0 +1,1996 @@
+{
+ "acl-2024-stub-head-down-the-header": {
+  "md table.header_rows": 4,
+  "md table.lost": 5,
+  "xhtml block.merged": 9
+ },
+ "acl-bart-columns-over-page-number": {
+  "md table.header_rows": 1,
+  "md table.lost": 2,
+  "md text.changed": 3,
+  "xhtml block.merged": 1
+ },
+ "apple-env-callout-beside-column": {
+  "md list.extra": 12,
+  "md table.header_rows": 6,
+  "md table.lost": 6,
+  "md table.restated_headers": 1,
+  "xhtml block.merged": 14,
+  "xhtml table.header_rows": 1,
+  "xhtml table.restated_headers": 1,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1,
+  "xhtml text.extra": 3,
+  "xhtml text.lost": 14
+ },
+ "asian-paints-stub-head-down-the-header": {
+  "md list.extra": 22,
+  "md table.header_rows": 13,
+  "md table.lost": 75,
+  "md table.restated_headers": 2,
+  "md text.changed": 2,
+  "md text.lost": 17,
+  "xhtml block.merged": 12,
+  "xhtml table.header_rows": 26,
+  "xhtml table.restated_headers": 5,
+  "xhtml table.sub_headers": 26
+ },
+ "bmc-pmc5131497-shaded-first-row": {
+  "md list.extra": 1,
+  "md table.header_rows": 2,
+  "md table.lost": 3
+ },
+ "bosch-bme280-header-over-figures": {
+  "md list.extra": 5,
+  "md table.header_rows": 1,
+  "md table.lost": 16,
+  "xhtml block.merged": 13,
+  "xhtml table.header_rows": 4,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 4
+ },
+ "brother-dialog-picture-no-table": {
+  "md table.header_rows": 7,
+  "md table.lost": 51,
+  "md text.changed": 1,
+  "md text.extra": 3,
+  "md text.lost": 3,
+  "xhtml block.merged": 75,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 22,
+  "xhtml text.extra": 2,
+  "xhtml text.lost": 9
+ },
+ "cbs-kms-overview-first-row-is-a-field": {
+  "md list.extra": 4,
+  "md table.header_rows": 1,
+  "md table.lost": 3
+ },
+ "census-p60-glyph-names": {
+  "md list.extra": 7,
+  "md table.header_rows": 8,
+  "md table.lost": 37,
+  "md text.changed": 9,
+  "md text.lost": 3,
+  "xhtml block.merged": 7,
+  "xhtml table.header_rows": 15,
+  "xhtml table.sub_headers": 15
+ },
+ "cree-cr4t-beam-angle": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-cu-header": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-degree": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-field-lines": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-figure-panels": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-hanging-bullets": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-polar-labels": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-running-lines": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-side-by-side-tables": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-stacked-boxes": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-table-regions": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-cr4t-table-title-rows": {
+  "md table.lost": 7,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "cree-furniture-in-cells": {
+  "xhtml block.merged": 9
+ },
+ "cree-noctura-fcc-heading": {
+  "xhtml block.merged": 9
+ },
+ "cree-noctura-lettered-steps": {
+  "xhtml block.merged": 9
+ },
+ "cree-noctura-ligature-space": {
+  "xhtml block.merged": 9
+ },
+ "cree-noctura-numbered-safety": {
+  "xhtml block.merged": 9
+ },
+ "cree-noctura-step-columns": {
+  "xhtml block.merged": 9
+ },
+ "cree-noctura-subtitle": {
+  "xhtml block.merged": 9
+ },
+ "digest-table-set-as-picture": {
+  "md list.extra": 4
+ },
+ "ecb-diagram-picture-no-table": {
+  "md table.header_rows": 1,
+  "md table.lost": 3,
+  "md text.lost": 2,
+  "xhtml block.merged": 8,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "edgar-turned-axis-labels": {
+  "md list.extra": 6,
+  "md table.header_rows": 214,
+  "md table.lost": 5,
+  "md text.changed": 169,
+  "md text.extra": 1,
+  "md text.lost": 4,
+  "xhtml block.merged": 229,
+  "xhtml table.header_rows": 9,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 3
+ },
+ "eia-coal-prices": {
+  "md list.extra": 1,
+  "md table.lost": 1
+ },
+ "elife-registered-report-open-heads": {
+  "md heading.extra": 1,
+  "md list.extra": 21,
+  "md table.header_rows": 1,
+  "md table.lost": 10,
+  "md table.restated_headers": 2,
+  "md text.lost": 2,
+  "xhtml table.header_rows": 3,
+  "xhtml table.restated_headers": 2,
+  "xhtml table.sub_headers": 3
+ },
+ "epa-200-7-logo-read-by-ocr": {
+  "md list.extra": 33,
+  "md table.lost": 12,
+  "md text.changed": 2
+ },
+ "epa-ap42-link-rects": {
+  "md list.extra": 113
+ },
+ "epa-ap42-note-marks": {
+  "md list.extra": 113
+ },
+ "epa-method-200-7-formulas": {
+  "md list.extra": 33,
+  "md table.lost": 12,
+  "md text.changed": 2
+ },
+ "eppendorf-arrow-items": {
+  "md list.extra": 2,
+  "md table.header_rows": 2,
+  "md table.lost": 1
+ },
+ "eppendorf-bold-abbreviations": {
+  "md list.extra": 2,
+  "md table.header_rows": 2,
+  "md table.lost": 1
+ },
+ "eppendorf-field-list": {
+  "md list.extra": 2,
+  "md table.header_rows": 2,
+  "md table.lost": 1
+ },
+ "eppendorf-footnote": {
+  "md list.extra": 2,
+  "md table.header_rows": 2,
+  "md table.lost": 1
+ },
+ "eppendorf-performance-groups": {
+  "md list.extra": 2,
+  "md table.header_rows": 2,
+  "md table.lost": 1
+ },
+ "eppendorf-qr-box": {
+  "md list.extra": 2,
+  "md table.header_rows": 2,
+  "md table.lost": 1
+ },
+ "eppendorf-tall-rows": {
+  "md list.extra": 2,
+  "md table.header_rows": 2,
+  "md table.lost": 1
+ },
+ "erp-2023-cell-hyphens": {
+  "md table.header_rows": 15,
+  "md table.lost": 82,
+  "md text.changed": 2,
+  "md text.lost": 3,
+  "xhtml block.merged": 62,
+  "xhtml table.header_rows": 8,
+  "xhtml table.shape": 2,
+  "xhtml table.sub_headers": 8
+ },
+ "erp-2023-link-underlines": {
+  "md table.header_rows": 15,
+  "md table.lost": 82,
+  "md text.changed": 2,
+  "md text.lost": 3,
+  "xhtml block.merged": 62,
+  "xhtml table.header_rows": 8,
+  "xhtml table.shape": 2,
+  "xhtml table.sub_headers": 8
+ },
+ "erp-2023-same-every-run": {
+  "md table.header_rows": 15,
+  "md table.lost": 82,
+  "md text.changed": 2,
+  "md text.lost": 3,
+  "xhtml block.merged": 62,
+  "xhtml table.header_rows": 8,
+  "xhtml table.shape": 2,
+  "xhtml table.sub_headers": 8
+ },
+ "eurjepi-full-width-table-last-rows": {
+  "md list.extra": 1,
+  "md table.header_rows": 2,
+  "md table.lost": 4,
+  "md text.changed": 1
+ },
+ "eurlex-ai-act": {
+  "md list.extra": 512,
+  "md text.lost": 88
+ },
+ "eurlex-gdpr": {
+  "md list.extra": 372
+ },
+ "fda-175551-logo-read-by-ocr": {
+  "md table.header_rows": 2,
+  "md table.lost": 2,
+  "xhtml block.merged": 3,
+  "xhtml table.restated_headers": 1
+ },
+ "fda-ndma-wingdings-arrows": {
+  "md table.lost": 2,
+  "xhtml table.header_rows": 1,
+  "xhtml table.restated_headers": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "fed-beigebook-2023-file-bookmarks": {
+  "xhtml block.merged": 2
+ },
+ "fed-beigebook-district-topics": {
+  "xhtml block.merged": 2
+ },
+ "fed-beigebook-subtitle": {
+  "xhtml block.merged": 2
+ },
+ "fed-combined-soma-group-head": {
+  "md table.header_rows": 6,
+  "md table.lost": 45,
+  "xhtml table.grid": 4,
+  "xhtml table.header_rows": 10,
+  "xhtml table.shape": 2,
+  "xhtml table.spans": 2,
+  "xhtml table.sub_headers": 10
+ },
+ "fed-fin-stmts-table-stubs": {
+  "md table.header_rows": 6,
+  "md table.lost": 45,
+  "xhtml table.grid": 4,
+  "xhtml table.header_rows": 10,
+  "xhtml table.shape": 2,
+  "xhtml table.spans": 2,
+  "xhtml table.sub_headers": 10
+ },
+ "fed-fin-stmts-underlined-columns": {
+  "md table.header_rows": 6,
+  "md table.lost": 45,
+  "xhtml table.grid": 4,
+  "xhtml table.header_rows": 10,
+  "xhtml table.shape": 2,
+  "xhtml table.spans": 2,
+  "xhtml table.sub_headers": 10
+ },
+ "fed-fomc-minutes": {
+  "md table.header_rows": 1,
+  "md text.lost": 1
+ },
+ "fed-fomc-minutes-signature": {
+  "md table.header_rows": 1,
+  "md text.lost": 1
+ },
+ "fed-fsr-2024-04-scales-beside-prose": {
+  "md list.extra": 29,
+  "md table.header_rows": 3,
+  "md table.lost": 4,
+  "md text.changed": 2,
+  "md text.extra": 10,
+  "md text.lost": 2,
+  "xhtml block.merged": 89,
+  "xhtml table.shape": 1,
+  "xhtml text.changed": 1,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 14
+ },
+ "fed-fsr-body-from-prose": {
+  "md list.extra": 34,
+  "md table.header_rows": 1,
+  "md table.lost": 6,
+  "xhtml block.merged": 89,
+  "xhtml table.shape": 2,
+  "xhtml text.changed": 1,
+  "xhtml text.lost": 1
+ },
+ "fed-fsr-case-folded-map": {
+  "md list.extra": 34,
+  "md table.header_rows": 1,
+  "md table.lost": 6,
+  "xhtml block.merged": 89,
+  "xhtml table.shape": 2,
+  "xhtml text.changed": 1,
+  "xhtml text.lost": 1
+ },
+ "fed-fsr-header-band": {
+  "md list.extra": 34,
+  "md table.header_rows": 1,
+  "md table.lost": 6,
+  "xhtml block.merged": 89,
+  "xhtml table.shape": 2,
+  "xhtml text.changed": 1,
+  "xhtml text.lost": 1
+ },
+ "fed-fsr-item-column-head": {
+  "md list.extra": 34,
+  "md table.header_rows": 1,
+  "md table.lost": 6,
+  "xhtml block.merged": 89,
+  "xhtml table.shape": 2,
+  "xhtml text.changed": 1,
+  "xhtml text.lost": 1
+ },
+ "fed-mpr-2023-03-scales-beside-prose": {
+  "md list.extra": 77,
+  "md table.header_rows": 7,
+  "md table.lost": 5,
+  "md text.lost": 5,
+  "xhtml block.merged": 128,
+  "xhtml order": 67,
+  "xhtml table.header_rows": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 2,
+  "xhtml text.changed": 3,
+  "xhtml text.extra": 24,
+  "xhtml text.lost": 201
+ },
+ "fed-mpr-2023-06-stacked-projection-rows": {
+  "md list.extra": 69,
+  "md table.header_rows": 9,
+  "md table.lost": 7,
+  "md text.lost": 6,
+  "xhtml block.merged": 98,
+  "xhtml order": 22,
+  "xhtml table.header_rows": 5,
+  "xhtml table.sub_headers": 5,
+  "xhtml text.changed": 2,
+  "xhtml text.extra": 15,
+  "xhtml text.lost": 133
+ },
+ "fed-mpr-chart-titles-side-by-side": {
+  "md list.extra": 1,
+  "md table.header_rows": 9,
+  "md table.lost": 5,
+  "xhtml block.merged": 107,
+  "xhtml order": 38,
+  "xhtml table.header_rows": 1,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1,
+  "xhtml text.changed": 2,
+  "xhtml text.extra": 14,
+  "xhtml text.lost": 103
+ },
+ "fed-mpr-continued-box-title": {
+  "md list.extra": 59,
+  "md table.header_rows": 13,
+  "md table.lost": 6,
+  "md text.lost": 9,
+  "xhtml block.merged": 105,
+  "xhtml order": 14,
+  "xhtml table.header_rows": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 2,
+  "xhtml text.changed": 2,
+  "xhtml text.extra": 12,
+  "xhtml text.lost": 103
+ },
+ "fed-mpr-continued-boxes": {
+  "md list.extra": 1,
+  "md table.header_rows": 9,
+  "md table.lost": 5,
+  "xhtml block.merged": 107,
+  "xhtml order": 38,
+  "xhtml table.header_rows": 1,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1,
+  "xhtml text.changed": 2,
+  "xhtml text.extra": 14,
+  "xhtml text.lost": 103
+ },
+ "fed-mpr-finding-heads": {
+  "md list.extra": 1,
+  "md table.header_rows": 9,
+  "md table.lost": 5,
+  "xhtml block.merged": 107,
+  "xhtml order": 38,
+  "xhtml table.header_rows": 1,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1,
+  "xhtml text.changed": 2,
+  "xhtml text.extra": 14,
+  "xhtml text.lost": 103
+ },
+ "fed-mpr-header-band": {
+  "md list.extra": 1,
+  "md table.header_rows": 9,
+  "md table.lost": 5,
+  "xhtml block.merged": 107,
+  "xhtml order": 38,
+  "xhtml table.header_rows": 1,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1,
+  "xhtml text.changed": 2,
+  "xhtml text.extra": 14,
+  "xhtml text.lost": 103
+ },
+ "fed-mpr-line-charts": {
+  "md list.extra": 59,
+  "md table.header_rows": 13,
+  "md table.lost": 6,
+  "md text.lost": 9,
+  "xhtml block.merged": 105,
+  "xhtml order": 14,
+  "xhtml table.header_rows": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 2,
+  "xhtml text.changed": 2,
+  "xhtml text.extra": 12,
+  "xhtml text.lost": 103
+ },
+ "fed-mpr-prose-beside-chart-notes": {
+  "md list.extra": 59,
+  "md table.header_rows": 13,
+  "md table.lost": 6,
+  "md text.lost": 9,
+  "xhtml block.merged": 105,
+  "xhtml order": 14,
+  "xhtml table.header_rows": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 2,
+  "xhtml text.changed": 2,
+  "xhtml text.extra": 12,
+  "xhtml text.lost": 103
+ },
+ "fed-mpr-scale-beside-prose": {
+  "md list.extra": 59,
+  "md table.header_rows": 13,
+  "md table.lost": 6,
+  "md text.lost": 9,
+  "xhtml block.merged": 105,
+  "xhtml order": 14,
+  "xhtml table.header_rows": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 2,
+  "xhtml text.changed": 2,
+  "xhtml text.extra": 12,
+  "xhtml text.lost": 103
+ },
+ "fed-sep-tables": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 53,
+  "xhtml order": 17,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1,
+  "xhtml text.extra": 8,
+  "xhtml text.lost": 73
+ },
+ "field-list-colons": {
+  "md table.header_rows": 2
+ },
+ "fomc-sep-histograms": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 21,
+  "xhtml order": 23,
+  "xhtml text.extra": 5,
+  "xhtml text.lost": 43
+ },
+ "fomc-sep-line-charts": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 21,
+  "xhtml order": 23,
+  "xhtml text.extra": 5,
+  "xhtml text.lost": 43
+ },
+ "fomc-sep-paired-scales": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 21,
+  "xhtml order": 23,
+  "xhtml text.extra": 5,
+  "xhtml text.lost": 43
+ },
+ "google-axis-years-at-the-foot": {
+  "md table.header_rows": 37,
+  "md table.lost": 11,
+  "md text.lost": 13,
+  "xhtml block.merged": 26,
+  "xhtml table.restated_headers": 1,
+  "xhtml table.shape": 1
+ },
+ "google-chart-over-picture": {
+  "md table.header_rows": 37,
+  "md table.lost": 11,
+  "md text.lost": 13,
+  "xhtml block.merged": 26,
+  "xhtml table.restated_headers": 1,
+  "xhtml table.shape": 1
+ },
+ "google-map-labels": {
+  "md table.header_rows": 37,
+  "md table.lost": 11,
+  "md text.lost": 13,
+  "xhtml block.merged": 26,
+  "xhtml table.restated_headers": 1,
+  "xhtml table.shape": 1
+ },
+ "google-text-columns": {
+  "md table.header_rows": 37,
+  "md table.lost": 11,
+  "md text.lost": 13,
+  "xhtml block.merged": 26,
+  "xhtml table.restated_headers": 1,
+  "xhtml table.shape": 1
+ },
+ "govinfo-public-law": {
+  "md text.extra": 11,
+  "md text.lost": 1
+ },
+ "hasm-footer-gap": {
+  "md table.lost": 3
+ },
+ "hasm-header-box": {
+  "md table.lost": 3
+ },
+ "hasm-header-cells": {
+  "md table.lost": 3
+ },
+ "hasm-template-title": {
+  "md table.lost": 3
+ },
+ "hermanmiller-aeron-field-lists": {
+  "md table.header_rows": 4,
+  "xhtml block.merged": 3
+ },
+ "hermanmiller-aeron-one-list": {
+  "md table.header_rows": 4,
+  "xhtml block.merged": 3
+ },
+ "hermanmiller-aeron-semibold-heads": {
+  "md table.header_rows": 4,
+  "xhtml block.merged": 3
+ },
+ "hermanmiller-arrow-items": {
+  "md table.header_rows": 4,
+  "xhtml block.merged": 3
+ },
+ "hermanmiller-field-rows": {
+  "md table.header_rows": 4,
+  "xhtml block.merged": 3
+ },
+ "hermanmiller-figure-reach": {
+  "md table.header_rows": 4,
+  "xhtml block.merged": 3
+ },
+ "hermanmiller-numbered-features": {
+  "md table.header_rows": 4,
+  "xhtml block.merged": 3
+ },
+ "hermanmiller-side-heads": {
+  "md table.header_rows": 4,
+  "xhtml block.merged": 3
+ },
+ "hess-full-width-table": {
+  "md list.extra": 3,
+  "md table.header_rows": 1,
+  "md table.lost": 1,
+  "md text.changed": 1,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "hmrc-sa100-pound-before-box": {
+  "md list.extra": 2,
+  "xhtml block.merged": 13
+ },
+ "hobart-am15-model-titles": {
+  "md table.lost": 1
+ },
+ "hobart-am15-option-boxes": {
+  "md table.lost": 1
+ },
+ "hobart-am15-prose-columns": {
+  "md table.lost": 1
+ },
+ "hobart-am15-run-in-labels": {
+  "md table.lost": 1
+ },
+ "hobart-am15-section-dividers": {
+  "md table.lost": 1
+ },
+ "hobart-am15-soft-hyphens": {
+  "md table.lost": 1
+ },
+ "hoshizaki-mixed-numbers": {
+  "md table.header_rows": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 7
+ },
+ "hpe-hdd-band-titles": {
+  "md table.header_rows": 2,
+  "md table.lost": 17,
+  "xhtml table.header_rows": 1,
+  "xhtml table.restated_headers": 11,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "hpe-hdd-blank-ruled-row": {
+  "md table.header_rows": 2,
+  "md table.lost": 17,
+  "xhtml table.header_rows": 1,
+  "xhtml table.restated_headers": 11,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "hpe-hdd-minus-items": {
+  "md table.header_rows": 2,
+  "md table.lost": 17,
+  "xhtml table.header_rows": 1,
+  "xhtml table.restated_headers": 11,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "hpe-hdd-partial-columns": {
+  "md table.header_rows": 2,
+  "md table.lost": 17,
+  "xhtml table.header_rows": 1,
+  "xhtml table.restated_headers": 11,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "hpe-hdd-section-running-heads": {
+  "md table.header_rows": 2,
+  "md table.lost": 17,
+  "xhtml table.header_rows": 1,
+  "xhtml table.restated_headers": 11,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "hpe-hdd-tall-rows": {
+  "md table.header_rows": 2,
+  "md table.lost": 17,
+  "xhtml table.header_rows": 1,
+  "xhtml table.restated_headers": 11,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "hpe-hdd-workload-row": {
+  "md table.header_rows": 2,
+  "md table.lost": 17,
+  "xhtml table.header_rows": 1,
+  "xhtml table.restated_headers": 11,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "hse-l118-regulation-parts": {
+  "md list.extra": 1,
+  "md table.header_rows": 2,
+  "md table.lost": 4,
+  "xhtml table.restated_headers": 1
+ },
+ "hse-l118-subtitle-kicker": {
+  "md list.extra": 1,
+  "md table.header_rows": 2,
+  "md table.lost": 4,
+  "xhtml table.restated_headers": 1
+ },
+ "hse-l153-bold-display-heads": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 1,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 2
+ },
+ "hse-l153-numbered-lead-ins": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 1,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 2
+ },
+ "ibf-bopp-degree-units": {
+  "md table.lost": 1
+ },
+ "ibf-bopp-partial-columns": {
+  "md table.lost": 1
+ },
+ "ibge-chart-picture-no-table": {
+  "md list.extra": 3,
+  "md table.header_rows": 15,
+  "md table.lost": 9,
+  "md text.lost": 1,
+  "xhtml block.merged": 21
+ },
+ "ilcor-prisma-diagram": {
+  "xhtml block.merged": 1
+ },
+ "ilo-columns-under-wrapped-title": {
+  "md list.extra": 3,
+  "md table.header_rows": 3,
+  "md table.lost": 7,
+  "xhtml block.merged": 22,
+  "xhtml order": 1,
+  "xhtml table.restated_headers": 1,
+  "xhtml text.extra": 2,
+  "xhtml text.lost": 35
+ },
+ "ilo-word-across-table-edge-read-once": {
+  "md list.extra": 3,
+  "md table.header_rows": 3,
+  "md table.lost": 7,
+  "xhtml block.merged": 22,
+  "xhtml order": 1,
+  "xhtml table.restated_headers": 1,
+  "xhtml text.extra": 2,
+  "xhtml text.lost": 35
+ },
+ "infineon-dimensions-table-set-as-picture": {
+  "md table.lost": 6,
+  "md text.lost": 1,
+  "xhtml block.merged": 2,
+  "xhtml table.restated_headers": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "insee-chart-titles-in-sections": {
+  "md table.lost": 2,
+  "xhtml block.merged": 3
+ },
+ "insee-header-spaces": {
+  "md table.lost": 4,
+  "xhtml block.merged": 8
+ },
+ "insee-ligatures": {
+  "md table.lost": 2,
+  "xhtml block.merged": 3
+ },
+ "insee-long-section-heads": {
+  "md table.lost": 4,
+  "xhtml block.merged": 8
+ },
+ "insee-stray-spaces": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 1
+ },
+ "irs-f1040-answer-heads": {
+  "md table.lost": 6,
+  "xhtml block.merged": 1,
+  "xhtml table.shape": 2
+ },
+ "irs-f1040s1-bold-labels": {
+  "md table.lost": 4,
+  "xhtml table.shape": 2
+ },
+ "irs-f1120-line-captions": {
+  "md table.header_rows": 1,
+  "md table.lost": 12,
+  "xhtml table.shape": 5,
+  "xhtml table.sub_headers": 1
+ },
+ "irs-f8949-grid-keys": {
+  "md table.lost": 1
+ },
+ "irs-fw9-line-heads": {
+  "md list.extra": 7,
+  "md table.lost": 1
+ },
+ "jmlr-dropout-italic-before-bracket": {
+  "md list.extra": 2,
+  "md table.lost": 1,
+  "xhtml block.merged": 10,
+  "xhtml text.changed": 1,
+  "xhtml text.lost": 2
+ },
+ "kao-katakana-dot-bullets": {
+  "md table.header_rows": 3,
+  "md table.lost": 25,
+  "md text.lost": 2,
+  "xhtml table.header_rows": 4,
+  "xhtml table.sub_headers": 4
+ },
+ "kohler-colour-codes": {
+  "md table.header_rows": 1,
+  "xhtml block.merged": 1
+ },
+ "kohler-drawn-bullets": {
+  "md table.header_rows": 1,
+  "xhtml block.merged": 1
+ },
+ "kohler-figure-labels": {
+  "md table.header_rows": 1,
+  "xhtml block.merged": 1
+ },
+ "kohler-k-r33912-clipped-rules": {
+  "md table.header_rows": 1,
+  "xhtml block.merged": 1
+ },
+ "kohler-lone-drawn-bullet": {
+  "md table.header_rows": 1,
+  "xhtml block.merged": 1
+ },
+ "kohler-one-per-line": {
+  "md table.header_rows": 1,
+  "xhtml block.merged": 1
+ },
+ "kohler-running-head": {
+  "md table.header_rows": 1,
+  "xhtml block.merged": 1
+ },
+ "lapp-box-columns": {
+  "md table.header_rows": 1,
+  "md table.lost": 9,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 8
+ },
+ "lapp-product-panel-prose": {
+  "md table.header_rows": 1,
+  "md table.lost": 9,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 8
+ },
+ "lapp-qr-caption": {
+  "md table.header_rows": 1,
+  "md table.lost": 9,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 8
+ },
+ "lapp-template-text": {
+  "md table.header_rows": 1,
+  "md table.lost": 9,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 8
+ },
+ "lutron-369613a-list-or": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-hanging-bullets": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-369-116-folio": {
+  "md table.lost": 1,
+  "xhtml block.merged": 7,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 7
+ },
+ "lutron-maestro-369-116-wordmark": {
+  "md table.lost": 1,
+  "xhtml block.merged": 7,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 7
+ },
+ "lutron-maestro-369613a-continued": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-369613a-diagram-titles": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-369613a-footer-code": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-369613a-frame": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-369613a-gutter-stops": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-369613a-nested-loads": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-369613a-note-marks": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-cell-hyphens": {
+  "md table.lost": 1,
+  "xhtml block.merged": 7,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 7
+ },
+ "lutron-maestro-dash-items": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-figure-labels": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-medium-headings": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-notes-label": {
+  "md table.lost": 1,
+  "xhtml block.merged": 8,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 27
+ },
+ "lutron-maestro-title": {
+  "md table.lost": 1,
+  "xhtml block.merged": 7,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 7
+ },
+ "mahle-band-titles": {
+  "md table.header_rows": 48,
+  "md table.lost": 106,
+  "xhtml block.merged": 4
+ },
+ "mahle-wrapped-interchange": {
+  "md table.header_rows": 48,
+  "md table.lost": 106,
+  "xhtml block.merged": 4
+ },
+ "malaria-j-table-heads": {
+  "md list.extra": 5,
+  "md table.header_rows": 2,
+  "md table.lost": 5,
+  "md text.lost": 4,
+  "xhtml block.merged": 1
+ },
+ "mdpi-sensors-article-title": {
+  "md list.extra": 7,
+  "md text.lost": 1
+ },
+ "mfsupply-field-lists": {
+  "md table.header_rows": 2,
+  "md table.lost": 2
+ },
+ "mfsupply-hex-facing-pages": {
+  "md table.header_rows": 2,
+  "md table.lost": 2
+ },
+ "mfsupply-table-title": {
+  "md table.header_rows": 2,
+  "md table.lost": 2
+ },
+ "mfsupply-tolerance-table": {
+  "md table.header_rows": 2,
+  "md table.lost": 2
+ },
+ "multiplastics-7500-gloss-angle": {
+  "md table.lost": 1,
+  "xhtml block.merged": 1
+ },
+ "multiplastics-7500-gutter": {
+  "md table.lost": 1,
+  "xhtml block.merged": 1
+ },
+ "multiplastics-7500-picture-labels": {
+  "md table.lost": 1,
+  "xhtml block.merged": 1
+ },
+ "multiplastics-7500-subtitle": {
+  "md table.lost": 1,
+  "xhtml block.merged": 1
+ },
+ "multiplastics-figure-reach": {
+  "md table.lost": 1,
+  "xhtml block.merged": 1
+ },
+ "multiplastics-letterhead": {
+  "md table.lost": 1,
+  "xhtml block.merged": 1
+ },
+ "multiplastics-symbol-bullets": {
+  "md table.lost": 1,
+  "xhtml block.merged": 1
+ },
+ "niosh-7400-graticule-labels-read-by-ocr": {
+  "md list.extra": 30,
+  "md table.lost": 1,
+  "md text.lost": 23,
+  "xhtml block.merged": 1
+ },
+ "niosh-nmam-3900-open-heads": {
+  "md list.extra": 9,
+  "md table.header_rows": 2,
+  "md table.lost": 3
+ },
+ "nist-af4": {
+  "md list.extra": 9,
+  "md table.lost": 2
+ },
+ "nist-nta": {
+  "md table.lost": 1
+ },
+ "nist-sec": {
+  "md list.extra": 11,
+  "md table.lost": 3
+ },
+ "omb-dot-leaders": {
+  "md list.extra": 72,
+  "md table.lost": 13,
+  "md text.lost": 2,
+  "xhtml table.header_rows": 2,
+  "xhtml table.sub_headers": 2
+ },
+ "owens-corning-procat-es": {
+  "md table.lost": 2
+ },
+ "owens-corning-procat-es-address": {
+  "md table.lost": 2
+ },
+ "owenscorning-procat-accessories": {
+  "md table.header_rows": 12,
+  "md table.lost": 3
+ },
+ "owenscorning-procat-accessories-address": {
+  "md table.header_rows": 12,
+  "md table.lost": 3
+ },
+ "owenscorning-procat-accessories-folios": {
+  "md table.header_rows": 12,
+  "md table.lost": 3
+ },
+ "owenscorning-procat-accessory-tables": {
+  "md table.header_rows": 12,
+  "md table.lost": 3
+ },
+ "owenscorning-procat-bracketed-note": {
+  "md table.header_rows": 12,
+  "md table.lost": 3
+ },
+ "owenscorning-procat-es-tables": {
+  "md table.lost": 2
+ },
+ "owenscorning-procat-fact-sheet-gutter": {
+  "md list.extra": 1
+ },
+ "owenscorning-procat-fact-sheet-tall-header": {
+  "md list.extra": 1
+ },
+ "owenscorning-procat-fact-sheet-title-sign": {
+  "md list.extra": 1
+ },
+ "owenscorning-procat-table-headings": {
+  "md table.header_rows": 12,
+  "md table.lost": 3
+ },
+ "owenscorning-procat-unit-powers": {
+  "md table.lost": 2
+ },
+ "panasonic-fp-digest": {
+  "md list.extra": 11,
+  "md table.header_rows": 2,
+  "md table.lost": 22,
+  "md text.changed": 7,
+  "md text.lost": 2,
+  "xhtml block.merged": 18,
+  "xhtml table.grid": 1,
+  "xhtml table.spans": 2
+ },
+ "panasonic-fp-drawings": {
+  "md list.extra": 11,
+  "md table.header_rows": 2,
+  "md table.lost": 22,
+  "md text.changed": 7,
+  "md text.lost": 2,
+  "xhtml block.merged": 18,
+  "xhtml table.grid": 1,
+  "xhtml table.spans": 2
+ },
+ "panasonic-fp-gutter": {
+  "md list.extra": 11,
+  "md table.header_rows": 2,
+  "md table.lost": 22,
+  "md text.changed": 7,
+  "md text.lost": 2,
+  "xhtml block.merged": 18,
+  "xhtml table.grid": 1,
+  "xhtml table.spans": 2
+ },
+ "panasonic-fp-long-titles": {
+  "md list.extra": 11,
+  "md table.header_rows": 2,
+  "md table.lost": 22,
+  "md text.changed": 7,
+  "md text.lost": 2,
+  "xhtml block.merged": 18,
+  "xhtml table.grid": 1,
+  "xhtml table.spans": 2
+ },
+ "panasonic-fp-numbered-features": {
+  "md list.extra": 11,
+  "md table.header_rows": 2,
+  "md table.lost": 22,
+  "md text.changed": 7,
+  "md text.lost": 2,
+  "xhtml block.merged": 18,
+  "xhtml table.grid": 1,
+  "xhtml table.spans": 2
+ },
+ "panasonic-fp-table-regions": {
+  "md list.extra": 11,
+  "md table.header_rows": 2,
+  "md table.lost": 22,
+  "md text.changed": 7,
+  "md text.lost": 2,
+  "xhtml block.merged": 18,
+  "xhtml table.grid": 1,
+  "xhtml table.spans": 2
+ },
+ "plos-one-banner-read-by-ocr": {
+  "md list.extra": 2,
+  "md table.lost": 1,
+  "md text.lost": 37
+ },
+ "plos-stacked-bold-heads": {
+  "md list.extra": 2,
+  "md table.lost": 1,
+  "md text.lost": 37
+ },
+ "pmc1343572-section-bands": {
+  "md list.extra": 19,
+  "md table.header_rows": 7,
+  "md table.lost": 6,
+  "md text.changed": 3,
+  "xhtml block.merged": 2,
+  "xhtml table.header_rows": 2,
+  "xhtml table.sub_headers": 2
+ },
+ "pmc1866754-centred-group-labels": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "md text.changed": 1,
+  "xhtml block.merged": 2,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "pmc1919390-ruled-header-levels": {
+  "md list.extra": 1,
+  "md table.lost": 1
+ },
+ "pmc2045680-wrapped-qualifier": {
+  "md list.extra": 8,
+  "md table.header_rows": 2,
+  "md table.lost": 3,
+  "md text.changed": 2,
+  "md text.extra": 1,
+  "md text.lost": 16,
+  "xhtml block.merged": 6
+ },
+ "pmc2228321-group-underline": {
+  "md list.extra": 12,
+  "md table.lost": 1
+ },
+ "pmc2747013-spacing-accents": {
+  "md heading.extra": 2,
+  "md list.extra": 1,
+  "md table.header_rows": 1
+ },
+ "pmc2754493-tables-side-by-side": {
+  "md list.extra": 5,
+  "md table.header_rows": 2,
+  "md table.lost": 5,
+  "md text.lost": 4,
+  "xhtml block.merged": 1
+ },
+ "pmc2961758-crystal-data-beside-title": {
+  "md list.extra": 1,
+  "md table.header_rows": 4,
+  "md table.lost": 2,
+  "md text.changed": 1,
+  "md text.lost": 1,
+  "xhtml table.header_rows": 1,
+  "xhtml table.shape": 1
+ },
+ "pmc3039689-label-fused-with-figure": {
+  "md list.extra": 10,
+  "md table.header_rows": 1,
+  "md table.lost": 4,
+  "xhtml table.header_rows": 1,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "pmc3039689-units-under-groups": {
+  "md list.extra": 10,
+  "md table.header_rows": 1,
+  "md table.lost": 4,
+  "xhtml table.header_rows": 1,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "pmc3138022-caption-above-next-figure": {
+  "md heading.extra": 1,
+  "md list.extra": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 7,
+  "xhtml order": 1,
+  "xhtml text.extra": 2,
+  "xhtml text.lost": 15
+ },
+ "pmc3262816-columns-under-caption": {
+  "md list.extra": 1,
+  "md table.header_rows": 2,
+  "md table.lost": 3
+ },
+ "pmc3280740-captions-above-plots": {
+  "md list.extra": 1,
+  "md table.header_rows": 1,
+  "md text.lost": 1,
+  "xhtml block.merged": 14,
+  "xhtml text.changed": 2,
+  "xhtml text.lost": 24
+ },
+ "pmc3359190-age-over-its-rule": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 11
+ },
+ "pmc3608546-units-under-groups": {
+  "md list.extra": 1,
+  "md table.lost": 1
+ },
+ "pmc4429933-country-blocks": {
+  "md list.extra": 3,
+  "md table.header_rows": 1,
+  "md table.lost": 9,
+  "xhtml table.header_rows": 2,
+  "xhtml table.restated_headers": 2,
+  "xhtml table.sub_headers": 2
+ },
+ "pmc4723313-wrapped-name": {
+  "md list.extra": 4,
+  "md table.header_rows": 2,
+  "md table.lost": 3,
+  "md text.lost": 40
+ },
+ "pmc4791410-banner-kickers": {
+  "md list.extra": 1,
+  "md table.header_rows": 2,
+  "md table.lost": 2
+ },
+ "pmc4791410-tables-side-by-side": {
+  "md list.extra": 1,
+  "md table.header_rows": 2,
+  "md table.lost": 2
+ },
+ "pmc4802872-group-labels": {
+  "md list.extra": 22,
+  "md table.lost": 4,
+  "xhtml table.header_rows": 3,
+  "xhtml table.sub_headers": 3
+ },
+ "pmc4967591-compound-hyphen": {
+  "md list.extra": 4,
+  "md table.header_rows": 10,
+  "md table.lost": 2,
+  "xhtml block.merged": 2
+ },
+ "pmc4967591-prose-in-figure-region": {
+  "md list.extra": 4,
+  "md table.header_rows": 10,
+  "md table.lost": 2,
+  "xhtml block.merged": 2
+ },
+ "pmc5007710-booktabs-groups": {
+  "md list.extra": 8,
+  "md table.lost": 6,
+  "xhtml block.merged": 3,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "pmc5662628-equation-no-table": {
+  "md table.header_rows": 3,
+  "md table.lost": 2
+ },
+ "pmc5847320-captions-under-plots": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 5,
+  "md text.changed": 4,
+  "md text.extra": 1,
+  "md text.lost": 42,
+  "xhtml block.merged": 4
+ },
+ "pmc5859216-trial-profile": {
+  "md table.lost": 7,
+  "xhtml block.merged": 4,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "pmc5989438-tight-references": {
+  "md list.extra": 7,
+  "md table.header_rows": 8,
+  "md table.lost": 10,
+  "md text.lost": 1
+ },
+ "pmc6000953-sample-size-header": {
+  "md list.extra": 2,
+  "md table.lost": 3
+ },
+ "pmc6073000-ring-over-a": {
+  "md list.extra": 2,
+  "md table.header_rows": 12,
+  "md table.lost": 3,
+  "md text.changed": 2,
+  "xhtml table.header_rows": 2,
+  "xhtml table.sub_headers": 1
+ },
+ "pmc6114051-country-blocks": {
+  "md list.extra": 13,
+  "md table.lost": 3,
+  "xhtml table.header_rows": 2,
+  "xhtml table.restated_headers": 2,
+  "xhtml table.sub_headers": 2
+ },
+ "pmc6116456-participant-flow": {
+  "md table.header_rows": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 3
+ },
+ "pmc6166639-label-wrapped-over-a-rule": {
+  "md list.extra": 3,
+  "md table.header_rows": 3,
+  "md table.lost": 1,
+  "xhtml block.merged": 8
+ },
+ "pmc6174244-tight-caption": {
+  "md table.lost": 3
+ },
+ "pmc6227383-table-beside-prose": {
+  "md table.lost": 2,
+  "xhtml block.merged": 4,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "pmc6238812-scale-beside-prose": {
+  "md table.header_rows": 1,
+  "md table.lost": 1,
+  "md text.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "pmc6241217-flowchart": {
+  "xhtml block.merged": 4
+ },
+ "pmlr-clip-columns-under-figure": {
+  "md heading.extra": 6,
+  "md table.restated_headers": 1,
+  "md text.lost": 1,
+  "xhtml block.merged": 9,
+  "xhtml table.restated_headers": 1
+ },
+ "rockwool-comfortboard-80": {
+  "md table.lost": 1,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "rockwool-comfortboard-panels": {
+  "md table.lost": 1,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "rohm-katakana-dot-bullets": {
+  "md list.extra": 37,
+  "md table.header_rows": 1,
+  "md table.lost": 10,
+  "md text.changed": 1,
+  "md text.extra": 1,
+  "md text.lost": 2,
+  "xhtml block.merged": 52,
+  "xhtml table.sub_headers": 1,
+  "xhtml text.changed": 1,
+  "xhtml text.extra": 2,
+  "xhtml text.lost": 6
+ },
+ "seagate-exos-drawn-bullets": {
+  "md table.lost": 1
+ },
+ "seagate-exos-run-on": {
+  "md table.lost": 1
+ },
+ "seagate-exos-wrapped-items": {
+  "md table.lost": 1
+ },
+ "seagate-exos-x16": {
+  "md table.lost": 1
+ },
+ "seagate-exos-x16-folio": {
+  "md table.lost": 1
+ },
+ "seagate-exos-x16-kicker": {
+  "md table.lost": 1
+ },
+ "seagate-exos-x16-note-marks": {
+  "md table.lost": 1
+ },
+ "sherwin-williams-eds-columns": {
+  "md table.lost": 7,
+  "xhtml table.restated_headers": 6
+ },
+ "sherwin-williams-eds-label-over-value": {
+  "md table.lost": 7,
+  "xhtml table.restated_headers": 6
+ },
+ "sherwin-williams-eds-label-values": {
+  "md table.lost": 7,
+  "xhtml table.restated_headers": 6
+ },
+ "sherwin-williams-eds-restated-units": {
+  "md table.lost": 7,
+  "xhtml table.restated_headers": 6
+ },
+ "sherwin-williams-eds-stacked-labels": {
+  "md table.lost": 7,
+  "xhtml table.restated_headers": 6
+ },
+ "sherwin-williams-eds-tables": {
+  "md table.lost": 7,
+  "xhtml table.restated_headers": 6
+ },
+ "sherwin-williams-emerald-edge": {
+  "md table.header_rows": 3
+ },
+ "sherwin-williams-emerald-field-lists": {
+  "md table.header_rows": 3
+ },
+ "sherwin-williams-emerald-running-lines": {
+  "md table.header_rows": 3
+ },
+ "sherwin-williams-emerald-title-sign": {
+  "md table.header_rows": 3
+ },
+ "sherwin-williams-pds-layout": {
+  "md table.header_rows": 3
+ },
+ "sherwin-williams-warning-run-on": {
+  "md table.header_rows": 3
+ },
+ "shimadzu-columns-read-whole": {
+  "md list.extra": 28,
+  "md table.grid": 1,
+  "md table.header_rows": 14,
+  "md table.lost": 28,
+  "md table.restated_headers": 1,
+  "md text.lost": 11,
+  "xhtml block.merged": 160,
+  "xhtml order": 6,
+  "xhtml table.grid": 1,
+  "xhtml table.header_rows": 3,
+  "xhtml table.restated_headers": 2,
+  "xhtml table.spans": 1,
+  "xhtml table.sub_headers": 3,
+  "xhtml text.changed": 1,
+  "xhtml text.extra": 9,
+  "xhtml text.lost": 91
+ },
+ "shimadzu-katakana-dot-bullets": {
+  "md list.extra": 28,
+  "md table.grid": 1,
+  "md table.header_rows": 14,
+  "md table.lost": 28,
+  "md table.restated_headers": 1,
+  "md text.lost": 11,
+  "xhtml block.merged": 160,
+  "xhtml order": 6,
+  "xhtml table.grid": 1,
+  "xhtml table.header_rows": 3,
+  "xhtml table.restated_headers": 2,
+  "xhtml table.spans": 1,
+  "xhtml table.sub_headers": 3,
+  "xhtml text.changed": 1,
+  "xhtml text.extra": 9,
+  "xhtml text.lost": 91
+ },
+ "stat-japan-katakana-dot-bullets": {
+  "md table.header_rows": 7,
+  "md table.lost": 9,
+  "md text.lost": 10,
+  "xhtml block.merged": 20,
+  "xhtml table.grid": 1,
+  "xhtml table.shape": 1
+ },
+ "statcan-note-links": {
+  "md table.lost": 1
+ },
+ "statcan-note-links-fra": {
+  "md table.lost": 1
+ },
+ "telstra-three-columns-on-shared-baselines": {
+  "md list.extra": 49,
+  "md table.header_rows": 15,
+  "md table.lost": 144,
+  "md table.restated_headers": 1,
+  "md text.changed": 4,
+  "md text.lost": 3,
+  "xhtml block.merged": 35,
+  "xhtml table.header_rows": 34,
+  "xhtml table.restated_headers": 1,
+  "xhtml table.shape": 4,
+  "xhtml table.sub_headers": 34
+ },
+ "thermo-m-series-callout-line": {
+  "md list.extra": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 2
+ },
+ "thermo-m-series-flyer": {
+  "md list.extra": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 2
+ },
+ "thermo-m-series-gutter": {
+  "md list.extra": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 2
+ },
+ "thermo-m-series-ligature-space": {
+  "md list.extra": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 2
+ },
+ "thermo-m-series-note-marks": {
+  "md list.extra": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 2
+ },
+ "thermo-m-series-spread-values": {
+  "md list.extra": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 2
+ },
+ "thermo-m-series-table-caption": {
+  "md list.extra": 1,
+  "md table.lost": 2,
+  "xhtml block.merged": 2
+ },
+ "ti-lm358-body-from-prose": {
+  "md list.extra": 15,
+  "md table.header_rows": 4,
+  "md table.lost": 22,
+  "md text.changed": 1,
+  "md text.lost": 3,
+  "xhtml block.merged": 38,
+  "xhtml order": 17,
+  "xhtml table.header_rows": 9,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 9,
+  "xhtml text.extra": 5,
+  "xhtml text.lost": 29
+ },
+ "ti-lm358-continued-heads": {
+  "md list.extra": 15,
+  "md table.header_rows": 4,
+  "md table.lost": 22,
+  "md text.changed": 1,
+  "md text.lost": 3,
+  "xhtml block.merged": 38,
+  "xhtml order": 17,
+  "xhtml table.header_rows": 9,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 9,
+  "xhtml text.extra": 5,
+  "xhtml text.lost": 29
+ },
+ "ti-lm358-note-numbers": {
+  "md list.extra": 15,
+  "md table.header_rows": 4,
+  "md table.lost": 22,
+  "md text.changed": 1,
+  "md text.lost": 3,
+  "xhtml block.merged": 38,
+  "xhtml order": 17,
+  "xhtml table.header_rows": 9,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 9,
+  "xhtml text.extra": 5,
+  "xhtml text.lost": 29
+ },
+ "ti-lm358-revision-bullets": {
+  "md list.extra": 15,
+  "md table.header_rows": 4,
+  "md table.lost": 22,
+  "md text.changed": 1,
+  "md text.lost": 3,
+  "xhtml block.merged": 38,
+  "xhtml order": 17,
+  "xhtml table.header_rows": 9,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 9,
+  "xhtml text.extra": 5,
+  "xhtml text.lost": 29
+ },
+ "ti-ne555-captions": {
+  "md list.extra": 7,
+  "md table.header_rows": 1,
+  "md table.lost": 17,
+  "md text.changed": 1,
+  "xhtml block.merged": 35,
+  "xhtml order": 4,
+  "xhtml table.grid": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.spans": 2,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 2
+ },
+ "ti-ne555-package-drawing": {
+  "md list.extra": 7,
+  "md table.header_rows": 1,
+  "md table.lost": 17,
+  "md text.changed": 1,
+  "xhtml block.merged": 35,
+  "xhtml order": 4,
+  "xhtml table.grid": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.spans": 2,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 2
+ },
+ "ti-ne555-plot-grids": {
+  "md list.extra": 7,
+  "md table.header_rows": 1,
+  "md table.lost": 17,
+  "md text.changed": 1,
+  "xhtml block.merged": 35,
+  "xhtml order": 4,
+  "xhtml table.grid": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.spans": 2,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 2
+ },
+ "ti-ne555-same-every-run": {
+  "md list.extra": 7,
+  "md table.header_rows": 1,
+  "md table.lost": 17,
+  "md text.changed": 1,
+  "xhtml block.merged": 35,
+  "xhtml order": 4,
+  "xhtml table.grid": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.spans": 2,
+  "xhtml text.extra": 1,
+  "xhtml text.lost": 2
+ },
+ "ti-tps5430-axis-titles": {
+  "md list.extra": 7,
+  "md table.header_rows": 4,
+  "md table.lost": 15,
+  "xhtml block.merged": 29,
+  "xhtml order": 2,
+  "xhtml table.header_rows": 1,
+  "xhtml table.shape": 4,
+  "xhtml table.spans": 1,
+  "xhtml table.sub_headers": 1,
+  "xhtml text.changed": 1,
+  "xhtml text.extra": 4,
+  "xhtml text.lost": 106
+ },
+ "true-field-labels": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-form-labels-letterhead": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-mixed-numbers": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t23-address": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t23-blank-box-label": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t23-bold-headings": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t23-control-bullets": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t23-dimension-drawing": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t23-footer-box": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t23-letterhead-rule": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t23-list-ends": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t49-broken-item": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t49-control-bullets": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t49-feature-columns": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t49-footer-box": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t49-form-labels": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t49-heads-over-items": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "true-t49-small-bold-labels": {
+  "md list.extra": 1,
+  "md table.lost": 1,
+  "xhtml block.merged": 2
+ },
+ "undesa-wesp-header-over-figures": {
+  "md list.extra": 2,
+  "md table.header_rows": 36,
+  "md table.lost": 22,
+  "md text.changed": 2,
+  "xhtml block.merged": 117,
+  "xhtml order": 7,
+  "xhtml table.header_rows": 1,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 1,
+  "xhtml text.extra": 3,
+  "xhtml text.lost": 10
+ },
+ "unit-caption-header": {
+  "md table.lost": 1
+ },
+ "usg-note-after-bracket": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 5
+ },
+ "usg-sheetrock-closing-line": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 5
+ },
+ "usg-sheetrock-note-marks": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 5
+ },
+ "usg-sheetrock-numbered-items": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 5
+ },
+ "usg-sheetrock-side-head-table": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 5
+ },
+ "usg-sheetrock-side-heads": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 5
+ },
+ "usg-sheetrock-table-regions": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 5
+ },
+ "usg-sheetrock-test-groups": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 5
+ },
+ "usg-sidebar-not-a-figure": {
+  "md list.extra": 2,
+  "md table.header_rows": 1,
+  "md table.lost": 5
+ },
+ "usgs-tm5b12-axis-scales": {
+  "md list.extra": 40,
+  "md table.header_rows": 3,
+  "md table.lost": 4,
+  "md text.lost": 22,
+  "xhtml block.merged": 40,
+  "xhtml order": 33,
+  "xhtml text.changed": 19,
+  "xhtml text.extra": 106,
+  "xhtml text.lost": 704
+ },
+ "usgs-tm5b13-axis-titles": {
+  "md table.header_rows": 16,
+  "md table.lost": 47,
+  "md text.lost": 15,
+  "xhtml block.merged": 77,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "usgs-tm5b13-plot-legends": {
+  "md table.header_rows": 16,
+  "md table.lost": 47,
+  "md text.lost": 15,
+  "xhtml block.merged": 77,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "usgs-tm5b13-running-heads": {
+  "md table.header_rows": 16,
+  "md table.lost": 47,
+  "md text.lost": 15,
+  "xhtml block.merged": 77,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 1
+ },
+ "wd-gold-footnotes": {
+  "md table.lost": 3
+ },
+ "wd-gold-note-after-quantity": {
+  "md table.lost": 3
+ },
+ "wd-gold-spec-tables": {
+  "md table.lost": 3
+ },
+ "wd-gold-template-labels": {
+  "md table.lost": 3
+ },
+ "wd-gold-title": {
+  "md table.lost": 3
+ },
+ "wes-italic-before-slash": {
+  "md list.extra": 4,
+  "md table.header_rows": 4,
+  "md table.lost": 10,
+  "md text.lost": 1
+ },
+ "worldbank-line-sample-legend": {
+  "md table.header_rows": 13,
+  "xhtml block.merged": 9
+ },
+ "wto-template-heads-not-furniture": {
+  "md list.extra": 5,
+  "md table.header_rows": 100,
+  "md table.lost": 1474,
+  "xhtml block.merged": 1162,
+  "xhtml order": 10,
+  "xhtml table.grid": 7,
+  "xhtml table.header_rows": 48,
+  "xhtml table.shape": 42,
+  "xhtml table.spans": 7,
+  "xhtml table.sub_headers": 50,
+  "xhtml text.changed": 5,
+  "xhtml text.extra": 10,
+  "xhtml text.lost": 102
+ }
+}
