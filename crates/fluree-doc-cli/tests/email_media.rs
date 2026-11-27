@@ -768,3 +768,66 @@ fn a_text_file_that_is_no_message_is_converted_as_text() {
     assert!(said.contains("The budget is agreed."), "{said}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_signatures_icons_lend_the_body_no_words_and_an_empty_figure_prints_nothing() {
+    // An HTML message showing a screenshot with alternative text, a
+    // signature's icons (a PNG and a GIF, each named by its alternative
+    // text, as most corporate mail has them) and an image with none. The
+    // icons are under the floor a model is sent: their figures keep their
+    // place, without the words. The screenshot keeps its own; the image
+    // with none prints no empty paragraph.
+    let dir = scratch("icons");
+    let input = dir.join("mail.eml");
+    let gif: &[u8] = b"GIF89a\x10\x00\x10\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00\
+\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b";
+    let mut m = b"From: a@example.org\r\n\
+Subject: Record\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"rel\"\r\n\
+\r\n\
+--rel\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<p>See the screen below.</p>\
+<p><img src=\"cid:shot@x\" alt=\"Record screen\"></p>\
+<p><img src=\"cid:plain@x\"></p>\
+<p>That is all.</p>\
+<p>Ann Smith <img src=\"cid:in@x\" alt=\"LinkedIn\"> <img src=\"cid:logo@x\" alt=\"Logo\"></p>\r\n"
+        .to_vec();
+    for (id, ct, bytes) in [
+        ("shot@x", "image/png", screen(600, 200)),
+        ("plain@x", "image/png", screen(600, 200)),
+        ("in@x", "image/png", screen(24, 24)),
+        ("logo@x", "image/gif", gif.to_vec()),
+    ] {
+        m.extend(
+            format!(
+                "--rel\r\nContent-Type: {ct}\r\nContent-ID: <{id}>\r\n\
+                 Content-Transfer-Encoding: binary\r\n\r\n"
+            )
+            .bytes(),
+        );
+        m.extend(bytes);
+        m.extend(b"\r\n");
+    }
+    m.extend(b"--rel--\r\n");
+    std::fs::write(&input, &m).unwrap();
+    let out = convert(&dir, &input, &["-f".as_ref(), "md".as_ref()]);
+    assert!(out.status.success());
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(md.contains("Record screen"), "{md}");
+    assert!(!md.contains("LinkedIn") && !md.contains("Logo"), "{md}");
+    assert!(!md.contains("\n\n\n"), "{md:?}");
+    // The figures are all there, in the graph.
+    let out = convert(&dir, &input, &["-f".as_ref(), "json".as_ref()]);
+    let els: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let figures = els
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["type"] == "doco:Figure")
+        .count();
+    assert_eq!(figures, 4);
+    let _ = std::fs::remove_dir_all(dir);
+}

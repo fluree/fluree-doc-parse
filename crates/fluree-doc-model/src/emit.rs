@@ -871,6 +871,11 @@ pub fn to_markdown_with_options(
                     out.push_str(&format!("{indent}- {text}\n"));
                 }
             }
+            // A figure with no words of its own (no alternative text, no
+            // label) prints nothing: a blank paragraph would say nothing
+            // either. What was read in its image follows it as paragraphs
+            // of their own.
+            "doco:Figure" if e.text.trim().is_empty() => {}
             _ => {
                 // A list's last item ends its line and no more. A paragraph
                 // set straight under it is a lazy continuation of the item
@@ -928,6 +933,22 @@ mod tests {
             depth,
             ..Element::new("doc:ListItem", text, "rust", "layout")
         }
+    }
+
+    #[test]
+    fn a_figure_with_no_words_prints_nothing_in_markdown() {
+        let figure = |text: &str| Element {
+            figure: Some("figure-0-1".into()),
+            ..Element::new("doco:Figure", text, "eml", "eml")
+        };
+        let els = [para("Before", vec![]), figure(""), para("After", vec![])];
+        assert_eq!(to_markdown(&els), "Before\n\nAfter\n\n");
+        let els = [
+            para("Before", vec![]),
+            figure("Org chart"),
+            para("After", vec![]),
+        ];
+        assert_eq!(to_markdown(&els), "Before\n\nOrg chart\n\nAfter\n\n");
     }
 
     #[test]

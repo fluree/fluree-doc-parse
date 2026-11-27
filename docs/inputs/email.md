@@ -260,6 +260,20 @@ Outlook's `[cid:…]` or Apple Mail's `<name.png>` in plain text, or by
 its name): the one written exactly so, else one written in another case.
 An image shown twice is one image, its figure drawn twice.
 
+A figure's text is the image's alternative text (`alt`), where the HTML
+gives it one, and nothing where the plain text marks it. A signature's
+icons carry such text (`LinkedIn`, `Logo`), which would otherwise read as
+words of nearly every corporate message: `fdoc convert` leaves out the
+alternative text of an image under the floor a model is sent (below; a
+GIF's or a BMP's size read from its header too), and keeps its figure. In
+Markdown and plain text a figure with no words prints nothing; in the
+graph, JSON and XHTML it still marks where the image is shown. In Rust,
+`email.elements` keeps every figure's alternative text, for a caller to
+judge. With no reader configured, each image the body shows is a figure all
+the same, the elements after it numbered one further, and the graph lists
+it in [`doc:unreadImages`](../formats/doco.md#images-nothing-read)
+(`NotRead`).
+
 Its text is read as a DOCX picture's is (see
 [Office files](office-and-web.md#docx)): by OCR (`--ocr`, `--ocr-words`,
 `<stem>_m<n>.json`), by a model's reading supplied (`--tier-results`,

@@ -301,7 +301,11 @@ read. Only pictures (`xdr:pic`) are read: a chart has its data in the sheet,
 and a shape's image fill is a texture. A group of pictures is one figure
 holding several images. Pictures in a header or footer, comments' shapes,
 and Excel's pictures placed *in* a cell (`IMAGE()`, Place in Cell) are not
-read. A workbook without pictures converts as it did. In a library,
+read. A workbook without pictures converts as it did. One with pictures
+does not, with no reader configured either: each picture is a figure in
+every format, its alternative text in the text, Markdown and JSON, the
+elements after it numbered one further, and the graph lists it in
+`doc:unreadImages` (`NotRead`) when nothing read it. In a library,
 `fluree_doc_xlsx::parse_with_ocr` (feature `ocr`) does it with an engine, and
 `parse_with_media` and `read_media` list and read the pictures as DOCX's do.
 
