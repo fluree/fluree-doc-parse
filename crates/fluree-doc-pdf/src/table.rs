@@ -1352,7 +1352,8 @@ impl Grid {
     /// Whether the grid's boxes are numbered as a form's are: numbered
     /// fields ([`numbered_field`]), or a field's lettered parts (`a. NAME`,
     /// `b. STREET ADDRESS`), in half its rows under the first or more, two
-    /// or more, across two columns or more, one of them numbered.
+    /// or more, across two columns or more, one of them numbered; and the
+    /// first row holding a numbered field of its own.
     fn numbered_boxes(&self, rows: &[Vec<String>]) -> bool {
         let lettered = |t: &str| {
             let mut chars = t.chars();
@@ -1376,7 +1377,26 @@ impl Grid {
             })
             .collect();
         let numbered = below.iter().flatten().any(|c| numbered_field(c.trim()));
-        numbered && boxed_rows >= 2 && boxed_rows * 2 >= below.len() && columns.len() >= 2
+        // The first row a box of the form too, holding a numbered field in
+        // its text (`… 1. REQUISITION NUMBER`, `18. SHIPPING POINT`): a
+        // row of plain names over numbered entries (`Institutioneel |
+        // Statistische Processen` over `1. Professionele …`, `7. …`) heads
+        // the columns it lists them in.
+        let first_boxed = rows.first().is_some_and(|r| {
+            r.iter().any(|c| {
+                let c = c.trim();
+                c.char_indices().any(|(i, ch)| {
+                    ch.is_ascii_digit()
+                        && (i == 0 || c[..i].ends_with(char::is_whitespace))
+                        && numbered_field(&c[i..])
+                })
+            })
+        });
+        numbered
+            && first_boxed
+            && boxed_rows >= 2
+            && boxed_rows * 2 >= below.len()
+            && columns.len() >= 2
     }
 
     /// How many leading rows are column headers.
@@ -12926,6 +12946,13 @@ mod header_tests {
             ["2. Scope", "4", "Office B"],
         ]);
         assert_eq!(g.header_rows(&list, &[], &[], &[]), 1);
+        // Plain names over entries numbered across the columns head them.
+        let principles = rows(&[
+            ["Institutional", "Processes", "Output"],
+            ["1. Independence", "7. Sound methods", "11. Relevance"],
+            ["2. Mandate", "8. Procedures", "12. Accuracy"],
+        ]);
+        assert_eq!(g.header_rows(&principles, &[], &[], &[]), 1);
     }
 
     #[test]
