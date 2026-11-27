@@ -248,6 +248,9 @@ struct Out {
     items: usize,
     /// Whether the walk is directly in a list, not in one of its items.
     in_list: bool,
+    /// The drawing the walk is in: the `data-figure` of the `<figure>`
+    /// round a drawing's text, as the XHTML writer sets it.
+    figure: Option<String>,
 }
 
 impl Out {
@@ -258,6 +261,11 @@ impl Out {
         self.elements.push(e);
         self.depths.push(self.depth);
     }
+}
+
+/// Does this element's `class` list name `class`?
+fn has_class(h: &Handle, class: &str) -> bool {
+    attr_of(h, "class").is_some_and(|c| c.split_whitespace().any(|c| c == class))
 }
 
 /// Does this element mark its content as quoted from another text?
@@ -853,6 +861,26 @@ fn walk_node(h: &Handle, out: &mut Out) {
                 let (text, links) = pre_text(h);
                 if !text.is_empty() {
                     out.push(linked("doco:Paragraph", text, None, links));
+                }
+                return;
+            }
+            // A drawing's text, as the XHTML writer sets it: a block for
+            // each fragment in the drawing's `<figure>`, read back as one
+            // fragment of that drawing.
+            "figure" if attr_of(h, "data-figure").is_some() => {
+                let outer = out
+                    .figure
+                    .replace(attr_of(h, "data-figure").unwrap_or_default());
+                walk_container(h, out);
+                out.figure = outer;
+                return;
+            }
+            "div" if has_class(h, fluree_doc_model::emit::FIGURE_TEXT_CLASS) => {
+                let (text, links) = text_of(h);
+                if !text.is_empty() {
+                    let mut e = linked("doco:Figure", text, None, links);
+                    e.figure = out.figure.clone();
+                    out.push(e);
                 }
                 return;
             }
@@ -1845,6 +1873,36 @@ mod tests {
         );
         assert_eq!(kinds(&els), ["doco:Table"]);
         assert_eq!(els[0].cells.as_ref().unwrap()[0][0], "cell");
+    }
+
+    #[test]
+    fn a_drawings_text_reads_back_a_fragment_a_block() {
+        // The XHTML writer's figure: a block for each fragment, read back as
+        // one fragment of the drawing it names.
+        let els = parse(
+            "<p>Our partners:</p>\
+             <figure data-figure=\"figure-2-0\">\
+             <div class=\"doco-figure-text\">STATE AND FEDERAL AGENCIES</div>\
+             <div class=\"doco-figure-text\">UNIVERSITIES</div>\
+             <div class=\"doco-figure-text\"></div>\
+             </figure>",
+        );
+        assert_eq!(
+            kinds(&els),
+            ["doco:Paragraph", "doco:Figure", "doco:Figure"]
+        );
+        assert_eq!(
+            texts(&els)[1..],
+            ["STATE AND FEDERAL AGENCIES", "UNIVERSITIES"]
+        );
+        assert!(els[1..]
+            .iter()
+            .all(|e| e.figure.as_deref() == Some("figure-2-0")));
+        // A page's own figure, its picture captioned, reads as before.
+        let els = parse(
+            "<figure><img src=\"a.png\"><figcaption>Figure 1. Survey vessels</figcaption></figure>",
+        );
+        assert_eq!(kinds(&els), ["doco:Paragraph"]);
     }
 
     #[test]

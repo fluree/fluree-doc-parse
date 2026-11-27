@@ -66,6 +66,24 @@ fn a_table_continued_over_a_page_is_one_table() {
 }
 
 #[test]
+fn a_drawings_fragments_read_back_one_each() {
+    // Labels of a row of icons, each a fragment of one drawing, between two
+    // paragraphs: each reads back as itself in both formats.
+    let frag = |t: &str| Element {
+        figure: Some("figure-1-0".into()),
+        ..el("doco:Figure", t)
+    };
+    let els = [
+        el("doco:Paragraph", "How the data is used:"),
+        frag("FISHERY AND PROTECTED SPECIES STOCK ASSESSMENTS"),
+        frag("ECOSYSTEM MODELING"),
+        frag("CLIMATE SCIENCE AND ASSESSMENTS"),
+        el("doco:Paragraph", "Surveys run from spring to fall."),
+    ];
+    assert_eq!(conform(&els, &Notes::default()), []);
+}
+
+#[test]
 fn each_class_is_caught() {
     // A heading read back at another level.
     let a = classes(&[heading("Deep", 7), heading("Results", 2)], Format::Md);
