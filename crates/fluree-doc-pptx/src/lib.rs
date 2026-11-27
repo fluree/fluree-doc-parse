@@ -65,10 +65,21 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
     }
 
     let mut out = Vec::new();
+    let mut notes = Vec::new();
     for (idx, name) in slides.iter().enumerate() {
         let Some(xml) = pkg.read(name) else {
             continue;
         };
+        // The slide's speaker notes, by the slide's own relationship to its
+        // notes part: `notesSlide3` can be slide 4's.
+        let part = pkg
+            .relationships(name)
+            .into_iter()
+            .find(|r| r.is("notesSlide") && !r.external)
+            .map(|r| r.target);
+        if let Some(nx) = part.and_then(|p| pkg.read(&p)) {
+            notes.extend(parse_notes_xml(&nx, idx)?);
+        }
         // Charts live in their own parts; the slide only names a
         // relationship id, so resolve those before walking it.
         let charts: Vec<(String, String)> = pkg
@@ -79,6 +90,8 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
             .collect();
         out.extend(parse_slide_with_charts(&xml, idx, &charts)?);
     }
+    // After the last slide, in slide order: see `Element::notes_for`.
+    out.extend(notes);
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
@@ -512,6 +525,71 @@ pub fn parse_slide_with_charts(
         }
         (Some(s), None) => out[s].kind = "doco:Paragraph".into(),
         _ => {}
+    }
+    Ok(out)
+}
+
+/// Parse a slide's notes part into the elements of its speaker notes,
+/// tagged with the slide's index as `page` and `notes_for`.
+///
+/// The notes are the page's `body` placeholder: paragraphs, and list items
+/// where a paragraph carries a bullet or an outline level, as on a slide.
+/// The rest of a notes page is the slide's picture, its number, and the
+/// header, footer and date the notes master repeats on every page.
+pub fn parse_notes_xml(xml: &str, page: usize) -> Result<Vec<Element>, PptxError> {
+    let mut r = Reader::from_str(xml);
+    r.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    let mut out: Vec<Element> = Vec::new();
+    let mut text = String::new();
+    let mut in_text = false;
+    let mut in_body = false;
+    let mut para_level = 0usize;
+    let mut para_bullet = false;
+    loop {
+        match r.read_event_into(&mut buf) {
+            Err(e) => return Err(PptxError::Xml(e.to_string())),
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
+                "sp" => in_body = false,
+                "ph" => in_body = attr(&e, "type").as_deref() == Some("body"),
+                "t" => in_text = in_body,
+                "br" if in_body => text.push(' '),
+                "pPr" => {
+                    para_level = attr(&e, "lvl").and_then(|v| v.parse().ok()).unwrap_or(0);
+                }
+                "buChar" | "buAutoNum" => para_bullet = true,
+                "buNone" => para_bullet = false,
+                _ => {}
+            },
+            Ok(Event::Text(t)) => {
+                if in_text {
+                    text.push_str(&t.unescape().unwrap_or_default());
+                }
+            }
+            Ok(Event::End(e)) => match local(e.name().as_ref()) {
+                "t" => in_text = false,
+                "p" => {
+                    if in_body {
+                        let item = (para_bullet || para_level > 0).then_some(para_level);
+                        flush(&mut out, &mut text, page, Shape::Body, item);
+                    }
+                    text.clear();
+                    para_bullet = false;
+                    para_level = 0;
+                }
+                "sp" => {
+                    text.clear();
+                    in_body = false;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+    }
+    for e in &mut out {
+        e.notes_for = Some(page);
     }
     Ok(out)
 }
