@@ -680,12 +680,13 @@ fn broken_or_deep_documents_read_as_far_as_they_go() {
     let cut = "<office:text><text:p>Kept</text:p><text:p>Cut off<text:span";
     let els = parse(&package("text", cut, &[])).unwrap();
     assert_eq!(texts(&els), ["Kept", "Cut off"]);
-    // Lists nested 120 deep, within the tree's bound: each item read, its
-    // depth capped.
+    // Lists nested as deep as the tree allows, 126 lists in 126 items in
+    // the three elements around a text: each item read, its depth capped,
+    // within a test thread's 2 MiB stack.
     let deep = format!(
         "<office:text>{}<text:p>Deepest</text:p>{}</office:text>",
-        "<text:list><text:list-item>".repeat(120),
-        "</text:list-item></text:list>".repeat(120)
+        "<text:list><text:list-item>".repeat(126),
+        "</text:list-item></text:list>".repeat(126)
     );
     let els = parse(&package("text", &deep, &[])).unwrap();
     assert_eq!(texts(&els), ["Deepest"]);

@@ -567,46 +567,8 @@ fn flow(
     };
     for c in t.elements(id) {
         match t.node(c).name.as_str() {
-            "h" => {
-                let level = t
-                    .attr(c, "outline-level")
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(1)
-                    .clamp(1, 6);
-                room_for_para(t, c, false, budget)?;
-                let text = tidy(&para_text(t, c, asides));
-                if !text.is_empty() {
-                    out.push(paragraph(
-                        "doco:SectionTitle",
-                        text,
-                        Some(level),
-                        page,
-                        budget,
-                    )?);
-                }
-                frames_after(c, out, asides, budget)?;
-            }
-            "p" => {
-                room_for_para(t, c, false, budget)?;
-                let text = tidy(&para_text(t, c, asides));
-                if text.is_empty() {
-                    frames_after(c, out, asides, budget)?;
-                    continue;
-                }
-                let style = t.attr(c, "style-name");
-                // A style named `Title` is the built-in one, defined or not.
-                let role = style
-                    .and_then(|s| t.roles.get(s))
-                    .or((style == Some("Title")).then_some(&Role::Title));
-                let (kind, level) = match role {
-                    _ if list.is_some() => ("doc:ListItem", None),
-                    Some(Role::Title) => ("doco:Title", None),
-                    Some(Role::Heading(l)) => ("doco:SectionTitle", Some(*l)),
-                    None => ("doco:Paragraph", None),
-                };
-                let mut e = paragraph(kind, text, level, page, budget)?;
-                e.depth = list.unwrap_or(0);
-                out.push(e);
+            name @ ("h" | "p") => {
+                block(t, c, name == "h", page, list, out, asides, budget)?;
                 frames_after(c, out, asides, budget)?;
             }
             // A list in a list's item is a level deeper.
@@ -617,17 +579,81 @@ fn flow(
             "list-item" | "list-header" => {
                 flow(t, c, page, Some(list.unwrap_or(0)), out, asides, budget)?
             }
-            "table" => {
-                if let Some(e) = table(t, c, page, asides, budget)? {
-                    out.push(e);
-                }
-            }
+            "table" => push_table(t, c, page, out, asides, budget)?,
             "section" | "index-body" | "table-of-content" | "alphabetical-index"
             | "illustration-index" | "table-index" | "bibliography" | "text-box" | "frame" => {
                 flow(t, c, page, list, out, asides, budget)?
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+/// A heading (`heading`) or a paragraph of [`flow`], `list` as there,
+/// pushed onto `out` where it holds text. Apart from [`flow`], which
+/// recurses once or twice for each level of a list: the element made here
+/// and its result would otherwise be held in each of its frames, and lists
+/// nested as deep as the tree allows overflowed a 2 MiB stack in a debug
+/// build.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn block(
+    t: &Tree,
+    c: usize,
+    heading: bool,
+    page: usize,
+    list: Option<usize>,
+    out: &mut Vec<Element>,
+    asides: &mut Vec<Aside>,
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
+    room_for_para(t, c, false, budget)?;
+    let text = tidy(&para_text(t, c, asides));
+    if text.is_empty() {
+        return Ok(());
+    }
+    let (kind, level) = if heading {
+        let level = t
+            .attr(c, "outline-level")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1)
+            .clamp(1, 6);
+        ("doco:SectionTitle", Some(level))
+    } else {
+        let style = t.attr(c, "style-name");
+        // A style named `Title` is the built-in one, defined or not.
+        let role = style
+            .and_then(|s| t.roles.get(s))
+            .or((style == Some("Title")).then_some(&Role::Title));
+        match role {
+            _ if list.is_some() => ("doc:ListItem", None),
+            Some(Role::Title) => ("doco:Title", None),
+            Some(Role::Heading(l)) => ("doco:SectionTitle", Some(*l)),
+            None => ("doco:Paragraph", None),
+        }
+    };
+    let mut e = paragraph(kind, text, level, page, budget)?;
+    if !heading {
+        e.depth = list.unwrap_or(0);
+    }
+    out.push(e);
+    Ok(())
+}
+
+/// A table of [`flow`], pushed onto `out` where it has cells; apart from
+/// it for the same reason as [`block`].
+#[inline(never)]
+fn push_table(
+    t: &Tree,
+    c: usize,
+    page: usize,
+    out: &mut Vec<Element>,
+    asides: &mut Vec<Aside>,
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
+    if let Some(e) = table(t, c, page, asides, budget)? {
+        out.push(e);
     }
     Ok(())
 }
