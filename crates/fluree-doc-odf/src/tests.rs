@@ -648,16 +648,19 @@ fn a_notes_citation_is_its_own() {
 #[test]
 fn a_texts_tables_and_paragraphs_spend_the_documents_budget() {
     // A hundred rows of a cell repeated a hundred times: 10,000 cells that
-    // hold text from a few kilobytes. DoCO writes each as a node, at
-    // 4 KiB; Markdown writes each once in its row.
+    // hold text from a few kilobytes, each spent at 512 bytes and its slot,
+    // whether Markdown writes it once in its row or DoCO as a node of its
+    // own, a node at a time: about 6.5 MB, past a thousand elements' worth.
     let row = "<table:table-row><table:table-cell table:number-columns-repeated=\"100\">\
                <text:p>x</text:p></table:table-cell></table:table-row>";
     let table = text(&format!("<table:table>{}</table:table>", row.repeat(100)));
-    let budget = || Budget::new(5_000 * ELEMENT_BYTES, 0);
-    let refused = parse_within(&table, &mut budget()).unwrap_err();
-    assert!(refused.to_string().contains("past"), "{refused}");
-    let els = parse_within(&table, &mut budget().for_output(Output::Flat)).unwrap();
-    assert_eq!(els.0[0].cells.as_ref().unwrap().len(), 100);
+    for output in [Output::Doco, Output::Flat] {
+        let budget = |n: u64| Budget::new(n * ELEMENT_BYTES, 0).for_output(output);
+        let refused = parse_within(&table, &mut budget(1_000)).unwrap_err();
+        assert!(refused.to_string().contains("past"), "{refused}");
+        let els = parse_within(&table, &mut budget(5_000)).unwrap();
+        assert_eq!(els.0[0].cells.as_ref().unwrap().len(), 100);
+    }
     // Paragraphs, each an element and its text, are spent as well.
     let paras = text(&"<text:p>x</text:p>".repeat(100));
     let need = reading(&paras) + 100 * (ELEMENT_BYTES + TEXT_BYTES);

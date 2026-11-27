@@ -221,7 +221,7 @@ structure](../concepts/geometry-vs-declared.md).
 
 A reader counts what it makes against one budget per document
 (`fluree_doc_model::budget`), at the costs of the largest output, DoCO,
-which writes each table cell as a node of its own. A caller converting to
+which copies each table cell's labels into it. A caller converting to
 Markdown, XHTML, JSON or the text says so around the reading, and a table
 too large for DoCO still reads:
 
