@@ -376,6 +376,11 @@ fn layout_title(
             .iter()
             .filter_map(|&(r, c0, c1)| up(r).map(|r| (r, c0, c1)))
             .collect(),
+        spread: lay
+            .spread
+            .iter()
+            .filter_map(|&(r, c)| up(r).map(|r| (r, c)))
+            .collect(),
         downs: lay
             .downs
             .iter()
@@ -7217,7 +7222,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     restated
                 }
             };
-            let spread = spread_runs(g, &raw.pages[pi].glyphs, &rows, &merges.continues_left);
+            let mut spread = spread_runs(g, &raw.pages[pi].glyphs, &rows, &merges.continues_left);
+            // Values the text reader saw set across the gutter between two
+            // columns, figures among them.
+            if let Some(lay) = explicit {
+                let cols = g.cols();
+                for &(r, c) in &lay.spread {
+                    if let Some(x) = spread.get_mut(r * cols + c) {
+                        *x = true;
+                    }
+                }
+            }
             tables += 1;
             let text = rows
                 .iter()

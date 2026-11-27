@@ -3946,6 +3946,9 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         carried_downs,
     ]
     .concat();
+    let spread = spread_in_gutters(&all_rows, &mut cells, &cols, header_rows, &sub_headers);
+    spans.extend(spread.iter().copied());
+    let spread: Vec<(usize, usize)> = spread.iter().map(|&(r, c, _)| (r, c)).collect();
     Some(Grid {
         page,
         bbox: BBox {
@@ -3959,6 +3962,7 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         layout: Some(std::sync::Arc::new(TableLayout {
             header_rows,
             spans,
+            spread,
             downs,
             sub_headers,
             restated_headers,
@@ -3966,6 +3970,73 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             claimed: Vec::new(),
         })),
     })
+}
+
+/// Body cells set across two columns: `(row, first column, end column)`.
+///
+/// A value standing in the gutter between two columns, clear of both
+/// columns' ink and centred on the two (within a tenth of their width),
+/// past the row's label, where its row has nothing else in either but
+/// fills two of its other columns or more and half of them, and the other
+/// rows fill both, is set across both: a limit of quantitation `1.5` given once for a
+/// compound's two isomers, under `Homo.A | Homo.B`. It is read into the
+/// first of the two.
+fn spread_in_gutters(
+    rows: &[Vec<&Line>],
+    cells: &mut [Vec<usize>],
+    cols: &[(f64, f64)],
+    header_rows: usize,
+    sections: &[usize],
+) -> Vec<(usize, usize, usize)> {
+    let ncols = cols.len();
+    let mut out = Vec::new();
+    for (r, ls) in rows.iter().enumerate().skip(header_rows) {
+        if sections.contains(&r) {
+            continue;
+        }
+        let chunks: Vec<&Chunk> = ls.iter().flat_map(|l| l.chunks.iter()).collect();
+        for c in &chunks {
+            let Some(k) =
+                (0..ncols.saturating_sub(1)).find(|&k| c.x0 >= cols[k].1 && c.x1 <= cols[k + 1].0)
+            else {
+                continue;
+            };
+            let (a, b) = (cols[k].0, cols[k + 1].1);
+            let centred = ((c.x0 + c.x1) / 2.0 - (a + b) / 2.0).abs() <= (b - a) / 10.0;
+            // Nothing else of the row in either column.
+            let alone = chunks.iter().all(|d| {
+                std::ptr::eq(*d, *c) || !column_of(cols, d).is_some_and(|j| j == k || j == k + 1)
+            });
+            // Two columns of values, both filled on two thirds of the other
+            // rows or more: a note's mark or a stray figure in the gutter of
+            // columns that hold little is no value of theirs.
+            let others: Vec<usize> = (header_rows..rows.len())
+                .filter(|&o| o != r && !sections.contains(&o))
+                .collect();
+            let both = others
+                .iter()
+                .filter(|&&o| {
+                    !cells[o * ncols + k].is_empty() && !cells[o * ncols + k + 1].is_empty()
+                })
+                .count();
+            // In a row of values: past its label, two of its other columns
+            // or more filled, and half of them (a label's row carrying its
+            // notes' marks out among the figures is none).
+            let rest: Vec<usize> = (1..ncols).filter(|&j| j != k && j != k + 1).collect();
+            let filled = rest
+                .iter()
+                .filter(|&&j| !cells[r * ncols + j].is_empty())
+                .count();
+            let valued = k >= 1 && filled >= 2 && filled * 2 >= rest.len();
+            if !centred || !alone || !valued || both < 2 || both * 3 < others.len() * 2 {
+                continue;
+            }
+            let held = std::mem::take(&mut cells[r * ncols + k + 1]);
+            cells[r * ncols + k].extend(held);
+            out.push((r, k, k + 2));
+        }
+    }
+    out
 }
 
 /// The lines set across rows, centred on them, taken out of the body's
@@ -4937,6 +5008,71 @@ mod tests {
             "{:?}",
             lay.downs
         );
+    }
+
+    #[test]
+    fn a_value_centred_across_a_gutter_spans_both_columns() {
+        // A limit given once for two isomers' columns, set in the gutter
+        // between them and centred on the two; off centre, it is no span.
+        let table = |x: f64| {
+            let mut gl = Vec::new();
+            for (t, x) in [
+                ("Oxy.", 90.0),
+                ("Octo.", 140.0),
+                ("Homo.A", 200.0),
+                ("Homo.B", 280.0),
+            ] {
+                gl.extend(set(t, x, 40.0));
+            }
+            for (t, x) in [("LOQ (%)", 20.0), ("0.3", 95.0), ("0.8", 145.0), ("1.5", x)] {
+                gl.extend(set(t, x, 58.0));
+            }
+            for (i, (label, a, o, b, c)) in [
+                ("Inj. #1", "192.6", "1637.5", "304.3", "2035.4"),
+                ("Inj. #2", "186.6", "1430.2", "291.8", "1951.4"),
+                ("Inj. #3", "188.3", "1517.3", "238.0", "1594.9"),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let y = 74.0 + 16.0 * i as f64;
+                for (t, x) in [
+                    (*label, 20.0),
+                    (*a, 90.0),
+                    (*o, 140.0),
+                    (*b, 200.0),
+                    (*c, 280.0),
+                ] {
+                    gl.extend(set(t, x, y));
+                }
+            }
+            let region = BBox {
+                x0: 10.0,
+                y0: 30.0,
+                x1: 340.0,
+                y1: 120.0,
+            };
+            let grids = read(&lines(&gl), &[], region, 0);
+            assert_eq!(grids.len(), 1, "{grids:?}");
+            let g = &grids[0];
+            let lay = g.layout.as_deref().expect("read from its text").clone();
+            let texts = lay.texts(&gl, g.cols());
+            (lay, texts, g.cols())
+        };
+        // Homo.A's figures run 200-227, Homo.B's 280-313: the gutter's
+        // middle, and the pair's, near 256.
+        let (lay, texts, cols) = table(248.0);
+        let row = texts.iter().position(|t| t == "LOQ (%)").expect("its row") / cols;
+        assert!(
+            lay.spans.contains(&(row, 3, 5)),
+            "{:?} {texts:?}",
+            lay.spans
+        );
+        assert!(lay.spread.contains(&(row, 3)), "{:?}", lay.spread);
+        assert_eq!(texts[row * cols + 3], "1.5", "{texts:?}");
+        // Set beside Homo.A's figures, it is Homo.A's.
+        let (lay, _, _) = table(232.0);
+        assert!(lay.spread.is_empty(), "{:?}", lay.spread);
     }
 
     #[test]
