@@ -7,7 +7,7 @@
 One point per engine on opendataloader-bench: the overall score against
 seconds per page, on a log axis. Every document in the corpus is one page, so
 the harness's seconds per document are seconds per page. fluree-doc-parse's
-three tiers are joined in order, the way a document walks up them.
+three modes are joined in order, each building on the one before.
 
 The score axis starts at Y_LO so the leading engines have room to spread out.
 Engines scoring below it are listed in a note in the plot's empty corner, so
@@ -22,18 +22,22 @@ import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "docs", "assets", "accuracy-vs-speed.svg")
 
-MEASURED = "2026-11-23"
+MEASURED = "2026-11-26"
+
+DET_SCORE, DET_SECS = 0.922007, 0.0067
+OCR_SCORE, OCR_SECS = 0.947430, 0.340
+VLM_SCORE, VLM_SECS = 0.951650, 1.580
 
 # (label, overall, seconds per page). Ours are scored with `--md-links text`,
-# as bench-adapter/pdf_parser_fluree.py runs them. Other engines' timings are
-# the harness's own. Ours: tier 1 is the harness's warm median of five; tier 2
-# is the layout detector per page on a GPU host; tier 3 is the corpus average
-# including model time. The harness itself times only the replay of cached
-# model output for tiers 2 and 3.
-TIERS = [
-    ("Tier 1 · deterministic", 0.901319, 0.0114),
-    ("Tier 2 · layout detector", 0.908607, 0.2),
-    ("Tier 3 · cascade", 0.940703, 1.5),
+# as bench-adapter/pdf_parser_fluree.py runs them, and timed as one
+# `fdoc convert <dir> -j 1` process over the 200 documents, its wall time
+# divided by 200: the median of five runs (deterministic) or three (+ OCR)
+# after a warm-up, and one run (+ VLM, billed per call, model time included).
+# Other engines' timings are the harness's own, one process per document.
+MODES = [
+    ("Deterministic", DET_SCORE, DET_SECS),
+    ("+ OCR", OCR_SCORE, OCR_SECS),
+    ("+ VLM", VLM_SCORE, VLM_SECS),
 ]
 ENGINES = [
     ("opendataloader-hybrid", 0.906572, 0.4627),
@@ -67,7 +71,7 @@ PLACE = {
     "mineru": (-9, 12, "end"),
     "marker": (-9, 4, "end"),
 }
-TIER_PLACE = [(0, -14, "middle"), (-6, 22, "end"), (12, 4, "start")]
+MODE_PLACE = [(0, -14, "middle"), (0, -14, "middle"), (12, 4, "start")]
 
 FLUREE = "#0d9488"  # teal, as in the Fluree benchmark charts
 OTHER = "#64748b"
@@ -79,7 +83,7 @@ FONT = "-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif"
 W, H = 880, 500
 LEFT, RIGHT, TOP, BOTTOM = 64, 856, 104, 430
 X_LO, X_HI = 0.001, 100.0
-Y_LO, Y_HI = 0.65, 0.95
+Y_LO, Y_HI = 0.65, 0.96
 
 
 def x(s):
@@ -103,12 +107,12 @@ def main():
         f"<text x='20' y='28' font-size='17' font-weight='700' fill='{INK}'>"
         "Accuracy against speed · opendataloader-bench</text>",
         f"<text x='20' y='48' font-size='12' fill='{MUTED}'>200 single-page PDFs · overall score, the "
-        f"mean of reading order, table and heading scores · {len(ENGINES) + 2} engines · {MEASURED}</text>",
+        f"mean of reading order, table and heading scores · {len(ENGINES) + 1} engines · {MEASURED}</text>",
     ]
     # Legend: two series, so a legend as well as direct labels.
     ly = 74
     s.append(f"<circle cx='26' cy='{ly - 4}' r='5.5' fill='{FLUREE}'/>")
-    s.append(f"<text x='37' y='{ly}' font-size='12' font-weight='700' fill='{INK}'>fluree-doc-parse, by tier</text>")
+    s.append(f"<text x='37' y='{ly}' font-size='12' font-weight='700' fill='{INK}'>fluree-doc-parse, by mode</text>")
     s.append(f"<circle cx='206' cy='{ly - 4}' r='4.5' fill='{OTHER}'/>")
     s.append(f"<text x='216' y='{ly}' font-size='12' fill='{INK}'>other engines</text>")
     s.append(f"<text x='{RIGHT}' y='{ly}' font-size='12' font-weight='700' fill='{INK}' text-anchor='end'>"
@@ -137,11 +141,11 @@ def main():
         s.append(f"<text x='{px + dx:.1f}' y='{py + dy:.1f}' font-size='11' fill='{MUTED}' "
                  f"text-anchor='{anchor}'>{esc(name)}</text>")
 
-    # Our tiers, joined in the order a document walks them.
-    pts = [(x(t), y(v)) for _, v, t in TIERS]
+    # Our modes, joined in order, each building on the one before.
+    pts = [(x(t), y(v)) for _, v, t in MODES]
     path = " ".join(f"{'M' if i == 0 else 'L'}{px:.1f} {py:.1f}" for i, (px, py) in enumerate(pts))
     s.append(f"<path d='{path}' fill='none' stroke='{FLUREE}' stroke-width='2' stroke-linejoin='round'/>")
-    for (label, score, secs), (px, py), (dx, dy, anchor) in zip(TIERS, pts, TIER_PLACE):
+    for (label, score, secs), (px, py), (dx, dy, anchor) in zip(MODES, pts, MODE_PLACE):
         s.append(f"<circle cx='{px:.1f}' cy='{py:.1f}' r='6' fill='{FLUREE}' stroke='white' stroke-width='2'/>")
         s.append(f"<text x='{px + dx:.1f}' y='{py + dy:.1f}' font-size='12' font-weight='700' fill='{INK}' "
                  f"text-anchor='{anchor}'>{esc(label)} <tspan font-weight='400' fill='{MUTED}'>{score:.3f}</tspan></text>")
@@ -165,7 +169,7 @@ def main():
                      f"{score:.3f} · {t}</text>")
 
     s.append(f"<text x='20' y='{H - 14}' font-size='10.5' fill='{MUTED}'>Other engines' times are the "
-             "benchmark's own. Tier 1 is a warm median; tiers 2 and 3 include model time, averaged over the corpus.</text>")
+             "benchmark's own, one process per document. Ours are one process over all 200; + VLM includes model time.</text>")
     s.append("</svg>")
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w") as f:

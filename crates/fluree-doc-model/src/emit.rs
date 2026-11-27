@@ -365,14 +365,18 @@ fn html_table_rows(
     let th_rows = e.header_rows.unwrap_or(0);
     let subs = e.sub_header_rows(rows.len());
     let ncols = rows.first().map(Vec::len).unwrap_or(0);
-    let md = e
-        .merged_down
-        .as_ref()
-        .filter(|m| ncols > 0 && m.len() == rows.len() * ncols);
-    let ml = e
-        .merged_left
-        .as_ref()
-        .filter(|m| ncols > 0 && m.len() == rows.len() * ncols);
+    let band = |ri: usize| subs[ri] || (ri < th_rows && rows[ri][1..].iter().all(|c| c.is_empty()));
+    let (md, ml) = spans_kept(
+        rows,
+        e.merged_down
+            .as_ref()
+            .filter(|m| ncols > 0 && m.len() == rows.len() * ncols),
+        e.merged_left
+            .as_ref()
+            .filter(|m| ncols > 0 && m.len() == rows.len() * ncols),
+        skip,
+        band,
+    );
     for (ri, r) in rows.iter().enumerate() {
         if ri < skip {
             continue;
@@ -380,7 +384,7 @@ fn html_table_rows(
         // A merged full-width band is one spanning header cell, not a row of
         // blanks after the first column. Its text may be split across
         // columns in the raw grid, so join it back.
-        if subs[ri] || (ri < th_rows && r[1..].iter().all(|c| c.is_empty())) {
+        if band(ri) {
             let joined = r
                 .iter()
                 .map(|c| c.trim())
@@ -417,10 +421,13 @@ fn html_table_rows(
                 .map(|m| (ci + 1..ncols).take_while(|k| m[ri * ncols + k]).count() + 1)
                 .unwrap_or(1);
             // A horizontally merged run's text lives across the cells it
-            // spans in the raw grid.
-            let text = if colspan > 1 {
-                r[ci..ci + colspan]
+            // spans in the raw grid. So may a vertical one's: the cells it
+            // spans are written once, here, and text a reader left in any
+            // of them is this cell's, as DoCO reads it, never dropped.
+            let text = if colspan > 1 || span > 1 {
+                rows[ri..ri + span]
                     .iter()
+                    .flat_map(|row| row[ci..ci + colspan].iter())
                     .map(|t| t.trim())
                     .filter(|t| !t.is_empty())
                     .collect::<Vec<_>>()
@@ -438,6 +445,63 @@ fn html_table_rows(
             out.push_str(&format!("<{tag}{attrs}>{}</{tag}>", cell(&text)));
         }
         out.push_str("</tr>\n");
+    }
+}
+
+/// The merge flags a table is written with: each cell continues the one
+/// above (`down`) or to its left (`left`) as flagged, but for a cell holding
+/// text that no written cell's span takes in. A span is written once, by its
+/// first cell, with the text of every cell it covers; a `band` row is
+/// written whole as one cell, and rows before `skip` not at all. A cell
+/// holding text outside every span so written would be lost: it is written
+/// as a cell of its own.
+fn spans_kept(
+    rows: &[Vec<String>],
+    down: Option<&Vec<bool>>,
+    left: Option<&Vec<bool>>,
+    skip: usize,
+    band: impl Fn(usize) -> bool,
+) -> (Option<Vec<bool>>, Option<Vec<bool>>) {
+    let ncols = rows.first().map_or(0, Vec::len);
+    let n = rows.len() * ncols;
+    let (mut down, mut left) = (down.cloned(), left.cloned());
+    let flagged = |m: &Option<Vec<bool>>, k: usize| m.as_ref().is_some_and(|m| m[k]);
+    loop {
+        let mut covered = vec![false; n];
+        for ri in skip..rows.len() {
+            if band(ri) {
+                covered[ri * ncols..(ri + 1) * ncols].fill(true);
+                continue;
+            }
+            for ci in 0..ncols {
+                let k = ri * ncols + ci;
+                if flagged(&down, k) || flagged(&left, k) {
+                    continue;
+                }
+                let span = (ri + 1..rows.len())
+                    .take_while(|&r| flagged(&down, r * ncols + ci))
+                    .count()
+                    + 1;
+                let colspan = (ci + 1..ncols)
+                    .take_while(|&c| flagged(&left, ri * ncols + c))
+                    .count()
+                    + 1;
+                for r in ri..ri + span {
+                    covered[r * ncols + ci..r * ncols + ci + colspan].fill(true);
+                }
+            }
+        }
+        let lost: Vec<usize> = (skip * ncols..n)
+            .filter(|&k| !covered[k] && !rows[k / ncols][k % ncols].trim().is_empty())
+            .collect();
+        if lost.is_empty() {
+            return (down, left);
+        }
+        for k in lost {
+            for m in [&mut down, &mut left].into_iter().flatten() {
+                m[k] = false;
+            }
+        }
     }
 }
 
@@ -1011,6 +1075,40 @@ mod tests {
         let mut wrapped = table("w", &[&["A", "B"], &["x\n\ny", "1"], &["", "2"]], 1);
         wrapped.merged_down = Some(vec![false, false, false, false, true, false]);
         assert!(to_markdown(&[wrapped]).contains("<td rowspan=\"2\">x  y</td>"));
+    }
+
+    #[test]
+    fn a_cell_holding_text_is_never_hidden_under_a_span() {
+        // A form's label over its value, the value's cell flagged as the
+        // rest of the label's: the value is written, with the label in the
+        // one cell the span is written as.
+        let mut form = table(
+            "f",
+            &[
+                &["Order", "Contract"],
+                &["1. DATE OF ORDER", "89303321"],
+                &["05/13/2021", ""],
+            ],
+            1,
+        );
+        form.merged_down = Some(vec![false, false, false, false, true, true]);
+        for out in [
+            to_markdown(std::slice::from_ref(&form)),
+            to_xhtml(std::slice::from_ref(&form)),
+        ] {
+            assert!(
+                out.contains("rowspan=\"2\">1. DATE OF ORDER 05/13/2021<"),
+                "{out}"
+            );
+            // The blank cell under the contract number still continues it.
+            assert!(out.contains("rowspan=\"2\">89303321<"), "{out}");
+        }
+        // Under a band written whole as one cell, a cell flagged as the rest
+        // of the band's holds text no span takes in: it is a cell of its own.
+        let mut banded = table("b", &[&["Totals", "", ""], &["2024", "12", "30"]], 1);
+        banded.merged_down = Some(vec![false, false, false, false, true, false]);
+        let out = to_markdown(std::slice::from_ref(&banded));
+        assert!(out.contains("<td>12</td>"), "{out}");
     }
 
     #[test]

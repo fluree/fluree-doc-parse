@@ -87,31 +87,34 @@ impl Reader {
     }
 
     /// A valid access token, minting one if the held token is gone or nearly.
-    fn token(&self) -> Result<String, String> {
+    fn token(&self) -> Result<String, Failure> {
         let now = unix_now();
-        let mut held = self.token.lock().map_err(|_| "token lock poisoned")?;
+        let mut held = self
+            .token
+            .lock()
+            .map_err(|_| Failure::Fatal("token lock poisoned".into()))?;
         if let Some((t, expiry)) = held.as_ref() {
             if *expiry > now + REFRESH_MARGIN_SECS {
                 return Ok(t.clone());
             }
         }
-        let assertion = self.assertion(now)?;
+        let assertion = self.assertion(now).map_err(Failure::Fatal)?;
         let body =
             format!("grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion={assertion}");
-        let mut resp = self
+        let request = |e| Failure::Request("token request", e);
+        let v: serde_json::Value = self
             .agent
             .post(TOKEN_URL)
             .content_type("application/x-www-form-urlencoded")
             .send(&body)
-            .map_err(|e| format!("token request failed: {e}"))?;
-        let v: serde_json::Value = resp
+            .map_err(request)?
             .body_mut()
             .read_json()
-            .map_err(|e| format!("token response: {e}"))?;
+            .map_err(request)?;
         let token = v
             .get("access_token")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| format!("token response had no access_token: {v}"))?
+            .ok_or_else(|| Failure::Fatal(format!("token response had no access_token: {v}")))?
             .to_string();
         *held = Some((token.clone(), now + TOKEN_TTL_SECS));
         Ok(token)
@@ -196,13 +199,13 @@ impl Reader {
         let v = with_retries(
             || {
                 let token = self.token()?;
-                Ok(self
-                    .agent
+                self.agent
                     .post(&url)
                     .header("Authorization", &format!("Bearer {token}"))
                     .content_type("application/json")
                     .send_json(&body)
-                    .and_then(|mut resp| resp.body_mut().read_json::<serde_json::Value>()))
+                    .and_then(|mut resp| resp.body_mut().read_json::<serde_json::Value>())
+                    .map_err(|e| Failure::Request("read", e))
             },
             std::thread::sleep,
         )?;
@@ -218,21 +221,32 @@ impl Reader {
     }
 }
 
+/// Why an attempt at a request failed.
+enum Failure {
+    /// A request failed on the wire or at the service, the reading's own or
+    /// the token exchange before it (named here, for the message): made
+    /// again when [`retryable`].
+    Request(&'static str, ureq::Error),
+    /// Nothing a retry can fix: a key that cannot sign, a token response
+    /// without a token.
+    Fatal(String),
+}
+
 /// Make a request until it is answered: `attempt` makes it once, and is
-/// made again after a failure a retry can fix ([`retryable`]), `wait`ing
-/// longer each time, [`RETRIES`] times at most. A failure before the request
-/// is sent (`attempt`'s outer error, a token that cannot be minted) is
-/// returned at once.
+/// made again after a failure a retry can fix ([`retryable`]), the token
+/// exchange's as well as the reading's, `wait`ing longer each time,
+/// [`RETRIES`] times at most. A [`Failure::Fatal`] is returned at once.
 fn with_retries<T>(
-    mut attempt: impl FnMut() -> Result<Result<T, ureq::Error>, String>,
+    mut attempt: impl FnMut() -> Result<T, Failure>,
     wait: impl Fn(std::time::Duration),
 ) -> Result<T, String> {
     let mut last = String::new();
     for n in 0..RETRIES {
-        match attempt()? {
+        match attempt() {
             Ok(v) => return Ok(v),
-            Err(e) => {
-                last = e.to_string();
+            Err(Failure::Fatal(why)) => return Err(why),
+            Err(Failure::Request(what, e)) => {
+                last = format!("{what} failed: {e}");
                 if !retryable(&e) || n + 1 == RETRIES {
                     break;
                 }
@@ -240,7 +254,7 @@ fn with_retries<T>(
             }
         }
     }
-    Err(format!("read failed: {last}"))
+    Err(last)
 }
 
 /// Whether a failed request is worth making again. Rate limits and the
@@ -321,10 +335,10 @@ fn unix_now() -> u64 {
 mod tests {
     use super::*;
 
-    /// `with_retries` over answers given in turn, the request counted and
-    /// no time spent waiting.
-    fn answering(
-        answers: Vec<Result<&'static str, ureq::Error>>,
+    /// `with_retries` over attempts answered in turn, the attempts counted
+    /// and no time spent waiting.
+    fn attempted(
+        answers: Vec<Result<&'static str, Failure>>,
     ) -> (Result<&'static str, String>, usize, Vec<u64>) {
         let answers = std::cell::RefCell::new(answers.into_iter());
         let calls = std::cell::Cell::new(0);
@@ -332,11 +346,23 @@ mod tests {
         let got = with_retries(
             || {
                 calls.set(calls.get() + 1);
-                Ok(answers.borrow_mut().next().expect("an answer per attempt"))
+                answers.borrow_mut().next().expect("an answer per attempt")
             },
             |d| waits.borrow_mut().push(d.as_secs()),
         );
         (got, calls.get(), waits.into_inner())
+    }
+
+    /// As [`attempted`], each failure the reading request's own.
+    fn answering(
+        answers: Vec<Result<&'static str, ureq::Error>>,
+    ) -> (Result<&'static str, String>, usize, Vec<u64>) {
+        attempted(
+            answers
+                .into_iter()
+                .map(|a| a.map_err(|e| Failure::Request("read", e)))
+                .collect(),
+        )
     }
 
     #[test]
@@ -373,16 +399,42 @@ mod tests {
         assert!(got.unwrap_err().contains("timeout"));
         assert_eq!(calls, RETRIES as usize);
         assert_eq!(waits, vec![5, 10, 15]);
-        // A failure before the request is sent is no request to retry.
-        let calls = std::cell::Cell::new(0);
-        let got: Result<&str, String> = with_retries(
-            || {
-                calls.set(calls.get() + 1);
-                Err("token exchange failed".to_string())
-            },
-            |_| {},
-        );
-        assert_eq!((got, calls.get()), (Err("token exchange failed".into()), 1));
+        // Nothing a retry can fix, a key that cannot sign, is no request to
+        // make again.
+        let (got, calls, _) = attempted(vec![Err(Failure::Fatal("not a PKCS#8 key".into()))]);
+        assert_eq!((got, calls), (Err("not a PKCS#8 key".into()), 1));
+    }
+
+    #[test]
+    fn a_token_exchange_the_network_dropped_is_made_again() {
+        // The token request timed out, then the reading went through.
+        let token = |e| Failure::Request("token request", e);
+        let (got, calls, waits) = attempted(vec![
+            Err(token(ureq::Error::Timeout(ureq::Timeout::Global))),
+            Ok("read"),
+        ]);
+        assert_eq!((got, calls, waits), (Ok("read"), 2, vec![5]));
+        // A connection refused on the token request, as when a network
+        // drops, likewise.
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        let (got, calls, _) = attempted(vec![Err(token(ureq::Error::Io(refused))), Ok("read")]);
+        assert_eq!((got, calls), (Ok("read"), 2));
+        // A key the service refuses is not tried again, and the message
+        // says it was the token request.
+        let (got, calls, _) = attempted(vec![Err(token(ureq::Error::StatusCode(400)))]);
+        assert_eq!(calls, 1);
+        assert!(got.unwrap_err().starts_with("token request failed: "));
+    }
+
+    #[test]
+    fn a_misconfigured_host_or_certificate_is_not_a_blip() {
+        for e in [
+            ureq::Error::HostNotFound,
+            ureq::Error::Tls("unknown issuer"),
+            ureq::Error::BadUri("no host".into()),
+        ] {
+            assert!(!retryable(&e), "{e}");
+        }
     }
 
     #[test]

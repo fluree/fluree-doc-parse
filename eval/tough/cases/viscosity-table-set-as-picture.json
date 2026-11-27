@@ -1,0 +1,41 @@
+{
+  "document": {
+    "file": "odl-bench-01030000000110.pdf",
+    "url": "https://raw.githubusercontent.com/opendataloader-project/opendataloader-bench/main/pdfs/01030000000110.pdf",
+    "sha256": "cd160a4e2296bd7c23f19c26af5bb6ed772f766ee1eacfe9998703c38146b494",
+    "ocr_words": "../fixtures/ocr-words/odl-bench-01030000000110",
+    "about": "opendataloader-bench 01030000000110: a lab manual's page with a table of water's kinematic viscosity by temperature, pasted as a spreadsheet's picture: four columns, twenty-five rows and a header, ruled in light grey."
+  },
+  "notes": [
+    "2026-11-26: the picture's words, read by OCR, read as a paragraph of headers and one value a line. The rules drawn in its pixels now go with its reading, and a picture whose own rules grid its own text is read as a table ruled by them. The stored reading is the built-in engine's (PP-OCRv6 small) of the picture's crop, with the rules drawn in its pixels: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`."
+  ],
+  "checks": [
+    {
+      "id": "four-columns",
+      "found": "2026-11-26",
+      "issue": "The table set as a picture read as one value a line.",
+      "columns": {
+        "with": "1.793E-06",
+        "count": 4
+      }
+    },
+    {
+      "id": "value-under-its-column",
+      "found": "2026-11-26",
+      "issue": "As above.",
+      "cell": {
+        "value": "8.930E-07",
+        "column": "Kinematic viscosity v (m²/s)"
+      }
+    },
+    {
+      "id": "last-row",
+      "found": "2026-11-26",
+      "issue": "As above.",
+      "row": {
+        "Temperature (degree C)": "85",
+        "Kinematic viscosity v (m²/s)": "3.420E-07"
+      }
+    }
+  ]
+}

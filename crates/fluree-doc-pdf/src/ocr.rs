@@ -192,6 +192,17 @@ pub enum Crop {
     Region(usize),
 }
 
+/// Read into a region's reading the rules its picture draws
+/// ([`fluree_doc_vision::rules::drawn`]), from the pixels it was read in:
+/// what a table set as an image is ruled by, which the table path reads
+/// ([`crate::document`]'s picture tables). A whole page's reading is left
+/// without: a scan's ruling is not read from its pixels here.
+pub fn read_rules(crop: Crop, pixels: &fluree_doc_vision::Pixels, reading: &mut WordReading) {
+    if matches!(crop, Crop::Region(_)) {
+        reading.rules = fluree_doc_vision::rules::drawn(pixels, reading);
+    }
+}
+
 impl Crop {
     /// The crop a tag names (`full`, `r0`, …); `None` for any other tag,
     /// such as a table crop, which an OCR reading has no use for.
@@ -856,14 +867,26 @@ fn inject_one(
     if t.replaces {
         p.glyphs.retain(|g| g.draw_index >= first_glyph);
     }
+    // A region's picture's rules, kept with the reading for the table path
+    // and laid nowhere else.
+    let rules = match (crop, t.shown) {
+        (Crop::Region(_), Some(region)) => place_rules(p, region, reading),
+        _ => Vec::new(),
+    };
     let mark = p.ocr.get_or_insert_with(|| crate::extract::OcrRead {
         first_glyph,
         ..Default::default()
     });
+    mark.rules.extend(rules);
     mark.whole |= matches!(t.area, Area::Page);
     for i in regions_read {
         if !mark.regions.contains(&i) {
             mark.regions.push(i);
+            let at = match &t.area {
+                Area::Regions(rs) => rs.iter().find(|(j, _)| *j == i).map(|(_, b)| *b),
+                Area::Page => None,
+            };
+            mark.region_boxes.push(at.unwrap_or_default());
         }
     }
     result
@@ -1009,7 +1032,155 @@ fn place(
             })
         })
         .collect();
-    Ok(placed)
+    Ok(without_marks(placed))
+}
+
+/// `placed` without the marks an engine took for letters: a letter alone,
+/// one it is unsure of (under [`WEAK_CONFIDENCE`]), with no word of its
+/// size beside it, in a script the reading's other words hardly use. A page
+/// read whole is read with its pictograms, and an engine whose alphabet
+/// holds Chinese reads an icon's frame as a character set alone (`月` for a
+/// document icon at 0.52, `口`, `日`) on a page printed in English. Laid on
+/// the page, the mark is a line of text the page never printed, opening the
+/// column it stands in. A letter of the page's own script stays, however
+/// unsure: a panel's number, a diagram's callout, a Chinese table's cell.
+/// So does a word with no confidence stated, or one among the words of its
+/// line.
+fn without_marks(placed: Vec<Option<Placed>>) -> Vec<Option<Placed>> {
+    // The reading's letters, Chinese, Japanese and Korean apart from the
+    // rest.
+    let (mut cjk, mut other) = (0usize, 0usize);
+    for c in placed.iter().flatten().flat_map(|w| w.text.chars()) {
+        if is_cjk(c) {
+            cjk += 1;
+        } else if c.is_alphabetic() {
+            other += 1;
+        }
+    }
+    let foreign = |c: char| {
+        let same = if is_cjk(c) {
+            cjk
+        } else if c.is_alphabetic() {
+            other
+        } else {
+            return false;
+        };
+        // Its own letter apart.
+        let (same, total) = (same - 1, cjk + other - 1);
+        total >= MIN_SCRIPT_LETTERS && same as f64 <= FOREIGN_SHARE * total as f64
+    };
+    let mark: Vec<bool> = placed
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            w.as_ref().is_some_and(|w| {
+                let mut letters = w.text.chars().filter(|c| !c.is_whitespace());
+                let one = match (letters.next(), letters.next()) {
+                    (Some(c), None) => Some(c),
+                    _ => None,
+                };
+                one.is_some_and(foreign)
+                    && w.conf.is_some_and(|c| c < WEAK_CONFIDENCE)
+                    && !placed
+                        .iter()
+                        .enumerate()
+                        .any(|(j, v)| j != i && v.as_ref().is_some_and(|v| line_mates(w, v)))
+            })
+        })
+        .collect();
+    placed
+        .into_iter()
+        .zip(mark)
+        .map(|(w, mark)| w.filter(|_| !mark))
+        .collect()
+}
+
+/// Fewest letters a reading holds besides a mark for its script to be
+/// known.
+const MIN_SCRIPT_LETTERS: usize = 20;
+
+/// Most share of a reading's other letters a mark's script may have for it
+/// to be foreign there: one letter in ten.
+const FOREIGN_SHARE: f64 = 0.1;
+
+/// Whether `v` stands beside `w` on one line, as words of a line do: of
+/// a height within twice the other's, level with it to half the taller
+/// one's height across its baseline, and no more than that height apart
+/// along it.
+fn line_mates(w: &Placed, v: &Placed) -> bool {
+    let frame = |q: &[(f64, f64); 4]| {
+        let len = (q[1].0 - q[0].0).hypot(q[1].1 - q[0].1);
+        let height = (q[3].0 - q[0].0).hypot(q[3].1 - q[0].1);
+        let centre = (
+            q.iter().map(|p| p.0).sum::<f64>() / 4.0,
+            q.iter().map(|p| p.1).sum::<f64>() / 4.0,
+        );
+        (len, height, centre)
+    };
+    let (wl, wh, wc) = frame(&w.quad);
+    let (vl, vh, vc) = frame(&v.quad);
+    let (short, tall) = (wh.min(vh), wh.max(vh));
+    if !(short > 0.0 && tall <= 2.0 * short && wl > 0.0) {
+        return false;
+    }
+    // Along the word's baseline, and across it.
+    let along = (
+        (w.quad[1].0 - w.quad[0].0) / wl,
+        (w.quad[1].1 - w.quad[0].1) / wl,
+    );
+    let (dx, dy) = (vc.0 - wc.0, vc.1 - wc.1);
+    let ahead = dx * along.0 + dy * along.1;
+    let across = -dx * along.1 + dy * along.0;
+    across.abs() <= 0.5 * tall && ahead.abs() - (wl + vl) * 0.5 <= tall
+}
+
+/// The rules a region's reading found drawn in its pixels
+/// ([`read_rules`]), on the page: mapped as its words are ([`place`]), in
+/// the page's frame, each cut to the region read. A rule runs the way its
+/// placed box is longer, so a page turned to be read turns its rules too.
+fn place_rules(p: &Page, region: BBox, reading: &WordReading) -> Vec<crate::rule::Rule> {
+    let rect = crop_rect(p, Some(region));
+    let (Coords::Px, Some(w), Some(h)) = (reading.coords, reading.width, reading.height) else {
+        return Vec::new();
+    };
+    if !(w > 0.0 && h > 0.0) {
+        return Vec::new();
+    }
+    let (sx, sy) = (rect.width() / w, rect.height() / h);
+    let mut out = Vec::new();
+    for r in &reading.rules {
+        let [x0, y0, x1, y1] = r.bbox;
+        if !r.bbox.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let a = p.from_display_point((rect.x0 + x0 * sx, rect.y0 + y0 * sy));
+        let b = p.from_display_point((rect.x0 + x1 * sx, rect.y0 + y1 * sy));
+        let placed = BBox {
+            x0: a.0.min(b.0),
+            y0: a.1.min(b.1),
+            x1: a.0.max(b.0),
+            y1: a.1.max(b.1),
+        };
+        let orientation = if placed.width() >= placed.height() {
+            crate::rule::Orientation::Horizontal
+        } else {
+            crate::rule::Orientation::Vertical
+        };
+        let cut = BBox {
+            x0: placed.x0.max(region.x0),
+            y0: placed.y0.max(region.y0),
+            x1: placed.x1.min(region.x1),
+            y1: placed.y1.min(region.y1),
+        };
+        if cut.x1 > cut.x0 && cut.y1 > cut.y0 {
+            out.push(crate::rule::Rule {
+                bbox: cut,
+                orientation,
+                page: p.index,
+            });
+        }
+    }
+    out
 }
 
 /// Whether an image of aspect `read` (width over height) is the crop of
@@ -2504,7 +2675,10 @@ pub fn read_pages_leaving(
             return;
         };
         match engine.read(&crop.pixels) {
-            Ok(reading) => readings.push((at, (crop.page, which, reading))),
+            Ok(mut reading) => {
+                read_rules(which, &crop.pixels, &mut reading);
+                readings.push((at, (crop.page, which, reading)))
+            }
             Err(e) => failed.push((at, (crop.name, e))),
         }
     });
@@ -2963,6 +3137,7 @@ mod tests {
             height: Some(1584.0),
             engine: None,
             words,
+            rules: Vec::new(),
         }
     }
 
@@ -3054,6 +3229,7 @@ mod tests {
                     angle: None,
                     conf: Some(0.9),
                 }],
+                rules: Vec::new(),
             })
         }
     }
@@ -3839,6 +4015,162 @@ mod tests {
     }
 
     #[test]
+    fn a_mark_the_engine_took_for_a_letter_is_not_laid() {
+        // A poster read whole: an icon over a column's banner read as a
+        // Chinese character the engine is unsure of, another beside a line
+        // of smaller text, a panel's number read sure, a diagram's callout
+        // letter read unsure, and a letter it is unsure of among the words
+        // of its line.
+        let at = |text: &str, b: [f64; 4], conf: f64| OcrWord {
+            conf: Some(conf),
+            ..word(text, b)
+        };
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let r = inject(
+            &mut doc,
+            &[(
+                0,
+                Crop::Page,
+                px(vec![
+                    at("月", [700.0, 100.0, 760.0, 160.0], 0.52),
+                    at("BUT COPYRIGHT DOESN'T", [600.0, 200.0, 900.0, 224.0], 0.99),
+                    at("6", [600.0, 300.0, 630.0, 340.0], 0.99),
+                    at("Some", [600.0, 400.0, 660.0, 420.0], 0.98),
+                    at("a", [668.0, 404.0, 680.0, 420.0], 0.6),
+                    at("text", [688.0, 400.0, 740.0, 420.0], 0.98),
+                    at("日", [500.0, 500.0, 560.0, 588.0], 0.71),
+                    at("domain are free", [580.0, 530.0, 900.0, 545.0], 0.99),
+                    at("E", [300.0, 700.0, 320.0, 724.0], 0.6),
+                ]),
+            )],
+        );
+        assert_eq!((r[0].taken, r[0].dropped), (7, 2));
+        let text = text_of(&doc.pages[0]);
+        assert!(!text.contains('月') && !text.contains('日'), "{text}");
+        assert!(text.contains('6') && text.contains("Some a text"), "{text}");
+        assert!(text.contains('E'), "{text}");
+
+        // On a page read in Chinese, a character alone is the page's own,
+        // however unsure: a table's `是` keeps its cell.
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let r = inject(
+            &mut doc,
+            &[(
+                0,
+                Crop::Page,
+                px(vec![
+                    at(
+                        "第一章 国家统计局发布的数据",
+                        [100.0, 100.0, 700.0, 130.0],
+                        0.98,
+                    ),
+                    at(
+                        "各地区生产总值与人口统计年鉴",
+                        [100.0, 200.0, 700.0, 230.0],
+                        0.97,
+                    ),
+                    at("是", [900.0, 400.0, 930.0, 430.0], 0.7),
+                ]),
+            )],
+        );
+        assert_eq!((r[0].taken, r[0].dropped), (3, 0));
+
+        // An engine that states no confidence leaves nothing to judge.
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let unstated = OcrWord {
+            conf: None,
+            ..word("月", [700.0, 100.0, 760.0, 160.0])
+        };
+        let r = inject(&mut doc, &[(0, Crop::Page, px(vec![unstated]))]);
+        assert_eq!((r[0].taken, r[0].dropped), (1, 0));
+    }
+
+    #[test]
+    fn a_region_reading_s_rules_are_placed_cut_to_it_and_kept_apart() {
+        // The screenshot of the test below, its reading carrying the rules
+        // its pixels draw: one across the crop, margin to margin, and one
+        // down it.
+        let mut glyphs = Vec::new();
+        for row in 0..12 {
+            glyphs.extend(native("Body text line", 72.0, 80.0 + row as f64 * 14.0));
+        }
+        let shot = BBox {
+            x0: 100.0,
+            y0: 300.0,
+            x1: 500.0,
+            y1: 500.0,
+        };
+        let image = ImagePlacement {
+            bbox: shot,
+            texty: Some(true),
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+            key: None,
+        };
+        let mut doc = Document {
+            pages: vec![page(glyphs, vec![image])],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let drawn = doc.pages[0].rules.len();
+        let reading = WordReading {
+            coords: Coords::Px,
+            width: Some(1648.0),
+            height: Some(848.0),
+            engine: None,
+            words: vec![word("Balance", [24.0, 100.0, 184.0, 140.0])],
+            rules: vec![
+                fluree_doc_vision::rules::DrawnRule {
+                    bbox: [0.0, 200.0, 1648.0, 204.0],
+                    axis: fluree_doc_vision::rules::Axis::Horizontal,
+                },
+                fluree_doc_vision::rules::DrawnRule {
+                    bbox: [424.0, 24.0, 428.0, 824.0],
+                    axis: fluree_doc_vision::rules::Axis::Vertical,
+                },
+            ],
+        };
+        inject(&mut doc, &[(0, Crop::Region(0), reading)]);
+        let p = &doc.pages[0];
+        // Not the page's ruling: only a table read from the picture makes
+        // them that.
+        assert_eq!(p.rules.len(), drawn);
+        let rules = &p.ocr.as_ref().unwrap().rules;
+        assert_eq!(rules.len(), 2);
+        // 200 px down the crop is 50 units, 344 on the page; the margins
+        // either side are cut off at the region's edges.
+        let a = rules[0];
+        assert_eq!(a.orientation, crate::rule::Orientation::Horizontal);
+        assert!(
+            (a.bbox.x0 - 100.0).abs() < 1e-9 && (a.bbox.x1 - 500.0).abs() < 1e-9,
+            "{a:?}"
+        );
+        assert!(
+            (a.bbox.y0 - 344.0).abs() < 1e-9 && (a.bbox.y1 - 345.0).abs() < 1e-9,
+            "{a:?}"
+        );
+        let d = rules[1];
+        assert_eq!(d.orientation, crate::rule::Orientation::Vertical);
+        assert!(
+            (d.bbox.x0 - 200.0).abs() < 1e-9 && (d.bbox.y0 - 300.0).abs() < 1e-9,
+            "{d:?}"
+        );
+    }
+
+    #[test]
     fn a_reading_none_of_whose_words_land_on_the_page_is_set_aside() {
         // Every word off the page, as an origin or a scale not the page's
         // puts them: not a reading that came back blank, listed with no
@@ -3932,6 +4264,7 @@ mod tests {
             height: Some(h),
             engine: None,
             words,
+            rules: Vec::new(),
         };
         let mut doc = page_with_regions(&[UPPER, LOWER]);
         let glyphs = doc.pages[0].glyphs.len();
@@ -4014,6 +4347,7 @@ mod tests {
                 // In the margin above the region: a neighbour's text.
                 word("cut", [400.0, 2.0, 460.0, 20.0]),
             ],
+            rules: Vec::new(),
         };
         let r = inject(&mut doc, &[(0, Crop::Region(0), reading)]);
         assert_eq!((r[0].taken, r[0].dropped), (1, 1));
@@ -4089,6 +4423,7 @@ mod tests {
                     conf,
                 })
                 .collect(),
+            rules: Vec::new(),
         }
     }
 
@@ -4384,6 +4719,7 @@ mod tests {
             height: None,
             engine: None,
             words,
+            rules: Vec::new(),
         }
     }
 
@@ -5426,6 +5762,7 @@ mod tests {
                 word("Name", [100.0, 500.0, 200.0, 520.0]),
                 word("Date", [100.0, 540.0, 200.0, 560.0]),
             ],
+            rules: Vec::new(),
         };
         inject(&mut doc, &[(0, Crop::Page, reading)]);
         assert_eq!(doc.pages[0].rotation, 0);
@@ -6688,6 +7025,7 @@ mod tests {
             height: Some(w * 2.0),
             engine: None,
             words: vec![word("Total", [20.0, 20.0, 120.0, 46.0])],
+            rules: Vec::new(),
         };
         let r = inject(&mut doc, &[(0, Crop::Page, reading)]);
         assert_eq!(
@@ -6701,6 +7039,7 @@ mod tests {
             height: Some(h * 2.0),
             engine: None,
             words: vec![word("Total", [20.0, 20.0, 120.0, 46.0])],
+            rules: Vec::new(),
         };
         assert_eq!(
             inject(&mut blank_scan(), &[(0, Crop::Page, reading)])[0].taken,
@@ -7361,6 +7700,7 @@ mod tests {
                 angle: None,
                 conf: Some(0.99),
             }],
+            rules: Vec::new(),
         };
         let page_units = with_copies(
             &doc,

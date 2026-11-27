@@ -525,6 +525,8 @@ mod tests {
             first_glyph: 1500,
             whole: false,
             regions: vec![1],
+            region_boxes: Vec::new(),
+            rules: Vec::new(),
         });
         let doc = Document {
             pages_past_limit: 0,
@@ -573,6 +575,8 @@ mod tests {
             first_glyph: 1500,
             whole: false,
             regions: vec![1],
+            region_boxes: Vec::new(),
+            rules: Vec::new(),
         });
         let doc = Document {
             pages_past_limit: 0,
@@ -637,6 +641,8 @@ mod tests {
             first_glyph: 1500,
             whole: false,
             regions: vec![0],
+            region_boxes: Vec::new(),
+            rules: Vec::new(),
         });
         let doc = Document {
             pages_past_limit: 0,
@@ -722,6 +728,8 @@ mod tests {
             first_glyph: 0,
             whole: true,
             regions: Vec::new(),
+            region_boxes: Vec::new(),
+            rules: Vec::new(),
         });
         assert_eq!(route::decide(&p).0, route::Route::Deterministic);
         let doc = Document {
