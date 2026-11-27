@@ -1299,6 +1299,22 @@ impl Grid {
         if row0.iter().all(|c| c.trim().is_empty()) {
             return 0;
         }
+        // A first row of numbered fields (`1. DATE OF ORDER`, `2. CONTRACT
+        // NO. …`, `6. SHIP TO:`) is a form's, its boxes numbered on down the
+        // rows under it (`3. ORDER NO.`): each names its own box, and no
+        // column under it. Numbered heads over columns of text (`1. Ingest |
+        // 2. Classify` over each step's notes) number nothing under them.
+        let filled: Vec<&str> = row0
+            .iter()
+            .map(|c| c.trim())
+            .filter(|c| !c.is_empty())
+            .collect();
+        if filled.len() >= 2
+            && filled.iter().all(|c| numbered_field(c))
+            && rows[1..].iter().flatten().any(|c| numbered_field(c.trim()))
+        {
+            return 0;
+        }
         let mut run = self.leading_fill_run(fills);
         // The run's last row is the body's first stripe where the rows from
         // it on are shaded every other row and it holds figures as they do:
@@ -5100,8 +5116,110 @@ pub fn detect_framed(
     let grids = detect_framed_rules(rules, fills, glyphs, page, frames)
         .into_iter()
         .map(|g| cut_to_box(g, rules, fills, glyphs))
+        .map(|g| cut_page_head(g, rules, glyphs))
         .collect();
     with_column_bands(with_header_band_edges(grids, fills, glyphs), rules, glyphs)
+}
+
+/// Whether a cell opens on a form's field number and the field's name: one
+/// or two digits and a stop, then a capital (`1. DATE OF ORDER`, `12.
+/// F.O.B. POINT`).
+fn numbered_field(text: &str) -> bool {
+    let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+    (1..=2).contains(&digits.len())
+        && text[digits.len()..].starts_with(". ")
+        && text[digits.len() + 2..]
+            .chars()
+            .next()
+            .is_some_and(char::is_uppercase)
+}
+
+/// Whether a cell's text is a page counter and nothing else: `PAGE 1 OF
+/// 30`, `Page 2 of 7`, a form's `PAGE OF PAGES` box with its two figures.
+fn page_counter(text: &str) -> bool {
+    let words: Vec<String> = text.split_whitespace().map(|w| w.to_lowercase()).collect();
+    words.len() <= 6
+        && words.first().is_some_and(|w| w == "page")
+        && words.iter().any(|w| w == "of")
+        && words.iter().any(|w| w.chars().all(|c| c.is_ascii_digit()))
+        && words.iter().all(|w| {
+            matches!(w.as_str(), "page" | "of" | "pages") || w.chars().all(|c| c.is_ascii_digit())
+        })
+}
+
+/// Most rows a form's head band runs to: its title and a notice under it.
+const PAGE_HEAD_ROWS: usize = 2;
+
+/// A ruled grid cut under the page's head: its first rows a band holding
+/// the page's counter (`PAGE OF PAGES` over `1 30`, read down its column)
+/// beside a line or two of words and no figure (the form's title, a
+/// notice), down to the first rule across the grid under the counter. A
+/// form sets its head inside its frame; the head names nothing of the
+/// fields under it, and a row of it is no header. The band's text is read
+/// as the page's.
+fn cut_page_head(g: Grid, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) -> Grid {
+    if g.layout.is_some() || g.rows() < PAGE_HEAD_ROWS + 3 {
+        return g;
+    }
+    let cols = g.cols();
+    let texts = g.cell_texts(glyphs);
+    let cell = |r: usize, c: usize| texts[r * cols + c].trim();
+    // The counter's column, and the rows it is read down.
+    let down = |c: usize, rows: usize| {
+        (0..rows)
+            .map(|r| cell(r, c))
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let Some((counter, rows)) = (0..cols).find_map(|c| {
+        (1..=PAGE_HEAD_ROWS)
+            .find(|&n| page_counter(&down(c, n)))
+            .map(|n| (c, n))
+    }) else {
+        return g;
+    };
+    let (x0, x1) = (g.xs[0], g.xs[cols]);
+    let counter_bottom = glyphs
+        .iter()
+        .filter(|gl| !gl.text.trim().is_empty())
+        .filter_map(|gl| gl.bbox.map(|b| (gl.center(), b)))
+        .filter(|((x, y), _)| {
+            *x >= g.xs[counter] && *x < g.xs[counter + 1] && *y >= g.ys[0] && *y < g.ys[rows]
+        })
+        .map(|(_, b)| b.y1)
+        .fold(f64::MIN, f64::max);
+    // The first boundary under it a rule runs across the grid along.
+    let across = |y: f64| {
+        rules.iter().any(|r| {
+            r.orientation == Orientation::Horizontal
+                && (r.axis_pos() - y).abs() <= EDGE_TOLERANCE
+                && r.bbox.x0 <= x0 + EDGE_TOLERANCE
+                && r.bbox.x1 >= x1 - EDGE_TOLERANCE
+        })
+    };
+    let Some(cut) = (1..=PAGE_HEAD_ROWS).find(|&k| g.ys[k] > counter_bottom && across(g.ys[k]))
+    else {
+        return g;
+    };
+    // Beside the counter, each row of the band a line of words: no figure.
+    let words_only = (0..cut).all(|r| {
+        (0..cols)
+            .filter(|&c| c != counter)
+            .all(|c| !cell(r, c).chars().any(|ch| ch.is_ascii_digit()))
+    });
+    if !words_only || g.rows() - cut < 3 {
+        return g;
+    }
+    let ys = g.ys[cut..].to_vec();
+    Grid {
+        bbox: BBox {
+            y0: ys[0],
+            ..g.bbox
+        },
+        ys,
+        ..g
+    }
 }
 
 /// Fewest of a grid's row boundaries a box holds inside it to frame rows of
@@ -12164,6 +12282,64 @@ mod header_tests {
         ] {
             assert!(!reads_as_quantity(t), "{t} should not read as a quantity");
         }
+    }
+
+    #[test]
+    fn a_page_counter_and_a_numbered_field_are_read_as_such() {
+        assert!(page_counter("PAGE OF PAGES 1 30"));
+        assert!(page_counter("Page 2 of 7"));
+        assert!(!page_counter("Page Size of the tray"));
+        assert!(!page_counter("Copybooks, 88 page, pack of 10"));
+        assert!(numbered_field("1. DATE OF ORDER"));
+        assert!(numbered_field("12. F.O.B. POINT"));
+        assert!(!numbered_field("1.5 mm"));
+        assert!(!numbered_field("2. results were"));
+    }
+
+    /// A form's frame: a head band of its title over a notice beside a page
+    /// box (`PAGE OF PAGES` over `1 30`), a rule across under them, then
+    /// numbered fields ruled row by row. `counter` sets the page box.
+    fn form(counter: bool) -> (Grid, Vec<crate::glyph::Glyph>, Vec<Rule>) {
+        let g = plain_grid(
+            vec![20.0, 300.0, 500.0, 596.0],
+            vec![13.0, 28.0, 40.0, 60.0, 80.0, 100.0],
+        );
+        let mut glyphs = vec![
+            gly(160.0, 26.0, 120.0, "ORDER FOR SUPPLIES OR SERVICES"),
+            gly(22.0, 38.0, 200.0, "IMPORTANT: Mark all packages"),
+            gly(22.0, 55.0, 60.0, "1. DATE OF ORDER"),
+            gly(302.0, 55.0, 60.0, "2. CONTRACT NO."),
+            gly(22.0, 75.0, 60.0, "3. ORDER NO."),
+            gly(22.0, 95.0, 60.0, "5. ISSUING OFFICE"),
+        ];
+        if counter {
+            glyphs.push(gly(505.0, 24.0, 60.0, "PAGE OF PAGES"));
+            glyphs.push(gly(505.0, 37.0, 20.0, "1 30"));
+        }
+        let rules = vec![
+            h(19.0, 597.0, 13.0),
+            h(19.0, 499.0, 28.0),
+            h(19.0, 597.0, 40.0),
+        ];
+        (g, glyphs, rules)
+    }
+
+    #[test]
+    fn a_form_s_page_head_is_cut_from_its_grid() {
+        let (g, glyphs, rules) = form(true);
+        let g = cut_page_head(g, &rules, &glyphs);
+        assert_eq!(g.ys, vec![40.0, 60.0, 80.0, 100.0]);
+        // Its fields are numbered: no header.
+        let rows: Vec<Vec<String>> = g
+            .cell_texts(&glyphs)
+            .chunks(g.cols())
+            .map(|r| r.to_vec())
+            .collect();
+        assert_eq!(g.header_rows(&rows, &glyphs, &rules, &[]), 0);
+        // With no page counter in it, the band is the grid's.
+        let (g, glyphs, rules) = form(false);
+        let ys = g.ys.clone();
+        assert_eq!(cut_page_head(g, &rules, &glyphs).ys, ys);
     }
 
     /// A receipt's grid as the page's rules read it: two rows over a filled
