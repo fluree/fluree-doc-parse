@@ -8240,7 +8240,7 @@ fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
         .map(|(&(a, b, _), t)| (a, b, t.as_str()))
         .collect();
     // The body's runs: its words on one line a cell's gap apart joined.
-    let runs: Vec<(f64, f64)> = {
+    let runs: Vec<(f64, f64, f64)> = {
         let mut lines: Vec<(f64, f64, f64)> = inked
             .iter()
             .filter(|&&(_, _, y)| y >= g.ys[1] && y < bottom)
@@ -8256,7 +8256,7 @@ fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
                 _ => runs.push((a, b, y)),
             }
         }
-        runs.into_iter().map(|(a, b, _)| (a, b)).collect()
+        runs
     };
     // Taken at their median start and end: a figure the edges set in the
     // wrong column stretches no column.
@@ -8347,7 +8347,7 @@ fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
         // one run: a chart sets a figure at its bar's end, and a negative
         // bar's figure stands out in the gutter on one side of the edge or
         // the other; a line of text run past the edge is a cell's.
-        let clear = !runs.iter().any(|&(a, b)| a < edge && b > edge);
+        let clear = !runs.iter().any(|&(a, b, _)| a < edge && b > edge);
         if right - left < fs * ALIGNED_SPLIT_GAP_EMS || !clear {
             return;
         }
@@ -8355,6 +8355,25 @@ fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
     }
     xs[0] = xs[0].min(block(0).0 - 0.5);
     xs[cols] = xs[cols].max(block(cols - 1).1 + 0.5);
+    // One figure to a column on each line, by the fitted edges: a chart's
+    // axis sets its ticks along one line (`5 4 3 2 1 0`), runs apart in one
+    // column, where a table sets one figure to a cell. (By the old edges, a
+    // negative bar's figure falls in the column before, beside that
+    // column's own.)
+    let column = |a: f64, b: f64| {
+        let m = (a + b) / 2.0;
+        xs.windows(2).position(|w| m >= w[0] && m < w[1])
+    };
+    let mut prev: Option<(usize, f64)> = None;
+    for &(a, b, y) in &runs {
+        let Some(c) = column(a, b) else {
+            continue;
+        };
+        if prev.is_some_and(|(pc, py)| pc == c && (y - py).abs() <= fs * 0.3) {
+            return;
+        }
+        prev = Some((c, y));
+    }
     g.bbox.x0 = xs[0];
     g.bbox.x1 = xs[cols];
     g.xs = xs;
