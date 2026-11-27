@@ -392,6 +392,71 @@ fn layout_title(
     Some((text, trimmed))
 }
 
+/// Rows opening a table nested in a table's rows: the first cell's label
+/// set down the rows under it (`Gradient` in a list of conditions), the
+/// row's other cells naming columns (`Time (min) | A% | B%`) that the rows
+/// in the label's span fill with figures. Set plain or bold, the row is
+/// the nested table's header.
+///
+/// A group's first row of data holds a figure among its values, or names
+/// nothing the rows under it fill with figures.
+fn nested_header_rows(
+    rows: &[Vec<String>],
+    continues_above: &[bool],
+    header_rows: usize,
+) -> Vec<usize> {
+    let cols = rows.first().map_or(0, Vec::len);
+    if cols < 3 || continues_above.len() != rows.len() * cols {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for r in header_rows..rows.len() {
+        let label = rows[r][0].trim();
+        if label.is_empty() || table::is_numeric_cell(label) {
+            continue;
+        }
+        // The label's span: the rows its cell runs on through, two at least.
+        let mut end = r;
+        while end + 1 < rows.len() && continues_above[(end + 1) * cols] {
+            end += 1;
+        }
+        if end < r + 2 {
+            continue;
+        }
+        let named: Vec<usize> = (1..cols)
+            .filter(|&c| !rows[r][c].trim().is_empty())
+            .collect();
+        let names: Vec<&str> = named.iter().map(|&c| rows[r][c].trim()).collect();
+        let distinct: std::collections::HashSet<&&str> = names.iter().collect();
+        // Words, more letters than digits: a count is a value (`N=175` over
+        // a subgroup's rates), a name is not (`A%`, `IL-8 (pg/mL)`).
+        let worded = |t: &str| {
+            let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+            letters > t.chars().filter(|c| c.is_ascii_digit()).count()
+        };
+        if names.len() < 2
+            || distinct.len() != names.len()
+            || names
+                .iter()
+                .any(|t| !worded(t) || table::is_numeric_cell(t))
+        {
+            continue;
+        }
+        // Figures under every name, on most of the span's rows.
+        let figures = (r + 1..=end)
+            .filter(|&k| {
+                named
+                    .iter()
+                    .all(|&c| table::is_numeric_cell(rows[k][c].trim()))
+            })
+            .count();
+        if figures * 2 > end - r {
+            out.push(r);
+        }
+    }
+    out
+}
+
 fn names_spanned_columns(
     rows: &[Vec<String>],
     continues_left: &[bool],
@@ -7035,13 +7100,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             };
             let restated_headers = match explicit {
                 Some(lay) => lay.restated_headers.clone(),
-                None => g.restated_header_rows(
-                    &rows,
-                    header_rows,
-                    &sub_headers,
-                    &raw.pages[pi].glyphs,
-                    &raw.pages[pi].fills,
-                ),
+                None => {
+                    let mut restated = g.restated_header_rows(
+                        &rows,
+                        header_rows,
+                        &sub_headers,
+                        &raw.pages[pi].glyphs,
+                        &raw.pages[pi].fills,
+                    );
+                    restated.extend(
+                        nested_header_rows(&rows, &merges.continues_above, header_rows)
+                            .into_iter()
+                            .filter(|r| !sub_headers.contains(r)),
+                    );
+                    restated.sort_unstable();
+                    restated.dedup();
+                    restated
+                }
             };
             let spread = spread_runs(g, &raw.pages[pi].glyphs, &rows, &merges.continues_left);
             tables += 1;
@@ -8687,6 +8762,37 @@ mod tests {
         rows.iter()
             .map(|r| r.iter().map(|c| c.to_string()).collect())
             .collect()
+    }
+
+    #[test]
+    fn a_table_nested_in_a_label_s_rows_opens_on_its_header() {
+        let rows = grid(&[
+            &["Flow Rate", "0.5 mL/min", "", ""],
+            &["Gradient", "Time (min)", "A%", "B%"],
+            &["", "0", "95", "5"],
+            &["", "0.7", "50", "50"],
+            &["", "8.0", "10", "90"],
+            &["Injection Volume", "5 µL", "", ""],
+        ]);
+        let mut down = vec![false; 24];
+        for r in 2..5 {
+            down[r * 4] = true;
+        }
+        assert_eq!(nested_header_rows(&rows, &down, 0), vec![1]);
+        // A subgroup's counts are values, not names.
+        let mut counts = rows.clone();
+        counts[1] = ["Responders", "N=175", "N=92", "N=40"]
+            .map(String::from)
+            .to_vec();
+        assert!(nested_header_rows(&counts, &down, 0).is_empty());
+        // A group's first row of data holds figures among its values.
+        let mut group = rows.clone();
+        group[1] = ["North", "Sales", "95", "5"].map(String::from).to_vec();
+        assert!(nested_header_rows(&group, &down, 0).is_empty());
+        // A label over one row is no span of rows to head.
+        let mut short = vec![false; 24];
+        short[2 * 4] = true;
+        assert!(nested_header_rows(&rows, &short, 0).is_empty());
     }
 
     #[test]
