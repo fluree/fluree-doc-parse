@@ -31,6 +31,12 @@
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1
  },
+ "census-p60-covered-continued": {
+  "md table.header_rows": 15,
+  "md table.sub_headers": 15,
+  "xhtml table.header_rows": 15,
+  "xhtml table.sub_headers": 15
+ },
  "census-p60-glyph-names": {
   "md table.header_rows": 15,
   "md table.sub_headers": 15,
@@ -805,6 +811,12 @@
  "wd-gold-title": {
   "md table.sub_headers": 3,
   "xhtml table.sub_headers": 3
+ },
+ "worldbank-pad-template-markers": {
+  "md table.header_rows": 2,
+  "md table.sub_headers": 5,
+  "xhtml table.header_rows": 2,
+  "xhtml table.sub_headers": 5
  },
  "wto-template-heads-not-furniture": {
   "md table.grid": 7,

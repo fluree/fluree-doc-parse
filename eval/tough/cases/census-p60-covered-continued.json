@@ -1,0 +1,20 @@
+{
+  "document": {
+    "file": "census-p60-287.pdf",
+    "url": "https://www2.census.gov/library/publications/2025/demo/p60-287.pdf",
+    "sha256": "b99624bfd024a4f9396594d23a845d5bd581f8094401a3b469aa0a3fb6c799d1",
+    "about": "US Census Bureau P60-287, Poverty in the United States: 2024. Some continued tables' titles carry a `—Con.` that a white box, a little shorter than the type, is laid over."
+  },
+  "notes": [
+    "2026-11-27: a box 9.6pt tall over 10pt type was read as a rule over the mark it lies on, and hid nothing. A bar hides nothing only when it is under half the type's size. Where the box stops 0.35pt short of the dash, a sliver of the dash shows, and the title keeps its `—Con.`."
+  ],
+  "checks": [
+    {
+      "id": "covered-continued-mark",
+      "found": "2026-11-27",
+      "issue": "`—Con.` under a box over the title read on both continued pages of the measures table; only the page whose box falls short of the dash shows any of it.",
+      "text": "Different Poverty Measures: 2024—Con.",
+      "count": 1
+    }
+  ]
+}

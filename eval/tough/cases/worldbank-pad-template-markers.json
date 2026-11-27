@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "worldbank-cambodia-basic-education-pad.pdf",
+    "url": "https://documents1.worldbank.org/curated/en/099081225092029814/pdf/BOSIB-d8efcebf-ebaf-4a92-b398-ff854a89e457.pdf",
+    "sha256": "4f8a3f6ded53b1968c6bcbc1222fc4ac0ff7d9229129c6ec14a41ab03e718844",
+    "about": "World Bank Project Appraisal Document (Cambodia, basic education), 40 pages. Its template sets a marker before each section, white on the white page."
+  },
+  "notes": [
+    "2026-11-27: text set in the colour of the fill under it shows nothing, and its markers read as text before each section's heading."
+  ],
+  "checks": [
+    {
+      "id": "no-template-markers",
+      "found": "2026-11-27",
+      "issue": "Markers set white on white (`@#&OPS~Doctype~OPS^dynamics@padbasicinformation#doctemplate`) read before twelve section headings.",
+      "no_text": "doctemplate"
+    }
+  ]
+}

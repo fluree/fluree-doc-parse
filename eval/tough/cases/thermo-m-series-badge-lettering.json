@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "thermo-m-series-flyer.pdf",
+    "url": "https://documents.thermofisher.com/TFS-Assets/LPD/Flyers/m-series-centrifuges-flyer.pdf",
+    "sha256": "eab219c469c27ab879a87b1b02394735371d630348bb4c2c540bdbb37a86dd23",
+    "about": "Thermo Scientific M Series centrifuges flyer (2 pages). The cover sets a 12 pt category tag in a red box above the 28 pt title, and the back page closes on a link line."
+  },
+  "notes": [
+    "2026-11-27 (guard): the badge's lettering is drawn as outlines, and its words are kept as text under clips that show none of them. Taking text away glyph by glyph must not take these: something of the type's size is drawn where they stand."
+  ],
+  "checks": [
+    {
+      "id": "badge-words-read",
+      "found": "2026-11-27",
+      "issue": "Guard: the badge reads GREEN COOL TECHNOLOGY & SUSTAIN-ABILITY on the page.",
+      "text": "COOL"
+    },
+    {
+      "id": "badge-words-read-2",
+      "found": "2026-11-27",
+      "issue": "Guard: as above.",
+      "text": "SUSTAIN"
+    }
+  ]
+}
