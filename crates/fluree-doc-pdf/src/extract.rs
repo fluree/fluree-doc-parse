@@ -3764,9 +3764,11 @@ mod probe_tests {
         assert!(keyed.pages[0].images[0].key.is_some());
         // A plain run: nothing probed, nothing keyed, the stream neither
         // decoded nor hashed.
-        let mut options = ExtractOptions::default();
-        options.probe_images = false;
-        options.key_images = false;
+        let options = ExtractOptions {
+            probe_images: false,
+            key_images: false,
+            ..ExtractOptions::default()
+        };
         let plain = extract_bytes_with(striped_page(), &options).expect("pdf");
         assert_eq!(plain.pages[0].images[0].texty, None);
         assert_eq!(plain.pages[0].images[0].key, None);
