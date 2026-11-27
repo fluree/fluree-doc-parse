@@ -1349,6 +1349,36 @@ impl Grid {
         }
     }
 
+    /// Whether the grid's boxes are numbered as a form's are: numbered
+    /// fields ([`numbered_field`]), or a field's lettered parts (`a. NAME`,
+    /// `b. STREET ADDRESS`), in half its rows under the first or more, two
+    /// or more, across two columns or more, one of them numbered.
+    fn numbered_boxes(&self, rows: &[Vec<String>]) -> bool {
+        let lettered = |t: &str| {
+            let mut chars = t.chars();
+            chars.next().is_some_and(|c| c.is_ascii_lowercase())
+                && t[1..].starts_with(". ")
+                && t[3..].chars().next().is_some_and(char::is_uppercase)
+        };
+        let boxed = |t: &str| numbered_field(t) || lettered(t);
+        let below = rows.get(1..).unwrap_or(&[]);
+        let boxed_rows = below
+            .iter()
+            .filter(|r| r.iter().any(|c| boxed(c.trim())))
+            .count();
+        let columns: std::collections::BTreeSet<usize> = below
+            .iter()
+            .flat_map(|r| {
+                r.iter()
+                    .enumerate()
+                    .filter(|(_, c)| boxed(c.trim()))
+                    .map(|(i, _)| i)
+            })
+            .collect();
+        let numbered = below.iter().flatten().any(|c| numbered_field(c.trim()));
+        numbered && boxed_rows >= 2 && boxed_rows * 2 >= below.len() && columns.len() >= 2
+    }
+
     /// How many leading rows are column headers.
     ///
     /// Row 0 is presumed to be the header — that is overwhelmingly the layout
@@ -1399,6 +1429,15 @@ impl Grid {
             && filled.iter().all(|c| numbered_field(c))
             && rows[1..].iter().flatten().any(|c| numbered_field(c.trim()))
         {
+            return 0;
+        }
+        // So is a grid whose boxes are numbered down most of its rows and
+        // across its columns, whatever its first row holds: a form's title
+        // set in the first box (`SOLICITATION/CONTRACT/ORDER … 1.
+        // REQUISITION NUMBER`) beside its page box, over `2. CONTRACT NO. |
+        // 3. AWARD DATE | 4. ORDER NUMBER`. A list numbered down one column
+        // (`1. Introduction | 3`) numbers its entries, not boxes.
+        if self.numbered_boxes(rows) {
             return 0;
         }
         let mut run = self.leading_fill_run(fills);
@@ -5302,16 +5341,19 @@ pub fn detect_framed(
 }
 
 /// Whether a cell opens on a form's field number and the field's name: one
-/// or two digits and a stop, then a capital (`1. DATE OF ORDER`, `12.
-/// F.O.B. POINT`).
+/// or two digits, a box's letter where the form parts a field (`13a.`),
+/// and a stop, then a capital (`1. DATE OF ORDER`, `12. F.O.B. POINT`,
+/// `17a. CONTRACTOR/OFFEROR`).
 fn numbered_field(text: &str) -> bool {
     let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let rest = &text[digits.len()..];
+    let rest = match rest.chars().next() {
+        Some(l) if l.is_ascii_lowercase() => &rest[1..],
+        _ => rest,
+    };
     (1..=2).contains(&digits.len())
-        && text[digits.len()..].starts_with(". ")
-        && text[digits.len() + 2..]
-            .chars()
-            .next()
-            .is_some_and(char::is_uppercase)
+        && rest.starts_with(". ")
+        && rest[2..].chars().next().is_some_and(char::is_uppercase)
 }
 
 /// Whether a cell's text is a page counter and nothing else: `PAGE 1 OF
@@ -12849,6 +12891,44 @@ mod header_tests {
     }
 
     #[test]
+    fn a_grid_of_numbered_boxes_is_a_form_without_a_header() {
+        // A form's first box holds its title and box 1 beside its page box;
+        // the boxes under it are numbered across the rows and columns.
+        let g = plain_grid(vec![0.0, 100.0, 200.0, 300.0], vec![0.0, 20.0, 40.0, 60.0]);
+        let rows = |r: &[[&str; 3]]| -> Vec<Vec<String>> {
+            r.iter()
+                .map(|r| r.iter().map(|t| t.to_string()).collect())
+                .collect()
+        };
+        let form = rows(&[
+            [
+                "ORDER FOR SUPPLIES 1. REQUISITION NUMBER",
+                "",
+                "PAGE OF 1 34",
+            ],
+            [
+                "2. CONTRACT NO. 47Q",
+                "3. AWARD DATE",
+                "4. ORDER NUMBER 8930",
+            ],
+            [
+                "13a. THIS CONTRACT IS",
+                "b. TELEPHONE NUMBER",
+                "14. METHOD RFQ",
+            ],
+        ]);
+        assert_eq!(g.header_rows(&form, &[], &[], &[]), 0);
+        // A list numbered down its first column numbers its entries: its
+        // first row still heads it.
+        let list = rows(&[
+            ["Section", "Pages", "Owner"],
+            ["1. Introduction", "3", "Office A"],
+            ["2. Scope", "4", "Office B"],
+        ]);
+        assert_eq!(g.header_rows(&list, &[], &[], &[]), 1);
+    }
+
+    #[test]
     fn a_page_counter_and_a_numbered_field_are_read_as_such() {
         assert!(page_counter("PAGE OF PAGES 1 30"));
         assert!(page_counter("Page 2 of 7"));
@@ -12858,6 +12938,9 @@ mod header_tests {
         assert!(numbered_field("12. F.O.B. POINT"));
         assert!(!numbered_field("1.5 mm"));
         assert!(!numbered_field("2. results were"));
+        assert!(numbered_field("17a. CONTRACTOR/OFFEROR"));
+        assert!(numbered_field("13b. RATING"));
+        assert!(!numbered_field("3ab. Notes"));
     }
 
     /// A form's frame: a head band of its title over a notice beside a page
