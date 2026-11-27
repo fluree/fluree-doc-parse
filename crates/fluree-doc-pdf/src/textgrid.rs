@@ -780,9 +780,18 @@ fn covered(cols: &[(f64, f64)], c: &Chunk) -> Vec<usize> {
         .collect()
 }
 
+/// A line of two cells or more with a figure past its first: a row of
+/// values, not a label's or a title's words.
+fn values_past_stub(l: &Line) -> bool {
+    l.chunks.len() >= 2
+        && l.chunks[1..]
+            .iter()
+            .any(|c| is_figure(&c.text) && !is_year(&c.text))
+}
+
 /// The item rows over a block of totals, where the region's figure rows
-/// end in one: lines directly under the fullest rows, each setting at most
-/// half their cells, labels of a few words and an amount under one of the
+/// end in one: lines under the fullest rows, or under a row of their sums
+/// that sets most of their cells, each setting at most half their cells, labels of a few words and an amount under one of the
 /// items' columns, one of its labels running across a gutter of the
 /// fullest rows (`Totaal
 /// exclusief BTW` across `Aantal | Prijs/st`). Such labels close the items'
@@ -797,7 +806,16 @@ fn items_over_totals<'a>(
 ) -> Option<(Vec<&'a Line>, Vec<f64>)> {
     let most = lines.iter().map(|l| l.chunks.len()).max()?;
     let last = lines.iter().rposition(|l| l.chunks.len() == most)?;
-    let block: Vec<&&Line> = lines[last + 1..]
+    // A row of the items' sums under them, setting most of their cells
+    // (`Total | 1 | 278.61 | 40.39 | 319.00`), votes with the items; the
+    // block of totals may start under it (`Grand Total | 319.00`).
+    let start = last
+        + 1
+        + lines[last + 1..]
+            .iter()
+            .take_while(|l| l.chunks.len() * 2 > most)
+            .count();
+    let block: Vec<&&Line> = lines[start..]
         .iter()
         .take_while(|l| {
             l.chunks.len() * 2 <= most
@@ -831,10 +849,11 @@ fn items_over_totals<'a>(
     if !totals || !across {
         return None;
     }
-    // The items, and whatever follows the block (another table's rows).
-    let after = last + 1 + block.len();
+    // The items and their sums, and whatever follows the block (another
+    // table's rows).
+    let after = start + block.len();
     Some((
-        lines[..=last]
+        lines[..start]
             .iter()
             .chain(&lines[after..])
             .copied()
@@ -1500,12 +1519,7 @@ fn read_beside(
     let valued: Vec<&Line> = band
         .iter()
         .map(|&i| &clipped[i])
-        .filter(|l| {
-            l.chunks.len() >= 2
-                && l.chunks[1..]
-                    .iter()
-                    .any(|c| is_figure(&c.text) && !is_year(&c.text))
-        })
+        .filter(|l| values_past_stub(l))
         .collect();
     // A block of totals under the items casts no vote on the columns; its
     // lines are still the table's rows.
@@ -2756,10 +2770,30 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     let is_restated = |l: &Line| restated.iter().any(|t| std::ptr::eq(*t, l));
     let cols = {
         let rows: Vec<&Line> = body.iter().filter(|l| !is_title(l)).copied().collect();
-        // A block of totals under the items casts no vote here either.
+        // A block of totals under the items casts no vote here either. An
+        // item's lines of words alone (its title wrapped) part its figures
+        // from the totals: the block is found among the lines with figures,
+        // as the read found it.
         match items_over_totals(&rows, x0, x1) {
             Some((items, _)) => columns(&items, x0, x1),
-            None => columns(&rows, x0, x1),
+            None => {
+                let valued: Vec<&Line> = rows
+                    .iter()
+                    .copied()
+                    .filter(|l| values_past_stub(l))
+                    .collect();
+                match items_over_totals(&valued, x0, x1) {
+                    Some((_, block)) => {
+                        let voters: Vec<&Line> = rows
+                            .iter()
+                            .copied()
+                            .filter(|l| !block.contains(&l.base))
+                            .collect();
+                        columns(&voters, x0, x1)
+                    }
+                    None => columns(&rows, x0, x1),
+                }
+            }
         }
     };
     if cols.len() < 2 {
@@ -5907,6 +5941,58 @@ mod tests {
                 .any(|r| r == "Total amount excluding VAT 127.45"),
             "{rows:?}"
         );
+    }
+
+    #[test]
+    fn totals_under_a_row_of_the_items_sums_merge_no_columns() {
+        // Three items, the last one's title wrapped onto a line of words
+        // alone; a row of their sums setting most of their cells; then a
+        // grand total whose label runs across the `Qty | Price` gutter. The
+        // grand total casts no vote: `Qty` and `Price` stay two columns.
+        let xs = [20.0, 90.0, 300.0, 360.0, 480.0];
+        let mut gl = Vec::new();
+        for (k, t) in ["Code", "Item", "Qty", "Price", "Amount"]
+            .iter()
+            .enumerate()
+        {
+            gl.extend(set(t, xs[k], 40.0));
+        }
+        for (i, row) in [
+            ["A1031", "Service kit", "2", "49.99", "99.98"],
+            ["A2210", "Filter set", "1", "12.50", "12.50"],
+            ["B0417", "Cleaning", "3", "4.99", "14.97"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (k, t) in row.iter().enumerate() {
+                gl.extend(set(t, xs[k], 56.0 + 14.0 * i as f64));
+            }
+        }
+        gl.extend(set("tabs, 50 pack", xs[1], 96.0));
+        for (t, x) in [
+            ("Total", 240.0),
+            ("6", xs[2]),
+            ("67.48", xs[3]),
+            ("127.45", xs[4]),
+        ] {
+            gl.extend(set(t, x, 112.0));
+        }
+        gl.extend(set("Grand Total incl. VAT", 280.0, 128.0));
+        gl.extend(set("154.21", xs[4], 128.0));
+        let region = BBox {
+            x0: 10.0,
+            y0: 48.0,
+            x1: 540.0,
+            y1: 132.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert!(!grids.is_empty(), "{grids:?}");
+        let g = &grids[0];
+        let texts = g.cell_texts(&gl);
+        assert_eq!(g.cols(), 5, "{texts:?}");
+        assert!(texts.iter().any(|t| t == "Qty"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "Price"), "{texts:?}");
     }
 
     #[test]
