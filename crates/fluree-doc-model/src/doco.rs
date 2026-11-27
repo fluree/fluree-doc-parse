@@ -1410,11 +1410,19 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         .find(|&r| !opening.iter().any(|o| same_row(&rows[r], o)))
                         .unwrap_or(rows.len());
                     let opening_again = |r: usize| r >= n_header && r < repeated_to;
+                    // And only while they name themselves in their first
+                    // cell, as the band's rows on the page before do: a row
+                    // with none opens something else, the table's title or
+                    // header set again (`Table 15-1.` over its years).
+                    let named_to = (repeated_to.max(n_header)..rows.len())
+                        .find(|&r| rows[r].first().is_none_or(|t| t.trim().is_empty()))
+                        .unwrap_or(rows.len());
                     let carried_band = |r: usize| -> Option<String> {
                         let own = subs.iter().any(|s| *s < r && *s >= n_header)
                             || subs.contains(&r)
                             || breaks.iter().any(|&b| b <= r)
-                            || opening_again(r);
+                            || opening_again(r)
+                            || (named_to < rows.len() && r >= named_to);
                         if own {
                             return None;
                         }
@@ -1640,8 +1648,35 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 *s <= end && stub_span_end(*s).is_none_or(|span| end <= span)
                             })
                             .map_or_else(|| header.clone(), |(_, h)| h.clone());
-                        let band_at_end =
-                            band_over(rows.len()).or_else(|| carried_band(rows.len()));
+                        // A band whose rows under it are all unlabelled
+                        // figures is a label set on a line of its own over
+                        // them (`Total, General science` over `17,114 …`), no
+                        // band:
+                        // it names nothing the next page carries on. A band
+                        // at the very foot, with no rows under it, does.
+                        let open = subs.iter().copied().filter(|&s| s >= n_header).max();
+                        let over_figures = open.is_some_and(|s| {
+                            let under: Vec<usize> =
+                                (s + 1..rows.len()).filter(|r| !subs.contains(r)).collect();
+                            let figure = |t: &str| {
+                                let t = t.trim();
+                                t.is_empty()
+                                    || (t.chars().any(|c| c.is_ascii_digit() || c == '-')
+                                        && t.chars().all(|c| {
+                                            c.is_ascii_digit() || ",.()-–—%$ ".contains(c)
+                                        }))
+                            };
+                            !under.is_empty()
+                                && under.iter().all(|&r| {
+                                    rows[r].first().is_none_or(|t| t.trim().is_empty())
+                                        && rows[r].iter().all(|t| figure(t))
+                                })
+                        });
+                        let band_at_end = if over_figures {
+                            None
+                        } else {
+                            band_over(rows.len()).or_else(|| carried_band(rows.len()))
+                        };
                         // A last row holding its first cell alone, no band.
                         let lone_end = (!subs.contains(&end)
                             && rows[end].iter().skip(1).all(|t| t.trim().is_empty()))
@@ -2688,6 +2723,87 @@ mod tests {
             .find(|n| n["doc:cellValue"] == "5.4 (4.3, 6.2)")
             .unwrap();
         assert_eq!(median["doc:sectionLabel"], "PFS");
+    }
+
+    #[test]
+    fn a_band_runs_on_through_a_page_of_its_rows_alone() {
+        // Three pages: the band opens on the first, the second holds one of
+        // its rows and nothing else, the third carries on.
+        let r = |a: &str, b: &str| vec![a.to_string(), b.into()];
+        let part = |id: &str, page: usize, rows: Vec<Vec<String>>| {
+            let mut t = el("doco:Table", "", None);
+            t.id = id.into();
+            t.page = page;
+            t.cells = Some(rows);
+            t.header_rows = Some(1);
+            t
+        };
+        let mut a = part(
+            "elem-00001",
+            0,
+            vec![
+                r("Contaminant", "MCL"),
+                r("A. Microbiological", ""),
+                r("1f. E. coli", "TT"),
+            ],
+        );
+        a.sub_headers = Some(vec![1]);
+        let mut b = part(
+            "elem-00002",
+            1,
+            vec![r("Contaminant", "MCL"), r("1g. E. coli", "Zero")],
+        );
+        b.continues = Some("elem-00001".into());
+        let mut c = part(
+            "elem-00003",
+            2,
+            vec![r("Contaminant", "MCL"), r("2a. Turbidity", "1 NTU")],
+        );
+        c.continues = Some("elem-00002".into());
+        let g = graph(&[a, b, c]);
+        let cell = |value: &str| g.iter().find(|n| n["doc:cellValue"] == value).unwrap();
+        assert_eq!(cell("Zero")["doc:sectionLabel"], "A. Microbiological");
+        assert_eq!(cell("1 NTU")["doc:sectionLabel"], "A. Microbiological");
+    }
+
+    #[test]
+    fn a_page_restating_its_title_carries_no_band() {
+        // A budget table's page sets its title and years again in rows with
+        // no label of their own: the band open at the page before's end
+        // (a total read as a band) names none of them.
+        let r = |a: &str, b: &str| vec![a.to_string(), b.into()];
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.cells = Some(vec![
+            r("Science programs", "8,717"),
+            r("Total, General science", ""),
+            r("", "17,114"),
+        ]);
+        a.header_rows = Some(0);
+        a.sub_headers = Some(vec![1]);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.page = 1;
+        b.cells = Some(vec![
+            r("", "Table 15-1."),
+            r("250 General Science:", "2025"),
+        ]);
+        b.header_rows = Some(0);
+        b.continues = Some("elem-00001".into());
+        let g = graph(&[a.clone(), b.clone()]);
+        let year = g.iter().find(|n| n["doc:cellValue"] == "2025").unwrap();
+        assert!(year.get("doc:sectionLabel").is_none());
+        // Nor where the page restates its years beside a label of its own.
+        let mut b2 = b;
+        b2.cells = Some(vec![r("250 General Science:", "2025"), r("Programs", "9")]);
+        let g2 = graph(&[a, b2]);
+        let year = g2.iter().find(|n| n["doc:cellValue"] == "2025").unwrap();
+        assert!(year.get("doc:sectionLabel").is_none());
+        let title = g
+            .iter()
+            .find(|n| n["doc:cellValue"] == "Table 15-1.")
+            .unwrap();
+        assert!(title.get("doc:sectionLabel").is_none());
     }
 
     #[test]
