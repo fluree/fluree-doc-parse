@@ -1053,6 +1053,7 @@ version = "0.1.0"
 dependencies = [
  "fluree-doc-model",
  "fluree-doc-ooxml",
+ "fluree-doc-xlsx",
  "quick-xml",
  "zip",
 ]
