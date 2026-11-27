@@ -55,6 +55,26 @@ fn a_plain_document_conforms() {
 }
 
 #[test]
+fn a_decks_speaker_notes_conform_after_its_slides() {
+    let at = |kind: &str, text: &str, page: usize| Element {
+        page,
+        ..el(kind, text)
+    };
+    let els = [
+        Element {
+            level: Some(1),
+            ..at("doco:SectionTitle", "Results", 0)
+        },
+        at("doco:Paragraph", "Sales rose.", 0),
+        Element {
+            notes_for: Some(0),
+            ..at("doco:Paragraph", "Pause for questions.", 0)
+        },
+    ];
+    assert_eq!(conform(&els, &Notes::default()), []);
+}
+
+#[test]
 fn a_table_continued_over_a_page_is_one_table() {
     let mut second = table("t2", &[&["Year", "Sales"], &["2025", "12"]], 1);
     second.continues = Some("t1".into());

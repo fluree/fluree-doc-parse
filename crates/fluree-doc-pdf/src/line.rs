@@ -2683,6 +2683,49 @@ impl Word {
     }
 }
 
+/// Each level line of `lines` (built on `glyphs`) that crosses a cut,
+/// parted there: a cut is `(x, y0, y1)`, standing at `x` between `y0` and
+/// `y1`. Each part is built again from the glyphs whose centres fall
+/// between two cuts. A row of icons' labels set close (`FISHERY AND` under
+/// one icon, `ECOSYSTEM` under the next) was assembled as one line across
+/// them; the caller cuts it at the edges of the icons' slots.
+pub(crate) fn part_at(lines: Vec<Line>, glyphs: &[Glyph], cuts: &[(f64, f64, f64)]) -> Vec<Line> {
+    if cuts.is_empty() {
+        return lines;
+    }
+    let mut out = Vec::with_capacity(lines.len());
+    for l in lines {
+        let mid = (l.bbox.y0 + l.bbox.y1) * 0.5;
+        let mut xs: Vec<f64> = cuts
+            .iter()
+            .filter(|(x, y0, y1)| mid > *y0 && mid < *y1 && *x > l.bbox.x0 && *x < l.bbox.x1)
+            .map(|(x, _, _)| *x)
+            .collect();
+        if xs.is_empty() || !l.is_horizontal() {
+            out.push(l);
+            continue;
+        }
+        xs.sort_by(f64::total_cmp);
+        let mut parts: Vec<Vec<usize>> = vec![Vec::new(); xs.len() + 1];
+        for &i in &l.glyphs {
+            let g = &glyphs[i];
+            let cx = g.bbox.map_or(g.origin.0, |b| (b.x0 + b.x1) * 0.5);
+            parts[xs.partition_point(|x| *x < cx)].push(i);
+        }
+        let built: Vec<Line> = parts
+            .iter()
+            .filter(|p| p.iter().any(|&i| !glyphs[i].text.trim().is_empty()))
+            .filter_map(|p| build_line(glyphs, p, l.rotation_bucket, SPACE_GAP_RATIO))
+            .collect();
+        if built.is_empty() {
+            out.push(l);
+        } else {
+            out.extend(built);
+        }
+    }
+    out
+}
+
 fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -> Option<Line> {
     build_line_parted(glyphs, idxs, bucket, space_ratio, &Default::default())
 }
