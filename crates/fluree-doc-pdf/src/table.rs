@@ -145,6 +145,9 @@ pub struct TableLayout {
     pub header_rows: usize,
     /// Cells read as one: `(row, first column, end column)`.
     pub spans: Vec<(usize, usize, usize)>,
+    /// Spans whose value is each of their columns', set centred across the
+    /// gutter between them: `(row, first column)`.
+    pub spread: Vec<(usize, usize)>,
     /// Header labels set across the header's rows, read into the top one:
     /// `(first row, column, end row)`.
     pub downs: Vec<(usize, usize, usize)>,
@@ -5671,6 +5674,12 @@ pub(crate) fn take_header_bands(
                 .filter(|s| s.0 >= k)
                 .map(|&(r, a, b)| (shift(r), a, b))
                 .collect();
+            lay.spread = lay
+                .spread
+                .iter()
+                .filter(|s| s.0 >= k)
+                .map(|&(r, c)| (shift(r), c))
+                .collect();
             lay.downs = lay
                 .downs
                 .iter()
@@ -8241,6 +8250,7 @@ fn layout_grid(
         layout: Some(std::sync::Arc::new(TableLayout {
             header_rows,
             spans: Vec::new(),
+            spread: Vec::new(),
             downs: Vec::new(),
             sub_headers: Vec::new(),
             restated_headers: Vec::new(),
@@ -8328,6 +8338,7 @@ fn field_grid(
         layout: Some(std::sync::Arc::new(TableLayout {
             header_rows: 0,
             spans: Vec::new(),
+            spread: Vec::new(),
             downs: Vec::new(),
             sub_headers: Vec::new(),
             restated_headers: Vec::new(),
