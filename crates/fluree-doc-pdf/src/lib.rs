@@ -166,9 +166,8 @@ pub fn unread_pages(
 /// `Unprobed`, an image extraction did not decode
 /// ([`ExtractOptions::probe_images`] off), half an inch or more on its
 /// longer side, which nothing reads and is always listed. Only `Region` is
-/// worth a warning of its own: the declined ones are logos, photographs and
-/// charts as often as content, and the unprobed ones are said once, by
-/// page.
+/// worth a warning ([`fluree_doc_model::Notes::summary`]): the declined and
+/// the unprobed ones are logos, photographs and charts as often as content.
 pub fn unread_regions(
     doc: &Document,
     elements: &[fluree_doc_model::Element],

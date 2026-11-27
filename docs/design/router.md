@@ -118,8 +118,8 @@ image costs: extraction probes them only when something acts on the verdict
 anchors, the layout sidecars or `--probe-images`). Unprobed, an image's
 `texty` is `None`: the router routes none, no engine is offered any, and
 each one the text layer does not cover, half an inch or more on its longer
-side, is listed as `Unprobed`, at any share of the page, with one warning
-that says how many and on which pages. A texty one under half an
+side, is listed as `Unprobed`, at any share of the page, without a warning: a
+run that reads no image has nothing to say about what one holds. A texty one under half an
 inch on its longer side (`MIN_SMALL_REGION_SIDE`, 36 units: a checkbox, an
 icon) is not listed, though an OCR engine is still offered it when its own
 pixels hold a line of text: a stencil reads as text whatever it draws, and a
