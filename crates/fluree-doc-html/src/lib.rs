@@ -965,12 +965,21 @@ fn attribute_steps(src: &str) -> u64 {
         match b.get(i) {
             Some(b'!') if b[i..].starts_with(b"!--") => {
                 // From the opening's own dashes, which `<!-->` and `<!--->`
-                // end on.
-                let end = [&b"-->"[..], b"--!>"]
-                    .iter()
-                    .filter_map(|pat| find(i + 1, pat).map(|e| e + pat.len()))
-                    .min();
-                i = end.unwrap_or(b.len());
+                // end on, to the first `--` a `>` or `!>` follows: one pass
+                // forward. Looked for each on its own, the ending a page
+                // never writes (`--!>`) was looked for to the end of the
+                // page from every comment: 600 KB of `<!-- c -->` took 78 s.
+                let mut at = i + 1;
+                i = loop {
+                    let Some(e) = find(at, b"--") else {
+                        break b.len();
+                    };
+                    match b.get(e + 2) {
+                        Some(b'>') => break e + 3,
+                        Some(b'!') if b.get(e + 3) == Some(&b'>') => break e + 4,
+                        _ => at = e + 1,
+                    }
+                };
             }
             Some(b'!' | b'?') => {
                 i = find(i, b">").map_or(b.len(), |e| e + 1);
@@ -3528,6 +3537,29 @@ mod tests {
         }
         // Before any of them, a script's text is passed over.
         assert_eq!(attribute_steps(&format!("<script>{tag}</script><svg>")), 0);
+        // A comment's dashes run on to its end, which may come late.
+        for comment in [
+            "<!-- a -- b ---->",
+            "<!-- a --- b --!>",
+            "<!-- a -!> -- >-->",
+        ] {
+            assert_eq!(attribute_steps(&format!("{comment}{tag}")), 3, "{comment}");
+        }
+        assert_eq!(attribute_steps(&format!("<!-- a -- {tag}")), 0);
+    }
+
+    #[test]
+    fn comments_are_passed_over_in_one_pass() {
+        // Each comment's ending was looked for to the end of the page in
+        // both its forms: 600 KB of comments took 78 s.
+        assert_linear(
+            "comments",
+            20_000,
+            |n| "<!-- c -->".repeat(n),
+            |page| {
+                std::hint::black_box(attribute_steps(page));
+            },
+        );
     }
 
     #[test]
