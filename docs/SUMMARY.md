@@ -69,6 +69,7 @@
   - [Tables](design/tables.md)
   - [Page furniture](design/furniture.md)
   - [The router](design/router.md)
+  - [How the limits were sized](design/limits.md)
 
 - [Reference](reference/README.md)
   - [Vocabulary](reference/vocabulary.md)

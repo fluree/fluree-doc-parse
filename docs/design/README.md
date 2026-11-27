@@ -11,6 +11,7 @@ surface](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 - [Tables](tables.md) — grids from geometry, including grids that look absent
 - [Page furniture](furniture.md) — headers, footers, watermarks
 - [The router](router.md) — what earns escalation
+- [How the limits were sized](limits.md) — what each bound on a document was measured against
 
 ## A note on how these decisions were made
 

@@ -209,7 +209,12 @@ as a range (`pages 2–10000`).
 Or it is `PastPageLimit`: a page of a PDF or an XPS document past the most a
 document is read to (10,000, `--max-pages`), listed one entry a page, with
 no entry in `doc:pages` either; of a TIFF, the first page past it, after
-which its pages are not counted ([Limits](../reference/limits.md#pages)).
+which its pages are not counted. Or `PastMemoryLimit` or `PastWorkLimit`:
+a page of a PDF on or after the one its memory or its work ran out on,
+before the page limit, the document read to the page before
+(`--max-memory`, `--max-work`). A consumer asking whether a document was
+read whole looks for any of these three
+([Limits](../reference/limits.md#pages)).
 
 A consumer that validates `reason` against a fixed set should accept every
 one above.

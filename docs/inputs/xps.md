@@ -79,7 +79,7 @@ whole, though each of its pages is within bounds. Pages past the page
 limit (10,000, `--max-pages`) are not read, and listed unread,
 `PastPageLimit` ([Limits](../reference/limits.md#pages)); a document
 listing more than 250,000 pages, read or not, as a PDF's page tree may, is
-refused.
+refused, unless the page limit is set higher, which raises it.
 
 In a library, `fluree_doc_xps::parse` returns the pages as the PDF engine's
 `Document`, for `fluree_doc_pdf::document::analyze_with`, with the pictures

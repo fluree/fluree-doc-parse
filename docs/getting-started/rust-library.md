@@ -393,6 +393,40 @@ build them.
     reading that came back blank; a placed picture whose reading is
     refused so is `Failed` in `doc:unreadImages`.
 
+### Limits on what a document may take
+
+- Each reader's error gains `TooLarge(fluree_doc_model::budget::TooLarge)`:
+  `ExtractError`, `DocxError`, `PptxError`, `XlsxError`, `CsvError`,
+  `DocError`, `PptError`, `XlsError`, `OdfError`, `RtfError`, `XpsError`
+  and `EmailError`. None of these enums is `#[non_exhaustive]`: a `match`
+  over one needs an arm for it, or `_`. A caller of this work's earlier
+  pull request, where the variant held a `String`, gets the same message
+  from `e.to_string()`, and which limit was passed from `e.limit()`.
+- `fluree_doc_pdf::Document` gains `pages_past_limit`, the pages after the
+  last one read, and `cut_short`, where the budget stopped the reading
+  before the page limit (`CutShort`): a `Document` literal needs both
+  (`pages_past_limit: 0, cut_short: None` for one read whole).
+- `annot::annotations(pdf, budget)`, of this work's earlier pull request,
+  is `annotations(pdf, pages, budget)`: the notes of the first `pages`
+  pages only, those read (`doc.pages.len()`).
+- `UnreadPage::reason` gains `PastPageLimit`, `PastMemoryLimit` and
+  `PastWorkLimit`: a page a limit left unread ([Limits](../reference/limits.md#pages)).
+- Changed behaviour: a PDF is read to its 10,000th page, and one whose
+  memory or work runs out on a page after the first is read to the page
+  before, where it was refused; the pages not read are listed by
+  `unread_pages`. `render::page` draws a page past the render pixels at the
+  scale that fits, which `Raster::scale` says. A PDF opened by
+  `fluree_doc_pdf::open`, as `extract_bytes` opens one, is refused when its
+  page tree nests or lists past the bounds the parser can walk.
+- New: `fluree_doc_model::budget::Limits`, `limited_to`, `limits`, `Limit`,
+  `MAX_PAGES` and `MAX_RENDER_PIXELS`, `TooLarge::new`, `fixed`, `within`,
+  `limit` and `max`; `fluree_doc_model::PAST_PAGE_LIMIT`,
+  `PAST_MEMORY_LIMIT`, `PAST_WORK_LIMIT`, `past_limit_reason` and
+  `is_past_limit`; `fluree_doc_pdf::open`, `extract_pdf`,
+  `extract_pdf_with`, `past_limit`, `CutShort` and the module `page_tree`;
+  `render::fitted_scale`, `page_scale`, `shrunk_by`, `page_shrunk_by` and
+  `MAX_RENDER_SIDE`.
+
 ## Errors
 
 `extract_file` and `extract_bytes` return `Result<Document, ExtractError>`.
@@ -426,8 +460,27 @@ if let Err(fluree_doc_docx::DocxError::TooLarge(e)) = &read {
 }
 ```
 
+A PDF past the page limit, or past its memory or work on a page after the
+first, is not refused: it is read short, to the last page that fit, and
+`doc.pages_past_limit` counts the pages after it. Nothing in the elements
+says so, and `to_markdown(&elements)` carries no notes: list the pages
+(`fluree_doc_pdf::unread_pages`, each `PastPageLimit`, `PastMemoryLimit`
+or `PastWorkLimit`, `fluree_doc_model::is_past_limit` telling them apart)
+and pass them on, as `to_markdown_with` writes them in band:
+
+```rust
+let unread = fluree_doc_pdf::unread_pages(&doc, &analysis.elements);
+if unread.iter().any(|u| fluree_doc_model::is_past_limit(&u.reason)) {
+    eprintln!("read to page {}", doc.pages.len());
+}
+let notes = fluree_doc_model::Notes { unread, ..Default::default() };
+let md = fluree_doc_model::to_markdown_with(&analysis.elements, &notes);
+```
+
 `limited_to` holds every reader called inside it, on its thread, to those
 limits; outside it they are `Limits::default()`. A thread a caller spawns
 starts at the defaults: call `limited_to` in it too. A reader's own bounds
 (`Limit::Fixed`: a part read beside the document, the glyphs of an XPS
-page) are not among the limits a caller sets.
+page) are not among the limits a caller sets. `Limit::Pages` is a document
+listing more pages than a reader holds before it reads any (250,000, or
+the page limit where that is more).

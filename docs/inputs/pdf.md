@@ -1036,10 +1036,13 @@ report, so malformed files fail as errors you can catch.
 
 A PDF is read within [limits](../reference/limits.md): its pages to the
 10,000th (those past it listed unread, `PastPageLimit`), what they draw
-within the document's memory and work budget, its page tree at most 256
-deep and 250,000 pages, and a page rendered for a crop with at most 64
-million pixels and 32,767 a side. Past the budget or the tree's bounds,
-`extract_bytes` returns `ExtractError::TooLarge`, which says which limit.
+within the document's memory and work budget (past it, read to the last
+whole page, the rest listed unread, `PastMemoryLimit` or `PastWorkLimit`),
+its page tree at most 256 deep and 250,000 pages (or the page limit, where
+that is more), and a page rendered for a crop with at most 64 million
+pixels and 32,767 a side. Past the tree's bounds, or the budget on its
+first page, `extract_bytes` returns `ExtractError::TooLarge`, which says
+which limit; the notes on the pages not read are not read either.
 
 ## Performance
 

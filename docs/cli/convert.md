@@ -28,7 +28,7 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `-o`, `--output <FILE>` | write to a file; single input only. Conflicts with `--out-dir` |
 | `--out-dir <DIR>` | write one output file per input into this directory |
 | `--pages <RANGES>` | restrict to 1-based pages: `3`, `1-5`, `1,4,9-12` |
-| `-j`, `--jobs <N>` | parallel workers for batch (`0` = one per core), lowered, with a note on stderr, to as many documents as the memory free (available, left by the process's cgroup, or its address space, whichever is least) holds at 3.75 GiB and the largest input each (a document's 2.5 GiB budget, its input, and 1.25 GiB that does not shrink with `--max-memory`), at least one; see [Limits](../reference/limits.md#batches) |
+| `-j`, `--jobs <N>` | parallel workers for batch (`0` = one per core), lowered, with a note on stderr, to as many documents as the memory free (on Linux available, left by the process's cgroup, or its address space, whichever is least; on macOS as `vm_stat` counts it) holds at 3.75 GiB and the smallest input each (a document's 2.5 GiB budget, its input, and 1.25 GiB that does not shrink with `--max-memory`), at least one. Each document then waits for room for its own input; see [Limits](../reference/limits.md#batches) |
 | `--base-iri <IRI>` | what every node IRI minted by `-f doco` starts with (`<IRI>-element-3`). Default: `--doc-iri`, else `urn:fluree-doc-parse:<stem>-<first 12 hex digits of the SHA-256>`. One input only |
 | `--doc-iri <IRI>` | stamp `-f doco` nodes with `doc:sourceDocument`, the tag a re-extraction retracts by. One input only |
 | `--source-name <NAME>` | what `-f doco` records as the input's name, `doc:sourceName`. Default: the input's file name; none from stdin. One input only |
@@ -45,10 +45,10 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--probe-images` | decode the images to tell those holding text from pictures, without reading them: `doc:unreadRegions` then says `Region`, `Small` or `NotTexty` where a plain run says `Unprobed`. Escalation, OCR and the anchors probe already |
 | `--escalate` | read escalated pages with the configured model in this run |
 | `--no-escalate` | never call a model, whatever the config says |
-| `--strict` | fail a PDF that yields nothing: no text, and no page or region reported unread. See [Exit codes](#exit-codes) |
-| `--max-memory <MIB>` | the memory one document may take, in MiB (default 2560); a document past it is refused, the error naming this flag. Also sizes `-j`. Env: `FDOC_MAX_MEMORY` |
-| `--max-work <STEPS>` | the steps of layout and parsing one document may take (default 2^28). Env: `FDOC_MAX_WORK` |
-| `--max-pages <N>` | the pages a PDF or XPS document is read to (default 10,000); those past it are listed unread, `PastPageLimit`, and warned about. Env: `FDOC_MAX_PAGES` |
+| `--strict` | fail a PDF that yields nothing: no text, and no page or region reported unread. A document read short of a limit is not one: its pages read are output. See [Exit codes](#exit-codes) |
+| `--max-memory <MIB>` | the memory one document may take, in MiB (default 2560); a document past it is refused, the error naming this flag, except a PDF past it on a page after the first, read to the page before, the rest listed unread, `PastMemoryLimit`. Also sizes `-j`. Env: `FDOC_MAX_MEMORY` |
+| `--max-work <STEPS>` | the steps of layout and parsing one document may take (default 2^28); past it, as `--max-memory`, `PastWorkLimit`. Env: `FDOC_MAX_WORK` |
+| `--max-pages <N>` | the pages a PDF or XPS document is read to (default 10,000); those past it are listed unread, `PastPageLimit`, and warned about, under `-q` too where the output carries no notes (`-f json`, `-f text`). Past 250,000, it also raises the pages a document may list before it is refused. Env: `FDOC_MAX_PAGES` |
 | `--max-render-pixels <N>` | the pixels a page is rendered with for a crop (default 64 million); a larger page is drawn at the scale that fits. Env: `FDOC_MAX_RENDER_PIXELS` |
 
 The `--max-*` flags are taken by every command, over the `FDOC_MAX_*`
