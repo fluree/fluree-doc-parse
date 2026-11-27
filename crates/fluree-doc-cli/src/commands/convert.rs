@@ -899,7 +899,8 @@ fn read_media_with(
             let name = format!("{stem}_{}.json", p.tag);
             common::warn_scores_out_of_range(&name, n, words, quiet);
         }
-        // Taken, or set aside as noise and listed as one that took no word.
+        // Taken, or set aside as noise and listed as one, with its words'
+        // confidence.
         out.ocr.extend(p.ocr_read);
         match p.read {
             Some(elements) => out.read.extend(picture.after_each_figure(elements)),
@@ -1101,7 +1102,8 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
                         eprintln!("ocr: {name}: the reading is noise, set aside");
                     }
                     failure = Some(("NotTexty", String::new()));
-                    // Listed all the same, as a reading that took no word.
+                    // Listed all the same, as one set aside, with the words
+                    // it held and the engine's confidence in them.
                     ocr_read.extend(image.ocr.into_iter().map(|r| fluree_doc_model::OcrReading {
                         page: None,
                         image: Some(tag.clone()),

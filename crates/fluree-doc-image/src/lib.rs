@@ -473,11 +473,25 @@ pub fn without_noise(
     doc: &Document,
     reading: fluree_doc_vision::WordReading,
 ) -> (fluree_doc_vision::WordReading, bool) {
-    if ocr::is_noise(&doc.pages[0], &reading) {
-        let words = Vec::new();
-        (fluree_doc_vision::WordReading { words, ..reading }, true)
-    } else {
-        (reading, false)
+    let (reading, noise) = set_aside_noise(doc, reading);
+    (reading, noise.is_some())
+}
+
+/// As [`without_noise`], with the words set aside and the engine's
+/// confidence in them, for the reading to be listed as one set aside.
+fn set_aside_noise(
+    doc: &Document,
+    reading: fluree_doc_vision::WordReading,
+) -> (fluree_doc_vision::WordReading, Option<ocr::Noise>) {
+    match ocr::noise_of(&doc.pages[0], &reading) {
+        Some(noise) => {
+            let words = Vec::new();
+            (
+                fluree_doc_vision::WordReading { words, ..reading },
+                Some(noise),
+            )
+        }
+        None => (reading, None),
     }
 }
 
@@ -486,8 +500,14 @@ fn analysed(
     more_pages: bool,
     reading: fluree_doc_vision::WordReading,
 ) -> ImageElements {
-    let (reading, noise) = without_noise(&doc, reading);
-    let injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
+    let (reading, noise) = set_aside_noise(&doc, reading);
+    let mut injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
+    // Listed as set aside, with what it held: the confidence of a reading
+    // that came back as noise is what tells it apart from one of a blank
+    // picture.
+    if let (Some(r), Some(_)) = (injected.first_mut(), noise) {
+        r.noise = noise;
+    }
     let page = &doc.pages[0];
     let size = fluree_doc_model::PageSize {
         index: 0,
@@ -502,7 +522,7 @@ fn analysed(
         elements: analysis.elements,
         size,
         not_texty: false,
-        noise,
+        noise: noise.is_some(),
         refused: injected.first().and_then(|r| r.refused),
         more_pages,
         ocr,
@@ -619,8 +639,8 @@ pub fn read_placed(
             unread.push((picture, "NotTexty"));
             continue;
         }
-        // A reading that is noise is set aside: listed all the same, as a
-        // reading that took no word.
+        // A reading that is noise is set aside: listed all the same, with
+        // the words it held and the engine's confidence in them.
         if r.noise {
             out.ocr.extend(listed(r.ocr));
             unread.push((picture, "NotTexty"));
@@ -1011,12 +1031,21 @@ mod tests {
         let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
         assert_eq!(reasons, ["NotTexty"]);
         assert!(r.errors.is_empty());
-        // Its reading is listed all the same, as one that took no word.
+        // Its reading is listed all the same, set aside as noise, with the
+        // word it held and the engine's confidence in it: what tells it
+        // apart from a reading of a blank picture.
         assert_eq!(
-            (r.ocr.len(), r.ocr[0].words, r.ocr[0].image.as_deref()),
-            (1, 0, Some("m1")),
-            "{:?}",
-            r.ocr
+            r.ocr,
+            [fluree_doc_model::OcrReading {
+                page: None,
+                image: Some("m1".into()),
+                crop: "full".into(),
+                engine: None,
+                words: 1,
+                mean_confidence: Some(0.2),
+                min_confidence: Some(0.2),
+                set_aside: Some("noise".into()),
+            }]
         );
     }
 

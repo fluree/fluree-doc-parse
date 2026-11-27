@@ -542,7 +542,8 @@ pub struct UnreadImage {
 /// routed on it. Only a reading of pixels that need not hold any text (a
 /// PDF region the pixel probe does not take for text, a picture a document
 /// places) is set aside as noise under a mean of 0.5, before it is taken:
-/// it is then listed as one that took no word.
+/// it is then listed with [`set_aside`](OcrReading::set_aside), its words
+/// and their confidence those it held, none of them in the output.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct OcrReading {
     /// 0-based physical page read, the space of [`Element::page`]; absent
@@ -561,14 +562,21 @@ pub struct OcrReading {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
     /// Words taken into the output, or lines for an engine that boxes lines
-    /// rather than words (the built-in one does).
+    /// rather than words (the built-in one does). For a reading set aside
+    /// ([`set_aside`](OcrReading::set_aside)), the words it held, none of
+    /// which is in the output.
     pub words: usize,
-    /// Mean and lowest confidence (0-1) of the words (or lines) taken, to
-    /// four decimals; absent when the engine gave none.
+    /// Mean and lowest confidence (0-1) of the words (or lines) counted in
+    /// `words`, to four decimals; absent when the engine gave none.
     #[serde(rename = "meanConfidence", skip_serializing_if = "Option::is_none")]
     pub mean_confidence: Option<f64>,
     #[serde(rename = "minConfidence", skip_serializing_if = "Option::is_none")]
     pub min_confidence: Option<f64>,
+    /// Why the reading's words were set aside, none of them taken: `noise`,
+    /// a photograph's grain or a gradient read for text. Absent for a
+    /// reading taken, even one that took no word.
+    #[serde(rename = "setAside", skip_serializing_if = "Option::is_none")]
+    pub set_aside: Option<String>,
 }
 
 /// What a document says about itself: its title, who made it, and when.

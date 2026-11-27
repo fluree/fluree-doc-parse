@@ -3229,6 +3229,7 @@ mod tests {
                 words: 1,
                 mean_confidence: Some(0.9),
                 min_confidence: Some(0.9),
+                set_aside: None,
             }]
         );
         // The second picture's part is not in the package: named, it fails

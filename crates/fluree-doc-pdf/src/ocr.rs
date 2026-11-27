@@ -239,6 +239,11 @@ pub struct Injected {
     pub min_conf: Option<f64>,
     /// The engine the reading names, if it names one.
     pub engine: Option<String>,
+    /// The words set aside as noise before any was taken ([`is_noise`]), and
+    /// the engine's confidence in them: a reading of a region, or of a
+    /// picture, that came back as a photograph's grain. `taken` is then 0,
+    /// and this is what the reading held.
+    pub noise: Option<Noise>,
     /// Skew of the reading's level lines, degrees counter-clockwise, as
     /// estimated and corrected for.
     pub skew_deg: f64,
@@ -256,6 +261,44 @@ pub struct Injected {
     pub regions: Vec<BBox>,
 }
 
+/// The words of a reading set aside as noise ([`is_noise`]): how many, and
+/// the engine's confidence in them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Noise {
+    /// Words set aside (lines, for an engine that boxes lines).
+    pub words: usize,
+    /// Their mean and lowest confidence, as [`Injected`] gives those of the
+    /// words taken: none where the engine gave no score in 0-1.
+    pub mean_conf: Option<f64>,
+    pub min_conf: Option<f64>,
+}
+
+impl Noise {
+    fn of(words: &[&Placed]) -> Self {
+        let (mean_conf, min_conf) = mean_and_min(words.iter().filter_map(|w| w.conf));
+        Noise {
+            words: words.len(),
+            mean_conf,
+            min_conf,
+        }
+    }
+}
+
+/// The mean and the lowest of `confs`; neither when there is none.
+fn mean_and_min(confs: impl Iterator<Item = f64>) -> (Option<f64>, Option<f64>) {
+    let (mut n, mut sum, mut min) = (0usize, 0.0, f64::INFINITY);
+    for c in confs {
+        n += 1;
+        sum += c;
+        min = min.min(c);
+    }
+    if n == 0 {
+        (None, None)
+    } else {
+        (Some(sum / n as f64), Some(min))
+    }
+}
+
 impl Injected {
     fn new(page: usize, crop: Crop) -> Self {
         Injected {
@@ -267,6 +310,7 @@ impl Injected {
             mean_conf: None,
             min_conf: None,
             engine: None,
+            noise: None,
             skew_deg: 0.0,
             chars: Vec::new(),
             regions_taken: Vec::new(),
@@ -356,18 +400,21 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
     // gradient, whose reading is strokes. Its words are set aside, and the
     // region stays unread. A reading of the whole page is not judged: a
     // scan's lines are words, and its regions are read with it.
-    let set_aside: Vec<Vec<usize>> = readings
+    // What was set aside is kept, with the engine's confidence in it: a
+    // reading that came back as noise is listed as one, not as a reading
+    // that read nothing.
+    let set_aside: Vec<(Vec<usize>, Option<Noise>)> = readings
         .iter()
         .zip(&judged)
         .map(|((_, crop, reading), t)| match (crop, t) {
             (Crop::Region(_), Ok(t)) => noise_in_regions(&doc.pages[t.pi], t, reading),
-            _ => Vec::new(),
+            _ => (Vec::new(), None),
         })
         .collect();
     let readings: Vec<(usize, Crop, std::borrow::Cow<WordReading>)> = readings
         .iter()
         .zip(&set_aside)
-        .map(|((page, crop, reading), gone)| {
+        .map(|((page, crop, reading), (gone, _))| {
             let kept = if gone.is_empty() {
                 std::borrow::Cow::Borrowed(reading)
             } else {
@@ -524,11 +571,12 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
     }
 
     out.into_iter()
-        .zip(&set_aside)
-        .map(|(r, gone)| {
+        .zip(set_aside)
+        .map(|(r, (gone, noise))| {
             let mut r = r.expect("every reading judged");
             if r.refused.is_none() {
                 r.dropped += gone.len();
+                r.noise = noise;
             }
             r
         })
@@ -626,8 +674,15 @@ fn fragment(text: &str) -> bool {
 /// them: that is decided first, so a reading of the wrong origin or scale
 /// is listed as failed, not set aside as one of a picture with no text.
 pub fn is_noise(page: &Page, reading: &WordReading) -> bool {
+    noise_of(page, reading).is_some()
+}
+
+/// As [`is_noise`], with the words judged noise and the engine's confidence
+/// in them, for the reading to be listed as one set aside
+/// ([`Injected::noise`]); `None` where the reading is not noise.
+pub fn noise_of(page: &Page, reading: &WordReading) -> Option<Noise> {
     let Ok(placed) = place(page, None, reading) else {
-        return false;
+        return None;
     };
     // As `inject_one` judges a whole-page reading of a page with no text of
     // its own, where each word that lands on the page is taken.
@@ -637,21 +692,23 @@ pub fn is_noise(page: &Page, reading: &WordReading) -> bool {
         .filter(|w| lands_on(page, None, w))
         .count();
     if on == 0 || on * 2 < placed.len() {
-        return false;
+        return None;
     }
     let words: Vec<&Placed> = placed.iter().flatten().collect();
-    noise(&words, page.width * page.height)
+    noise(&words, page.width * page.height).then(|| Noise::of(&words))
 }
 
 /// The words of `reading`, by their index among its words, that land in a
 /// region it may fill and are noise there ([`noise`]): each region judged
-/// by the words that land in it, as [`add_words`] lands them.
-fn noise_in_regions(p: &Page, t: &Target, reading: &WordReading) -> Vec<usize> {
+/// by the words that land in it, as [`add_words`] lands them. With them,
+/// how many they are and the engine's confidence in them, where there are
+/// any.
+fn noise_in_regions(p: &Page, t: &Target, reading: &WordReading) -> (Vec<usize>, Option<Noise>) {
     let Area::Regions(within) = &t.area else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
     let Ok(placed) = place(p, t.shown, reading) else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
     // `place` skips the blank words: its slots are the others, in order.
     let index = (reading.words.iter().enumerate())
@@ -669,6 +726,7 @@ fn noise_in_regions(p: &Page, t: &Target, reading: &WordReading) -> Vec<usize> {
         })
         .collect();
     let mut gone = Vec::new();
+    let mut noisy: Vec<&Placed> = Vec::new();
     for (i, region) in within {
         let words: Vec<&Placed> = landed
             .iter()
@@ -677,9 +735,11 @@ fn noise_in_regions(p: &Page, t: &Target, reading: &WordReading) -> Vec<usize> {
             .collect();
         if noise(&words, region.width() * region.height()) {
             gone.extend(landed.iter().filter(|(r, _, _)| r == i).map(|(_, k, _)| *k));
+            noisy.extend(words);
         }
     }
-    gone
+    let set_aside = (!noisy.is_empty()).then(|| Noise::of(&noisy));
+    (gone, set_aside)
 }
 
 /// Where the router lets one reading land.
@@ -1228,9 +1288,7 @@ fn add_words(
         }
         kept.push(word);
     }
-    let confs: Vec<f64> = kept.iter().filter_map(|w| w.conf).collect();
-    result.mean_conf = (!confs.is_empty()).then(|| confs.iter().sum::<f64>() / confs.len() as f64);
-    result.min_conf = confs.iter().copied().reduce(f64::min);
+    (result.mean_conf, result.min_conf) = mean_and_min(kept.iter().filter_map(|w| w.conf));
     result.taken = kept.len();
 
     let mut next = p.glyphs.iter().map(|g| g.draw_index + 1).max().unwrap_or(0);
@@ -2616,7 +2674,9 @@ pub fn read_pages_leaving(
 /// near 1; it shows a reading that failed as a whole, not a misread word. A
 /// reading of a region the probe does not take for text that is noise
 /// ([`MIN_PICTURE_CONFIDENCE`]) is set aside before it is taken, and is
-/// listed as one that took no word.
+/// listed as one set aside (`set_aside: "noise"`), with the words it held
+/// and the engine's confidence in them ([`Injected::noise`]): that is the
+/// reading whose confidence a caller most wants to see.
 pub fn readings(
     injected: &[Injected],
     elements: &[fluree_doc_model::Element],
@@ -2669,14 +2729,23 @@ pub fn readings(
         )
     });
     kept.into_iter()
-        .map(|r| fluree_doc_model::OcrReading {
-            page: Some(r.page),
-            image: None,
-            crop: r.crop.tag(),
-            engine: r.engine.clone(),
-            words: r.taken,
-            mean_confidence: r.mean_conf.map(round),
-            min_confidence: r.min_conf.map(round),
+        .map(|r| {
+            // Set aside as noise: what it held, and why none of it is in
+            // the output.
+            let (words, mean, min, set_aside) = match r.noise {
+                Some(n) => (n.words, n.mean_conf, n.min_conf, Some("noise".into())),
+                None => (r.taken, r.mean_conf, r.min_conf, None),
+            };
+            fluree_doc_model::OcrReading {
+                page: Some(r.page),
+                image: None,
+                crop: r.crop.tag(),
+                engine: r.engine.clone(),
+                words,
+                mean_confidence: mean.map(round),
+                min_confidence: min.map(round),
+                set_aside,
+            }
         })
         .collect()
 }
@@ -3635,6 +3704,7 @@ mod tests {
                 words: 3,
                 mean_confidence: Some(0.7856),
                 min_confidence: Some(0.6211),
+                set_aside: None,
             }]
         );
     }
@@ -4318,7 +4388,23 @@ mod tests {
                 "{reading:?}"
             );
             assert_eq!(unread, ["Small", "NotTexty"]);
+            // Kept with what it held, for the listing to say so.
+            let conf = reading.words[0].conf;
+            assert_eq!(
+                r.noise,
+                Some(Noise {
+                    words: reading.words.len(),
+                    mean_conf: conf,
+                    min_conf: conf,
+                }),
+                "{reading:?}"
+            );
         }
+        // Listed as set aside, with the confidence that made it noise.
+        let (r, _, _) = run(scored(&strokes, Some(0.3)), Crop::Region(0));
+        let listed = readings(&[r], &[]);
+        assert_eq!((listed[0].words, listed[0].mean_confidence), (2, Some(0.3)));
+        assert_eq!(listed[0].set_aside.as_deref(), Some("noise"));
         // A date, read unsure but as words; exactly two thirds of the words
         // fragments, not more; fragments read as surely as a chart's axis
         // or a code; a line of text over the whole of a tight crop, read

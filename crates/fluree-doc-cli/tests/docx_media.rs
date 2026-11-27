@@ -827,13 +827,23 @@ fn a_pictures_reading_that_is_noise_leaves_it_unread() {
         assert!(!err.contains("were not read"), "{err}");
         let warned = "report_m1.json: 1 of 1 word score(s) outside 0-1";
         assert_eq!(err.contains(warned), hundred, "{err}");
-        // Its reading is listed, as one that took no word.
+        // Its reading is listed, set aside as noise, with the words it held
+        // and the engine's confidence in them (none, scored 0-100).
         let listed = &document(&doco)["doc:ocrReadings"]["@value"][0];
+        let words = read.as_array().unwrap().len();
         assert_eq!(
-            (&listed["image"], &listed["words"]),
-            (&"m1".into(), &0.into()),
+            (&listed["image"], &listed["words"], &listed["setAside"]),
+            (&"m1".into(), &words.into(), &"noise".into()),
             "{doco}"
         );
+        let mean = (!hundred).then(|| {
+            let confs: Vec<f64> = (read.as_array().unwrap().iter())
+                .map(|w| w["conf"].as_f64().unwrap())
+                .collect();
+            // To four decimals, as listed.
+            (confs.iter().sum::<f64>() / confs.len() as f64 * 1e4).round() / 1e4
+        });
+        assert_eq!(listed["meanConfidence"].as_f64(), mean, "{doco}");
         let (text, _) = run(&input, &dir.join("home"), "text", &ocr_words);
         assert_eq!(
             text.trim(),

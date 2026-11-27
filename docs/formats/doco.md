@@ -388,7 +388,9 @@ regions are.
                        "@value": [
     { "pageIndex": 0, "crop": "full", "engine": "pp-ocrv6-small/oar-ocr", "words": 212,
       "meanConfidence": 0.9843, "minConfidence": 0.3121 },
-    { "pageIndex": 2, "crop": "r1", "words": 9 } ] } }
+    { "pageIndex": 2, "crop": "r1", "words": 9 },
+    { "image": "m1", "crop": "full", "words": 2, "meanConfidence": 0.28,
+      "minConfidence": 0.1, "setAside": "noise" } ] } }
 ```
 
 Present only when an OCR reading (`--ocr`, `--ocr-words`) was taken into the
@@ -405,14 +407,15 @@ and `minConfidence` are over the words (or lines) taken, to four decimals,
 and absent when the engine gave no score. One score outside 0-1 (Tesseract's
 0-100, not divided) leaves the whole reading without them, with a warning on
 stderr: its other scores are on that scale too, and could not be told apart
-from 0-1 ones. A reading whose words are not in the output is not listed: one
-set aside (not routed to a reader, superseded by the page's whole reading,
+from 0-1 ones. A reading whose words are not in the output is not listed,
+but for one set aside as noise (`setAside`, below): one
+refused (not routed to a reader, superseded by the page's whole reading,
 unplaceable: all of its words land off what it read (the page, or its region
 with the crop's margin) or have no usable box, or most of them do in a
 region's reading or in a whole reading of a page whose text is all pixels),
 and one a model's reading replaced (a page or a picture read whole through
-`--tier-results` or the configured model). One that took no word is, with
-`words: 0`, unless a model's reading replaced its page or read every region
+`--tier-results` or the configured model). One that took no word is listed, with
+`words: 0`, and one set aside as noise with what it held, unless a model's reading replaced its page or read every region
 the reading was to read: its region, for a region's reading; every region an
 OCR engine reads on its page, for a whole reading of a page of text. Those
 include the small regions no model is sent (`Small`), so a whole reading of a
@@ -432,7 +435,9 @@ reading of a region (`r{i}`) or of a picture whose mean is under 0.5, or
 under 0.8 with most of its words fragments, or with one fragment, or one
 word read under 0.8, boxed over nearly all of it, is noise, set aside before
 it is taken ([regions](#regions-nothing-read), [images](#images-nothing-read)),
-and listed here with `words: 0`. A reading of a whole page (`full`) or of an
+and listed here with `setAside: "noise"`: `words`, `meanConfidence` and
+`minConfidence` are then those of the words it held, none of which is in the
+output, so the confidence that made it noise shows. A reading of a whole page (`full`) or of an
 image read as a file is not judged: a scan's lines are words. A consumer that wants a second reading where OCR
 may be wrong is better served by comparing two engines than by a cut on this
 number.
