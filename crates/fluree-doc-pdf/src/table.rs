@@ -1300,14 +1300,19 @@ impl Grid {
             return 0;
         }
         // A first row of numbered fields (`1. DATE OF ORDER`, `2. CONTRACT
-        // NO. …`, `6. SHIP TO:`) is a form's: each names its own box, and
-        // no column under it.
+        // NO. …`, `6. SHIP TO:`) is a form's, its boxes numbered on down the
+        // rows under it (`3. ORDER NO.`): each names its own box, and no
+        // column under it. Numbered heads over columns of text (`1. Ingest |
+        // 2. Classify` over each step's notes) number nothing under them.
         let filled: Vec<&str> = row0
             .iter()
             .map(|c| c.trim())
             .filter(|c| !c.is_empty())
             .collect();
-        if filled.len() >= 2 && filled.iter().all(|c| numbered_field(c)) {
+        if filled.len() >= 2
+            && filled.iter().all(|c| numbered_field(c))
+            && rows[1..].iter().flatten().any(|c| numbered_field(c.trim()))
+        {
             return 0;
         }
         let mut run = self.leading_fill_run(fills);
