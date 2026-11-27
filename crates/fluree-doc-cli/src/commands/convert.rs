@@ -2596,6 +2596,9 @@ fn convert_xps(
     unread_regions.retain(|u| asked(u.page));
     let mut ocr = fluree_doc_pdf::ocr::readings(&injected, &a.elements);
     ocr.retain(|r| r.page.is_none_or(asked));
+    // A page part that would not read, read as blank.
+    let mut warnings = fluree_doc_pdf::parse_warnings(&doc);
+    warnings.retain(|w| asked(w.page));
     let notes = fluree_doc_model::Notes {
         unread,
         unread_regions,
@@ -2607,10 +2610,16 @@ fn convert_xps(
             .collect(),
         info: xps.info.clone(),
         ocr,
+        warnings,
         ..Default::default()
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {stem}: {note}");
+    }
+    if !quiet {
+        for line in parse_warning_lines(&notes.warnings) {
+            eprintln!("warning: {stem}: {line}");
+        }
     }
     let asked_pages = doc.pages.iter().filter(|p| asked(p.index)).count();
     if let Some(why) = read_nothing(doc.pages.len(), asked_pages, &a.elements, &notes) {
@@ -2652,6 +2661,7 @@ fn parse_warning_lines(warnings: &[fluree_doc_model::ParseWarning]) -> Vec<Strin
             }
             let what = match kind {
                 "ImageDecodeFailure" => "an image could not be decoded; what it shows is missing",
+                "MissingPagePart" => "the page's part is missing or unreadable; read as blank",
                 // Any other kind the interpreter may name (it declares
                 // `UnsupportedFont`, but never reports it).
                 _ => "the parser reported a problem",
