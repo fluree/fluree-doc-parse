@@ -37,6 +37,7 @@ impl OcrEngine for Bands {
             height: Some(h),
             engine: Some("bands".into()),
             words,
+            rules: Vec::new(),
         })
     }
 }
