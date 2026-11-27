@@ -226,7 +226,20 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
-    let (jobs, lowered) = batch_jobs(args.jobs, cores, free_memory());
+    let per_job = match job_memory(
+        args.job_memory,
+        std::env::var("FDOC_JOB_MEMORY").ok().as_deref(),
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
+    let (jobs, lowered) = batch_jobs(args.jobs, cores, free_memory(), per_job);
+    // Each document's budget, two thirds of what it may take, as the
+    // default's whole budget is of its 3.75 GiB.
+    let share = per_job.map_or(MAX_MEMORY, |m| m / 3 * 2);
     // Lowered to no fewer than the files there are, it changes nothing.
     if let Some(why) = lowered.filter(|_| !quiet && jobs < files.len()) {
         eprintln!("note: {why}");
@@ -245,7 +258,10 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
                 let i = cursor.fetch_add(1, Ordering::Relaxed);
                 let Some(f) = files.get(i) else { break };
                 let t0 = std::time::Instant::now();
-                match convert_path(f, &slots[i], cfg, args, pages.as_deref(), quiet) {
+                let converted = fluree_doc_model::budget::within(share, || {
+                    convert_path(f, &slots[i], cfg, args, pages.as_deref(), quiet)
+                });
+                match converted {
                     Ok(out) => {
                         let dst = &out_dir.join(format!("{}.{}", slots[i], ext(args.format)));
                         if let Err(e) = std::fs::write(dst, out) {
@@ -284,29 +300,55 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
 /// copies, 3.75 GiB, the 4 GB a document at its budget was measured to fit in.
 const DOCUMENT_MEMORY: u64 = MAX_MEMORY + MAX_MEMORY / 2;
 
+/// What `--job-memory` (`flag`), or else `FDOC_JOB_MEMORY` (`env`), sets a
+/// batch document to take, in bytes: `None` where neither is set.
+fn job_memory(flag: Option<u64>, env: Option<&str>) -> Result<Option<u64>, String> {
+    let mib = match (flag, env.map(str::trim).filter(|v| !v.is_empty())) {
+        (Some(m), _) => m,
+        (None, Some(v)) => v
+            .parse::<u64>()
+            .map_err(|_| format!("FDOC_JOB_MEMORY={v:?} is not a whole number of MiB"))?,
+        (None, None) => return Ok(None),
+    };
+    if mib == 0 {
+        return Err("--job-memory: 0 MiB leaves a document nothing to be read with".into());
+    }
+    Ok(Some(mib.saturating_mul(1 << 20)))
+}
+
 /// How many documents a batch converts at once, and why, where it is fewer
 /// than `requested` (`0`, one per core of `cores`).
 ///
 /// Each document may take its whole budget and what goes with it
-/// ([`DOCUMENT_MEMORY`]) at once, so no more run together than `memory`, the
-/// memory free to the process, holds, and at least one; where that is not
-/// known, no more than one per core. A document past its budget fails on its
-/// own, but documents within theirs that together pass what the machine has
-/// would abort the whole batch, or have it killed.
-fn batch_jobs(requested: usize, cores: usize, memory: Option<u64>) -> (usize, Option<String>) {
+/// ([`DOCUMENT_MEMORY`], or `per_job` where the caller sets it) at once, so
+/// no more run together than `memory`, the memory free to the process,
+/// holds, and at least one; where that is not known, no more than one per
+/// core, unless `per_job` is set, which says the caller knows what the
+/// machine holds (a batch waiting on the network wants more than its
+/// cores). A document past its budget fails on its own, but documents
+/// within theirs that together pass what the machine has would abort the
+/// whole batch, or have it killed.
+fn batch_jobs(
+    requested: usize,
+    cores: usize,
+    memory: Option<u64>,
+    per_job: Option<u64>,
+) -> (usize, Option<String>) {
     let asked = if requested == 0 { cores } else { requested };
-    let (bound, why) = match memory {
-        Some(free) => (
-            usize::try_from(free / DOCUMENT_MEMORY)
+    let document = per_job.unwrap_or(DOCUMENT_MEMORY).max(1);
+    let (bound, why) = match (memory, per_job) {
+        (Some(free), _) => (
+            usize::try_from(free / document)
                 .unwrap_or(usize::MAX)
                 .max(1),
             format!(
                 "{} MiB of memory free, {} MiB a document",
                 free >> 20,
-                DOCUMENT_MEMORY >> 20
+                document >> 20
             ),
         ),
-        None => (
+        (None, Some(_)) => return (asked, None),
+        (None, None) => (
             cores,
             "the free memory is not known; one per core".to_string(),
         ),
@@ -3059,23 +3101,42 @@ mod tests {
     fn a_batch_runs_no_more_documents_at_once_than_memory_holds() {
         // Room for three documents: -j 8 and one per core of 12 lowered.
         let three = Some(3 * DOCUMENT_MEMORY + (DOCUMENT_MEMORY >> 1));
-        let (jobs, why) = batch_jobs(8, 12, three);
+        let (jobs, why) = batch_jobs(8, 12, three, None);
         assert_eq!(jobs, 3);
         assert!(why.unwrap().starts_with("-j 8 lowered to 3: "));
-        let (jobs, why) = batch_jobs(0, 12, three);
+        let (jobs, why) = batch_jobs(0, 12, three, None);
         assert_eq!(jobs, 3);
         assert!(why.unwrap().starts_with("-j 0 (one per core) lowered to 3"));
         // Within it: as asked, unsaid.
-        assert_eq!(batch_jobs(2, 12, three), (2, None));
-        assert_eq!(batch_jobs(0, 2, three), (2, None));
+        assert_eq!(batch_jobs(2, 12, three, None), (2, None));
+        assert_eq!(batch_jobs(0, 2, three, None), (2, None));
         // A budget each is not room enough: what goes with it counts.
-        assert_eq!(batch_jobs(4, 12, Some(3 * MAX_MEMORY)).0, 2);
+        assert_eq!(batch_jobs(4, 12, Some(3 * MAX_MEMORY), None).0, 2);
         // Less than one document's room: still one.
-        assert_eq!(batch_jobs(4, 12, Some(1 << 30)).0, 1);
-        assert_eq!(batch_jobs(1, 12, Some(0)), (1, None));
+        assert_eq!(batch_jobs(4, 12, Some(1 << 30), None).0, 1);
+        assert_eq!(batch_jobs(1, 12, Some(0), None), (1, None));
         // Not known: one per core at most.
-        assert_eq!(batch_jobs(0, 6, None), (6, None));
-        assert_eq!(batch_jobs(16, 6, None).0, 6);
+        assert_eq!(batch_jobs(0, 6, None, None), (6, None));
+        assert_eq!(batch_jobs(16, 6, None, None).0, 6);
+    }
+
+    #[test]
+    fn a_batch_can_be_told_what_a_document_takes() {
+        let gib = 1u64 << 30;
+        // An 8 GB container runs one document at the default, four at 1.5
+        // GiB each.
+        assert_eq!(batch_jobs(8, 12, Some(7 * gib), None).0, 1);
+        let (jobs, why) = batch_jobs(8, 12, Some(7 * gib), Some(3 * gib / 2));
+        assert_eq!(jobs, 4);
+        assert!(why.unwrap().ends_with("1536 MiB a document"));
+        // Free memory not known: told, the batch runs as many as asked.
+        assert_eq!(batch_jobs(32, 8, None, Some(gib)), (32, None));
+        // The flag over the environment, in MiB; 0 and nonsense refused.
+        assert_eq!(job_memory(None, None), Ok(None));
+        assert_eq!(job_memory(None, Some(" 512 ")), Ok(Some(512 << 20)));
+        assert_eq!(job_memory(Some(256), Some("512")), Ok(Some(256 << 20)));
+        assert!(job_memory(Some(0), None).is_err());
+        assert!(job_memory(None, Some("1G")).is_err());
     }
 
     #[test]
@@ -3225,7 +3286,7 @@ mod tests {
         ]);
         let free = free_memory_in(&read);
         assert_eq!(free, Some(2_999_000_000));
-        let (jobs, why) = batch_jobs(4, 12, free);
+        let (jobs, why) = batch_jobs(4, 12, free, None);
         assert_eq!(jobs, 1);
         assert!(why.unwrap().contains("2860 MiB of memory free"));
         // Under an address space smaller still, that.

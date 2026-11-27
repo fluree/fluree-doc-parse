@@ -444,6 +444,16 @@ available, had the batch killed, silently; they now convert one at a time.
 And a group limited to 9 GB, after 4 GB written to a file had left 3.1 GB
 of cache counted in its use, no longer lowers `-j 2` to one.
 
+`--job-memory <MiB>` (or `FDOC_JOB_MEMORY`) says what a document of the
+batch takes in place of the 3.75 GiB: as many run at once as the memory
+free holds at that, and each is read within two thirds of it
+(`fluree_doc_model::budget::within`), as the default's 2.5 GiB budget is
+two thirds of its 3.75. An 8 GB container that runs one document at a
+time runs four with `--job-memory 1536`, each refused past 1 GiB. Where
+the memory free is not known, setting it lifts the one-per-core bound: a
+batch that waits on the network, not the processor, runs as many as
+`-j` asks.
+
 ## Coordinates
 
 No cell past Excel's grid, row 1,048,576 or column 16,384, is read, in any
