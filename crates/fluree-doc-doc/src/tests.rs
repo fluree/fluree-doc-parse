@@ -20,10 +20,12 @@ pub(crate) struct Stories<'a> {
     pub footnotes: Vec<&'a str>,
     pub comments: Vec<&'a str>,
     pub endnotes: Vec<&'a str>,
-    /// The headers' and footers' story, and the text boxes', which are not
-    /// read.
+    /// The headers' and footers' story, the body's text boxes' and the
+    /// headers' text boxes', read where the table stream lists their
+    /// stories ([`with_tables`]).
     pub headers: Vec<&'a str>,
     pub boxes: Vec<&'a str>,
+    pub header_boxes: Vec<&'a str>,
 }
 
 /// A `.doc`: the main text in a one-byte piece, the notes in a two-byte
@@ -40,10 +42,12 @@ pub(crate) fn doc_with(s: &Stories<'_>, nfib: u16, flags: u16) -> Vec<u8> {
     }
     let (ftn, atn, edn) = (story(&s.footnotes), story(&s.comments), story(&s.endnotes));
     let (hdd, txbx) = (story(&s.headers), story(&s.boxes));
-    let notes = format!("{ftn}{hdd}{atn}{edn}{txbx}");
-    // Layout: FIB, then the notes (UTF-16) at 0x200, then the main text
+    let hdr_txbx = story(&s.header_boxes);
+    let notes = format!("{ftn}{hdd}{atn}{edn}{txbx}{hdr_txbx}");
+    // Layout: FIB (to 0x382 where it holds every pair a Word 97 file
+    // does), then the notes (UTF-16) at 0x400, then the main text
     // (Windows-1252) after them, then the FKP on its own 512-byte page.
-    let mut wd = vec![0u8; 0x200];
+    let mut wd = vec![0u8; 0x400];
     let notes_fc = wd.len() as u32;
     for u in notes.encode_utf16() {
         wd.extend(u.to_le_bytes());
@@ -134,6 +138,7 @@ pub(crate) fn doc_with(s: &Stories<'_>, nfib: u16, flags: u16) -> Vec<u8> {
         count(&atn),
         count(&edn),
         count(&txbx),
+        count(&hdr_txbx),
     ]
     .into_iter()
     .enumerate()
@@ -184,6 +189,7 @@ pub(crate) fn memo() -> Vec<u8> {
             endnotes: vec!["\u{2} Method in the annex."],
             headers: Vec::new(),
             boxes: Vec::new(),
+            header_boxes: vec![],
         },
         0x00C1,
         0x0200,
@@ -237,6 +243,7 @@ fn the_table_stream_is_the_one_the_fib_names() {
             endnotes: vec![],
             headers: vec![],
             boxes: vec![],
+            header_boxes: vec![],
         },
         0x00C1,
         0,
@@ -253,6 +260,7 @@ fn old_encrypted_and_foreign_files_are_refused() {
         endnotes: vec![],
         headers: vec![],
         boxes: vec![],
+        header_boxes: vec![],
     };
     assert!(matches!(
         parse(&doc_with(&s, 0x0065, 0x0200)),
@@ -424,6 +432,7 @@ fn a_tables_padding_is_spent_before_it_is_made() {
             endnotes: vec![],
             headers: vec![],
             boxes: vec![],
+            header_boxes: vec![],
         },
         0x00C1,
         0x0200,
@@ -458,6 +467,7 @@ fn a_paragraph_finds_its_properties_by_search() {
         .map(|i| Char {
             c: '\r',
             fc: 2 * i + 1,
+            cp: 2 * i + 1,
         })
         .collect();
     let mut paras = Vec::new();
@@ -477,7 +487,7 @@ fn a_paragraph_finds_its_properties_by_search() {
 fn para_texts(s: &str) -> Vec<String> {
     let mut got = Vec::new();
     paragraphs(
-        s.chars().map(|c| Char { c, fc: 0 }),
+        s.chars().map(|c| Char { c, fc: 0, cp: 0 }),
         &[],
         None,
         &mut Budget::default(),
@@ -550,6 +560,7 @@ fn stories<'a>(main: &[&'a str]) -> Stories<'a> {
         endnotes: vec![],
         headers: vec![],
         boxes: vec![],
+        header_boxes: vec![],
     }
 }
 
@@ -672,4 +683,339 @@ fn the_summary_gives_title_and_author_and_what_is_not_read_is_said() {
         .unwrap()
         .left_out
         .is_empty());
+}
+
+/// `doc` with `parts` appended to its table stream, each where the FIB
+/// pair it is names it (`fcPlcfHdd` is 11, `fcDop` 31, …), the FIB saying
+/// it holds every pair a Word 97 file does, and `tail` appended to the
+/// `WordDocument` stream.
+fn with_tables(doc: &[u8], parts: &[(usize, Vec<u8>)], tail: &[u8]) -> Vec<u8> {
+    let mut streams = streams_of(doc);
+    let mut table = streams.remove("/1Table").unwrap();
+    let wd = streams.get_mut("/WordDocument").unwrap();
+    wd[0x98..0x9A].copy_from_slice(&93u16.to_le_bytes());
+    for (pair, data) in parts {
+        let at = 0x9A + 8 * pair;
+        wd[at..at + 4].copy_from_slice(&(table.len() as u32).to_le_bytes());
+        wd[at + 4..at + 8].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        table.extend(data);
+    }
+    wd.extend(tail);
+    streams.insert("/1Table".into(), table);
+    compound_of(&streams)
+}
+
+/// The length of a `.doc`'s `WordDocument` stream: where [`with_tables`]
+/// puts its `tail`.
+fn wd_len(doc: &[u8]) -> u32 {
+    streams_of(doc)["/WordDocument"].len() as u32
+}
+
+/// A PLC: its positions, then its data items.
+fn plc_of(cps: &[u32], data: &[Vec<u8>]) -> Vec<u8> {
+    let mut v: Vec<u8> = cps.iter().flat_map(|c| c.to_le_bytes()).collect();
+    v.extend(data.iter().flatten());
+    v
+}
+
+/// The header stories `slots` (six for the notes' separators, then six a
+/// section), each `None` where it is empty: the paragraphs of the headers'
+/// story [`doc_with`] writes, and the `PlcfHdd` bounding them, with the
+/// guard Word ends it with.
+fn hdd<'a>(slots: &[Option<&'a str>]) -> (Vec<&'a str>, Vec<u8>) {
+    let mut cps = vec![0u32];
+    let mut paras = Vec::new();
+    for slot in slots {
+        let len = slot.map_or(0, |t| t.encode_utf16().count() as u32 + 1);
+        cps.push(cps.last().unwrap() + len);
+        paras.extend(*slot);
+    }
+    cps.push(cps.last().unwrap() + 1);
+    (paras, plc_of(&cps, &[]))
+}
+
+/// A PLC of one section, its properties (SEPX) at `sepx` in the
+/// `WordDocument` stream.
+fn sed(sepx: u32) -> Vec<u8> {
+    let mut d = vec![0u8; 12];
+    d[2..6].copy_from_slice(&sepx.to_le_bytes());
+    plc_of(&[0, 1], &[d])
+}
+
+/// Section properties: their size, then `sprmSFTitlePage` set as `on`.
+fn title_sepx(on: bool) -> Vec<u8> {
+    let mut v = 3u16.to_le_bytes().to_vec();
+    v.extend(0x300Au16.to_le_bytes());
+    v.push(u8::from(on));
+    v
+}
+
+fn kinds_texts(els: &[Element]) -> Vec<(&str, &str, &str)> {
+    els.iter()
+        .map(|e| (e.kind.as_str(), e.text.as_str(), e.evidence))
+        .collect()
+}
+
+#[test]
+fn headers_and_footers_are_read_once_where_word_shows_them() {
+    // A section's stories: even pages' header and footer, odd pages' (the
+    // only ones a document that does not set even pages apart shows), and
+    // the first page's, shown by a section with a title page.
+    let (headers, plcf_hdd) = hdd(&[
+        Some("\u{3}"),
+        Some("\u{4}"),
+        None,
+        None,
+        None,
+        None,
+        Some("Even head"),
+        Some("Ref: QA-7"),
+        Some("Even foot"),
+        Some("Uncontrolled copy"),
+        Some("Cover only\rRef: QA-7"),
+        None,
+    ]);
+    let mut s = stories(&["Body text"]);
+    s.headers = headers;
+    s.footnotes = vec!["\u{2} A note."];
+    s.comments = vec!["Why?"];
+    let doc = doc_with(&s, 0x00C1, 0x0200);
+    let read = |title: bool, facing: bool| {
+        let sepx = wd_len(&doc);
+        let mut dop = vec![0u8; 8];
+        dop[0] = u8::from(facing);
+        let bytes = with_tables(
+            &doc,
+            &[(11, plcf_hdd.clone()), (6, sed(sepx)), (31, dop)],
+            &title_sepx(title),
+        );
+        parse_with_info(&bytes).unwrap()
+    };
+    let titled = read(true, false);
+    assert!(titled.left_out.is_empty());
+    assert_eq!(
+        kinds_texts(&titled.elements),
+        [
+            // The first page's header, then the rest's, a line they share
+            // once; the notes' separators nothing.
+            ("doco:Paragraph", "Cover only", "header"),
+            ("doco:Paragraph", "Ref: QA-7", "header"),
+            ("doco:Paragraph", "Body text", "doc"),
+            ("doco:Paragraph", "1 A note.", "footnote"),
+            // The footer after the notes, as a DOCX's; comments last.
+            ("doco:Paragraph", "Uncontrolled copy", "footer"),
+            ("doco:Paragraph", "Why?", "comment"),
+        ]
+    );
+    assert_eq!(titled.elements[5].id, "elem-00006");
+    // No title page: the first page's header is not shown. Even pages set
+    // apart: theirs are, after the odd pages'.
+    let texts = |p: Parsed| -> Vec<String> { p.elements.into_iter().map(|e| e.text).collect() };
+    assert_eq!(
+        texts(read(false, true)),
+        [
+            "Ref: QA-7",
+            "Even head",
+            "Body text",
+            "1 A note.",
+            "Uncontrolled copy",
+            "Even foot",
+            "Why?"
+        ]
+    );
+}
+
+/// A text box's FTXBXS: the shape holding it, and whether it is kept for
+/// reuse (deleted).
+fn ftxbxs(lid: u32, reusable: bool) -> Vec<u8> {
+    let mut d = vec![0u8; 22];
+    d[0..4].copy_from_slice(&1u32.to_le_bytes());
+    d[8..10].copy_from_slice(&u16::from(reusable).to_le_bytes());
+    d[14..18].copy_from_slice(&lid.to_le_bytes());
+    d
+}
+
+/// A shape's FSPA: its id, and the rest zeros.
+fn fspa(spid: u32) -> Vec<u8> {
+    let mut d = vec![0u8; 26];
+    d[0..4].copy_from_slice(&spid.to_le_bytes());
+    d
+}
+
+#[test]
+fn text_boxes_are_read_after_the_paragraph_holding_their_anchor() {
+    // The body anchors shape 1026 at its `\x08` in the second paragraph;
+    // the text boxes' story holds its box, a deleted box kept for reuse,
+    // and a box whose shape no anchor names. The header anchors 2049.
+    let main = ["Before.", "\u{8}Anchored here.", "After."];
+    let (headers, plcf_hdd) = hdd(&[
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("Head\u{8} two"),
+        None,
+        None,
+        None,
+        None,
+    ]);
+    let mut s = stories(&main);
+    s.headers = headers;
+    s.boxes = vec!["Boxed words", "Second box line", "Deleted box", "Loose box"];
+    s.header_boxes = vec!["Header box"];
+    let doc = doc_with(&s, 0x00C1, 0x0200);
+    // Box 1 is its two paragraphs (positions 0..28), then 28..40, 40..50.
+    let txbx = plc_of(
+        &[0, 28, 40, 50, 51],
+        &[
+            ftxbxs(1026, false),
+            ftxbxs(7, true),
+            ftxbxs(99, false),
+            ftxbxs(0, false),
+        ],
+    );
+    let spa_mom = plc_of(&[8, 32], &[fspa(1026)]);
+    let hdr_txbx = plc_of(&[0, 11, 12], &[ftxbxs(2049, false), ftxbxs(0, false)]);
+    let spa_hdr = plc_of(&[4, 11], &[fspa(2049)]);
+    let bytes = with_tables(
+        &doc,
+        &[
+            (11, plcf_hdd),
+            (56, txbx),
+            (40, spa_mom),
+            (58, hdr_txbx),
+            (41, spa_hdr),
+        ],
+        &[],
+    );
+    let read = parse_with_info(&bytes).unwrap();
+    assert!(read.left_out.is_empty(), "{:?}", read.left_out);
+    assert_eq!(
+        kinds_texts(&read.elements),
+        [
+            ("doco:Paragraph", "Head two", "header"),
+            ("doco:Paragraph", "Header box", "header"),
+            ("doco:Paragraph", "Before.", "doc"),
+            ("doco:Paragraph", "Anchored here.", "doc"),
+            ("doco:Paragraph", "Boxed words", "doc"),
+            ("doco:Paragraph", "Second box line", "doc"),
+            ("doco:Paragraph", "After.", "doc"),
+            // No anchor found: after the body.
+            ("doco:Paragraph", "Loose box", "doc"),
+        ]
+    );
+}
+
+#[test]
+fn a_header_list_that_does_not_read_is_said_not_read() {
+    let (headers, plcf_hdd) = hdd(&[
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("Ref: QA-7"),
+        None,
+        Some("Footer text"),
+        None,
+        None,
+    ]);
+    let mut s = stories(&["Body"]);
+    s.headers = headers;
+    s.boxes = vec!["Boxed"];
+    let doc = doc_with(&s, 0x00C1, 0x0200);
+    let read =
+        |parts: &[(usize, Vec<u8>)]| parse_with_info(&with_tables(&doc, parts, &[])).unwrap();
+    let texts = |p: &Parsed| -> Vec<String> { p.elements.iter().map(|e| e.text.clone()).collect() };
+    // Positions that go backwards: the stories would overlap, and be read
+    // again for each.
+    let mut backwards = plcf_hdd.clone();
+    backwards[4 * 10..4 * 11].copy_from_slice(&5u32.to_le_bytes());
+    // A list cut short, its size running past the table stream.
+    let mut streams = streams_of(&with_tables(&doc, &[(11, plcf_hdd.clone())], &[]));
+    let wd = streams.get_mut("/WordDocument").unwrap();
+    let at = 0x9A + 8 * 11 + 4;
+    wd[at..at + 4].copy_from_slice(&0x7FFF_FFF0u32.to_le_bytes());
+    let cut = parse_with_info(&compound_of(&streams)).unwrap();
+    for p in [read(&[(11, backwards)]), read(&[]), cut] {
+        assert_eq!(p.left_out, ["headers and footers", "text boxes"]);
+        assert_eq!(texts(&p), ["Body"]);
+    }
+    // Positions past the story: held to it.
+    let mut long = plcf_hdd.clone();
+    let n = long.len() / 4;
+    for i in 10..n {
+        long[4 * i..4 * i + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    }
+    let p = read(&[(11, long)]);
+    assert_eq!(texts(&p), ["Ref: QA-7", "Body", "Footer text"]);
+    // A text box list cut to a few bytes reads as none.
+    let p = read(&[(11, plcf_hdd), (56, vec![1, 2, 3])]);
+    assert_eq!(p.left_out, ["text boxes"]);
+}
+
+#[test]
+fn section_properties_are_looked_through_within_a_bound() {
+    // Five hundred sections, each with a first page's header, each naming
+    // its own section properties two bytes past the last's, each running
+    // sixty kilobytes over the next ones: thirty megabytes looked
+    // through, past the bound.
+    let n = 500usize;
+    let mut slots = vec![None; 6];
+    for _ in 0..n {
+        slots.extend([None, None, None, None, Some("x"), None]);
+    }
+    let (headers, plcf_hdd) = hdd(&slots);
+    let mut s = stories(&["Body"]);
+    s.headers = headers;
+    let doc = doc_with(&s, 0x00C1, 0x0200);
+    let base = wd_len(&doc);
+    // At every even byte a size of 0xFFF0, then sprms none of which is
+    // the title page's.
+    let sepx: Vec<u8> = [0xF0, 0xFF].repeat(0x8000 + n);
+    let cps: Vec<u32> = (0..=n as u32).collect();
+    let seds: Vec<Vec<u8>> = (0..n as u32)
+        .map(|i| {
+            let mut d = vec![0u8; 12];
+            d[2..6].copy_from_slice(&(base + 2 * i).to_le_bytes());
+            d
+        })
+        .collect();
+    let bytes = with_tables(
+        &doc,
+        &[(11, plcf_hdd.clone()), (6, plc_of(&cps, &seds))],
+        &sepx,
+    );
+    let read = parse_with_info(&bytes).unwrap();
+    assert_eq!(read.left_out, ["headers and footers"]);
+    // One section's properties, however many sections name them, are
+    // looked through once.
+    let same: Vec<Vec<u8>> = (0..n).map(|_| seds[0].clone()).collect();
+    let bytes = with_tables(&doc, &[(11, plcf_hdd), (6, plc_of(&cps, &same))], &sepx);
+    assert!(parse_with_info(&bytes).unwrap().left_out.is_empty());
+}
+
+#[test]
+fn a_run_of_characters_finds_its_first_piece_by_search() {
+    // 200,000 pieces of a character each, and as many runs of one: each
+    // looking through every piece is forty billion steps.
+    let n = 200_000u32;
+    let wd: Vec<u8> = (0..n).map(|i| b'a' + (i % 26) as u8).collect();
+    let pieces: Vec<Piece> = (0..n)
+        .map(|i| Piece {
+            cp: (i, i + 1),
+            fc: i,
+            compressed: true,
+        })
+        .collect();
+    for i in 0..n {
+        let got: Vec<Char> = chars(&wd, &pieces, i, i + 1).collect();
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].c, got[0].cp), ((b'a' + (i % 26) as u8) as char, i));
+    }
 }

@@ -529,8 +529,9 @@ fn read_source(
         }
         // A Word 97-2003 document's text, through its piece table, and
         // what its summary information declares. What it holds and this
-        // reader leaves out (its headers and footers, its text boxes) is
-        // said, rather than lost without a word.
+        // reader leaves out (headers and footers, or text boxes, whose list
+        // of stories does not read) is said, rather than lost without a
+        // word.
         SourceKind::Doc => {
             let read = fluree_doc_doc::parse_with_info(&data).map_err(|e| e.to_string())?;
             if !read.left_out.is_empty() && !quiet {

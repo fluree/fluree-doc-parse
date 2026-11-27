@@ -236,17 +236,30 @@ the piece table says which run of the document each holds. What is read:
   `footnote`, `endnote` and `comment` as in a DOCX; a note opens with its
   number (`1`, `2`, … and `i`, `ii`, … for endnotes). `fdoc convert` keeps
   the comments only with `--comments`, as a DOCX's.
+- **Headers and footers**, as a DOCX's: those Word shows, each section's
+  first page's where the section has a title page, its odd pages' (or only
+  one), and its even pages' where the document sets them apart, each story
+  read once and a line two of them share kept once. The headers come before
+  the body and the footers after the notes, their `evidence` `header` and
+  `footer`. The notes' separators are not read.
+- **Text boxes**, the body's and the headers', each after the paragraph
+  holding the shape it is drawn in, with that paragraph's `evidence`; a box
+  whose shape is not found comes after the body (or the headers). A box
+  Word keeps for reuse after it was deleted is not read. A DOCX's text box
+  is read in its anchor paragraph, its first line run on to the anchor
+  paragraph's text; here the box's paragraphs stay its own.
 
 What this round leaves out, and says so here rather than guessing: styles
 (so no heading, title or list is told apart from a paragraph, and list
-numbers Word computes are absent), headers and footers, text boxes, comment
-authors, a table's header row (`header_rows` is left undetected), merged
-cells, pictures, and the summary information's dates. A document whose
-headers, footers or text boxes hold text is named in a warning
+numbers Word computes are absent), comment authors, a table's header row
+(`header_rows` is left undetected), merged cells, pictures, and the summary
+information's dates. Headers, footers or text boxes whose list in the table
+stream does not read (it is missing, lies outside the stream, or its
+positions go backwards) are left out and named in a warning
 (`not read: headers and footers, text boxes`;
 `fluree_doc_doc::parse_with_info` lists them in `left_out`), so what they
 say is not lost without a word. Word 95 and earlier and encrypted files
-are refused. Provenance and evidence are `doc`.
+are refused. Provenance is `doc`, and so is the body's evidence.
 
 A file is recognised as a Word document by its content, a compound file
 holding a `WordDocument` stream, whatever its name. As for any compound
@@ -257,7 +270,12 @@ pieces and 64 million characters, a piece table whose positions go
 backwards (pieces that overlap, reading the same characters again) failing
 as malformed. Each page of paragraph properties is read once however many
 times the bin table names it, at most about four million runs of them, and
-a paragraph finds its own by a binary search. Returns `DocError`
+a paragraph finds its own by a binary search, as a run of characters (a
+header's story, a text box's) finds its first piece. The header stories and
+the text boxes are read only where their positions never go backwards, so
+none is read twice, each held to its story; the sections' properties are
+looked through once each, at most 16 MiB of them, past which the headers are
+left out and said to be. Returns `DocError`
 (`fluree_doc_doc::parse`) otherwise.
 
 ## PPTX
