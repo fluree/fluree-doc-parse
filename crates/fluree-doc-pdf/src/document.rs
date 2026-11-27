@@ -5673,10 +5673,26 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
 
         // A one-column grid — a key/value list ruled with horizontals only —
         // reads its columns from where its text sits.
+        // Then a row stacking its values one a line is parted into rows
+        // (`Grid::split_stacked_rows`), the spanning rows numbered on past
+        // the rows added over them.
         let spanning_rows: Vec<Vec<usize>> = timed(&mut timings.tables, || {
             grids
                 .iter_mut()
-                .map(|g| g.split_by_alignment(&p.glyphs))
+                .map(|g| {
+                    let spanning = g.split_by_alignment(&p.glyphs);
+                    let added = g.split_stacked_rows(&p.glyphs);
+                    spanning
+                        .into_iter()
+                        .map(|r| {
+                            r + added
+                                .iter()
+                                .filter(|&&(at, _)| at < r)
+                                .map(|&(_, n)| n)
+                                .sum::<usize>()
+                        })
+                        .collect()
+                })
                 .collect()
         });
 
@@ -6769,6 +6785,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 })
                 .collect();
             let explicit = g.layout.as_deref();
+            let mut stacked = Vec::new();
             let mut merges = match explicit {
                 Some(lay) => lay.merges(g.rows(), g.cols()),
                 None => {
@@ -6776,9 +6793,25 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     let mut m = g.merges(&page.rules, &page.fills);
                     g.text_merges(&page.glyphs, &page.rules, &mut m);
                     g.group_label_merges(&page.glyphs, &page.rules, &mut m);
+                    stacked = g.stacked_merges(&page.glyphs, &page.rules, &mut m);
                     m
                 }
             };
+            // A block beside values stacked one a line, parted with their
+            // rows, is one cell: its lines read in order into its first.
+            let mut rows = rows;
+            for (band, c) in &stacked {
+                let text = band
+                    .clone()
+                    .map(|r| rows[r][*c].trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                for r in band.clone() {
+                    rows[r][*c].clear();
+                }
+                rows[band.start][*c] = text;
+            }
             // A row whose text crosses an alignment-derived boundary is one
             // cell across the row — a boxed notice over a key/value list.
             // Its text is read whole into the first cell, since the cut
