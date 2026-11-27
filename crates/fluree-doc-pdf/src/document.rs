@@ -5247,6 +5247,322 @@ fn side_of(
     (cut.rows() >= 2 && held >= 2 && ruled).then_some(cut)
 }
 
+/// Fewest icons in a row of them ([`icon_rows`]): two shapes side by side
+/// are as often a pair of logos or a chart's legend.
+const ICON_ROW: usize = 3;
+
+/// How far two icons of one row may differ in size, as a share of the size:
+/// one shape drawn again, its outline's width aside.
+const ICON_SIZE_SPREAD: f64 = 0.15;
+
+/// Farthest, in a label's line height, an icon's foot stands over its
+/// label's first line; a label's lines stand a line's leading apart.
+const ICON_LABEL_REACH: f64 = 1.5;
+
+/// Most words in a line of an icon's label: a name, not a sentence.
+const ICON_LABEL_WORDS: usize = 5;
+
+/// A row of icons, each with its label set under it.
+struct IconRow {
+    /// Where the labels stand: from the icons' feet to the lowest label's.
+    band: crate::geom::BBox,
+    /// Each icon's label's box: its slot's width, from the icon's foot to
+    /// the label's.
+    boxes: Vec<crate::geom::BBox>,
+    /// The most lines any label runs to.
+    lines: usize,
+}
+
+impl IconRow {
+    /// Where its labels' lines are cut: at each edge between two icons'
+    /// slots, from the icons' feet to the labels'.
+    fn cuts(&self) -> Vec<(f64, f64, f64)> {
+        self.boxes
+            .windows(2)
+            .map(|w| (w[0].x1, self.band.y0, self.band.y1))
+            .collect()
+    }
+
+    /// Is `g`, a grid read from alignment, the row's labels: within the
+    /// band they stand in, rows no more than the labels' lines?
+    fn labels_grid(&self, g: &Grid) -> bool {
+        let slack = 2.0;
+        g.bbox.y0 >= self.band.y0 - slack
+            && g.bbox.y1 <= self.band.y1 + slack
+            && g.bbox.x0 >= self.band.x0 - slack
+            && g.bbox.x1 <= self.band.x1 + slack
+            && g.rows() <= self.lines
+    }
+}
+
+/// Do words of one line close up across `cut`: a glyph left of it and one
+/// right of it, level, less than an em apart, as a word's space sets them?
+/// Labels side by side stand farther apart than that.
+fn closes_across(glyphs: &[crate::geom::BBox], cut: f64) -> bool {
+    glyphs.iter().any(|a| {
+        (a.x0 + a.x1) / 2.0 < cut
+            && glyphs.iter().any(|b| {
+                let em = a.height().max(b.height());
+                let level = ((a.y0 + a.y1) - (b.y0 + b.y1)).abs() / 2.0 <= em / 2.0;
+                (b.x0 + b.x1) / 2.0 >= cut && level && b.x0 - a.x1 < em
+            })
+    })
+}
+
+/// The page's rows of icons with their labels: [`ICON_ROW`] drawn shapes
+/// or more of one size ([`ICON_SIZE_SPREAD`]), level with each other, side
+/// by side and apart, each larger than the text and with a label of a
+/// word or a few set under it: a fact sheet's `HOW THE DATA IS USED`, five
+/// round icons over `FISHERY AND / PROTECTED / SPECIES STOCK /
+/// ASSESSMENTS`, `ECOSYSTEM / MODELING`, ….
+///
+/// Read across, alignment lined the labels' lines up into a table, and the
+/// page read them row by row: `FISHERY AND ECOSYSTEM PROTECTED MODELING`.
+/// A label is the lines under its icon, within its slot (to halfway to
+/// each neighbour), the first within [`ICON_LABEL_REACH`] of its lines of
+/// the icon's foot and each next within a line's leading, none of more
+/// than [`ICON_LABEL_WORDS`] words, one word of two letters or more. Every
+/// icon of the row has one, and each ends under its icon.
+///
+/// Not a row: shapes holding words (a flowchart's steps), shapes with text
+/// level between them (an outlined title's letters), labels whose words
+/// close up across a slot's edge (a paragraph run on under shapes), or a
+/// column of text run on under each icon (a list per icon).
+///
+/// The labels are read from `glyphs`, the page's prose; what stands on and
+/// between the shapes is weighed over all the page's glyphs, `page_glyphs`,
+/// a chart's axis numbers read into a grid among them.
+fn icon_rows(
+    fills: &[crate::rule::Fill],
+    glyphs: &[Glyph],
+    page_glyphs: &[Glyph],
+    page_width: f64,
+) -> Vec<IconRow> {
+    let inked: Vec<&Glyph> = glyphs
+        .iter()
+        .filter(|g| g.bbox.is_some() && g.is_horizontal() && !g.text.trim().is_empty())
+        .collect();
+    let all = || glyphs.iter().chain(page_glyphs);
+    let page_ink: Vec<crate::geom::BBox> = all()
+        .filter(|g| g.bbox.is_some() && !g.text.trim().is_empty())
+        .map(|g| g.bbox.unwrap())
+        .collect();
+    if inked.is_empty() || fills.len() < ICON_ROW {
+        return Vec::new();
+    }
+    let mut sizes: Vec<f64> = inked.iter().map(|g| g.font_size as f64).collect();
+    sizes.sort_by(f64::total_cmp);
+    let text = sizes[sizes.len() / 2].max(1.0);
+    // Shapes larger than the text, narrower than a quarter of the page,
+    // about as tall as wide, and not inside another such shape.
+    let shapes: Vec<crate::geom::BBox> = fills
+        .iter()
+        .map(|f| f.bbox)
+        .filter(|b| {
+            let (w, h) = (b.width(), b.height());
+            w >= 2.0 * text
+                && h >= 2.0 * text
+                && w <= page_width / 4.0
+                && w <= 2.0 * h
+                && h <= 2.0 * w
+        })
+        .collect();
+    let inside = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
+        a != b
+            && a.x0 >= b.x0 - 0.5
+            && a.x1 <= b.x1 + 0.5
+            && a.y0 >= b.y0 - 0.5
+            && a.y1 <= b.y1 + 0.5
+    };
+    // An icon is a picture, holding no words: a box with words in it is a
+    // flowchart's step or a card, and the text under it is the next one's.
+    // A mark set on the icon, a `$` or a `?`, is its own lettering.
+    let holds_text = |b: &crate::geom::BBox| {
+        all()
+            .filter(|g| {
+                let Some(gb) = g.bbox else {
+                    return false;
+                };
+                let (cx, cy) = ((gb.x0 + gb.x1) / 2.0, (gb.y0 + gb.y1) / 2.0);
+                cx > b.x0 && cx < b.x1 && cy > b.y0 && cy < b.y1
+            })
+            .flat_map(|g| g.text.chars())
+            .filter(|c| c.is_alphabetic())
+            .count()
+            >= 2
+    };
+    let mut shapes: Vec<crate::geom::BBox> = shapes
+        .iter()
+        .filter(|a| !shapes.iter().any(|b| inside(a, b)) && !holds_text(a))
+        .copied()
+        .collect();
+    shapes.sort_by(|a, b| a.y0.total_cmp(&b.y0).then(a.x0.total_cmp(&b.x0)));
+    shapes.dedup_by(|a, b| a == b);
+    let alike = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
+        (a.width() - b.width()).abs() <= ICON_SIZE_SPREAD * a.width()
+            && (a.height() - b.height()).abs() <= ICON_SIZE_SPREAD * a.height()
+            && (a.y0 - b.y0).abs() <= ICON_SIZE_SPREAD * a.height()
+    };
+    let mut used = vec![false; shapes.len()];
+    let mut out = Vec::new();
+    for i in 0..shapes.len() {
+        if used[i] {
+            continue;
+        }
+        let mut row: Vec<usize> = (i..shapes.len())
+            .filter(|&j| !used[j] && alike(&shapes[i], &shapes[j]))
+            .collect();
+        row.sort_by(|&a, &b| shapes[a].x0.total_cmp(&shapes[b].x0));
+        // Side by side and apart: none overlaps the next.
+        let apart = row.windows(2).all(|w| shapes[w[0]].x1 < shapes[w[1]].x0);
+        if row.len() < ICON_ROW || !apart {
+            continue;
+        }
+        let icons: Vec<crate::geom::BBox> = row.iter().map(|&k| shapes[k]).collect();
+        // A row of icons stands alone in its band: text level with the
+        // icons, between them, makes them a line's letters (an outlined
+        // title's O's) or pictures set in running text.
+        let top = icons.iter().map(|b| b.y0).fold(f64::MAX, f64::min);
+        let foot = icons.iter().map(|b| b.y1).fold(f64::MIN, f64::max);
+        let (left, right) = (icons[0].x0, icons[icons.len() - 1].x1);
+        let level = page_ink.iter().any(|b| {
+            let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+            cy > top
+                && cy < foot
+                && cx > left
+                && cx < right
+                && !icons.iter().any(|i| cx >= i.x0 && cx <= i.x1)
+        });
+        if level {
+            continue;
+        }
+        // Each icon's slot: to halfway to each neighbour, and as far out at
+        // the row's ends.
+        let slot = |k: usize| {
+            let a = &icons[k];
+            let half = |b: &crate::geom::BBox, c: &crate::geom::BBox| (c.x0 - b.x1) / 2.0;
+            let lo = if k == 0 {
+                a.x0 - half(a, &icons[1])
+            } else {
+                (icons[k - 1].x1 + a.x0) / 2.0
+            };
+            let hi = if k + 1 == icons.len() {
+                a.x1 + half(&icons[k - 1], a)
+            } else {
+                (a.x1 + icons[k + 1].x0) / 2.0
+            };
+            (lo, hi)
+        };
+        let mut boxes = Vec::new();
+        let mut most = 0;
+        for (k, icon) in icons.iter().enumerate() {
+            let (lo, hi) = slot(k);
+            // The glyphs under the icon in its slot, as lines of their own.
+            let under: Vec<Glyph> = inked
+                .iter()
+                .filter(|g| {
+                    let b = g.bbox.unwrap();
+                    let cx = (b.x0 + b.x1) / 2.0;
+                    cx >= lo && cx < hi && b.y0 >= icon.y1 - 1.0 && b.y0 <= icon.y1 + 8.0 * text
+                })
+                .map(|g| (*g).clone())
+                .collect();
+            let mut lines = crate::line::assemble(&under);
+            lines.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+            let mut label: Vec<&Line> = Vec::new();
+            for l in &lines {
+                let fs = (l.font_size as f64).max(1.0);
+                let reach = match label.last() {
+                    None => icon.y1 + ICON_LABEL_REACH * fs,
+                    Some(prev) => prev.bbox.y1 + fs,
+                };
+                if l.bbox.y0 > reach {
+                    break;
+                }
+                label.push(l);
+            }
+            // A label names its picture in words: a few to a line, one of
+            // two letters or more. Lone letters under shapes are a
+            // diagram's symbols.
+            let named = !label.is_empty()
+                && label
+                    .iter()
+                    .all(|l| l.text.split_whitespace().count() <= ICON_LABEL_WORDS)
+                && label.iter().any(|l| {
+                    l.text
+                        .split_whitespace()
+                        .any(|w| w.chars().filter(|c| c.is_alphabetic()).count() >= 2)
+                });
+            if !named {
+                boxes.clear();
+                break;
+            }
+            most = most.max(label.len());
+            let foot = label.iter().map(|l| l.bbox.y1).fold(f64::MIN, f64::max);
+            // A label ends under its icon: a line following it in the slot
+            // as close as a label stands under its icon makes it the head of
+            // a column of text, a list set under each icon. A paragraph
+            // running on across the slot's edges, under the whole row, is
+            // the page's text after it.
+            let leading = label.last().map_or(text, |l| (l.font_size as f64).max(1.0));
+            let next: Vec<crate::geom::BBox> = inked
+                .iter()
+                .map(|g| g.bbox.unwrap())
+                .filter(|b| b.y0 > foot && b.y0 <= foot + ICON_LABEL_REACH * leading)
+                .collect();
+            let in_slot = |b: &crate::geom::BBox| {
+                let cx = (b.x0 + b.x1) / 2.0;
+                cx >= lo && cx < hi
+            };
+            let across = [lo, hi].iter().any(|&cut| closes_across(&next, cut));
+            if next.iter().any(in_slot) && !across {
+                boxes.clear();
+                break;
+            }
+            boxes.push(crate::geom::BBox {
+                x0: lo,
+                y0: icon.y1 - 1.0,
+                x1: hi,
+                y1: foot + 0.5,
+            });
+        }
+        if boxes.len() != icons.len() {
+            continue;
+        }
+        // Each label reads whole in its slot: across a slot's edge, the
+        // words either side stand an em or more apart, wider than a word's
+        // space. Words closing up across it are a line of text running on
+        // under the row, its columns not the icons'.
+        let (lo_y, hi_y) = (foot, boxes.iter().map(|b| b.y1).fold(f64::MIN, f64::max));
+        let under_row: Vec<crate::geom::BBox> = inked
+            .iter()
+            .map(|g| g.bbox.unwrap())
+            .filter(|b| b.y0 >= lo_y - 1.0 && b.y1 <= hi_y + 0.5)
+            .collect();
+        let closes_up = boxes[1..]
+            .iter()
+            .any(|slot| closes_across(&under_row, slot.x0));
+        if closes_up {
+            continue;
+        }
+        for &k in &row {
+            used[k] = true;
+        }
+        let band = crate::geom::BBox {
+            x0: boxes[0].x0,
+            y0: icons.iter().map(|b| b.y1).fold(f64::MAX, f64::min),
+            x1: boxes[boxes.len() - 1].x1,
+            y1: boxes.iter().map(|b| b.y1).fold(f64::MIN, f64::max),
+        };
+        out.push(IconRow {
+            band,
+            boxes,
+            lines: most,
+        });
+    }
+    out
+}
+
 /// Fewest items a column of aligned rows holds to be a list ([`list_boxes`]):
 /// one bullet is an item, not a list.
 const LIST_COLUMN_ITEMS: usize = 2;
@@ -6121,8 +6437,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 crate::column::detect(&glyphs_outside_grids(&p.glyphs, &elsewhere))
             }
         });
+        // Rows of icons with their labels under them: no table, each label
+        // read whole, its lines cut at the edges of the icons' slots
+        // ([`icon_rows`]).
+        let icons = icon_rows(&p.fills, &prose, &p.glyphs, p.width);
+        let slot_cuts: Vec<(f64, f64, f64)> = icons.iter().flat_map(IconRow::cuts).collect();
         let mut cols = timed(&mut timings.columns, || {
             line::assemble_columns_in(&prose, &p.rules, p.index, &prose_cols)
+                .into_iter()
+                .map(|col| line::part_at(col, &prose, &slot_cuts))
+                .collect::<Vec<_>>()
         });
 
         // Second table strategy: alignment, for the 14 corpus documents whose
@@ -6146,6 +6470,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 && !table::walled_in(&g.bbox, &walls)
                 && !lists_its_rows(g, &prose)
                 && !lists_side_by_side(g, &prose, &p.rules)
+                && !icons.iter().any(|row| row.labels_grid(g))
         });
         // Field lists set without rules, found between the page's gutters
         // where a row across the page holds more than a label and its
@@ -6208,6 +6533,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 } else {
                     line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
                 }
+                .into_iter()
+                .map(|col| line::part_at(col, &remaining, &slot_cuts))
+                .collect()
             });
             grid_sources.extend(std::iter::repeat_n(GridSource::Aligned, aligned.len()));
             grids.extend(aligned);
@@ -6245,6 +6573,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let remaining = glyphs_outside_grids(&p.glyphs, &grids);
                 cols = timed(&mut timings.columns, || {
                     line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
+                        .into_iter()
+                        .map(|col| line::part_at(col, &remaining, &slot_cuts))
+                        .collect()
                 });
             }
         }
@@ -6272,6 +6603,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let remaining = glyphs_outside_grids(&p.glyphs, &grids);
                 cols = timed(&mut timings.columns, || {
                     line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
+                        .into_iter()
+                        .map(|col| line::part_at(col, &remaining, &slot_cuts))
+                        .collect()
                 });
             }
         }
@@ -6362,13 +6696,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             })
             .map(|f| f.bbox)
             .collect();
-        let groups = crate::region::read_order_with_panels(
+        let label_boxes: Vec<crate::geom::BBox> = icons
+            .iter()
+            .flat_map(|row| row.boxes.iter().copied())
+            .collect();
+        let groups = crate::region::read_order_with_labels(
             cols,
             &p.rules,
             &table_boxes,
             &pictures,
             &frames,
             &panels,
+            &label_boxes,
         );
         let prose_sources: Vec<(usize, bool)> =
             groups.iter().map(|g| (g.column, g.own_measure)).collect();
@@ -9292,6 +9631,117 @@ mod tests {
         // of the table.
         let (g, page) = table(60.0);
         assert!(table_title(&g, &page, &[], false).is_none());
+    }
+
+    #[test]
+    fn labels_under_a_row_of_icons_are_no_table() {
+        let glyph = |x0: f64, y: f64, t: &str| Glyph {
+            text: t.into(),
+            bbox: Some(BBox {
+                x0,
+                y0: y - 6.0,
+                x1: x0 + 4.5 * t.chars().count() as f64,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x0, y),
+            rotation_deg: 0.0,
+            font_size: 7.0,
+            weight: None,
+            italic: false,
+            advance: Some(4.5 * t.chars().count() as f64),
+            draw_index: 0,
+            ocr: None,
+        };
+        let fill = |x0: f64, y0: f64| {
+            crate::rule::Fill::new(
+                BBox {
+                    x0,
+                    y0,
+                    x1: x0 + 70.0,
+                    y1: y0 + 70.0,
+                },
+                0,
+            )
+        };
+        // Five round icons in a row, a label of a line or two under each.
+        let xs = [220.0, 298.0, 376.0, 454.0, 532.0];
+        let fills: Vec<crate::rule::Fill> = xs.iter().map(|&x| fill(x, 376.0)).collect();
+        let labels = [
+            ["FISHERY AND", "PROTECTED"],
+            ["ECOSYSTEM", "MODELING"],
+            ["INTEGRATED", "ECOSYSTEM"],
+            ["SCIENTIFIC", "RESEARCH"],
+            ["CLIMATE", "SCIENCE"],
+        ];
+        let mut glyphs = Vec::new();
+        for (x, label) in xs.iter().zip(labels) {
+            for (k, t) in label.iter().enumerate() {
+                glyphs.push(glyph(x + 8.0, 460.0 + 9.0 * k as f64, t));
+            }
+        }
+        let rows = icon_rows(&fills, &glyphs, &glyphs, 612.0);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].boxes.len(), 5);
+        assert_eq!(rows[0].cuts().len(), 4);
+        // A grid alignment reads over the labels is theirs; one running on
+        // past them, rows of values under icons heading its columns, is a
+        // table.
+        let grid = |y1: f64, rows: usize| Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 226.0,
+                y0: 454.0,
+                x1: 590.0,
+                y1,
+            },
+            xs: vec![226.0, 400.0, 590.0],
+            ys: (0..=rows)
+                .map(|r| 454.0 + (y1 - 454.0) * r as f64 / rows as f64)
+                .collect(),
+        };
+        assert!(rows[0].labels_grid(&grid(469.0, 2)));
+        assert!(!rows[0].labels_grid(&grid(560.0, 8)));
+        // Icons stacked down a column, a table's status marks: no row.
+        let stacked: Vec<crate::rule::Fill> = (0..5)
+            .map(|k| fill(60.0, 100.0 + 80.0 * k as f64))
+            .collect();
+        assert!(icon_rows(&stacked, &glyphs, &glyphs, 612.0).is_empty());
+        // An outlined title's round letters, the line's other words set
+        // level between them: letters, no icons.
+        let mut titled = glyphs.clone();
+        for x in [292.0, 370.0, 448.0, 526.0] {
+            let mut g = glyph(x, 420.0, "A");
+            g.font_size = 40.0;
+            titled.push(g);
+        }
+        assert!(icon_rows(&fills, &titled, &titled, 612.0).is_empty());
+        // So are a chart's plots, its axis numbers between them read into a
+        // grid and out of the prose.
+        assert!(icon_rows(&fills, &glyphs, &titled, 612.0).is_empty());
+        // A paragraph run on under the row, its words closing up across the
+        // slots' edges: text with columns of its own, no labels.
+        let running: Vec<Glyph> = (0..17)
+            .map(|k| glyph(216.0 + 22.0 * k as f64, 460.0, "abcd"))
+            .collect();
+        assert!(icon_rows(&fills, &running, &running, 612.0).is_empty());
+        // A `$` set on an icon is its lettering: the row stands.
+        let mut marked = glyphs.clone();
+        marked.push(glyph(250.0, 420.0, "$"));
+        assert_eq!(icon_rows(&fills, &marked, &marked, 612.0).len(), 1);
+        // A list run on under each icon, its next item a little over a
+        // leading under the first: no labels, a column of text per icon.
+        let mut listed = glyphs.clone();
+        for x in xs {
+            listed.push(glyph(x + 8.0, 484.0, "item"));
+        }
+        assert!(icon_rows(&fills, &listed, &listed, 612.0).is_empty());
+        // The page's paragraph under the row, running across the slots'
+        // edges: the row stands.
+        let mut over_text = glyphs.clone();
+        over_text.extend((0..17).map(|k| glyph(216.0 + 22.0 * k as f64, 484.0, "abcd")));
+        assert_eq!(icon_rows(&fills, &over_text, &over_text, 612.0).len(), 1);
     }
 
     #[test]

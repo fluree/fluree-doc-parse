@@ -21,6 +21,7 @@ read without tooling, and the one an LLM consumes best.
 | `doco:List` / `ListItem` | `- ` items; a nested list is indented to where its parent item's text starts |
 | `doco:Table` | a pipe table with a header separator row |
 | `doco:Figure` | a paragraph (an [anchor](../integration/anchors.md) token, where enabled) |
+| a deck's `doc:SpeakerNotes` | after the slides under `# Speaker notes`, each slide's under `## Slide 4: <its title>` |
 
 ```markdown
 # 1 Features

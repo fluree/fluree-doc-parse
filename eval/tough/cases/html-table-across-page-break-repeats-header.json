@@ -1,0 +1,16 @@
+{
+  "document": {
+    "file": "aeis-ex21-subsidiaries-2025.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/927003/000110465926014731/aeis-20251231xex21d1.htm",
+    "sha256": "47cd074701641d97da2572e8ec0f6ed3eaf4972dabfea65c2f96c8c49171e179",
+    "about": "SEC filing, Exhibit 21 (Toppan Merrill), set as pages: the list of subsidiaries is one table per page, the second page setting the header `Name | Jurisdiction of Incorporation or Organization` over again after a page break."
+  },
+  "checks": [
+    {
+      "id": "one-table",
+      "found": "2026-11-27",
+      "issue": "The second page's part was a table of its own, its repeated header a second header in the Markdown; it carries the first page's table on.",
+      "md_text": "<tr><td>LumaSenseTechnologies, Inc.</td><td></td><td>Delaware</td></tr> <tr><td>Sekidenko, Inc.</td><td></td><td>Washington</td></tr>"
+    }
+  ]
+}

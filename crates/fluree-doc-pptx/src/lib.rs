@@ -68,10 +68,21 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
     }
 
     let mut out = Vec::new();
+    let mut notes = Vec::new();
     for (idx, name) in slides.iter().enumerate() {
         let Some(xml) = pkg.read(name) else {
             continue;
         };
+        // The slide's speaker notes, by the slide's own relationship to its
+        // notes part: `notesSlide3` can be slide 4's.
+        let part = pkg
+            .relationships(name)
+            .into_iter()
+            .find(|r| r.is("notesSlide") && !r.external)
+            .map(|r| r.target);
+        if let Some(nx) = part.and_then(|p| pkg.read(&p)) {
+            notes.extend(parse_notes_xml(&nx, idx)?);
+        }
         // Charts live in their own parts; the slide only names a
         // relationship id, so resolve those before walking it.
         let charts: Vec<(String, String)> = pkg
@@ -82,6 +93,8 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
             .collect();
         out.extend(parse_slide_with_charts(&xml, idx, &charts)?);
     }
+    // After the last slide, in slide order: see `Element::notes_for`.
+    out.extend(notes);
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
@@ -646,6 +659,71 @@ pub fn parse_slide_with_charts(
     Ok(out)
 }
 
+/// Parse a slide's notes part into the elements of its speaker notes,
+/// tagged with the slide's index as `page` and `notes_for`.
+///
+/// The notes are the page's `body` placeholder: paragraphs, and list items
+/// where a paragraph carries a bullet or an outline level, as on a slide.
+/// The rest of a notes page is the slide's picture, its number, and the
+/// header, footer and date the notes master repeats on every page.
+pub fn parse_notes_xml(xml: &str, page: usize) -> Result<Vec<Element>, PptxError> {
+    let mut r = Reader::from_str(xml);
+    r.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    let mut out: Vec<Element> = Vec::new();
+    let mut text = String::new();
+    let mut in_text = false;
+    let mut in_body = false;
+    let mut para_level = 0usize;
+    let mut para_bullet = false;
+    loop {
+        match r.read_event_into(&mut buf) {
+            Err(e) => return Err(PptxError::Xml(e.to_string())),
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
+                "sp" => in_body = false,
+                "ph" => in_body = attr(&e, "type").as_deref() == Some("body"),
+                "t" => in_text = in_body,
+                "br" if in_body => text.push(' '),
+                "pPr" => {
+                    para_level = attr(&e, "lvl").and_then(|v| v.parse().ok()).unwrap_or(0);
+                }
+                "buChar" | "buAutoNum" => para_bullet = true,
+                "buNone" => para_bullet = false,
+                _ => {}
+            },
+            Ok(Event::Text(t)) => {
+                if in_text {
+                    text.push_str(&t.unescape().unwrap_or_default());
+                }
+            }
+            Ok(Event::End(e)) => match local(e.name().as_ref()) {
+                "t" => in_text = false,
+                "p" => {
+                    if in_body {
+                        let item = (para_bullet || para_level > 0).then_some(para_level);
+                        flush(&mut out, &mut text, page, Shape::Body, item);
+                    }
+                    text.clear();
+                    para_bullet = false;
+                    para_level = 0;
+                }
+                "sp" => {
+                    text.clear();
+                    in_body = false;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+    }
+    for e in &mut out {
+        e.notes_for = Some(page);
+    }
+    Ok(out)
+}
+
 fn push(text: &mut String, cell: &mut Cell, in_cell: bool, s: &str) {
     if in_cell {
         cell.text.push_str(s);
@@ -1064,6 +1142,96 @@ mod tests {
         let els = parse(buf.get_ref()).unwrap();
         let read: Vec<(usize, &str)> = els.iter().map(|e| (e.page, e.text.as_str())).collect();
         assert_eq!(read, [(0, "moved to first"), (1, "moved to second")]);
+    }
+
+    fn notes_page(body: &str) -> String {
+        format!("<p:notes {NS}><p:cSld><p:spTree>{body}</p:spTree></p:cSld></p:notes>")
+    }
+
+    #[test]
+    fn a_notes_page_is_read_from_its_body_placeholder() {
+        let x = notes_page(&format!(
+            "{}{}{}{}{}",
+            shape(Some("sldImg"), ""),
+            shape(
+                Some("body"),
+                &format!(
+                    "{}<a:p><a:pPr><a:buChar char=\"•\"/></a:pPr><a:r><a:t>A point</a:t></a:r></a:p>",
+                    para("What the presenter says.")
+                )
+            ),
+            shape(Some("sldNum"), &para("4")),
+            shape(Some("ftr"), &para("Footer")),
+            shape(None, &para("4")),
+        ));
+        let els = parse_notes_xml(&x, 3).unwrap();
+        let read: Vec<(&str, &str)> = els
+            .iter()
+            .map(|e| (e.kind.as_str(), e.text.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("doco:Paragraph", "What the presenter says."),
+                ("doc:ListItem", "A point")
+            ]
+        );
+        assert!(els.iter().all(|e| e.notes_for == Some(3) && e.page == 3));
+    }
+
+    #[test]
+    fn a_slides_notes_follow_the_last_slide_by_its_own_relationship() {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let base = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let notes_rel = |target: &str| {
+            format!(
+                "<Relationships><Relationship Id=\"rId9\" Type=\"{base}/notesSlide\" \
+                 Target=\"../notesSlides/{target}\"/></Relationships>"
+            )
+        };
+        for (name, body) in [
+            (
+                "ppt/presentation.xml",
+                format!(
+                    "<p:presentation {NS}><p:sldIdLst><p:sldId id=\"256\" r:id=\"rId1\"/>\
+                     <p:sldId id=\"257\" r:id=\"rId2\"/></p:sldIdLst></p:presentation>"
+                ),
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels",
+                format!(
+                    "<Relationships><Relationship Id=\"rId1\" Type=\"{base}/slide\" Target=\"slides/slide1.xml\"/>\
+                     <Relationship Id=\"rId2\" Type=\"{base}/slide\" Target=\"slides/slide2.xml\"/></Relationships>"
+                ),
+            ),
+            ("ppt/slides/slide1.xml", slide(&shape(None, &para("Slide one")))),
+            ("ppt/slides/slide2.xml", slide(&shape(None, &para("Slide two")))),
+            // Named the other way round: the relationship says whose they are.
+            ("ppt/slides/_rels/slide1.xml.rels", notes_rel("notesSlide2.xml")),
+            ("ppt/slides/_rels/slide2.xml.rels", notes_rel("notesSlide1.xml")),
+            ("ppt/notesSlides/notesSlide2.xml", notes_page(&shape(Some("body"), &para("About one")))),
+            ("ppt/notesSlides/notesSlide1.xml", notes_page(&shape(Some("body"), &para("About two")))),
+        ] {
+            z.start_file(name, opts).unwrap();
+            z.write_all(body.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+        let els = parse(buf.get_ref()).unwrap();
+        let read: Vec<(&str, Option<usize>)> =
+            els.iter().map(|e| (e.text.as_str(), e.notes_for)).collect();
+        assert_eq!(
+            read,
+            [
+                ("Slide one", None),
+                ("Slide two", None),
+                ("About one", Some(0)),
+                ("About two", Some(1))
+            ]
+        );
     }
 
     #[test]

@@ -167,6 +167,16 @@ point with no value, and a gap stays a blank cell rather than moving the
 values after it onto earlier categories. Of a multi-level category axis, the
 level next to the plot is read.
 
+**Speaker notes are read.** What the presenter says over a slide is the
+slide's notes page, a part of its own beside the slide. Each slide's notes are
+read as paragraphs and list items carrying `notes_for`, the slide's index.
+They come after the deck's last slide, in slide order, so the body reads as
+the slides do and its text offsets don't move when notes are added:
+- Markdown sets them after the slides under `# Speaker notes`, a slide's name
+  over each slide's (`## Slide 4: Results`);
+- DoCO puts each slide's `doc:SpeakerNotes` inside the slide, after its own
+  content (see [DoCO](../formats/doco.md#a-slides-speaker-notes-are-in-the-slide)).
+
 Returns `PptxError` for a malformed or non-archive file.
 
 ## XLSX

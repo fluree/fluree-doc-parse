@@ -269,6 +269,14 @@ pub struct Element {
     /// people the message discusses.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub signature: bool,
+    /// Part of a slide's speaker notes, on an element read from them: the
+    /// slide's index, its `page`. A deck's notes are what the presenter
+    /// says over a slide, not what the slide shows. A reader puts them after
+    /// the deck's last slide, in slide order, so the body reads as the
+    /// slides do and every body element keeps its place in the text; the
+    /// writers set them apart from the body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes_for: Option<usize>,
     /// Which engine produced this element. Always `"rust"` here; the VLM tier
     /// emits the same shape with `"vlm"`.
     pub provenance: &'static str,
@@ -371,6 +379,7 @@ impl Element {
             message: None,
             resumes: None,
             signature: false,
+            notes_for: None,
             provenance,
             evidence,
         }

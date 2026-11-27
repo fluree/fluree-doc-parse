@@ -215,8 +215,21 @@ fn strip_marker(text: &str) -> &str {
 fn reference(elements: &[Element], format: Format) -> Vec<Unit> {
     let mut out = Vec::new();
     let mut i = 0;
+    let mut notes_open = false;
     while i < elements.len() {
         let e = &elements[i];
+        // A deck's speaker notes, as both writers set them: a heading over
+        // all of them, and each slide's name over its own.
+        if let Some(slide) = e.notes_for {
+            if i == 0 || elements[i - 1].notes_for != Some(slide) {
+                if !notes_open {
+                    notes_open = true;
+                    out.extend(Unit::block(Kind::Heading(1), i, "Speaker notes"));
+                }
+                let name = fluree_doc_model::emit::notes_heading(elements, slide);
+                out.extend(Unit::block(Kind::Heading(2), i, &name));
+            }
+        }
         match e.kind.as_str() {
             "doco:Table" => {
                 if let Some(rows) = &e.cells {

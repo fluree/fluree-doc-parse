@@ -942,6 +942,7 @@ fn render(
             notes,
             &fluree_doc_model::MarkdownOptions {
                 links: args.md_links.into(),
+                ..Default::default()
             },
         ),
         Format::Xhtml => fluree_doc_model::to_xhtml_with(elements, notes),

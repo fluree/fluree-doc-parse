@@ -48,6 +48,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `message` | [email](../inputs/email.md), on the element opening each message | the message's header: `from`, `to`, `cc`, `date`, `subject`, … |
 | `resumes` | email, where a message goes on after a quote nested in it | the `id` of the element that opened that message |
 | `signature` | email | `true` on each element of a message's signature |
+| `notes_for` | [PPTX](../inputs/office-and-web.md#pptx) speaker notes | the index of the slide whose notes the element is part of; such elements come after the deck's last slide |
 
 Absent fields are **omitted**, not null. `bbox` in particular: an element with
 no geometry has no `bbox` key, and this is load-bearing — see [Measured vs
