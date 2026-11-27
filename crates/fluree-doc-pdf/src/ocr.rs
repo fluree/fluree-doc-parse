@@ -1963,17 +1963,18 @@ pub fn ocr_jobs_within(
     max_crops: usize,
     small_per_page: usize,
 ) -> (OcrJobs, usize, usize) {
+    // Numbered as the analysis's anchors and crops are.
+    let pages = crate::document::routing_pages(doc);
     // A region showing what an earlier one shows is not read again
     // ([`copies`]): it takes the earlier one's reading, and counts against
     // the limit only through it.
     let copied: std::collections::HashMap<(usize, usize), (usize, usize)> =
-        copies(doc, only).into_iter().collect();
+        copies_on(&pages, only).into_iter().collect();
     // Every crop, in page order, with its kind: 0 a page read whole, 1 a
     // routed region, 2 a small one.
     type Ranked = (u8, usize, Option<(usize, BBox)>);
     let mut crops: Vec<Ranked> = Vec::new();
-    // Numbered as the analysis's anchors and crops are.
-    for p in &crate::document::routing_pages(doc) {
+    for p in &pages {
         if only.is_some_and(|keep| !keep.contains(&p.index)) {
             continue;
         }
@@ -2071,11 +2072,24 @@ pub type RegionCopy = ((usize, usize), (usize, usize));
 /// region, or noise. What the margin of each crop shows apart from the
 /// image is not read again: a word an engine would read across the edge of
 /// a copy's region is lost.
+///
+/// The regions are numbered on the pages as the analysis routes them
+/// ([`crate::document::routing_pages`]), as [`ocr_jobs`], [`inject`] and
+/// the anchors number them: numbered on the page as drawn, a capture under
+/// a caption in faux bold would be no region, every region after it would
+/// take its number, and a logo drawn again on the next page would lend
+/// that copy the capture's reading.
 pub fn copies(doc: &Document, only: Option<&[usize]>) -> Vec<RegionCopy> {
+    copies_on(&crate::document::routing_pages(doc), only)
+}
+
+/// [`copies`] on the pages as the analysis routes them, which the caller
+/// already has from [`crate::document::routing_pages`].
+fn copies_on(pages: &[Page], only: Option<&[usize]>) -> Vec<RegionCopy> {
     let mut first: std::collections::HashMap<(u64, i32, [i64; 2]), (usize, usize)> =
         std::collections::HashMap::new();
     let mut out = Vec::new();
-    for p in &doc.pages {
+    for p in pages {
         if only.is_some_and(|keep| !keep.contains(&p.index)) {
             continue;
         }
@@ -6054,6 +6068,86 @@ mod tests {
         );
         assert_eq!(own.len(), 3);
         assert_eq!(own[2].2.coords, Coords::Page);
+    }
+
+    #[test]
+    fn a_copy_is_numbered_on_the_page_as_the_analysis_routes_it() {
+        // Page 1: prose, a capture with a caption drawn twice over it (26
+        // glyphs as drawn, enough to say the text layer covers it; 13 once
+        // the bold counts once, a glyph void), then a logo. Page 2: prose
+        // and the logo again. As the analysis routes page 1, the capture is
+        // r0 and the logo r1; as drawn, the logo would be r0, and its copy
+        // on page 2 would take the capture's reading.
+        let small = |x0: f64, x1: f64, key: u64| ImagePlacement {
+            bbox: BBox {
+                x0,
+                y0: 262.0,
+                x1,
+                y1: 322.0,
+            },
+            texty: Some(true),
+            ppi: None,
+            bitonal: false,
+            grid: (400, 120),
+            key: Some(key),
+        };
+        let prose = || -> Vec<Glyph> {
+            (0..4)
+                .flat_map(|l| {
+                    native(
+                        "The account review and the record",
+                        40.0,
+                        40.0 + 14.0 * l as f64,
+                    )
+                })
+                .collect()
+        };
+        let mut first = prose();
+        for _ in 0..2 {
+            first.extend(native("Figure 1 data", 60.0, 300.0));
+        }
+        let mut second = page(prose(), vec![small(300.0, 400.0, 2)]);
+        second.index = 1;
+        let doc = Document {
+            pages: vec![
+                page(first, vec![small(56.0, 256.0, 1), small(300.0, 400.0, 2)]),
+                second,
+            ],
+            title: None,
+        };
+        assert_eq!(route::ocr_regions(&doc.pages[0]).len(), 1, "as drawn");
+        assert_eq!(copies(&doc, None), [((1, 0), (0, 1))]);
+        assert_eq!(
+            crops_of(&doc),
+            [(0, "r0".to_string()), (0, "r1".to_string())]
+        );
+        // The logo's reading, and not the capture's, is lent to its copy.
+        let read = |text: &str| WordReading {
+            coords: Coords::Px,
+            width: Some(100.0),
+            height: Some(100.0),
+            engine: None,
+            words: vec![OcrWord {
+                text: text.into(),
+                bbox: [10.0, 30.0, 90.0, 70.0],
+                angle: None,
+                conf: Some(0.99),
+            }],
+            rules: Vec::new(),
+        };
+        let readings = with_copies(
+            &doc,
+            None,
+            vec![
+                (0, Crop::Region(0), read("Invoice 4417")),
+                (0, Crop::Region(1), read("ACME")),
+            ],
+        );
+        let lent: Vec<&str> = (readings.iter())
+            .filter(|(page, _, _)| *page == 1)
+            .map(|(_, _, r)| r.words[0].text.as_str())
+            .collect();
+        assert_eq!(lent, ["ACME"]);
     }
 
     #[test]
