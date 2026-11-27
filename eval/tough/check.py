@@ -239,6 +239,12 @@ def run_check(check, reading):
         hits = norm(reading.text).count(norm(check["text"]))
         ok = hits == check["count"] if "count" in check else hits > 0
         return ok, None if ok else f"{hits} times in the text projection"
+    if "md_text" in check:
+        # In the Markdown, where a span is written once: text a span hides
+        # is lost there, and found in the text projection all the same.
+        hits = norm(reading.md()).count(norm(check["md_text"]))
+        ok = hits == check["count"] if "count" in check else hits > 0
+        return ok, None if ok else f"{hits} times in the Markdown"
     if "no_text" in check:
         hits = norm(reading.text).count(norm(check["no_text"]))
         return hits == 0, None if hits == 0 else f"{hits} times in the text projection"
@@ -367,6 +373,15 @@ def main():
         extra = convert_args(case)
         again = lambda: convert(args.fdoc, path, "doco", extra)
         reading = Reading(again(), convert(args.fdoc, path, "text", extra), again)
+        # The Markdown, read once and only for a check that asks for it.
+        markdown = {}
+
+        def md(path=path, extra=extra):
+            if "md" not in markdown:
+                markdown["md"] = convert(args.fdoc, path, "md", extra)
+            return markdown["md"]
+
+        reading.md = md
 
         results = []
         bad = reading.offsets()
