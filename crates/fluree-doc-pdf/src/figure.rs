@@ -2838,9 +2838,28 @@ pub fn graticules(
 const PICTURE_EDGE: f64 = 0.5;
 
 /// A label as a picture's: a few words, no display type.
+///
+/// Two kinds of label pass whatever their length or size:
+/// - an axis's scale, a line of figures ([`SCALE_FIGURES`] of its words
+///   holding one), as many as the axis carries;
+/// - marks with no letter or figure in them (`..`, `•·`). These are a
+///   chart's data points, read as text where the picture carries a text
+///   layer of its own, set at the size of the dots they are read from.
 fn picture_label(size: f32, text: &str, prose: f32) -> bool {
-    text.split_whitespace().count() <= LABEL_MAX_WORDS && size < prose * FRAME_DISPLAY
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let figured = words
+        .iter()
+        .filter(|w| w.chars().any(|c| c.is_ascii_digit()))
+        .count();
+    let scale = !words.is_empty() && figured as f64 >= SCALE_FIGURES * words.len() as f64;
+    (words.len() <= LABEL_MAX_WORDS || scale)
+        && (size < prose * FRAME_DISPLAY || !text.chars().any(char::is_alphanumeric))
 }
+
+/// Least share of a line's words holding a figure for the line to be an
+/// axis's scale: its ticks' values, a misread one or two among them
+/// (`2t50`, `34:1`) where a text layer was read from the picture.
+const SCALE_FIGURES: f64 = 0.75;
 
 /// Share of the page's height, at its top, its running heads stand in.
 const PAGE_BAND: f64 = 0.08;
@@ -3033,6 +3052,29 @@ pub(crate) fn share_inside(b: &BBox, r: &BBox) -> f64 {
     w * h / (b.width() * b.height()).max(1e-9)
 }
 
+/// Share of `b` that the figures' drawings lie over, counted once where
+/// drawings overlap: sampled on a grid of points, as [`photo_cover`] is.
+pub(crate) fn share_under(b: &BBox, figures: &[Figure]) -> f64 {
+    if b.width() <= 0.0 || b.height() <= 0.0 {
+        return 0.0;
+    }
+    let steps = PHOTO_SAMPLES;
+    let mut under = 0usize;
+    for i in 0..steps {
+        for j in 0..steps {
+            let x = b.x0 + (i as f64 + 0.5) / steps as f64 * b.width();
+            let y = b.y0 + (j as f64 + 0.5) / steps as f64 * b.height();
+            if figures.iter().any(|f| {
+                let d = f.drawing;
+                x >= d.x0 && x <= d.x1 && y >= d.y0 && y <= d.y1
+            }) {
+                under += 1;
+            }
+        }
+    }
+    under as f64 / (steps * steps) as f64
+}
+
 /// Share of the drawing that photographs lie under, counted once where
 /// they overlap: sampled on a grid, since a figure's pictures are often
 /// drawn in overlapping pieces.
@@ -3071,6 +3113,22 @@ const MARK_INSIDE: f64 = 0.6;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_charts_marks_and_scales_are_its_labels() {
+        // A title over a picture is display type; a label is not.
+        assert!(!picture_label(16.0, "Benzene Linear Curve", 10.0));
+        assert!(picture_label(8.0, "Amount of Benzene", 10.0));
+        // Data points read as text, at the size of the dots.
+        assert!(picture_label(14.4, "..", 10.0));
+        assert!(picture_label(12.7, "•·", 10.0));
+        // A scale's line of ticks, a misread one among them.
+        let ticks = "190 200 210 220 230 240 250 2t50 270 280 290 300 310 320 330 340 350";
+        assert!(picture_label(4.7, ticks, 10.0));
+        // A sentence as long is no label.
+        let prose = "the peaks of the spectra were read at each wavelength across the range of the detector in steps";
+        assert!(!picture_label(9.0, prose, 10.0));
+    }
     use crate::rule::Orientation;
 
     fn bb(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
