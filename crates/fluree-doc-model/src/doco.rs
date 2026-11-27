@@ -609,6 +609,7 @@ struct TablePart {
     lone_end: Option<String>,
     opening: Vec<Vec<String>>,
     page: usize,
+    placed: bool,
 }
 
 impl<'a> Emitter<'a> {
@@ -1190,8 +1191,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             // A part split from the one before on the same page
                             // was parted at the table's own rule or gap, which
                             // closes the band over it as a blank row does: the
-                            // band carries over a page break only.
-                            p.band_at_end.clone().filter(|_| p.page < e.page),
+                            // band carries over a page break only. Parts the
+                            // page does not place (HTML's, all page 0) are linked
+                            // by their reader at a page break only.
+                            p.band_at_end
+                                .clone()
+                                .filter(|_| p.page < e.page || !(p.placed && e.bbox.is_some())),
                             Some(p.opening.clone()),
                             p.lone_end.clone(),
                         )
@@ -1419,8 +1424,13 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     // cell, as the band's rows on the page before do: a row
                     // with none opens something else, the table's title or
                     // header set again (`Table 15-1.` over its years).
+                    // A row with no text at all parts nothing (an HTML
+                    // table's sizing row): the carry goes on past it.
                     let named_to = (repeated_to.max(n_header)..rows.len())
-                        .find(|&r| rows[r].first().is_none_or(|t| t.trim().is_empty()))
+                        .find(|&r| {
+                            rows[r].first().is_none_or(|t| t.trim().is_empty())
+                                && rows[r].iter().any(|t| !t.trim().is_empty())
+                        })
                         .unwrap_or(rows.len());
                     let carried_band = |r: usize| -> Option<String> {
                         let own = subs.iter().any(|s| *s < r && *s >= n_header)
@@ -1707,6 +1717,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 lone_end,
                                 opening,
                                 page: e.page,
+                                placed: e.bbox.is_some(),
                             },
                         );
                     }
@@ -2835,6 +2846,37 @@ mod tests {
         let fifty = g.iter().find(|n| n["doc:cellValue"] == "50").unwrap();
         assert!(fifty.get("doc:sectionLabel").is_none());
         assert_eq!(fifty["doc:columnHeader"], "Patents");
+    }
+
+    #[test]
+    fn parts_the_page_does_not_place_carry_their_band() {
+        // An HTML list cut into tables at its page breaks: every element is
+        // page 0 and has no box, and the later table opens on an empty
+        // sizing row before the rows still under the earlier one's band.
+        let r = |a: &str, b: &str| vec![a.to_string(), b.into()];
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.bbox = None;
+        a.cells = Some(vec![
+            r("Name", "Jurisdiction"),
+            r("United States of America", ""),
+            r("Example Holdings LLC", "Delaware"),
+        ]);
+        a.header_rows = Some(1);
+        a.sub_headers = Some(vec![1]);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.bbox = None;
+        b.cells = Some(vec![r("", ""), r("Example USA LLC", "Delaware")]);
+        b.header_rows = Some(0);
+        b.continues = Some("elem-00001".into());
+        let g = graph(&[a, b]);
+        let usa = g
+            .iter()
+            .find(|n| n["doc:cellValue"] == "Example USA LLC")
+            .unwrap();
+        assert_eq!(usa["doc:sectionLabel"], "United States of America");
+        assert_eq!(usa["doc:columnHeader"], "Name");
     }
 
     #[test]
