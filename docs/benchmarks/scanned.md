@@ -37,8 +37,8 @@ strings at their character offsets are the text projection.
 
 ## Where we stand
 
-Measured on the set of seed 4 (digest `d2374f80…`), in the run
-`eval/scanned/baseline.json` records.
+Measured on the set of seed 4, in the run `eval/scanned/baseline.json`
+records, whose `corpus_sha256` is the digest of the set it was written on.
 
 | profile | pages | facts | unread pages, without → with OCR | without OCR | OCR, strict | OCR, whole word |
 |---|---|---|---|---|---|---|
@@ -100,10 +100,10 @@ What this shows:
   or a misread character costs the whole fact.
 - **The structure of a scan is not read the way the born-digital page's
   is.** On the four pasted pages fdoc reads the 8 headings of the gold,
-  with and without OCR. On the 54 scans, OCR reads 84 headings for 126 in
-  the gold, 72 of them the gold's and 12 not; counted page by page, that
-  is 42 fewer than the gold and none over (the *missing* and *extra*
-  columns), and 42 of the 54 pages have a heading count other than the
+  with and without OCR. On the 54 scans, OCR reads 74 headings for 126 in
+  the gold, 72 of them the gold's and 2 not; counted page by page, that
+  is 52 fewer than the gold and none over (the *missing* and *extra*
+  columns), and 52 of the 54 pages have a heading count other than the
   gold's. OCR has no bold, so a bold line of body size (a signature,
   `Bill to:`, `Closing balance`) is lost: a scan's heading is a line set
   larger than its body, or a page's first line. Each line is sized by the
@@ -114,30 +114,30 @@ What this shows:
   heading, and an address or a paragraph is read as one block, as on the
   born-digital page, not line by line. The engine's boxes still vary by a
   pixel or two, and a line a little larger than its body can come out over
-  the 15% a heading needs: of the 12 headings read that are not the
-  gold's, ten are a statement's `Statement of account`, set in 11 pt
-  over 10 (six when the pages were read shrunk to 2,000 px, where its box
-  came out a pixel shorter against its body's), and one a letterhead read
-  with two of its words run together (`Harrow OfficeSupply`). An address
-  line, `7 Orchard Road`, reads as a numbered heading only at 100 dpi,
-  where the address is still cut after its first line. The
+  the 15% a heading needs. A statement's `Statement of account`, set in
+  11 pt over 10, did on ten scans when the baseline was first recorded,
+  and no longer does on any. Of the 2 headings read that are not the gold's, one is a
+  letterhead read with two of its words run together in the JPEG
+  (`Harrow OfficeSupply`), and one an address line, `7 Orchard Road`,
+  read as a numbered heading only at 100 dpi, where the address is still
+  cut after its first line. The
   per-document headings are in the baseline, and a page that no longer
   reads one of its gold's, or reads one other than those it read then,
   fails the check.
 
 | headings | pages | gold | OCR read | missing | extra | pages off | gold read |
 |---|---|---|---|---|---|---|---|
-| clean-300 | 6 | 14 | 9 | 5 | 0 | 5 | 8 |
-| clean-200 | 6 | 14 | 9 | 5 | 0 | 5 | 8 |
+| clean-300 | 6 | 14 | 8 | 6 | 0 | 6 | 8 |
+| clean-200 | 6 | 14 | 8 | 6 | 0 | 6 | 8 |
 | clean-150 | 6 | 14 | 8 | 6 | 0 | 6 | 8 |
-| clean-100 | 6 | 14 | 10 | 4 | 0 | 4 | 8 |
-| skew-300 | 6 | 14 | 10 | 4 | 0 | 4 | 8 |
-| noisy-300 | 6 | 14 | 10 | 4 | 0 | 4 | 8 |
-| fax-200 | 6 | 14 | 10 | 4 | 0 | 4 | 8 |
-| fax-std | 6 | 14 | 10 | 4 | 0 | 4 | 9 |
+| clean-100 | 6 | 14 | 9 | 5 | 0 | 5 | 8 |
+| skew-300 | 6 | 14 | 8 | 6 | 0 | 6 | 8 |
+| noisy-300 | 6 | 14 | 8 | 6 | 0 | 6 | 8 |
+| fax-200 | 6 | 14 | 8 | 6 | 0 | 6 | 8 |
+| fax-std | 6 | 14 | 9 | 5 | 0 | 5 | 9 |
 | jpeg-150 | 6 | 14 | 8 | 6 | 0 | 6 | 7 |
 | pasted, both densities | 4 | 8 | 8 | 0 | 0 | 0 | 8 |
-| **all scanned** | 54 | 126 | 84 | 42 | 0 | 42 | 72 |
+| **all scanned** | 54 | 126 | 74 | 52 | 0 | 52 | 72 |
 
 *Missing* and *extra* are a page's headings fewer or more than its gold's,
 summed; *gold read* counts the gold's headings read as headings, word for
@@ -163,8 +163,9 @@ dependency versions are pinned, its interpreter is one uv manages, and its
 seeds are fixed, so the set is byte-identical from run to run on one machine;
 `check.py` prints its digest. On another platform the bytes can differ (the
 interpreter's zlib, the pdfium and Pillow wheels built for it), and with them
-a few readings: the baseline's digest then does not match and the check says
-so.
+a few readings: the baseline's digest then does not match, and `--baseline`
+fails, as a fact lost may then be the pixels rather than fdoc;
+`--allow-digest-mismatch` compares all the same, with a warning.
 `eval/scanned/baseline.json` records the facts each page misses today and
 the headings it reads, and `--baseline` fails on any fact lost against it,
 on any heading of the gold a page no longer reads as one, on any heading
@@ -175,7 +176,8 @@ one of its lists.
 None of this runs in CI: the engine needs ONNX Runtime and the models, about
 100 MB of assets, and the generator needs Python packages the Rust job does
 not install. `eval/run.sh` runs the routing half when the set has been
-generated.
+generated, and the OCR run against the baseline too when `FDOC_OCR_MODELS`
+names the assets.
 
 ## Caveats that belong with the numbers
 
@@ -187,7 +189,9 @@ generated.
   engine comparison; issue
   [#4](https://github.com/fluree/fluree-doc-parse/issues/4) records a harder
   bake-off between engines.
-- **Recall, and the headings.** Text the engine invents is not counted.
+- **Recall, and the headings.** Text the engine invents is not counted:
+  the check credits a fact found and charges nothing for text no page
+  holds, so a reading that adds words passes it.
   Of the structure only the headings are: word for word on a pasted page,
   and on a scan by which are the gold's and which are not. A table read as
   text lines scores the same as a table read as a table, and a scan is not
