@@ -881,3 +881,21 @@ See [Loading into a Fluree ledger](../integration/ledger-ingest.md).
 `nif:beginIndex` / `nif:endIndex` index into the string
 [`-f text`](text.md) produces — not into the Markdown, and not into
 `nif:isString` concatenated. Generate both from the same run.
+
+## Written a node at a time
+
+`fdoc` writes the graph to its output as it makes it, a node at a time,
+and never holds it whole: a table's cells are most of a large document's
+graph, and a table of two million cells makes 800 MB of it. What is held
+while it is written is the document's elements and, for each node, what it
+contains, so DoCO converts what Markdown converts
+([limits](../reference/limits.md#the-output-converted-to)).
+
+A node is written before the nodes it contains (the document, its body,
+then everything in it; a table before its cells), so the elements are
+walked twice: once to find what each node contains, once to write. The
+bytes are those of the graph built whole and pretty-printed, keys in order.
+
+In a library, `fluree_doc_model::doco::write_doco(&elements, &opts, writer)`
+writes it to any `std::io::Write`, buffered; `to_doco` returns the same
+bytes as one `String`, which holds the whole graph.

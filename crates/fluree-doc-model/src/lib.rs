@@ -19,7 +19,7 @@ pub mod outline;
 pub mod scaling;
 pub mod symbols;
 
-pub use doco::{to_doco, to_text, DocoOptions};
+pub use doco::{to_doco, to_text, write_doco, DocoOptions};
 pub use element::{
     is_past_limit, is_stray_control, past_limit_reason, xsd_date_time, xsd_temporal, Attachment,
     Datum, DocumentInfo, Element, Link, Notes, OcrReading, ParseWarning, Target, Turn, UnreadImage,

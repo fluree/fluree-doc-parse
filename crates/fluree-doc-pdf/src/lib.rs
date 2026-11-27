@@ -31,7 +31,7 @@
 //!   and [`document::to_xhtml`]
 //! - [`spend_table_copies`] — the copies DoCO writes of the tables, spent
 //!   from that budget before the output is written
-//! - [`doco::to_doco`] / [`doco::to_text`] and [`doco::DocoOptions`]
+//! - [`doco::to_doco`] / [`doco::write_doco`] / [`doco::to_text`] and [`doco::DocoOptions`]
 //! - [`route::decide`] and [`route::signals`] — escalation verdicts
 //! - [`unread_pages`] and [`unread_regions`] — what the router sent a reader
 //!   to and nothing read, and [`past_limit`], the pages past the page limit
@@ -985,7 +985,7 @@ mod tests {
 #[cfg(test)]
 mod copies_tests {
     use super::*;
-    use fluree_doc_model::budget::{Budget, Limit, ELEMENT_BYTES, TEXT_BYTES};
+    use fluree_doc_model::budget::{Budget, Limit, FLAT_CELL_BYTES, TEXT_BYTES};
     use fluree_doc_model::doco::{table_copies, Copies, TableCopies};
     use fluree_doc_model::Element;
 
@@ -1070,7 +1070,7 @@ mod copies_tests {
 
     /// What DoCO's copies `c` are spent at.
     fn cost(c: Copies) -> u64 {
-        c.cells * ELEMENT_BYTES + c.text * TEXT_BYTES
+        c.cells * FLAT_CELL_BYTES + c.text * TEXT_BYTES
     }
 
     /// What the copies of `elements`' tables are spent, each part with what

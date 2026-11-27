@@ -2,8 +2,7 @@
 
 use super::*;
 use fluree_doc_model::budget::{
-    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
-    MAX_MEMORY, TEXT_BYTES,
+    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, MAX_MEMORY, TEXT_BYTES,
 };
 use std::io::Write;
 
@@ -324,7 +323,7 @@ fn a_repeated_cell_of_text_is_bounded_by_its_bytes() {
     // For Markdown, which copies nothing: the table, and each copy a cell
     // that holds the text, written once in its row.
     let need = |n: u64| {
-        FLAT_ELEMENT_BYTES
+        ELEMENT_BYTES
             + n * (FLAT_CELL_BYTES + CELL_BYTES)
             + n * (word.trim().len() as u64) * TEXT_BYTES
     };
@@ -354,7 +353,7 @@ fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
     let refused = within(need - 1, Output::Doco).unwrap_err();
     assert!(matches!(refused, OdfError::TooLarge(_)), "{refused}");
     // Markdown writes a paragraph as a line: it costs less.
-    let flat = 1000 * (FLAT_ELEMENT_BYTES + TEXT_BYTES) + reading(&text(&body));
+    let flat = 1000 * (ELEMENT_BYTES + TEXT_BYTES) + reading(&text(&body));
     assert!(within(flat, Output::Flat).is_ok());
     assert!(within(flat - 1, Output::Flat).is_err());
     // A presentation's, the same.
@@ -382,7 +381,7 @@ fn a_table_padded_to_its_widest_row_counts_the_padding() {
     );
     // The table, and the 1024 cells that hold `x`, at Markdown's costs.
     let need = 1101 * 4096 * CELL_BYTES
-        + FLAT_ELEMENT_BYTES
+        + ELEMENT_BYTES
         + 1024 * (FLAT_CELL_BYTES + TEXT_BYTES)
         + reading(&text(&body));
     let within = |memory: u64| {
@@ -649,16 +648,19 @@ fn a_notes_citation_is_its_own() {
 #[test]
 fn a_texts_tables_and_paragraphs_spend_the_documents_budget() {
     // A hundred rows of a cell repeated a hundred times: 10,000 cells that
-    // hold text from a few kilobytes. DoCO writes each as a node, at
-    // 4 KiB; Markdown writes each once in its row.
+    // hold text from a few kilobytes, each spent at 512 bytes and its slot,
+    // whether Markdown writes it once in its row or DoCO as a node of its
+    // own, a node at a time: about 6.5 MB, past a thousand elements' worth.
     let row = "<table:table-row><table:table-cell table:number-columns-repeated=\"100\">\
                <text:p>x</text:p></table:table-cell></table:table-row>";
     let table = text(&format!("<table:table>{}</table:table>", row.repeat(100)));
-    let budget = || Budget::new(5_000 * ELEMENT_BYTES, 0);
-    let refused = parse_within(&table, &mut budget()).unwrap_err();
-    assert!(refused.to_string().contains("past"), "{refused}");
-    let els = parse_within(&table, &mut budget().for_output(Output::Flat)).unwrap();
-    assert_eq!(els.0[0].cells.as_ref().unwrap().len(), 100);
+    for output in [Output::Doco, Output::Flat] {
+        let budget = |n: u64| Budget::new(n * ELEMENT_BYTES, 0).for_output(output);
+        let refused = parse_within(&table, &mut budget(1_000)).unwrap_err();
+        assert!(refused.to_string().contains("past"), "{refused}");
+        let els = parse_within(&table, &mut budget(5_000)).unwrap();
+        assert_eq!(els.0[0].cells.as_ref().unwrap().len(), 100);
+    }
     // Paragraphs, each an element and its text, are spent as well.
     let paras = text(&"<text:p>x</text:p>".repeat(100));
     let need = reading(&paras) + 100 * (ELEMENT_BYTES + TEXT_BYTES);

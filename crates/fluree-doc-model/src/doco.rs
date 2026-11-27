@@ -41,10 +41,12 @@
 //!   while the physical index is always defined and always unique. For
 //!   paginationless sources it is the slide or sheet index.
 
-use crate::element::{Attachment, DocumentInfo, Element, Target};
+use crate::element::{Attachment, DocumentInfo, Element, Link, Target};
 use crate::message::{Mailbox, Message};
+use serde::ser::{Serialize, SerializeMap, SerializeSeq};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
+use std::io::Write;
 
 /// Display-label budget: full text lives in `nif:isString`, the label is a
 /// preview for graph canvases.
@@ -1185,14 +1187,213 @@ fn strip_tags(html: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-struct Emitter<'a> {
+/// What a node's IRI says it is: `{base_iri}-{kind}-{n}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Element,
+    Section,
+    Table,
+    Cell,
+    Link,
+    Mailbox,
+    Message,
+    Signature,
+}
+
+impl Kind {
+    fn name(self) -> &'static str {
+        match self {
+            Kind::Element => "element",
+            Kind::Section => "section",
+            Kind::Table => "table",
+            Kind::Cell => "cell",
+            Kind::Link => "link",
+            Kind::Mailbox => "mailbox",
+            Kind::Message => "message",
+            Kind::Signature => "signature",
+        }
+    }
+}
+
+/// What the first walk of [`write_doco`] finds that a node cannot know when
+/// it is made: what it contains, its header, and a signature's text, which
+/// its elements give it after it. Nodes are numbered as they are made, the
+/// number their IRI ends in.
+///
+/// A node is written before the nodes it contains (the body first, then
+/// everything in it), so its `po:contains` must be known before they are
+/// made. The first walk makes every node and keeps only this; the second
+/// makes them again and writes each as soon as it is whole. A table's
+/// cells are numbered one after the other, so its half million cells are
+/// one run here, not half a million IRIs.
+#[derive(Debug, Default)]
+struct Plan {
+    /// Each node's kind, by number: a child's IRI is written from it.
+    kinds: Vec<Kind>,
+    /// What each node contains, in order, as runs of consecutive numbers.
+    children: HashMap<usize, Vec<std::ops::Range<usize>>>,
+    /// The node each node holds as its header.
+    headers: HashMap<usize, usize>,
+    /// Each signature's text and the span it covers, set when it closes.
+    signatures: HashMap<usize, (String, usize, usize)>,
+}
+
+/// `{base}{sep}{kind}-{n}`, as [`Emitter::mint`] makes it: see
+/// [`DocoOptions::base_iri`].
+fn iri(base: &str, kind: Kind, n: usize) -> String {
+    let sep = if base.is_empty() || base.ends_with(['/', '#', ':']) {
+        ""
+    } else {
+        "-"
+    };
+    format!("{base}{sep}{}-{n}", kind.name())
+}
+
+/// The DoCO document written as `serde_json::to_string_pretty` writes it,
+/// a node at a time: `@context`, then each node of `@graph` as it comes.
+struct GraphWriter<W: Write> {
+    out: std::io::BufWriter<W>,
+    nodes: usize,
+}
+
+/// `out` with `indent` written after each line break: a value pretty
+/// printed on its own, set where the whole document would nest it. JSON
+/// escapes a line break inside a string, so every one written is the
+/// printer's own.
+struct Indented<'a, W: Write> {
+    out: &'a mut W,
+    indent: &'static [u8],
+}
+
+impl<W: Write> Write for Indented<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut rest = buf;
+        while let Some(i) = rest.iter().position(|&b| b == b'\n') {
+            self.out.write_all(&rest[..=i])?;
+            self.out.write_all(self.indent)?;
+            rest = &rest[i + 1..];
+        }
+        self.out.write_all(rest)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.out.flush()
+    }
+}
+
+impl<W: Write> GraphWriter<W> {
+    fn begin(out: W, context: &Value) -> std::io::Result<Self> {
+        let mut out = std::io::BufWriter::with_capacity(1 << 16, out);
+        out.write_all(b"{\n  \"@context\": ")?;
+        let mut indented = Indented {
+            out: &mut out,
+            indent: b"  ",
+        };
+        serde_json::to_writer_pretty(&mut indented, context)?;
+        out.write_all(b",\n  \"@graph\": [")?;
+        Ok(Self { out, nodes: 0 })
+    }
+
+    fn node(&mut self, node: &impl Serialize) -> std::io::Result<()> {
+        let sep: &[u8] = if self.nodes == 0 {
+            b"\n    "
+        } else {
+            b",\n    "
+        };
+        self.out.write_all(sep)?;
+        let mut indented = Indented {
+            out: &mut self.out,
+            indent: b"    ",
+        };
+        serde_json::to_writer_pretty(&mut indented, node)?;
+        self.nodes += 1;
+        Ok(())
+    }
+
+    fn end(mut self) -> std::io::Result<()> {
+        let close: &[u8] = if self.nodes == 0 {
+            b"]\n}"
+        } else {
+            b"\n  ]\n}"
+        };
+        self.out.write_all(close)?;
+        self.out.flush()
+    }
+}
+
+/// A node as it is written: its properties, with `po:contains` and
+/// `doc:link` (held as placeholders, so they sort where the map puts them)
+/// written from runs of numbers rather than built as arrays first: a
+/// table's cells run to half a million, a line's links to 600,000.
+struct NodeOut<'a> {
+    props: &'a Map<String, Value>,
+    contains: Contains<'a>,
+    /// Its `doc:link`, held as a placeholder too: the link nodes after it.
+    links: Contains<'a>,
+}
+
+impl Serialize for NodeOut<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut map = s.serialize_map(Some(self.props.len()))?;
+        for (k, v) in self.props {
+            if k == "po:contains" {
+                map.serialize_entry(k, &self.contains)?;
+            } else if k == "doc:link" {
+                map.serialize_entry(k, &self.links)?;
+            } else {
+                map.serialize_entry(k, v)?;
+            }
+        }
+        map.end()
+    }
+}
+
+/// The IRIs of a node's children, from their runs of numbers.
+struct Contains<'a> {
+    base: &'a str,
+    kinds: &'a [Kind],
+    runs: &'a [std::ops::Range<usize>],
+}
+
+impl Serialize for Contains<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let n = self.runs.iter().map(ExactSizeIterator::len).sum();
+        let mut seq = s.serialize_seq(Some(n))?;
+        for i in self.runs.iter().cloned().flatten() {
+            seq.serialize_element(&iri(self.base, self.kinds[i], i))?;
+        }
+        seq.end()
+    }
+}
+
+/// Builds the graph's nodes in the order they are written, on either walk
+/// of [`write_doco`]: the first records the [`Plan`] and writes nothing,
+/// the second writes each node once it is whole, with what the plan says it
+/// contains.
+struct Emitter<'a, W: Write> {
     opts: &'a DocoOptions,
-    nodes: Vec<Map<String, Value>>,
-    /// node index → ordered child IRIs (kept separate so `po:contains` can be
-    /// attached in one pass at the end).
-    children: Vec<Vec<String>>,
-    /// node index → the child IRI it holds as its header.
-    headers: Vec<Option<String>>,
+    /// The nodes made and not yet written, from node `written` on. A node
+    /// is whole once the element that made it is emitted (a cell, once it
+    /// is made): nothing set later is set on the node itself.
+    pending: Vec<Map<String, Value>>,
+    written: usize,
+    /// Where the second walk writes; `None` on the first.
+    out: Option<GraphWriter<W>>,
+    /// On the first walk, what the second needs; on the second, read.
+    plan: Plan,
+    /// The first walk keeping every node rather than dropping it once
+    /// whole, for the tests' reference: the graph built whole.
+    keep: bool,
+    /// The `doc:Link` nodes each element not yet written names, by
+    /// number: its `doc:link`.
+    link_runs: HashMap<usize, std::ops::Range<usize>>,
+    /// The element whose links [`Emitter::emit_links`] makes next, and
+    /// where its text starts in the projection.
+    links_due: Option<(usize, Option<usize>)>,
+    /// The most nodes held at once, for the tests.
+    #[cfg(test)]
+    most_held: usize,
     counter: usize,
     /// (id-index of open section, its level)
     open_sections: Vec<(usize, usize)>,
@@ -1201,6 +1402,12 @@ struct Emitter<'a> {
     /// `doc:Message` nodes by the id of the element that opened them, for
     /// an element that goes back to one.
     messages: HashMap<String, usize>,
+    /// Each `doc:Message` node's `doc:from`, for the signatures in it: the
+    /// message itself may be written by then.
+    senders: HashMap<usize, Value>,
+    /// The mailboxes minted with an address, in order, with their name and
+    /// IRI, for a mailbox written with a name alone.
+    addressed: Vec<(Option<String>, String)>,
     /// The `doc:Signature` the current elements go into, with its text so
     /// far and where that starts and ends in the projection.
     open_signature: Option<OpenSignature>,
@@ -1238,55 +1445,155 @@ struct TablePart {
     placed: bool,
 }
 
-impl<'a> Emitter<'a> {
-    fn mint(&mut self, kind: &str) -> String {
-        let base = &self.opts.base_iri;
-        let sep = if base.is_empty() || base.ends_with(['/', '#', ':']) {
-            ""
-        } else {
-            "-"
-        };
-        let iri = format!("{base}{sep}{kind}-{}", self.counter);
+impl<'a, W: Write> Emitter<'a, W> {
+    fn new(opts: &'a DocoOptions, out: Option<GraphWriter<W>>, plan: Plan) -> Self {
+        Emitter {
+            opts,
+            pending: Vec::new(),
+            written: 0,
+            out,
+            plan,
+            keep: false,
+            link_runs: HashMap::new(),
+            links_due: None,
+            #[cfg(test)]
+            most_held: 0,
+            counter: 0,
+            open_sections: Vec::new(),
+            open_message: None,
+            messages: HashMap::new(),
+            senders: HashMap::new(),
+            addressed: Vec::new(),
+            open_signature: None,
+            mailboxes: HashMap::new(),
+            tables: HashMap::new(),
+            body_idx: 0,
+        }
+    }
+
+    /// Whether this is the first walk, which plans and writes nothing.
+    fn planning(&self) -> bool {
+        self.out.is_none()
+    }
+
+    /// Whether this is the first walk, and it keeps no node: a node's
+    /// properties are not needed, only that it is there.
+    fn only_planning(&self) -> bool {
+        self.planning() && !self.keep
+    }
+
+    /// Number the next node, of `kind`, returning its number and IRI.
+    fn mint(&mut self, kind: Kind) -> (usize, String) {
+        let n = self.counter;
         self.counter += 1;
-        iri
+        if self.planning() {
+            self.plan.kinds.push(kind);
+        } else {
+            debug_assert_eq!(self.plan.kinds.get(n), Some(&kind), "the walks part");
+        }
+        (n, iri(&self.opts.base_iri, kind, n))
+    }
+
+    /// The IRI node `idx`, of `kind`, was minted with.
+    fn iri_of(&self, kind: Kind, idx: usize) -> String {
+        iri(&self.opts.base_iri, kind, idx)
+    }
+
+    /// The properties of node `idx`, not written yet.
+    fn at(&mut self, idx: usize) -> &mut Map<String, Value> {
+        let i = idx
+            .checked_sub(self.written)
+            .expect("a DoCO node is set before it is written");
+        &mut self.pending[i]
     }
 
     /// Create a node stamped with its source document, returning its index.
-    fn node(&mut self, kind: &str, doco_type: &str, tag: Option<&str>) -> usize {
+    fn node(&mut self, kind: Kind, doco_type: &str, tag: Option<&str>) -> usize {
         let idx = self.unstamped(kind, doco_type, tag);
         if let Some(doc_iri) = &self.opts.doc_iri {
-            self.nodes[idx].insert("doc:sourceDocument".into(), json!({ "@id": doc_iri }));
+            let stamp = json!({ "@id": doc_iri });
+            self.at(idx).insert("doc:sourceDocument".into(), stamp);
         }
         idx
     }
 
     /// Create a node without the `doc:sourceDocument` stamp, for a node
     /// always reached through a stamped parent.
-    fn unstamped(&mut self, kind: &str, doco_type: &str, tag: Option<&str>) -> usize {
-        let iri = self.mint(kind);
+    fn unstamped(&mut self, kind: Kind, doco_type: &str, tag: Option<&str>) -> usize {
+        let (idx, iri) = self.mint(kind);
         let mut m = Map::new();
         m.insert("@id".into(), Value::String(iri));
         m.insert("@type".into(), Value::String(doco_type.into()));
         if let Some(tag) = tag {
             m.insert("doc:xhtmlTag".into(), Value::String(tag.into()));
         }
-        self.nodes.push(m);
-        self.children.push(Vec::new());
-        self.headers.push(None);
-        self.nodes.len() - 1
+        self.pending.push(m);
+        #[cfg(test)]
+        {
+            self.most_held = self.most_held.max(self.pending.len());
+        }
+        idx
     }
 
     /// Attach `child` as `parent`'s header: DoCO's `po:containsAsHeader`,
     /// and `po:contains` too, so a query for everything a section holds
     /// needs no second property.
     fn attach_header(&mut self, parent: usize, child: usize) {
-        self.headers[parent] = Some(self.nodes[child]["@id"].as_str().unwrap().to_string());
+        if self.planning() {
+            self.plan.headers.insert(parent, child);
+        }
         self.attach(parent, child);
     }
 
+    /// Record `child` as the next node `parent` contains: on the first
+    /// walk, which the second writes it from.
     fn attach(&mut self, parent: usize, child: usize) {
-        let child_iri = self.nodes[child]["@id"].as_str().unwrap().to_string();
-        self.children[parent].push(child_iri);
+        if !self.planning() {
+            return;
+        }
+        let runs = self.plan.children.entry(parent).or_default();
+        match runs.last_mut() {
+            Some(run) if run.end == child => run.end += 1,
+            _ => runs.push(child..child + 1),
+        }
+    }
+
+    /// Write every node made so far, each whole by now; on the first walk,
+    /// drop them (or, for the tests' reference, keep them).
+    fn flush(&mut self) -> std::io::Result<()> {
+        let Some(out) = &mut self.out else {
+            if !self.keep {
+                self.written += self.pending.len();
+                self.pending.clear();
+                self.link_runs.clear();
+            }
+            return Ok(());
+        };
+        let base = &self.opts.base_iri;
+        for (i, mut props) in self.pending.drain(..).enumerate() {
+            let idx = self.written + i;
+            if let Some(&h) = self.plan.headers.get(&idx) {
+                let header = iri(base, self.plan.kinds[h], h);
+                props.insert("po:containsAsHeader".into(), Value::String(header));
+            }
+            let runs = self.plan.children.get(&idx).map_or(&[][..], Vec::as_slice);
+            if !runs.is_empty() {
+                props.insert("po:contains".into(), Value::Null);
+            }
+            let links = self.link_runs.remove(&idx);
+            let kinds = &self.plan.kinds;
+            out.node(&NodeOut {
+                props: &props,
+                contains: Contains { base, kinds, runs },
+                links: Contains {
+                    base,
+                    kinds,
+                    runs: links.as_slice(),
+                },
+            })?;
+        }
+        self.written = self.counter;
+        Ok(())
     }
 
     /// The open signature, else the innermost open section, else the open
@@ -1308,12 +1615,18 @@ impl<'a> Emitter<'a> {
     /// sender's office, not the office of the company the thread discusses.
     fn open_signature(&mut self) {
         let parent = self.open_message.unwrap_or_else(|| self.current_parent());
-        let idx = self.node("signature", "doc:Signature", None);
+        let idx = self.node(Kind::Signature, "doc:Signature", None);
         if let Some(from) = self
             .open_message
-            .and_then(|m| self.nodes[m].get("doc:from").cloned())
+            .and_then(|m| self.senders.get(&m).cloned())
         {
-            self.nodes[idx].insert("doc:signer".into(), from);
+            self.at(idx).insert("doc:signer".into(), from);
+        }
+        // Its text is its elements', which come after it: the first walk
+        // found it.
+        if let Some((text, start, end)) = self.plan.signatures.get(&idx).cloned() {
+            self.set_text(idx, &text);
+            self.set_offsets(idx, start, end);
         }
         self.attach(parent, idx);
         self.open_signature = Some(OpenSignature {
@@ -1323,15 +1636,23 @@ impl<'a> Emitter<'a> {
         });
     }
 
-    /// Close the open signature, giving it the span its elements cover.
+    /// Close the open signature, giving it the span its elements cover: on
+    /// the first walk, recorded for the second, which writes the signature
+    /// before its elements.
     fn close_signature(&mut self) {
         let Some(sig) = self.open_signature.take() else {
             return;
         };
-        if let Some((start, end)) = sig.span {
+        let (Some((start, end)), true) = (sig.span, self.planning()) else {
+            return;
+        };
+        if self.keep {
             self.set_text(sig.node, &sig.text);
             self.set_offsets(sig.node, start, end);
         }
+        self.plan
+            .signatures
+            .insert(sig.node, (sig.text, start, end));
     }
 
     /// Go on with the `doc:Message` the element `opener` opened.
@@ -1372,29 +1693,29 @@ impl<'a> Emitter<'a> {
                     continue;
                 }
             }
-            let idx = self.node("mailbox", "doc:Mailbox", None);
+            let idx = self.node(Kind::Mailbox, "doc:Mailbox", None);
             if let Some(a) = &m.address {
-                self.nodes[idx].insert("doc:address".into(), Value::String(a.clone()));
+                self.at(idx)
+                    .insert("doc:address".into(), Value::String(a.clone()));
             }
             if let Some(n) = &m.name {
-                self.nodes[idx].insert("doc:name".into(), Value::String(n.clone()));
+                self.at(idx)
+                    .insert("doc:name".into(), Value::String(n.clone()));
             }
-            let iri = self.nodes[idx]["@id"].as_str().unwrap().to_string();
+            let iri = self.iri_of(Kind::Mailbox, idx);
+            if m.address.is_some() {
+                self.addressed.push((m.name.clone(), iri.clone()));
+            }
             self.mailboxes.insert(key, iri);
         }
     }
 
+    /// The first mailbox minted with an address under `name`, any case.
     fn mailbox_by_name(&self, name: &str) -> Option<String> {
-        self.nodes
+        self.addressed
             .iter()
-            .find(|n| {
-                n["@type"] == "doc:Mailbox"
-                    && n.get("doc:address").is_some()
-                    && n.get("doc:name")
-                        .and_then(Value::as_str)
-                        .is_some_and(|v| v.eq_ignore_ascii_case(name))
-            })
-            .map(|n| n["@id"].as_str().unwrap().to_string())
+            .find(|(n, _)| n.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(name)))
+            .map(|(_, iri)| iri.clone())
     }
 
     /// Open a `doc:Message` for an element that starts one, and describe it.
@@ -1406,7 +1727,7 @@ impl<'a> Emitter<'a> {
     /// open stay inside it.
     fn open_message(&mut self, m: &Message, opener: &str) {
         self.open_sections.clear();
-        let idx = self.node("message", "doc:Message", None);
+        let idx = self.node(Kind::Message, "doc:Message", None);
         self.messages.insert(opener.to_string(), idx);
         for (key, boxes) in [
             ("doc:from", &m.from),
@@ -1420,30 +1741,35 @@ impl<'a> Emitter<'a> {
                 .map(Value::String)
                 .collect();
             if !iris.is_empty() {
-                self.nodes[idx].insert(key.into(), Value::Array(iris));
+                if key == "doc:from" {
+                    self.senders.insert(idx, Value::Array(iris.clone()));
+                }
+                self.at(idx).insert(key.into(), Value::Array(iris));
             }
         }
         if let Some(d) = &m.date {
             if let Some(d) = date_time(d) {
-                self.nodes[idx].insert("doc:sentAt".into(), d);
+                self.at(idx).insert("doc:sentAt".into(), d);
             }
         }
         if let Some(s) = &m.subject {
-            self.nodes[idx].insert("doc:subject".into(), Value::String(s.clone()));
+            self.at(idx)
+                .insert("doc:subject".into(), Value::String(s.clone()));
         }
         if let Some(id) = &m.message_id {
-            self.nodes[idx].insert("doc:messageId".into(), Value::String(id.clone()));
+            self.at(idx)
+                .insert("doc:messageId".into(), Value::String(id.clone()));
         }
         for (key, ids) in [
             ("doc:inReplyTo", &m.in_reply_to),
             ("doc:references", &m.references),
         ] {
             if !ids.is_empty() {
-                self.nodes[idx].insert(key.into(), json!(ids));
+                self.at(idx).insert(key.into(), json!(ids));
             }
         }
         if m.quoted {
-            self.nodes[idx].insert("doc:quoted".into(), Value::Bool(true));
+            self.at(idx).insert("doc:quoted".into(), Value::Bool(true));
         }
         let body = self.body_idx;
         self.attach(body, idx);
@@ -1460,7 +1786,8 @@ impl<'a> Emitter<'a> {
         if trimmed.is_empty() {
             return;
         }
-        self.nodes[idx].insert("nif:isString".into(), Value::String(text.into()));
+        self.at(idx)
+            .insert("nif:isString".into(), Value::String(text.into()));
         let label: String = if trimmed.chars().count() > LABEL_MAX_CHARS {
             let mut l: String = trimmed.chars().take(LABEL_MAX_CHARS).collect();
             l.push('\u{2026}');
@@ -1468,44 +1795,65 @@ impl<'a> Emitter<'a> {
         } else {
             trimmed.into()
         };
-        self.nodes[idx].insert("rdfs:label".into(), Value::String(label));
+        self.at(idx)
+            .insert("rdfs:label".into(), Value::String(label));
     }
 
     fn set_provenance(&mut self, idx: usize, e: &Element) {
-        self.nodes[idx].insert("doc:pageIndex".into(), json!(e.page));
+        self.at(idx).insert("doc:pageIndex".into(), json!(e.page));
         // Only sources with layout carry a box. Emitting zeros for the rest
         // would hand every consumer a real-looking position.
         if let Some(b) = e.bbox {
-            self.nodes[idx].insert(
+            self.at(idx).insert(
                 "doc:bbox".into(),
                 Value::String(format!("{:.2},{:.2},{:.2},{:.2}", b.x0, b.y0, b.x1, b.y1)),
             );
         }
-        self.nodes[idx].insert("doc:evidence".into(), Value::String(e.evidence.into()));
+        self.at(idx)
+            .insert("doc:evidence".into(), Value::String(e.evidence.into()));
         // A recording places an element in time rather than on a page.
         // Plain integers, so "what was said between minute 4 and 5" is a
         // numeric comparison in any query language.
         if let Some(t) = &e.turn {
             if let Some(s) = &t.speaker {
-                self.nodes[idx].insert("doc:speaker".into(), Value::String(s.clone()));
+                self.at(idx)
+                    .insert("doc:speaker".into(), Value::String(s.clone()));
             }
-            self.nodes[idx].insert("doc:startMs".into(), json!(t.start_ms));
-            self.nodes[idx].insert("doc:endMs".into(), json!(t.end_ms));
+            self.at(idx).insert("doc:startMs".into(), json!(t.start_ms));
+            self.at(idx).insert("doc:endMs".into(), json!(t.end_ms));
         }
     }
 
     fn set_offsets(&mut self, idx: usize, start: usize, end: usize) {
-        self.nodes[idx].insert("nif:beginIndex".into(), json!(start));
-        self.nodes[idx].insert("nif:endIndex".into(), json!(end));
+        self.at(idx).insert("nif:beginIndex".into(), json!(start));
+        self.at(idx).insert("nif:endIndex".into(), json!(end));
     }
 
-    /// Emit a `doc:Link` node per link on this element and reference them
-    /// from it.
+    /// Reference from element `idx` a `doc:Link` node per link on it,
+    /// made by [`Emitter::emit_links`] once the element is whole.
     ///
     /// A node rather than a property on the element, because an element can
     /// carry several links and each one has its own anchor: flattening them
     /// onto the element would leave a consumer with a set of targets and no
     /// way to tell which words point where.
+    ///
+    /// The link nodes are numbered right after the element's own, so the
+    /// element names them before they are made: `doc:link` is held as a
+    /// placeholder and written from their run of numbers, as `po:contains`
+    /// is. An element of 600,000 links holds none of their nodes.
+    fn set_links(&mut self, idx: usize, e: &Element, text_start: Option<usize>) {
+        let n = e.links.as_ref().map_or(0, Vec::len);
+        if n == 0 {
+            return;
+        }
+        self.at(idx).insert("doc:link".into(), Value::Null);
+        let first = self.counter;
+        self.link_runs.insert(idx, first..first + n);
+        self.links_due = Some((idx, text_start));
+    }
+
+    /// Make the `doc:Link` nodes [`Emitter::set_links`] named for `e`, once
+    /// the element is written, each written once made.
     ///
     /// Anchor offsets land in the same space as every other offset in the
     /// graph — characters into the text projection — so the interval lookup
@@ -1514,56 +1862,67 @@ impl<'a> Emitter<'a> {
     /// projection is not the element's own text (a table, whose cells are
     /// joined with tabs) it is `None`, and the link is emitted without
     /// offsets rather than with wrong ones.
-    fn set_links(&mut self, idx: usize, e: &Element, text_start: Option<usize>) {
-        let Some(links) = e.links.clone() else {
-            return;
+    fn emit_links(&mut self, e: &Element) -> std::io::Result<()> {
+        let Some((idx, text_start)) = self.links_due.take() else {
+            return Ok(());
         };
+        let links = e.links.as_deref().unwrap_or_default();
+        debug_assert_eq!(
+            self.link_runs.get(&idx).map(|r| r.start),
+            Some(self.counter)
+        );
+        self.flush()?;
         // The projection trims the element's text, so offsets into it have
         // to trim with it.
         let lead = e.text.chars().take_while(|c| c.is_whitespace()).count();
-        // Where each character starts, and the text's end: an anchor is cut
-        // by its offsets in one step, where skipping to each anchor is
-        // quadratic in an element of many links (600,000 on one line).
-        let starts: Vec<usize> = e
-            .text
-            .char_indices()
-            .map(|(i, _)| i)
-            .chain(std::iter::once(e.text.len()))
+        // Where each anchor's first and last characters start, found in one
+        // walk of the text: skipping to each anchor is quadratic in an
+        // element of many links (600,000 on one line), and where every
+        // character starts is eight bytes a character.
+        let mut wanted: Vec<usize> = (links.iter().filter_map(Link::span))
+            .flat_map(|(b, end)| [b, end.max(b)])
             .collect();
-        let at = |c: usize| starts[c.min(starts.len() - 1)];
-        let mut iris = Vec::new();
-        for l in &links {
-            let node = self.node("link", "doc:Link", None);
+        wanted.sort_unstable();
+        wanted.dedup();
+        let mut bytes = Vec::with_capacity(wanted.len());
+        let mut chars = e.text.char_indices().map(|(i, _)| i).enumerate();
+        for &c in &wanted {
+            let byte = chars.by_ref().find(|&(k, _)| k == c).map(|(_, i)| i);
+            // Past the text, its end.
+            bytes.push(byte.unwrap_or(e.text.len()));
+            if byte.is_none() {
+                break;
+            }
+        }
+        bytes.resize(wanted.len(), e.text.len());
+        let at = |c: usize| bytes[wanted.binary_search(&c).unwrap_or_default()];
+        for l in links {
+            let node = self.node(Kind::Link, "doc:Link", None);
             match &l.target {
                 // A literal, not a node: every directory of every address
                 // a corpus links to would otherwise become a namespace in
                 // the store, and which ones is up to the documents.
                 Target::Uri { uri } => {
-                    self.nodes[node].insert(
+                    self.at(node).insert(
                         "doc:linkTarget".into(),
                         json!({ "@value": uri, "@type": "xsd:anyURI" }),
                     );
                 }
                 Target::Page { page } => {
-                    self.nodes[node].insert("doc:linkPage".into(), json!(page));
+                    self.at(node).insert("doc:linkPage".into(), json!(page));
                 }
             }
             if let (Some(start), Some((b, end))) = (text_start, l.span()) {
                 if b >= lead {
                     self.set_offsets(node, start + b - lead, start + end - lead);
                     let anchor = e.text[at(b)..at(end.max(b))].to_string();
-                    self.nodes[node].insert("nif:isString".into(), Value::String(anchor));
+                    self.at(node)
+                        .insert("nif:isString".into(), Value::String(anchor));
                 }
             }
-            iris.push(self.nodes[node]["@id"].as_str().unwrap().to_string());
+            self.flush()?;
         }
-        if iris.is_empty() {
-            return;
-        }
-        self.nodes[idx].insert(
-            "doc:link".into(),
-            Value::Array(iris.into_iter().map(Value::String).collect()),
-        );
+        Ok(())
     }
 }
 
@@ -1593,57 +1952,116 @@ fn date_time(v: &str) -> Option<Value> {
     Some(json!({ "@value": v, "@type": ty }))
 }
 
+/// The DoCO JSON-LD graph of `elements`, as one string: what
+/// [`write_doco`] writes, made in memory. A document of many table cells
+/// is written rather than held: see [`write_doco`].
 pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
-    let mut em = Emitter {
-        opts,
-        nodes: Vec::new(),
-        children: Vec::new(),
-        headers: Vec::new(),
-        counter: 0,
-        open_sections: Vec::new(),
-        open_message: None,
-        messages: HashMap::new(),
-        open_signature: None,
-        mailboxes: HashMap::new(),
-        tables: HashMap::new(),
-        body_idx: 0,
-    };
+    let mut out = Vec::new();
+    write_doco(elements, opts, &mut out).expect("writing into memory does not fail");
+    String::from_utf8(out).expect("JSON is written as UTF-8")
+}
 
+/// Write the DoCO JSON-LD graph of `elements` to `out`, a node at a time,
+/// byte for byte what [`to_doco`] returns. `out` is buffered here.
+///
+/// The graph is never held whole: a table's cells are most of a large
+/// document's graph, half a million nodes for a table of half a million
+/// cells, each with its labels, and held they took 3 KB a cell. Each node
+/// is written once it is whole, so what is held is the elements, the state
+/// the walk carries (the sections open, a table's column names, the IRIs of
+/// the mailboxes) and, for each node, its kind and what it contains.
+///
+/// The elements are walked twice. A node is written before the nodes it
+/// contains, the body first, a table before its cells, so what it contains
+/// must be known before they are made: the first walk finds it and writes
+/// nothing, the second writes.
+pub fn write_doco<W: Write>(
+    elements: &[Element],
+    opts: &DocoOptions,
+    out: W,
+) -> std::io::Result<()> {
+    let mut first = Emitter::<std::io::Sink>::new(opts, None, Plan::default());
+    walk(&mut first, elements)?;
+    let out = GraphWriter::begin(out, &context())?;
+    let mut second = Emitter::new(opts, Some(out), first.plan);
+    walk(&mut second, elements)?;
+    match second.out.take() {
+        Some(out) => out.end(),
+        None => unreachable!("the second walk writes"),
+    }
+}
+
+/// The graph's `@context`.
+fn context() -> Value {
+    json!({
+        "doco": "http://purl.org/spar/doco/",
+        "po": "http://www.essepuntato.it/2008/12/pattern#",
+        "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+        "nif": "http://persistence.uni-leipzig.org/nlp2rdf/ontologies/nif-core#",
+        "doc": "https://ns.flur.ee/doc#",
+        "dcterms": "http://purl.org/dc/terms/",
+        "foaf": "http://xmlns.com/foaf/0.1/",
+        "xsd": "http://www.w3.org/2001/XMLSchema#",
+        // Containment edges must ingest as IRI references, not literals.
+        "po:contains": { "@type": "@id" },
+        "po:containsAsHeader": { "@type": "@id" },
+        // A link's anchor is a node of the graph. Its target is an
+        // `xsd:anyURI` literal on that node.
+        "doc:link": { "@type": "@id" },
+        // A message's sender and recipients, and a signature's signer,
+        // are the graph's mailbox nodes.
+        "doc:from": { "@type": "@id" },
+        "doc:to": { "@type": "@id" },
+        "doc:cc": { "@type": "@id" },
+        "doc:bcc": { "@type": "@id" },
+        "doc:signer": { "@type": "@id" },
+        // A table carried on from the page before names the part it
+        // carries on.
+        "doc:continues": { "@type": "@id" },
+    })
+}
+
+/// One walk of `elements`, making the graph's nodes in order: the document,
+/// its body, the mailboxes, then each element's.
+fn walk<W: Write>(em: &mut Emitter<'_, W>, elements: &[Element]) -> std::io::Result<()> {
+    let opts = em.opts;
     // FOAF's document class: DoCO roots its own examples in a FaBiO
     // bibliographic class, which a spreadsheet or an email is not.
-    let doc_idx = em.node("element", "foaf:Document", Some("html"));
+    let doc_idx = em.node(Kind::Element, "foaf:Document", Some("html"));
     if let Some(h) = &opts.sha256 {
-        em.nodes[doc_idx].insert("doc:sha256".into(), Value::String(h.clone()));
+        em.at(doc_idx)
+            .insert("doc:sha256".into(), Value::String(h.clone()));
     }
     if let Some(n) = &opts.source_name {
-        em.nodes[doc_idx].insert("doc:sourceName".into(), Value::String(n.clone()));
+        em.at(doc_idx)
+            .insert("doc:sourceName".into(), Value::String(n.clone()));
     }
     if !opts.running_text.is_empty() {
-        em.nodes[doc_idx].insert(
+        em.at(doc_idx).insert(
             "doc:runningText".into(),
             json!({ "@type": "@json", "@value": opts.running_text }),
         );
     }
     if !opts.unread.is_empty() {
-        em.nodes[doc_idx].insert(
+        em.at(doc_idx).insert(
             "doc:unreadPages".into(),
             json!({ "@type": "@json", "@value": opts.unread }),
         );
     }
     if !opts.warnings.is_empty() {
-        em.nodes[doc_idx].insert(
+        em.at(doc_idx).insert(
             "doc:parseWarnings".into(),
             json!({ "@type": "@json", "@value": opts.warnings }),
         );
     }
     if !opts.unread_regions.is_empty() {
-        em.nodes[doc_idx].insert(
+        em.at(doc_idx).insert(
             "doc:unreadRegions".into(),
             json!({ "@type": "@json", "@value": opts.unread_regions }),
         );
     }
     if !opts.unread_images.is_empty() {
-        em.nodes[doc_idx].insert(
+        em.at(doc_idx).insert(
             "doc:unreadImages".into(),
             json!({ "@type": "@json", "@value": opts.unread_images }),
         );
@@ -1651,7 +2069,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     if !opts.ocr_readings.is_empty() {
         // A JSON literal, as the unread pages are: facts about how the
         // document was read, not things a graph should grow edges to.
-        em.nodes[doc_idx].insert(
+        em.at(doc_idx).insert(
             "doc:ocrReadings".into(),
             json!({ "@type": "@json", "@value": opts.ocr_readings }),
         );
@@ -1659,17 +2077,19 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     if !opts.pages.is_empty() {
         // A JSON literal rather than a node per page: these are the page's
         // measurements, not things a graph should grow edges to.
-        em.nodes[doc_idx].insert(
+        em.at(doc_idx).insert(
             "doc:pages".into(),
             json!({ "@type": "@json", "@value": opts.pages }),
         );
     }
     let info = &opts.info;
     if let Some(t) = &info.title {
-        em.nodes[doc_idx].insert("dcterms:title".into(), Value::String(t.clone()));
+        em.at(doc_idx)
+            .insert("dcterms:title".into(), Value::String(t.clone()));
     }
     if !info.creators.is_empty() {
-        em.nodes[doc_idx].insert("dcterms:creator".into(), json!(info.creators));
+        em.at(doc_idx)
+            .insert("dcterms:creator".into(), json!(info.creators));
     }
     for (key, value) in [
         ("dcterms:created", &info.created),
@@ -1677,17 +2097,17 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     ] {
         if let Some(v) = value {
             if let Some(v) = date_time(v) {
-                em.nodes[doc_idx].insert(key.into(), v);
+                em.at(doc_idx).insert(key.into(), v);
             }
         }
     }
     if !opts.attachments.is_empty() {
-        em.nodes[doc_idx].insert(
+        em.at(doc_idx).insert(
             "doc:attachments".into(),
             json!({ "@type": "@json", "@value": opts.attachments }),
         );
     }
-    let body_idx = em.node("element", "doco:BodyMatter", Some("body"));
+    let body_idx = em.node(Kind::Element, "doco:BodyMatter", Some("body"));
     em.body_idx = body_idx;
     em.attach(doc_idx, body_idx);
     em.register_mailboxes(elements);
@@ -1729,7 +2149,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             // heading.
             "doco:Title" if !titled => {
                 titled = true;
-                let title = em.node("element", "doco:Title", Some("h1"));
+                let title = em.node(Kind::Element, "doco:Title", Some("h1"));
                 let text = projection_text(e);
                 em.set_text(title, &text);
                 em.set_provenance(title, e);
@@ -1749,11 +2169,16 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     em.open_sections.pop();
                 }
                 let parent = em.current_parent();
-                let section = em.node("section", "doco:Section", None);
-                em.nodes[section].insert("doc:sectionLevel".into(), json!(level));
+                let section = em.node(Kind::Section, "doco:Section", None);
+                em.at(section)
+                    .insert("doc:sectionLevel".into(), json!(level));
                 em.attach(parent, section);
 
-                let title = em.node("element", "doco:SectionTitle", Some(&format!("h{level}")));
+                let title = em.node(
+                    Kind::Element,
+                    "doco:SectionTitle",
+                    Some(&format!("h{level}")),
+                );
                 let text = projection_text(e);
                 em.set_text(title, &text);
                 em.set_provenance(title, e);
@@ -1780,14 +2205,14 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     Some(&(l, depth, last)) if depth == d || last.is_none() => l,
                     // One deeper: a list inside the item before.
                     Some(&(_, _, Some(parent))) => {
-                        let l = em.node("element", "doco:List", Some("ul"));
+                        let l = em.node(Kind::Element, "doco:List", Some("ul"));
                         em.attach(parent, l);
                         open_lists.push((l, d, None));
                         l
                     }
                     _ => {
                         let parent = em.current_parent();
-                        let l = em.node("element", "doco:List", Some("ul"));
+                        let l = em.node(Kind::Element, "doco:List", Some("ul"));
                         em.attach(parent, l);
                         open_lists.push((l, d, None));
                         l
@@ -1795,7 +2220,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 };
                 // A list item is the block it holds, a paragraph; being
                 // contained by the list is what makes it a member.
-                let item = em.node("element", "doco:Paragraph", Some("li"));
+                let item = em.node(Kind::Element, "doco:Paragraph", Some("li"));
                 let text = projection_text(e);
                 em.set_text(item, &text);
                 em.set_provenance(item, e);
@@ -1811,7 +2236,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             }
             "doco:Table" => {
                 let parent = em.current_parent();
-                let table = em.node("table", "doco:Table", Some("table"));
+                let table = em.node(Kind::Table, "doco:Table", Some("table"));
                 let text = projection_text(e);
                 em.set_text(table, &text);
                 em.set_provenance(table, e);
@@ -1834,6 +2259,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     .and_then(|id| em.tables.get(id))
                     .filter(|p| Some(p.last.len()) == ncols);
                 let (
+                    continues,
                     header_before,
                     last_before,
                     rows_before,
@@ -1842,29 +2268,32 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     opening_before,
                     lone_before,
                 ) = match earlier {
-                    Some(p) => {
-                        em.nodes[table]
-                            .insert("doc:continues".into(), Value::String(p.iri.clone()));
-                        (
-                            Some(p.names_at_end.clone()),
-                            Some(p.last.clone()),
-                            p.rows,
-                            Some((p.head.clone(), p.head_left.clone(), p.header_only)),
-                            // A part split from the one before on the same page
-                            // was parted at the table's own rule or gap, which
-                            // closes the band over it as a blank row does: the
-                            // band carries over a page break only. Parts the
-                            // page does not place (HTML's, all page 0) are linked
-                            // by their reader at a page break only.
-                            p.band_at_end
-                                .clone()
-                                .filter(|_| p.page < e.page || !(p.placed && e.bbox.is_some())),
-                            Some(p.opening.clone()),
-                            p.lone_end.clone(),
-                        )
-                    }
-                    None => (None, None, 0, None, None, None, None),
+                    Some(p) => (
+                        Some(p.iri.clone()),
+                        Some(p.names_at_end.clone()),
+                        Some(p.last.clone()),
+                        p.rows,
+                        Some((p.head.clone(), p.head_left.clone(), p.header_only)),
+                        // A part split from the one before on the same page
+                        // was parted at the table's own rule or gap, which
+                        // closes the band over it as a blank row does: the
+                        // band carries over a page break only. Parts the
+                        // page does not place (HTML's, all page 0) are linked
+                        // by their reader at a page break only.
+                        p.band_at_end
+                            .clone()
+                            .filter(|_| p.page < e.page || !(p.placed && e.bbox.is_some())),
+                        Some(p.opening.clone()),
+                        p.lone_end.clone(),
+                    ),
+                    None => (None, None, None, 0, None, None, None, None),
                 };
+                if let Some(iri) = continues {
+                    em.at(table)
+                        .insert("doc:continues".into(), Value::String(iri));
+                }
+                // The table is whole: its links come next, then its cells.
+                em.emit_links(e)?;
 
                 // Cell entities: data rows index from 0 below the measured
                 // header (`header_rows` — absent means undetected, treated
@@ -2321,10 +2750,17 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             if value.is_empty() {
                                 continue;
                             }
-                            let cell_idx = em.unstamped("cell", "doc:TableCell", None);
-                            em.nodes[cell_idx]
+                            let cell_idx = em.unstamped(Kind::Cell, "doc:TableCell", None);
+                            em.attach(table, cell_idx);
+                            // The first walk needs of a cell only that it
+                            // is there.
+                            if em.only_planning() {
+                                em.flush()?;
+                                continue;
+                            }
+                            em.at(cell_idx)
                                 .insert("doc:rowIndex".into(), json!(rows_before + r - n_header));
-                            em.nodes[cell_idx].insert("doc:columnIndex".into(), json!(c));
+                            em.at(cell_idx).insert("doc:columnIndex".into(), json!(c));
                             // A cell set across every column of its row, a
                             // band or a note closing the table, is no one
                             // column's value: the first column's header
@@ -2338,18 +2774,18 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 .or(header.get(c))
                                 .filter(|h| !h.is_empty() && !whole_row)
                             {
-                                em.nodes[cell_idx]
+                                em.at(cell_idx)
                                     .insert("doc:columnHeader".into(), Value::String(h.clone()));
                             }
                             if let Some(s) = section {
-                                em.nodes[cell_idx]
+                                em.at(cell_idx)
                                     .insert("doc:sectionLabel".into(), Value::String(s.into()));
                             }
                             if c > first && !row_header.is_empty() {
-                                em.nodes[cell_idx]
+                                em.at(cell_idx)
                                     .insert("doc:rowHeader".into(), Value::String(row_header));
                             }
-                            em.nodes[cell_idx]
+                            em.at(cell_idx)
                                 .insert("doc:cellValue".into(), Value::String(value.into()));
                             // Whether the value is this cell's own: merge
                             // denormalisation can synthesise or rejoin
@@ -2380,19 +2816,18 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 .then(|| e.datums.as_ref()?.get(r)?.get(c)?.as_ref())
                                 .flatten()
                             {
-                                em.nodes[cell_idx].insert(
+                                em.at(cell_idx).insert(
                                     "doc:cellDatum".into(),
                                     json!({ "@value": d.value, "@type": d.datatype }),
                                 );
                             }
-                            em.attach(table, cell_idx);
+                            // Written now: a table of half a million cells
+                            // is not held.
+                            em.flush()?;
                         }
                     }
                     if let Some(last) = rows.last() {
-                        let iri = em.nodes[table]["@id"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_string();
+                        let iri = em.iri_of(Kind::Table, table);
                         // What names the rows the break carries on: a header
                         // restated down to the last row (or on it), else the
                         // part's own; the band open over them. The loop above
@@ -2480,7 +2915,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             // the bbox travels with it.
             "doco:Figure" => {
                 let parent = em.current_parent();
-                let f = em.node("element", "doco:Figure", Some("figure"));
+                let f = em.node(Kind::Element, "doco:Figure", Some("figure"));
                 let text = projection_text(e);
                 em.set_text(f, &text);
                 em.set_provenance(f, e);
@@ -2490,14 +2925,15 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 let start = span.map(|(s, _)| s);
                 em.set_links(f, e, start);
                 if let Some(id) = &e.figure {
-                    em.nodes[f].insert("doc:figure".into(), Value::String(id.clone()));
+                    em.at(f)
+                        .insert("doc:figure".into(), Value::String(id.clone()));
                 }
                 em.attach(parent, f);
             }
             // doco:Paragraph and anything else text-bearing.
             _ => {
                 let parent = em.current_parent();
-                let p = em.node("element", &e.kind, Some("p"));
+                let p = em.node(Kind::Element, &e.kind, Some("p"));
                 let text = projection_text(e);
                 em.set_text(p, &text);
                 em.set_provenance(p, e);
@@ -2509,71 +2945,23 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 em.attach(parent, p);
             }
         }
-        if let (Some(sig), Some((start, end))) = (em.open_signature.as_mut(), span) {
+        // The element is whole: the links it names are made after it.
+        em.emit_links(e)?;
+        // A signature's text is gathered on the first walk, which records it
+        // for the second.
+        let planning = em.planning();
+        if let (Some(sig), Some((start, end)), true) = (em.open_signature.as_mut(), span, planning)
+        {
             if !sig.text.is_empty() {
                 sig.text.push_str("\n\n");
             }
             sig.text.push_str(&projection_text(e));
             sig.span = Some((sig.span.map_or(start, |s| s.0), end));
         }
+        em.flush()?;
     }
     em.close_signature();
-
-    // Attach po:contains and build the graph.
-    let Emitter {
-        nodes,
-        children,
-        headers,
-        ..
-    } = em;
-    let graph: Vec<Value> = nodes
-        .into_iter()
-        .zip(children)
-        .zip(headers)
-        .map(|((mut n, kids), header)| {
-            if let Some(h) = header {
-                n.insert("po:containsAsHeader".into(), Value::String(h));
-            }
-            if !kids.is_empty() {
-                n.insert(
-                    "po:contains".into(),
-                    Value::Array(kids.into_iter().map(Value::String).collect()),
-                );
-            }
-            Value::Object(n)
-        })
-        .collect();
-
-    let doc = json!({
-        "@context": {
-            "doco": "http://purl.org/spar/doco/",
-            "po": "http://www.essepuntato.it/2008/12/pattern#",
-            "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-            "nif": "http://persistence.uni-leipzig.org/nlp2rdf/ontologies/nif-core#",
-            "doc": "https://ns.flur.ee/doc#",
-            "dcterms": "http://purl.org/dc/terms/",
-            "foaf": "http://xmlns.com/foaf/0.1/",
-            "xsd": "http://www.w3.org/2001/XMLSchema#",
-            // Containment edges must ingest as IRI references, not literals.
-            "po:contains": { "@type": "@id" },
-            "po:containsAsHeader": { "@type": "@id" },
-            // A link's anchor is a node of the graph. Its target is an
-            // `xsd:anyURI` literal on that node.
-            "doc:link": { "@type": "@id" },
-            // A message's sender and recipients, and a signature's signer,
-            // are the graph's mailbox nodes.
-            "doc:from": { "@type": "@id" },
-            "doc:to": { "@type": "@id" },
-            "doc:cc": { "@type": "@id" },
-            "doc:bcc": { "@type": "@id" },
-            "doc:signer": { "@type": "@id" },
-            // A table carried on from the page before names the part it
-            // carries on.
-            "doc:continues": { "@type": "@id" },
-        },
-        "@graph": graph,
-    });
-    serde_json::to_string_pretty(&doc).unwrap()
+    em.flush()
 }
 
 /// The number an ordered list's item opens with, `3.` or `3)`.
@@ -2612,6 +3000,7 @@ fn counted_across(elements: &[Element], i: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::element::Link;
     use crate::geom::BBox;
 
     fn el(kind: &str, text: &str, level: Option<usize>) -> Element {
@@ -2638,8 +3027,45 @@ mod tests {
         }
     }
 
+    /// `to_doco`, held to the graph built whole: every test of the graph
+    /// is a test that writing it a node at a time changes no byte.
+    fn doco(elements: &[Element], opts: &DocoOptions) -> String {
+        let written = to_doco(elements, opts);
+        assert_eq!(written, whole(elements, opts), "written apart from whole");
+        written
+    }
+
+    /// The graph built whole, every node held, then printed at once: what
+    /// `to_doco` returned before the graph was written a node at a time,
+    /// and the reference the written one is held to, byte for byte.
+    fn whole(elements: &[Element], opts: &DocoOptions) -> String {
+        let mut em = Emitter::<std::io::Sink>::new(opts, None, Plan::default());
+        em.keep = true;
+        walk(&mut em, elements).unwrap();
+        let (base, plan) = (&opts.base_iri, &em.plan);
+        let node = |i: usize| Value::String(iri(base, plan.kinds[i], i));
+        let graph: Vec<Value> = (em.pending.iter().cloned().enumerate())
+            .map(|(i, mut n)| {
+                if let Some(&h) = plan.headers.get(&i) {
+                    n.insert("po:containsAsHeader".into(), node(h));
+                }
+                if let Some(runs) = plan.children.get(&i) {
+                    let kids = runs.iter().cloned().flatten().map(node).collect();
+                    n.insert("po:contains".into(), Value::Array(kids));
+                }
+                if let Some(links) = em.link_runs.get(&i) {
+                    let links = links.clone().map(node).collect();
+                    n.insert("doc:link".into(), Value::Array(links));
+                }
+                Value::Object(n)
+            })
+            .collect();
+        let doc = json!({ "@context": context(), "@graph": graph });
+        serde_json::to_string_pretty(&doc).unwrap()
+    }
+
     fn graph(elements: &[Element]) -> Vec<Value> {
-        let v: Value = serde_json::from_str(&to_doco(elements, &opts())).unwrap();
+        let v: Value = serde_json::from_str(&doco(elements, &opts())).unwrap();
         v["@graph"].as_array().unwrap().clone()
     }
 
@@ -4022,7 +4448,7 @@ mod tests {
             }],
             ..opts()
         };
-        let v: Value = serde_json::from_str(&to_doco(&els, &o)).unwrap();
+        let v: Value = serde_json::from_str(&doco(&els, &o)).unwrap();
         let g = v["@graph"].as_array().unwrap();
         assert_eq!(
             find(g, "foaf:Document")[0]["doc:parseWarnings"],
@@ -4052,7 +4478,7 @@ mod tests {
             }],
             ..opts()
         };
-        let v: Value = serde_json::from_str(&to_doco(&els, &o)).unwrap();
+        let v: Value = serde_json::from_str(&doco(&els, &o)).unwrap();
         let g = v["@graph"].as_array().unwrap();
         let doc = find(g, "foaf:Document")[0];
         // A JSON literal, the box written as `doc:bbox` writes one.
@@ -4081,7 +4507,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let v: Value = serde_json::from_str(&to_doco(&[], &o)).unwrap();
+        let v: Value = serde_json::from_str(&doco(&[], &o)).unwrap();
         let doc = &v["@graph"][0];
         assert_eq!(doc["doc:unreadImages"]["@type"], "@json");
         assert_eq!(
@@ -4092,7 +4518,7 @@ mod tests {
             }])
         );
         // Nothing unread, nothing said.
-        let v: Value = serde_json::from_str(&to_doco(&[], &opts())).unwrap();
+        let v: Value = serde_json::from_str(&doco(&[], &opts())).unwrap();
         assert!(v["@graph"][0].get("doc:unreadImages").is_none());
     }
 
@@ -4112,7 +4538,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let v: Value = serde_json::from_str(&to_doco(&[], &o)).unwrap();
+        let v: Value = serde_json::from_str(&doco(&[], &o)).unwrap();
         let doc = &v["@graph"][0];
         assert_eq!(doc["@type"], "foaf:Document");
         assert_eq!(doc["doc:sha256"], sha);
@@ -4127,7 +4553,7 @@ mod tests {
     fn the_document_node_lists_its_ocr_readings_with_their_confidence() {
         use crate::element::OcrReading;
         // None read: nothing is said.
-        let v: Value = serde_json::from_str(&to_doco(&[], &opts())).unwrap();
+        let v: Value = serde_json::from_str(&doco(&[], &opts())).unwrap();
         assert!(v["@graph"][0].get("doc:ocrReadings").is_none());
         let o = DocoOptions {
             ocr_readings: vec![
@@ -4154,7 +4580,7 @@ mod tests {
             ],
             ..opts()
         };
-        let v: Value = serde_json::from_str(&to_doco(&[], &o)).unwrap();
+        let v: Value = serde_json::from_str(&doco(&[], &o)).unwrap();
         let r = &v["@graph"][0]["doc:ocrReadings"];
         assert_eq!(r["@type"], "@json");
         assert_eq!(
@@ -4216,7 +4642,7 @@ mod tests {
             base_iri: "https://example.org/doc/7f3a/".into(),
             ..Default::default()
         };
-        let v: Value = serde_json::from_str(&to_doco(&els, &o)).unwrap();
+        let v: Value = serde_json::from_str(&doco(&els, &o)).unwrap();
         assert_eq!(
             v["@graph"][0]["@id"],
             "https://example.org/doc/7f3a/element-0"
@@ -4324,6 +4750,200 @@ mod tests {
         let link = find(&g, "doc:Link");
         assert_eq!(link[0]["doc:linkPage"], 11);
         assert!(link[0].get("doc:linkTarget").is_none());
+    }
+
+    #[test]
+    fn a_graph_written_a_node_at_a_time_is_the_graph_built_whole() {
+        // One document of everything a node is made for, its notes on the
+        // document node: each written as the graph built whole prints it.
+        let mut title = el("doco:Title", "Annual Report", None);
+        title.links = Some(vec![Link::uri("https://example.com").spanning(0, 6)]);
+        let mut item = el("doc:ListItem", "First, see page 2", None);
+        item.links = Some(vec![Link::page(1).spanning(11, 17)]);
+        let mut deeper = el("doc:ListItem", "A point under it", None);
+        deeper.depth = 1;
+        let mut figure = el("doco:Figure", "Sales 40%", None);
+        figure.figure = Some("fig-1".into());
+        let mut stacked = el("doco:Table", "", None);
+        stacked.cells = Some(vec![
+            vec!["Item".into(), "Price".into(), "".into()],
+            vec!["".into(), "Unit".into(), "Line".into()],
+            vec!["Pie".into(), "14.50".into(), "29.00".into()],
+            vec!["".into(), "3.00".into(), "6.00".into()],
+        ]);
+        stacked.header_rows = Some(2);
+        let mut ml = vec![false; 12];
+        ml[2] = true;
+        let mut md = vec![false; 12];
+        md[3] = true;
+        md[9] = true;
+        stacked.merged_left = Some(ml);
+        stacked.merged_down = Some(md);
+        let mailbox = |name: &str, address: Option<&str>| Mailbox {
+            name: Some(name.into()),
+            address: address.map(Into::into),
+        };
+        let mut opener = el("doco:Paragraph", "From: Kai Moreno", None);
+        opener.id = "m1".into();
+        opener.message = Some(Box::new(Message {
+            from: vec![mailbox("Kai Moreno", Some("kai@example.net"))],
+            subject: Some("Report".into()),
+            date: Some("2026-07-17T13:48:00Z".into()),
+            ..Default::default()
+        }));
+        // A quoted header names the sender alone: the same mailbox.
+        let mut quoted = el("doco:Paragraph", "Kai Moreno wrote:", None);
+        quoted.id = "m2".into();
+        quoted.message = Some(Box::new(Message {
+            from: vec![mailbox("kai moreno", None)],
+            quoted: true,
+            ..Default::default()
+        }));
+        let mut sign_off = el("doco:Paragraph", "--", None);
+        sign_off.resumes = Some("m1".into());
+        sign_off.signature = true;
+        let mut block = el("doco:Paragraph", "Kai Moreno\nSpringfield", None);
+        block.signature = true;
+        let mut els = vec![
+            title,
+            el("doco:SectionTitle", "Overview", Some(1)),
+            el("doco:Paragraph", "Up on last year.", None),
+            item,
+            deeper,
+            el("doc:ListItem", "Second", None),
+            figure,
+            el("doco:SectionTitle", "Detail", Some(2)),
+            stacked,
+        ];
+        els.extend(split_table());
+        els.extend([opener, el("doco:Paragraph", "Done.", None), quoted]);
+        els.extend([sign_off, block]);
+        let full = DocoOptions {
+            running_text: vec!["ACME".into()],
+            pages: vec![crate::geom::PageSize {
+                index: 0,
+                width: 612.0,
+                height: 792.0,
+                folio: Some("iv".into()),
+            }],
+            info: DocumentInfo {
+                title: Some("Report".into()),
+                creators: vec!["Ada".into()],
+                created: Some("2026-07-17".into()),
+                modified: None,
+            },
+            sha256: Some("ab".repeat(32)),
+            source_name: Some("report.pdf".into()),
+            ..opts()
+        };
+        let written = doco(&els, &full);
+        let g: Value = serde_json::from_str(&written).unwrap();
+        for ty in ["doco:Title", "doco:List", "doco:Figure", "doc:Link"] {
+            assert!(
+                !find(g["@graph"].as_array().unwrap(), ty).is_empty(),
+                "{ty}"
+            );
+        }
+        for ty in [
+            "doc:TableCell",
+            "doc:Mailbox",
+            "doc:Message",
+            "doc:Signature",
+        ] {
+            assert!(
+                !find(g["@graph"].as_array().unwrap(), ty).is_empty(),
+                "{ty}"
+            );
+        }
+        // Through `write_doco` too, and minted under any base.
+        let mut out = Vec::new();
+        write_doco(&els, &full, &mut out).unwrap();
+        assert_eq!(out, written.as_bytes());
+        for base in ["", "urn:x:", "https://example.com/doc/"] {
+            let o = DocoOptions {
+                base_iri: base.into(),
+                doc_iri: None,
+                ..opts()
+            };
+            doco(&els, &o);
+        }
+    }
+
+    #[test]
+    fn a_large_table_is_written_without_holding_its_cells() {
+        // 20,000 cells: each written once made, never more than the
+        // document, its body, the table and one cell held at once.
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            (0..2_001)
+                .map(|r| (0..10).map(|c| format!("r{r}c{c}")).collect())
+                .collect(),
+        );
+        let o = opts();
+        let mut first = Emitter::<std::io::Sink>::new(&o, None, Plan::default());
+        walk(&mut first, std::slice::from_ref(&t)).unwrap();
+        // What the table contains is planned as one run of numbers.
+        let table = first.plan.kinds.iter().position(|&k| k == Kind::Table);
+        let runs = &first.plan.children[&table.unwrap()];
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].len(), 20_000);
+        assert!(first.most_held <= 4, "{}", first.most_held);
+        let out = GraphWriter::begin(std::io::sink(), &context()).unwrap();
+        let mut second = Emitter::new(&o, Some(out), first.plan);
+        walk(&mut second, std::slice::from_ref(&t)).unwrap();
+        assert_eq!(second.counter, 20_003);
+        assert!(second.most_held <= 4, "{}", second.most_held);
+    }
+
+    #[test]
+    fn an_element_of_many_links_is_written_a_link_at_a_time() {
+        let words: Vec<String> = (0..10_000).map(|i| format!("w{i}")).collect();
+        let mut p = el("doco:Paragraph", &words.join(" "), None);
+        let mut at = 0;
+        let links = words.iter().map(|w| {
+            let l = Link::uri(format!("https://example.com/{w}")).spanning(at, at + w.len());
+            at += w.len() + 1;
+            l
+        });
+        p.links = Some(links.collect());
+        let o = opts();
+        let mut first = Emitter::<std::io::Sink>::new(&o, None, Plan::default());
+        walk(&mut first, std::slice::from_ref(&p)).unwrap();
+        let out = GraphWriter::begin(Vec::new(), &context()).unwrap();
+        let mut second = Emitter::new(&o, Some(out), first.plan);
+        walk(&mut second, std::slice::from_ref(&p)).unwrap();
+        assert!(second.most_held <= 3, "{}", second.most_held);
+        assert!(second.link_runs.is_empty());
+        // Each anchor is its word, and the paragraph names every link.
+        let g = graph(std::slice::from_ref(&p));
+        let links = find(&g, "doc:Link");
+        assert_eq!(links.len(), 10_000);
+        assert_eq!(links[9_999]["nif:isString"], "w9999");
+        let para = &find(&g, "doco:Paragraph")[0];
+        assert_eq!(para["doc:link"][9_999], links[9_999]["@id"]);
+    }
+
+    #[test]
+    fn a_write_that_fails_stops_the_graph_with_its_error() {
+        struct Full(usize);
+        impl Write for Full {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                if self.0 < buf.len() {
+                    return Err(std::io::Error::other("disk full"));
+                }
+                self.0 -= buf.len();
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let els: Vec<Element> = (0..5_000)
+            .map(|i| el("doco:Paragraph", &format!("Paragraph {i}."), None))
+            .collect();
+        let e = write_doco(&els, &opts(), Full(100_000)).unwrap_err();
+        assert_eq!(e.to_string(), "disk full");
+        assert!(write_doco(&els, &opts(), Full(usize::MAX)).is_ok());
     }
 
     #[test]

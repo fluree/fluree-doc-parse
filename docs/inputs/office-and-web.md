@@ -468,11 +468,12 @@ flattened out of it. So this reader measures after all, but only shape.
   as too large. Past 2,048 islands a sheet's islands are not mended. The
   `.xls`, `.xlsb` and `.ods` readers lay their sheets out the same way,
   within the same budget.
-- **Size.** A cell is spent at what the output makes of it: a cell that
-  holds text is a node of its own in DoCO (4 KiB), a cell of its row in
-  Markdown, XHTML, JSON and the text (512 bytes). So a sheet of 50,000 rows
-  by 12 columns converts to Markdown, and is refused as DoCO. The same holds
-  for `.xls`, `.xlsb` and `.ods`, laid out alike.
+- **Size.** A cell that holds text is spent at 512 bytes, whatever the
+  output: a cell of its row in Markdown, XHTML, JSON and the text, a node
+  of its own in DoCO, which writes it once made and holds none, but spends
+  the labels it copies into it. So a sheet of 50,000 rows by 15 columns
+  converts to every output, DoCO too. The same holds for `.xls`, `.xlsb`
+  and `.ods`, laid out alike.
 - **Values are the cached ones.** A formula's last computed value is what
   the file holds and what Excel shows; nothing is recalculated.
 - **A cell's text is what Excel shows.** A number is rendered through its

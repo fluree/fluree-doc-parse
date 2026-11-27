@@ -43,6 +43,44 @@ With the OCR engine's defaults and four pipelines, a batch runs one
 document at once with 12 GiB free, two with 16 GiB, three with 24 GiB and
 six with 32 GiB.
 
+## DoCO, written a node at a time
+
+DoCO's graph was built whole, every node a map of JSON values, then
+printed into one string: a table's cell took about 3 KB, so an element or
+a cell was counted at 4 KiB for DoCO and 2 KiB or less for the others, and
+a table of 570,000 filled cells was refused as DoCO where Markdown
+converted it. It is now written a node at a time (`doco::write_doco`): the
+elements are walked once to find what each node contains, which is held as
+runs of node numbers (a table's cells are one run), then again to write
+each node once it is whole. An element and a cell cost DoCO what they cost
+the others; a `.csv` record's cell costs it 256 B rather than 128, for the
+copies of the table the writer keeps while it writes it (its rows, merges
+read, and each cell's place in the text), which a `.csv` reader's own
+strings are smaller than. The labels DoCO copies into each cell are still
+counted, though no longer held: they bound what a file of a few kilobytes
+can make it write.
+
+Peak memory, debug build, before and after:
+
+| Input | md | doco, held whole | doco, written |
+| --- | --- | --- | --- |
+| 500,000 cells (`.csv`, 50,000 rows by 10, `r{row}c{col}`) | | 1,512 MB | 180 MB |
+| 2,000,000 cells, the same (`.csv`) | 259 MB | 5,970 MB | 645 MB |
+| 2,000,000 one-digit cells (`.csv`) | 200 MB | 5,863 MB | 603 MB |
+| 500,000 one-digit cells (`.xlsx`) | 405 MB | 2,350 MB | 413 MB |
+| 500,000 cells (Markdown table) | 127 MB | 1,507 MB | 179 MB |
+| 1,000,000 paragraphs (`.txt`) | 731 MB | 3,808 MB | 712 MB |
+| 600,000 links on one line (Markdown) | 280 MB | 2,530 MB | 280 MB |
+| 2,000,000 links on one line (Markdown) | 886 MB | | 887 MB |
+
+The output is the same, byte for byte: every document under the
+repository that converts (1,423 of them, 74 MB of DoCO) was converted by
+both and compared, and the tests hold each graph they build to the one
+built whole. The second walk costs little time, as the first writes
+nothing and skips a cell's labels: a table of two million cells took 32 s
+in a debug build, 33 s held whole, and one of half a million 7.8 s, 6.9
+s held whole.
+
 ## A PDF's content
 
 Before the budget was spent on what a page draws, a page of 31 KB drawing

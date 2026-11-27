@@ -83,16 +83,18 @@ Three kinds of spending share one estimate of memory, 2.5 GiB a document:
 
 | Unit | Cost | What it is |
 | --- | --- | --- |
-| element | 4 KiB for `-f doco`, 2 KiB for the others | an element made, or a table cell that holds text, which DoCO writes as a node of its own; for the others, a table's cell that holds text costs 512 B, whatever the format, its slot and text counted apart |
+| element | 2 KiB | an element made; a table's cell that holds text costs 512 B, whatever the format and the output, its slot and text counted apart, and a `.csv` record's less ([A CSV's records](#a-csvs-records)) |
 | cell | 128 B | a cell slot allocated: read (a `.docx` or `.pptx` table's cells and rows as each is read, its grid within them), each copy of a repeated one, each a merge covers, each a table is padded with, and each copy a layout keeps |
 | byte of text | 12 B | each byte the text may take in the worst output: a control character counts six (`\u0001` in JSON), `"` and `&` six, `<` and `>` four, a character Markdown escapes two |
-| link | an element and a cell (4.1 KiB) for `-f doco`, four cells (512 B) for the others, with its target's text | a hyperlink kept on an element (Markdown, HTML): DoCO writes each as a node of its own |
+| link | four cells (512 B), with its target's text | a hyperlink kept on an element (Markdown, HTML): DoCO writes each as a node of its own, a link at a time |
 
 Each cost is above the peak memory one unit was measured to take, from the
-reader through the largest output (`-f doco`), with the unit alone filling
-95% of the budget:
+reader through any output, with the unit alone filling 95% of the budget
+(the DoCO column measured when DoCO held its graph whole; it now writes it
+a node at a time, and takes about what Markdown does, [The output
+converted to](#the-output-converted-to)):
 
-| Measured at the budget | md | json | doco |
+| Measured at the budget | md | json | doco, held whole |
 | --- | --- | --- | --- |
 | 551,000 numeric table cells (`.xlsb`) | 394 MB | 394 MB | 2,465 MB (4.5 KiB a cell) |
 | 536,000 cells apart, each an element (`.xlsb`) | 753 MB | 753 MB | 1,879 MB |
@@ -111,59 +113,67 @@ copies (calamine's, for an `.xls`).
 DoCO writes each element and each table cell that holds text as a node of
 its own, and copies a table's cells (below); Markdown, XHTML and the flat
 JSON write each once, and the text projection only repeats a value merged
-down. So the budget counts what the requested output makes:
-`fdoc convert` tells the readers the format once, for every input it
-reads (`fluree_doc_model::budget::converting_to`), and a reader that is not
-told, a library caller's, counts at DoCO's costs, the largest. An element
-costs 2 KiB for Markdown, XHTML, JSON and the text: the reader's own copy is
-most of it, and the most measured is 1.25 KB a paragraph (`.odt`, its XML
-tree) and 750 B a cell (`.xlsx`). A table's cell that holds text costs the
-same in every format but CSV, a sheet's (`.xls`, `.xlsb`, `.xlsx`, `.ods`)
-as a Markdown, HTML, Word, PowerPoint, RTF or OpenDocument
-table's: its slots, each copy the reader and the layout keep, and its text
-are spent apart, and the cell 512 B more for these outputs
-(`fluree_doc_model::budget::filled_cell_bytes`, which the fuzz targets'
-check counts with too), not 2 KiB: a one-digit cell of an `.xlsx`, 750 B in
-all, counts 980 B. A `.csv` record's cell costs 128 B more, not 512
-(`filled_csv_cell_bytes`): the CSV reader keeps nothing of a cell but its
-text, and counted as a sheet's, an ordinary file of a million records was
-refused at four times what it takes ([A CSV's records](#a-csvs-records)).
-The slots are not the same in every format: a sheet's
-layout copies its cells (into islands, then a table's grid), and a
-Markdown table's parser builds a tree, each spent, so a table may convert
-from one format and be refused from another. 50,000 rows by 12 columns
-convert to DoCO from a `.csv`, at 1.77 GB, and are refused as an `.xlsx`,
-`.xls`, `.ods` or Markdown table; as Markdown, JSON or the text, all five
-convert. Counted at an element's 2 KiB, a `.csv` of 100,000 rows
-by 12 columns (13 MB) was refused as Markdown where the same `.xlsx`
+down. DoCO writes its graph a node at a time, holding none of it
+([written a node at a time](../formats/doco.md#written-a-node-at-a-time)),
+so a node costs it what an element or a cell costs the others. The budget
+counts what the requested output makes: `fdoc convert` tells the readers
+the format once, for every input it reads
+(`fluree_doc_model::budget::converting_to`), and a reader that is not told,
+a library caller's, counts at DoCO's costs, the largest. An element costs 2
+KiB: the reader's own copy is most of it, and the most measured is 1.25 KB
+a paragraph (`.odt`, its XML tree) and 750 B a cell (`.xlsx`). A table's
+cell that holds text costs the same in every format but CSV, and in every
+output, a sheet's (`.xls`, `.xlsb`, `.xlsx`, `.ods`) as a Markdown, HTML,
+Word, PowerPoint, RTF or OpenDocument table's: its slots, each copy the
+reader and the layout keep, and its text are spent apart, and the cell 512
+B more (`fluree_doc_model::budget::filled_cell_bytes`, which the fuzz
+targets' check counts with too), not 2 KiB: a one-digit cell of an
+`.xlsx`, 750 B in all, counts 980 B. A `.csv` record's cell costs 128 B
+more, not 512 (`filled_csv_cell_bytes`): the CSV reader keeps nothing of a
+cell but its text, and counted as a sheet's, an ordinary file of a million
+records was refused at four times what it takes ([A CSV's
+records](#a-csvs-records)). As DoCO it costs 256 B more: the copies of the
+table DoCO keeps while it writes it (its rows, its merges read, and where
+each cell sits in the text) are more than such a cell itself, two million
+one-digit cells peaking at 0.6 GB as DoCO and 0.2 GB as Markdown. The slots
+are not the same in every format: a sheet's layout copies its cells (into
+islands, then a table's grid), and a Markdown table's parser builds a
+tree, each spent, so a table may convert from one format and be refused
+from another. Counted at an element's 2 KiB, a `.csv` of 100,000 rows by
+12 columns (13 MB) was refused as Markdown where the same `.xlsx`
 converted; it now converts, at 144 MB, and 100,000 rows by 15 columns (1.5
 million cells) at 162 MB, about 110 B a cell, 290 MB from a Markdown table,
 whose parser's tree is counted too ([A Markdown document's
-tree](#a-markdown-documents-tree)). As DoCO, 2.9 KB a cell were measured
-(20,000 rows by 15 columns, 883 MB), so both are refused there. Counted
-at 2 KiB on top of its slots, each of an `.ods` sheet's cells spent twice,
-and its content bound to 64 MiB, a LibreOffice `.ods` of 50,000 rows by 12
-columns (2.2 MB, its content 77 MB) was refused as Markdown; it now
-converts, and peaks at 0.9 GB, its XML tree most of it.
+tree](#a-markdown-documents-tree)), and 0.46 GB as DoCO. Counted at 2 KiB
+on top of its slots, each of an `.ods` sheet's cells spent twice, and its
+content bound to 64 MiB, a LibreOffice `.ods` of 50,000 rows by 12 columns
+(2.2 MB, its content 77 MB) was refused as Markdown; it now converts, and
+peaks at 0.9 GB, its XML tree most of it.
 
 A table of 50,000 rows by 15 columns, every cell filled (750,000 cells),
 peaks at:
 
-| Read from | md | xhtml | json | text | doco (unbounded) |
-| --- | --- | --- | --- | --- | --- |
-| `.csv` (4.4 MB) | 73 MB | 75 MB | 84 MB | 160 MB | 2,229 MB |
-| `.xlsx` (5.3 MB) | 541 MB | 541 MB | 541 MB | 552 MB | 3,034 MB |
-| `.docx` (2.1 MB) | 218 MB | 218 MB | 217 MB | 223 MB | 2,247 MB |
-| `.html` (13 MB) | 403 MB | 403 MB | 409 MB | 416 MB | 2,249 MB |
+| Read from | md | xhtml | json | text |
+| --- | --- | --- | --- | --- |
+| `.csv` (4.4 MB) | 73 MB | 75 MB | 84 MB | 160 MB |
+| `.xlsx` (5.3 MB) | 541 MB | 541 MB | 541 MB | 552 MB |
+| `.docx` (2.1 MB) | 218 MB | 218 MB | 217 MB | 223 MB |
+| `.html` (13 MB) | 403 MB | 403 MB | 409 MB | 416 MB |
 
-It converts to every output but DoCO, whose 3 GB from the `.xlsx` is past
-what the budget allows; as DoCO it is refused before anything is written.
-At the other outputs' costs a budget holds about 1.2 million elements, or
-about 4 million table cells of one digit, 3 million of 20 bytes (10 million
-and 5.4 million from a `.csv`); the most such a document was measured to
-take is 1.5 GB (1.2 million paragraphs of an `.odt`), against 0.25 GB for
-1.2 million cells of a `.csv` or a `.doc`, and 1.2 GB for as many
-paragraphs of a `.docx`.
+It converts to every output, DoCO included. A table made alike
+(`r{row}c{col}` in each cell) peaks as DoCO at 245 MB from a `.csv`, 498 MB
+from an `.xlsx`, 242 MB from a `.docx` and 431 MB from an `.html`, where
+its Markdown takes 99, 492, 225 and 419 MB: DoCO holds what Markdown
+does, and from a `.csv`, whose reader holds so little, the copies of the
+table it keeps while it writes it. Held whole, as it was before it was
+written a node at a time, the graph took 2.2 to 3 GB, and was refused.
+
+A budget holds about 1.2 million elements, or about 4 million table cells
+of one digit, 3 million of 20 bytes (10 million and 5.4 million from a
+`.csv`, fewer as DoCO, which copies each cell's labels); the most such a
+document was measured to take is 1.5 GB (1.2 million paragraphs of an
+`.odt`), against 0.25 GB for 1.2 million cells of a `.csv` or a `.doc`, and
+1.2 GB for as many paragraphs of a `.docx`.
 
 ### A CSV's records
 
@@ -183,8 +193,12 @@ about 1.6 million records; it was refused from 0.8 million:
 | 1.7 million (60 MB) | refused | refused | refused | refused |
 | 10 million one-digit cells (2 M records, 20 MB) | 989 MB | 1,071 MB | 2,155 MB | refused |
 
-The last is about the most cells a budget holds. As DoCO, a cell is a node of its own at an element's cost (2.9 KB measured), so
-about 100,000 such records convert. What a hostile file makes is still
+The last is about the most cells a budget holds. As DoCO, a cell is a node
+of its own, written once made, at 256 B and its labels (each cell's
+column header and row label), so about 800,000 such records convert: of
+a like file, 500,000 took 0.81 GB and 800,000 1.29 GB, and a million were
+refused. Before DoCO was written a node at a time, a cell took 2.9 KB, and
+about 100,000 records converted. What a hostile file makes is still
 refused before it is allocated: a header of 100,000 columns over 200,000
 one-field records (20 billion cells padded), and a record of 30 million
 empty fields before one that holds something, are refused in 0.01 and 0.15
@@ -214,7 +228,7 @@ from 5 KB.
 So a reader spends them too, once a table is made and before it is kept
 (`Budget::spend_copies`, sized by `fluree_doc_model::doco::table_copies`
 walking the table as the writer does, without making a copy): each cell a
-merge fills, a node of its own, at the element's cost, and each byte copied,
+merge fills, a node of its own, at a cell's cost, and each byte copied,
 merged value or label, at the text's. A cell's labels are counted on every
 table, merged or not: a long row label over many columns is the same copy.
 A part of a table a page break carried on (`continues`) is written with
@@ -227,7 +241,10 @@ counts them on every cell they land on, with the part before
 document's tables): a band of 6,000 characters at the foot of one page,
 over 10,000 rows on the next, is 120 MB of labels from 6 KB, and is refused.
 The 5.3 GB above is 4.4 B a byte copied, under the 12 the budget counts;
-both files are refused as DoCO now, before a copy is made.
+both files are refused as DoCO now, before a copy is made. DoCO now writes
+its graph a node at a time, and holds the merged values while it writes a
+table but not the labels; the labels are counted all the same, as the
+bound on what a few kilobytes of merges make it write.
 
 A PDF's tables, an XPS document's and those an OCR reading makes are laid
 out from what the page draws, by a layout that keeps no budget: their

@@ -2958,8 +2958,8 @@ fn spend_table(b: &mut Budget, e: &Element) -> Result<(), TooLarge> {
 mod tests {
     use super::*;
     use fluree_doc_model::budget::{
-        converting_to, output, Output, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, MAX_MEMORY, MAX_WORK,
-        TEXT_BYTES,
+        converting_to, output, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, MAX_MEMORY,
+        MAX_WORK, TEXT_BYTES,
     };
     use fluree_doc_model::scaling::assert_linear;
 
@@ -3983,10 +3983,15 @@ mod tests {
 
     #[test]
     fn each_element_spends_the_pages_budget() {
-        let page = "<p>word</p>".repeat(10_000_000 / 11);
-        // Each paragraph is a node of the output: 4 KiB of the budget.
-        assert!(super::parse(&page).is_err());
-        assert!(super::parse(&"<p>word</p>".repeat(1_000)).is_ok());
+        // Each paragraph is an element: 2 KiB of the budget, whatever the
+        // output, DoCO's included.
+        let page = |n: usize| "<p>word</p>".repeat(n);
+        for output in [Output::Flat, Output::Doco] {
+            let read = |n| converting_to(output, || within(&page(n), 4 << 20));
+            assert_eq!(read(1_000).unwrap().len(), 1_000);
+            let err = read(2_048).unwrap_err().to_string();
+            assert!(err.starts_with("elements past"), "{err}");
+        }
     }
 
     #[test]
@@ -4368,32 +4373,54 @@ mod tests {
 
     #[test]
     fn each_link_is_spent_before_it_is_kept() {
-        // DoCO writes each as a node of its own: 4.2 KB a link.
-        let page = format!("<p>{}</p>", "<a href=b>a</a> ".repeat(1_000));
-        let read = |output| converting_to(output, || within(&page, 3 << 20));
-        assert_eq!(
-            read(Output::Flat).unwrap()[0].links.as_ref().unwrap().len(),
-            1_000
-        );
-        let err = read(Output::Doco).unwrap_err().to_string();
-        assert!(err.starts_with("links past"), "{err}");
+        // Four cell slots a link, and its target's text, in every output:
+        // DoCO writes each as a node of its own, a link at a time, and
+        // holds no more of it. Against the same tags with an attribute
+        // that makes no link, 1,000 links cost exactly that more.
+        let page = |attribute: &str| {
+            format!(
+                "<p>{}</p>",
+                format!("<a {attribute}=b>a</a> ").repeat(1_000)
+            )
+        };
+        let (linked, titled) = (page("href"), page("title"));
+        for output in [Output::Flat, Output::Doco] {
+            let least = |page: &str| {
+                let (mut lo, mut hi) = (0u64, 64 << 20);
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    match converting_to(output, || within(page, mid)) {
+                        Ok(_) => hi = mid,
+                        Err(_) => lo = mid + 1,
+                    }
+                }
+                lo
+            };
+            let links = converting_to(output, || within(&linked, 64 << 20)).unwrap();
+            assert_eq!(links[0].links.as_ref().unwrap().len(), 1_000);
+            assert_eq!(
+                least(&linked) - least(&titled),
+                1_000 * (4 * CELL_BYTES + TEXT_BYTES)
+            );
+        }
     }
 
     #[test]
     fn a_table_written_once_spends_its_cells_not_an_element_each() {
-        // DoCO makes a node of each cell that holds text; Markdown writes
-        // it once. 50,000 rows of 30 cells, 1.5 million, were refused as
+        // Markdown writes a cell that holds text once, and DoCO as a node of
+        // its own, a node at a time: neither holds an element's worth of
+        // it. 50,000 rows of 30 cells, 1.5 million, were refused as
         // Markdown, which takes about 510 bytes a cell.
         let row = format!("<tr>{}</tr>", "<td>12.50</td>".repeat(10));
         let page = format!("<table>{}</table>", row.repeat(2_000));
         let read = |output| converting_to(output, || within(&page, 32 << 20));
         assert_eq!(read(Output::Flat).unwrap().len(), 1);
-        assert!(read(Output::Doco).is_err());
+        assert_eq!(read(Output::Doco).unwrap().len(), 1);
         // Written once, a cell that holds text costs what a sheet's does, at
         // the output its budget counts at, whatever the thread converts to.
         let mut e = element("doco:Table", String::new(), None);
         e.cells = Some(vec![vec!["a".into(), String::new()]]);
-        let need = FLAT_ELEMENT_BYTES + FLAT_CELL_BYTES + TEXT_BYTES;
+        let need = ELEMENT_BYTES + FLAT_CELL_BYTES + TEXT_BYTES;
         let spend = |memory| spend_table(&mut Budget::new(memory, 0).for_output(Output::Flat), &e);
         assert!(spend(need).is_ok());
         assert!(spend(need - 1).is_err());

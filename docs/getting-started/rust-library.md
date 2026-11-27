@@ -77,6 +77,12 @@ stem and the first twelve hex digits of its SHA-256, so two files named
 `report` do not mint the same nodes. See [IRIs and
 re-extraction](../formats/doco.md#iris-and-re-extraction).
 
+A large document's graph is better written than returned:
+`write_doco(elements, options, writer)`, from the same module, writes the
+same bytes to any `std::io::Write` (a file, a socket) a node at a time,
+without holding the graph ([written a node at a
+time](../formats/doco.md#written-a-node-at-a-time)).
+
 `to_text` and `to_doco` are a pair: the `nif:beginIndex` / `nif:endIndex`
 values in the graph are character offsets into exactly the string `to_text`
 returns. See [The text projection](../concepts/text-projection.md).
@@ -219,7 +225,7 @@ structure](../concepts/geometry-vs-declared.md).
 
 A reader counts what it makes against one budget per document
 (`fluree_doc_model::budget`), at the costs of the largest output, DoCO,
-which writes each table cell as a node of its own. A caller converting to
+which copies each table cell's labels into it. A caller converting to
 Markdown, XHTML, JSON or the text says so around the reading, and a table
 too large for DoCO still reads:
 
@@ -248,7 +254,7 @@ Reachability is not an offer of stability.
 | `extract_file` / `extract_bytes` | PDF → `Document` |
 | `document::analyze` / `analyze_with` | `Document` → elements |
 | `document::to_markdown` / `to_xhtml` | emitters |
-| `doco::to_doco` / `to_text` / `DocoOptions` | graph and text projection |
+| `doco::to_doco` / `write_doco` / `to_text` / `DocoOptions` | graph and text projection |
 | `route::decide` / `route::signals` | escalation verdicts |
 | `forms::fields` | AcroForm values |
 | `outline::extract` | PDF bookmark tree |

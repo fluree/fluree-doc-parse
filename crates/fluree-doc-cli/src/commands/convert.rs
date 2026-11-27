@@ -280,7 +280,7 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
                     match converted {
                         Ok(out) => {
                             let dst = &out_dir.join(format!("{}.{}", slots[i], ext(args.format)));
-                            if let Err(e) = std::fs::write(dst, out) {
+                            if let Err(e) = out.write_file(dst) {
                                 eprintln!("error: writing {}: {e}", dst.display());
                                 failures.fetch_add(1, Ordering::Relaxed);
                             } else if verbose {
@@ -691,7 +691,7 @@ fn convert_path(
     args: &ConvertArgs,
     pages: Option<&[usize]>,
     quiet: bool,
-) -> Result<String, String> {
+) -> Result<Rendered, String> {
     // What the OCR engine says about an image it reads names this file.
     let _doc = super::ocr::Reading::of(path);
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -714,7 +714,7 @@ fn convert_source(
     args: &ConvertArgs,
     pages: Option<&[usize]>,
     quiet: bool,
-) -> Result<String, String> {
+) -> Result<Rendered, String> {
     use fluree_doc_model::budget::{converting_to, Output};
     let output = match args.format {
         Format::Doco => Output::Doco,
@@ -736,7 +736,7 @@ fn read_source(
     args: &ConvertArgs,
     pages: Option<&[usize]>,
     quiet: bool,
-) -> Result<String, String> {
+) -> Result<Rendered, String> {
     use common::SourceKind;
     // By its content where that says, else by its name (`input_kind`).
     let kind = common::input_kind(path, &data);
@@ -976,7 +976,7 @@ fn read_source(
     if !args.comments {
         elements.retain(|e| e.evidence != "comment");
     }
-    Ok(render(&elements, src, args, Vec::new(), &notes))
+    Ok(render(elements, src, args, Vec::new(), &notes))
 }
 
 /// A meeting transcript or a caption file: one paragraph per speaker turn.
@@ -988,14 +988,14 @@ fn convert_transcript(
     src: &Source,
     args: &ConvertArgs,
     quiet: bool,
-) -> Result<String, String> {
+) -> Result<Rendered, String> {
     let stem = src.stem;
     let elements = fluree_doc_transcript::parse(data).map_err(|e| common::refused(&e))?;
     if elements.is_empty() && !quiet {
         eprintln!("note: {stem}: the transcript holds no cues, so the output is empty");
     }
     Ok(render(
-        &elements,
+        elements,
         src,
         args,
         Vec::new(),
@@ -1015,7 +1015,7 @@ fn convert_email(
     cfg: &TierConfig,
     args: &ConvertArgs,
     quiet: bool,
-) -> Result<String, String> {
+) -> Result<Rendered, String> {
     let stem = src.stem;
     let mut email = fluree_doc_email::parse(data).map_err(|e| common::refused(&e))?;
     // The images the body shows: a pasted screenshot's text follows its
@@ -1061,7 +1061,7 @@ fn convert_email(
     };
     let mut elements = email.elements;
     fluree_doc_image::place_after_figures(&mut elements, media.read);
-    Ok(render(&elements, src, args, Vec::new(), &notes))
+    Ok(render(elements, src, args, Vec::new(), &notes))
 }
 
 /// Save the files a document carries (an e-mail's attachments, a PDF's
@@ -1193,7 +1193,7 @@ fn convert_attachments(
         let out = convert_carried(f, cfg, &child_args, None, quiet)?;
         Some(out.and_then(|out| {
             let path = dir.join(format!("{}.{}", f.info.sha256, ext(args.format)));
-            std::fs::write(&path, out).map_err(|e| {
+            out.write_file(&path).map_err(|e| {
                 let e = format!("writing {}: {e}", path.display());
                 unwritten = Some(e.clone());
                 e
@@ -1282,7 +1282,7 @@ pub(crate) fn convert_carried(
     args: &ConvertArgs,
     pages: Option<&[usize]>,
     quiet: bool,
-) -> Option<Result<String, String>> {
+) -> Option<Result<Rendered, String>> {
     let readable_images =
         cfg.ocr.is_some() || cfg.ocr_words.is_some() || cfg.tier_results.is_some() || cfg.escalate;
     let name = f
@@ -1412,7 +1412,7 @@ fn convert_image(
     cfg: &TierConfig,
     args: &ConvertArgs,
     quiet: bool,
-) -> Result<String, String> {
+) -> Result<Rendered, String> {
     let stem = src.stem;
     let format = fluree_doc_pdf::image::Format::sniff(&data).ok_or("not a recognised image")?;
     // Upright: a phone photo's page is the size the reader sees it at, as
@@ -1539,7 +1539,7 @@ fn convert_image(
         }
     }
     past_limits(stem, &notes, args.format, quiet);
-    Ok(render(&elements, src, args, sizes, &notes))
+    Ok(render(elements, src, args, sizes, &notes))
 }
 
 /// The model readings of an image read whole, as a page: a reading someone
@@ -2350,13 +2350,13 @@ fn warn_listed_scores(
 
 /// The output of a bare image as OCR read it ([`ocr_image`]), warned about
 /// as a PDF's page nothing read is.
-fn render_image_ocr(read: ImageOcr, src: &Source, args: &ConvertArgs, quiet: bool) -> String {
+fn render_image_ocr(read: ImageOcr, src: &Source, args: &ConvertArgs, quiet: bool) -> Rendered {
     warn_listed_scores(read.scores, &read.notes.ocr, quiet);
     if let (Some(note), false) = (read.notes.summary(), quiet) {
         eprintln!("warning: {}: {note}", src.stem);
     }
     past_limits(src.stem, &read.notes, args.format, quiet);
-    render(&read.elements, src, args, read.sizes, &read.notes)
+    render(read.elements, src, args, read.sizes, &read.notes)
 }
 
 /// What OCR made of a bare image.
@@ -2593,19 +2593,59 @@ fn image_words(
     }
 }
 
+/// A document converted, to be written: as its text, or, for DoCO, as
+/// the elements and options [`fluree_doc_model::doco::write_doco`] writes
+/// straight to the output. A DoCO graph is never held whole: a table's
+/// cells are each a node of it, and a table of half a million made 200 MB.
+pub(crate) enum Rendered {
+    Text(String),
+    Doco {
+        elements: Vec<Element>,
+        opts: Box<fluree_doc_pdf::doco::DocoOptions>,
+    },
+}
+
+impl Rendered {
+    /// Write it to `out`, buffered.
+    fn write_to(&self, out: impl std::io::Write) -> std::io::Result<()> {
+        match self {
+            Rendered::Text(text) => {
+                let mut out = out;
+                out.write_all(text.as_bytes())?;
+                out.flush()
+            }
+            Rendered::Doco { elements, opts } => {
+                fluree_doc_pdf::doco::write_doco(elements, opts, out)
+            }
+        }
+    }
+
+    /// Write it to the file `path`, created or truncated.
+    fn write_file(&self, path: &Path) -> std::io::Result<()> {
+        self.write_to(std::fs::File::create(path)?)
+    }
+
+    /// It as one string, for a caller that holds the output.
+    pub(crate) fn into_string(self) -> String {
+        match self {
+            Rendered::Text(text) => text,
+            Rendered::Doco { elements, opts } => fluree_doc_pdf::doco::to_doco(&elements, &opts),
+        }
+    }
+}
+
 /// Emit an element stream in the requested format. Shared by every source.
 fn render(
-    elements: &[Element],
+    mut elements: Vec<Element>,
     src: &Source,
     args: &ConvertArgs,
     pages: Vec<fluree_doc_model::PageSize>,
     notes: &fluree_doc_model::Notes,
-) -> String {
+) -> Rendered {
     // No source writes a stray control character into what it emits: a
     // model's reading or another format's text can carry one as surely as a
     // PDF's font.
-    let scrubbed: Vec<Element>;
-    let elements = if elements.iter().any(|e| {
+    if elements.iter().any(|e| {
         e.text.chars().any(fluree_doc_model::is_stray_control)
             || e.cells
                 .iter()
@@ -2613,28 +2653,19 @@ fn render(
                 .flatten()
                 .any(|c| c.chars().any(fluree_doc_model::is_stray_control))
     }) {
-        scrubbed = elements
-            .iter()
-            .cloned()
-            .map(|mut e| {
-                e.scrub_controls();
-                e
-            })
-            .collect();
-        &scrubbed[..]
-    } else {
-        elements
-    };
+        elements.iter_mut().for_each(Element::scrub_controls);
+    }
+    let text = Rendered::Text;
     match args.format {
-        Format::Md => fluree_doc_model::to_markdown_with_options(
-            elements,
+        Format::Md => text(fluree_doc_model::to_markdown_with_options(
+            &elements,
             notes,
             &fluree_doc_model::MarkdownOptions {
                 links: args.md_links.into(),
             },
-        ),
-        Format::Xhtml => fluree_doc_model::to_xhtml_with(elements, notes),
-        Format::Json => serde_json::to_string_pretty(elements).unwrap(),
+        )),
+        Format::Xhtml => text(fluree_doc_model::to_xhtml_with(&elements, notes)),
+        Format::Json => text(serde_json::to_string_pretty(&elements).unwrap()),
         Format::Doco => {
             // A caller naming the document names its nodes too: they are
             // minted under its IRI, so they cost the store no namespace the
@@ -2664,11 +2695,14 @@ fn render(
                 sha256: Some(src.sha256.clone()),
                 source_name: src.name.clone(),
             };
-            fluree_doc_pdf::doco::to_doco(elements, &opts)
+            Rendered::Doco {
+                elements,
+                opts: Box::new(opts),
+            }
         }
-        Format::Text => fluree_doc_pdf::doco::to_text(elements),
+        Format::Text => text(fluree_doc_pdf::doco::to_text(&elements)),
         Format::Conform => {
-            serde_json::to_string(&fluree_doc_conform::conform(elements, notes)).unwrap()
+            text(serde_json::to_string(&fluree_doc_conform::conform(&elements, notes)).unwrap())
         }
     }
 }
@@ -2681,7 +2715,7 @@ pub(crate) fn conform_report(path: &Path) -> Result<String, String> {
     let mut cfg = TierConfig::from_env_with(None, None, None, None, false);
     cfg.resolve_escalation(false, true, true);
     let slot = slots(std::slice::from_ref(&args.inputs[0])).remove(0);
-    convert_path(path, &slot, &cfg, &args, None, true)
+    convert_path(path, &slot, &cfg, &args, None, true).map(Rendered::into_string)
 }
 
 /// The note when a document has more OCR crops than `ocr.max_crops`.
@@ -2749,7 +2783,7 @@ fn convert_bytes(
     args: &ConvertArgs,
     pages: Option<&[usize]>,
     quiet: bool,
-) -> Result<String, String> {
+) -> Result<Rendered, String> {
     let stem = src.stem;
     // Opened once, for the outline, the links and the renders as well as
     // the extraction.
@@ -3053,7 +3087,7 @@ fn convert_bytes(
             eprintln!("warning: {stem}: {why}");
         }
     }
-    Ok(render(&a.elements, src, args, sizes, &notes))
+    Ok(render(a.elements, src, args, sizes, &notes))
 }
 
 /// An XPS or OpenXPS document: its pages' glyphs laid out by the PDF
@@ -3072,7 +3106,7 @@ fn convert_xps(
     args: &ConvertArgs,
     pages: Option<&[usize]>,
     quiet: bool,
-) -> Result<String, String> {
+) -> Result<Rendered, String> {
     use fluree_doc_pdf::ocr::{Crop, WordReading};
     let stem = src.stem;
     let xps = fluree_doc_xps::parse(data).map_err(|e| common::refused(&e))?;
@@ -3322,7 +3356,7 @@ fn convert_xps(
             eprintln!("warning: {stem}: {why}");
         }
     }
-    Ok(render(&a.elements, src, args, sizes, &notes))
+    Ok(render(a.elements, src, args, sizes, &notes))
 }
 
 /// How many pages a parser warning names on stderr; `doc:parseWarnings`
@@ -3503,18 +3537,16 @@ fn slots(files: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
-fn write_out(out: &str, dst: Option<&Path>) -> i32 {
-    match dst {
-        Some(p) => {
-            if let Err(e) = std::fs::write(p, out) {
-                eprintln!("error: writing {}: {e}", p.display());
-                return 1;
-            }
-            0
-        }
-        None => {
-            print!("{out}");
-            0
+fn write_out(out: &Rendered, dst: Option<&Path>) -> i32 {
+    let (written, to) = match dst {
+        Some(p) => (out.write_file(p), p.display().to_string()),
+        None => (out.write_to(std::io::stdout().lock()), "stdout".into()),
+    };
+    match written {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("error: writing {to}: {e}");
+            1
         }
     }
 }

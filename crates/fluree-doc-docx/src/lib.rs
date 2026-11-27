@@ -4311,7 +4311,7 @@ mod tests {
     #[test]
     fn a_tables_cell_costs_what_a_sheets_does() {
         use fluree_doc_model::budget::{
-            Output, CELL_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+            Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, TEXT_BYTES,
         };
         let cell = |t: &str| format!("<w:tc><w:p><w:r><w:t>{t}</w:t></w:r></w:p></w:tc>");
         let xml = doc(&format!(
@@ -4334,7 +4334,7 @@ mod tests {
         // Its four cells and two rows as they are read, which its grid of
         // four is made within, the table, and its three cells that hold
         // text, each written once in its row.
-        let need = 6 * CELL_BYTES + FLAT_ELEMENT_BYTES + 3 * FLAT_CELL_BYTES + 4 * TEXT_BYTES;
+        let need = 6 * CELL_BYTES + ELEMENT_BYTES + 3 * FLAT_CELL_BYTES + 4 * TEXT_BYTES;
         assert_eq!(read(need).unwrap()[0].kind, "doco:Table");
         assert!(matches!(read(need - 1), Err(DocxError::TooLarge(_))));
     }

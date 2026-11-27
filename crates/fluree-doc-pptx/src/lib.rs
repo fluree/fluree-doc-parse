@@ -1259,21 +1259,19 @@ mod tests {
 
     #[test]
     fn a_tables_cell_costs_what_a_sheets_does() {
-        use fluree_doc_model::budget::{
-            Output, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
-        };
+        use fluree_doc_model::budget::{Output, ELEMENT_BYTES, FLAT_CELL_BYTES, TEXT_BYTES};
         let mut e = Element::new("doco:Table", String::new(), "pptx", "pptx");
         e.cells = Some(vec![vec!["ab".into(), String::new()]]);
         let spend =
             |output, memory| spend_table(&e, &mut Budget::new(memory, 0).for_output(output));
         // The table, and its cell that holds text written once in its row,
-        // or a node of its own in DoCO; its grid was spent as it was made.
-        let flat = FLAT_ELEMENT_BYTES + FLAT_CELL_BYTES + 2 * TEXT_BYTES;
-        assert!(spend(Output::Flat, flat).is_ok());
-        assert!(spend(Output::Flat, flat - 1).is_err());
-        let doco = 2 * ELEMENT_BYTES + 2 * TEXT_BYTES;
-        assert!(spend(Output::Doco, doco).is_ok());
-        assert!(spend(Output::Doco, doco - 1).is_err());
+        // or as a node of its own in DoCO, a node at a time, at the same
+        // cost; its grid was spent as it was made.
+        let need = ELEMENT_BYTES + FLAT_CELL_BYTES + 2 * TEXT_BYTES;
+        for output in [Output::Flat, Output::Doco] {
+            assert!(spend(output, need).is_ok());
+            assert!(spend(output, need - 1).is_err());
+        }
     }
 
     /// A stored package of `parts`.
