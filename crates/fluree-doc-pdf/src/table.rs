@@ -105,12 +105,34 @@ pub struct Grid {
 
 impl TableLayout {
     /// Each cell's text, a span's read whole into its first cell.
+    ///
+    /// Blank glyphs on a line the cell holds no ink on are left out: a
+    /// line's spaces under the cell (a description's under a row of
+    /// figures) are no line of it, and read with it they were a line of
+    /// gaps that parted the cell's own line as a gutter would
+    /// (`26.0 7.2012`, `Delivery da te`).
     pub fn texts(&self, glyphs: &[crate::glyph::Glyph], cols: usize) -> Vec<String> {
         let mut out: Vec<String> = self
             .cells
             .iter()
             .map(|ids| {
-                let gs: Vec<crate::glyph::Glyph> = ids.iter().map(|&i| glyphs[i].clone()).collect();
+                let inked: Vec<&crate::glyph::Glyph> = ids
+                    .iter()
+                    .map(|&i| &glyphs[i])
+                    .filter(|g| !g.text.trim().is_empty())
+                    .collect();
+                let on_inked_line = |g: &crate::glyph::Glyph| {
+                    inked.iter().any(|o| {
+                        (o.origin.1 - g.origin.1).abs()
+                            <= f64::from(o.font_size.max(g.font_size)) * 0.3
+                    })
+                };
+                let gs: Vec<crate::glyph::Glyph> = ids
+                    .iter()
+                    .map(|&i| &glyphs[i])
+                    .filter(|g| !g.text.trim().is_empty() || on_inked_line(g))
+                    .cloned()
+                    .collect();
                 join_cell_lines(crate::line::assemble(&gs).iter().map(|l| l.text.as_str()))
             })
             .collect();
