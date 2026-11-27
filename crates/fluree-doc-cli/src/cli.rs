@@ -192,7 +192,7 @@ impl From<MdLinks> for fluree_doc_model::MdLinks {
 #[derive(Args, Debug)]
 pub struct ConvertArgs {
     /// Input documents: files, directories, or `-` for stdin (a PDF, a
-    /// transcript or an email)
+    /// transcript, an email or a PNG, JPEG or TIFF image)
     #[arg(required = true, value_name = "FILE|DIR|-")]
     pub inputs: Vec<PathBuf>,
 
@@ -225,7 +225,8 @@ pub struct ConvertArgs {
     #[arg(long, value_name = "DIR")]
     pub layout_boxes: Option<PathBuf>,
 
-    /// Directory of model-tier readings (`<stem>_<crop>.json`) to splice into
+    /// Directory of model-tier readings (`<stem>_<crop>.json`; `<stem>_m<n>.json`
+    /// for an image a DOCX, XLSX or e-mail places in its flow) to splice into
     /// the output [env: FDOC_TIER_RESULTS]
     #[arg(long, value_name = "DIR")]
     pub tier_results: Option<PathBuf>,
@@ -237,7 +238,8 @@ pub struct ConvertArgs {
 
     /// Directory of OCR word readings (`<stem>_p<N>_full.json`,
     /// `<stem>_p<N>_r<i>.json`; `<stem>.json` for a bare image,
-    /// `<stem>_m<n>[_<k>].json` for a DOCX's pictures) read as glyphs on the
+    /// `<stem>_m<n>[_<k>].json` for a DOCX's or an XLSX's pictures and an
+    /// e-mail's inline images) read as glyphs on the
     /// pages and regions the router sends a reader [env: FDOC_OCR_WORDS]
     #[arg(long, value_name = "DIR", conflicts_with = "ocr")]
     pub ocr_words: Option<PathBuf>,

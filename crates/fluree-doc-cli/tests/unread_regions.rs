@@ -947,3 +947,192 @@ fn a_form_with_stencil_checkboxes_lists_nothing() {
     assert!(doc.get("doc:unreadRegions").is_none(), "{doc}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_model_reading_of_a_pasted_screen_keeps_the_documents_outline() {
+    // A reading of the region naming the screen's title and a heading of
+    // it: they are the screen's, read as paragraphs, as OCR's are.
+    let reading = serde_json::json!([{ "parsing_res_list": [
+        { "block_label": "doc_title", "block_content": "SCREENSHOT", "block_order": 0 },
+        { "block_label": "text", "block_content": "## Balance 9,876.54", "block_order": 1 }
+    ]}])
+    .to_string();
+    let dir = scratch("screen-headings", &page(true));
+    let tiers = sidecars(&dir, "tiers", &[("memo_p0_r0.json", reading.clone())]);
+    let (_, _, text) = convert(&dir, &["--tier-results", tiers.to_str().unwrap()]);
+    assert!(text.contains("SCREENSHOT\\n\\nBalance 9,876.54"), "{text}");
+    let _ = std::fs::remove_dir_all(dir);
+    // A region covering most of a page under a few lines of text of its own
+    // is the page's content, a scan under a stamped header: its headings
+    // are the document's.
+    let line = "RECEIVED BY FAX FROM THE BRANCH OFFICE AND FORWARDED FOR REVIEW";
+    let mut ops: Vec<String> = (0..3)
+        .map(|i| format!("BT /F1 10 Tf 26 {} Td ({line}) Tj ET", 760 - i * 14))
+        .collect();
+    ops.push("q 560 0 0 600 26 60 cm /I0 Do Q".into());
+    let (w, h, gray) = capture();
+    let scan = pdf(
+        &[(612.0, 792.0)],
+        &ops.join("\n"),
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+        &[(
+            "I0".to_string(),
+            format!(
+                "/Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {}",
+                gray.len()
+            ),
+            gray.clone(),
+        )],
+    );
+    let dir = scratch("scan-headings", &scan);
+    let tiers = sidecars(&dir, "tiers", &[("memo_p0_r0.json", reading.clone())]);
+    let (_, _, text) = convert(&dir, &["--tier-results", tiers.to_str().unwrap()]);
+    assert!(text.contains("region-splice"), "{text}");
+    assert!(text.contains("# SCREENSHOT"), "{text}");
+    let _ = std::fs::remove_dir_all(dir);
+    // The same scan stored in two strips, each under half the page: routed
+    // a region each, and together still the page's content.
+    ops.pop();
+    ops.push("q 560 0 0 300 26 360 cm /I0 Do Q".into());
+    ops.push("q 560 0 0 300 26 60 cm /I1 Do Q".into());
+    let image = |name: &str| {
+        (
+            name.to_string(),
+            format!(
+                "/Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {}",
+                gray.len()
+            ),
+            gray.clone(),
+        )
+    };
+    let strips = pdf(
+        &[(612.0, 792.0)],
+        &ops.join("\n"),
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+        &[image("I0"), image("I1")],
+    );
+    let dir = scratch("strip-headings", &strips);
+    let tiers = sidecars(&dir, "tiers", &[("memo_p0_r0.json", reading)]);
+    let (_, _, text) = convert(&dir, &["--tier-results", tiers.to_str().unwrap()]);
+    assert!(text.contains("region-splice"), "{text}");
+    assert!(text.contains("# SCREENSHOT"), "{text}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A Letter page carrying only `text` at its top and the capture placed by
+/// this `cm` matrix: too few glyphs for a page of text, so it routes near
+/// blank and is read whole.
+fn near_blank(text: &str, cm: &str) -> Vec<u8> {
+    let (w, h, gray) = capture();
+    pdf(
+        &[(612.0, 792.0)],
+        &format!(
+            "BT /F1 10 Tf 72 {} Td ({text}) Tj ET\nq {cm} cm /I0 Do Q",
+            792 - 340
+        ),
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+        &[(
+            "I0".to_string(),
+            format!(
+                "/Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {}",
+                gray.len()
+            ),
+            gray,
+        )],
+    )
+}
+
+/// The element of the graph whose text holds `needle`: its type and text.
+fn element_with(graph: &str, needle: &str) -> (String, String) {
+    let graph: serde_json::Value = serde_json::from_str(graph).unwrap();
+    graph["@graph"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|n| {
+            let text = n["nif:isString"]["@value"]
+                .as_str()
+                .or_else(|| n["nif:isString"].as_str())?;
+            text.contains(needle)
+                .then(|| (n["@type"].to_string(), text.to_string()))
+        })
+        .unwrap_or_else(|| panic!("no element holds {needle}"))
+}
+
+/// A model's whole reading of `dir`'s page holding `blocks` (label,
+/// content): the graph.
+fn model_reading(dir: &Path, blocks: &[(&str, &str)]) -> String {
+    let blocks: Vec<_> = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, (label, content))| {
+            serde_json::json!({ "block_label": label, "block_content": content, "block_order": i })
+        })
+        .collect();
+    let reading = serde_json::json!([{ "parsing_res_list": blocks }]).to_string();
+    let tiers = sidecars(dir, "tiers", &[("memo_p0_full.json", reading)]);
+    convert(dir, &["--tier-results", tiers.to_str().unwrap()]).2
+}
+
+#[test]
+fn a_page_near_blank_read_whole_keeps_its_headings_by_ocr_and_by_a_model() {
+    // A screenshot under a quarter of the page, with a caption that repeats
+    // the screen's name. Read whole, the page's words are the page's text
+    // whoever reads them: OCR keeps the screen's title as a heading, as a
+    // model's reading does.
+    let dir = scratch(
+        "near-blank-screen",
+        &near_blank("Customer Portal", "490 0 0 230 60 482"),
+    );
+    let (doc, _, _) = convert(&dir, &[]);
+    assert_eq!(
+        doc["doc:unreadPages"]["@value"][0]["reason"], "NearBlank",
+        "{doc}"
+    );
+    let prose = "Reference ABC-7781 opened at the branch office on the date shown";
+    let mut words = vec![
+        serde_json::json!({ "text": "Customer", "box": [80, 100, 230, 130] }),
+        serde_json::json!({ "text": "Portal", "box": [240, 100, 350, 130] }),
+    ];
+    for row in 0..9 {
+        let mut x = 80.0;
+        let y = 150.0 + row as f64 * 16.0;
+        for w in prose.split(' ') {
+            let len = w.len() as f64 * 6.0;
+            words.push(serde_json::json!({ "text": w, "box": [x, y, x + len, y + 11.0] }));
+            x += len + 6.0;
+        }
+    }
+    let words = serde_json::json!({ "coords": "page", "words": words });
+    let w = sidecars(&dir, "words", &[("memo_p0_full.json", words.to_string())]);
+    let (_, _, ocr) = convert(&dir, &["--ocr-words", w.to_str().unwrap()]);
+    // The screen's title, above the screen's prose (the page's caption
+    // comes after it).
+    let (kind, _) = element_with(&ocr, "Portal");
+    assert!(
+        kind == "\"doco:Title\"" || kind == "\"doco:SectionTitle\"",
+        "{ocr}"
+    );
+    assert!(
+        ocr.find("Portal").unwrap() < ocr.find("Reference").unwrap(),
+        "{ocr}"
+    );
+    let model = model_reading(
+        &dir,
+        &[
+            ("doc_title", "Customer Portal"),
+            ("text", prose),
+            ("figure_title", "Customer Portal"),
+        ],
+    );
+    let (_, text) = element_with(&model, "Portal");
+    assert!(text.starts_with("# Customer Portal"), "{model}");
+    let _ = std::fs::remove_dir_all(dir);
+    // A cover with a logo, its title drawn in outlines: no text layer to
+    // tell it is the page's own, and a model's reading keeps it.
+    let dir = scratch("near-blank-cover", &near_blank("", "60 0 0 12 72 600"));
+    let model = model_reading(&dir, &[("doc_title", "Annual Report 2025")]);
+    let (_, text) = element_with(&model, "Annual");
+    assert!(text.starts_with("# Annual Report 2025"), "{model}");
+    let _ = std::fs::remove_dir_all(dir);
+}

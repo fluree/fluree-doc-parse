@@ -12,15 +12,17 @@ PNG, JPEG and TIFF (classic and BigTIFF), read as **one page of pixels**.
 
 Every other source this library takes has a text layer or declared structure,
 so there is always something to fall back on. An image has neither. It is read
-by an OCR engine, or by the deep reader, and without either the honest output
-is nothing:
+by an OCR engine (`--ocr`, or the words one wrote, `--ocr-words`), by a
+model's reading supplied (`--tier-results`) or by the configured model, and
+without any of them the honest output is nothing. It is warned about as a
+PDF's page nothing read is, and listed in `doc:unreadPages`:
 
 ```
-note: image/png carries no text layer, so only a model can read it
-      run `fdoc config gemini --credentials <key.json>` to enable one
+warning: scan: fluree-doc-parse: page 1 carries content no reader transcribed (Scanned). This output is missing it.
+note: scan: read it with --ocr, --ocr-words, --tier-results or a configured model (`fdoc config gemini --credentials <key.json>`)
 ```
 
-That message matters more here than anywhere else, because an empty document
+That warning matters more here than anywhere else, because an empty document
 is otherwise indistinguishable from a blank image. See
 [`fdoc config`](../cli/config.md).
 
@@ -38,6 +40,17 @@ image's crop, `<stem>_p0_full.png`: the image upright, at its own resolution
 (`scale` 1), drawn over white where it is transparent, with the reason
 `scanned`. [`fdoc ocr`](../cli/ocr.md) reads it, or the image file itself.
 Either way the words land where `convert` reads them.
+
+An image given on its own is given to be read, and is read as a scanned
+page is: the pixel probe that keeps a document's photographs and charts from
+the configured model does not judge it, nor does the noise rule an OCR reading of a
+picture or of a PDF region is held to. What an engine reads in it is in the
+output, however unsure, as the words of a scan read poorly are. However few
+they are, the image is read: a stamp's `PAID` may be all it holds. The floor
+a scanned PDF's page is held to (`OcrSparse`, a page read whole under 40
+characters) judges a page among pages of text, and is not applied to an
+image given alone; only an image OCR took no word in is listed unread, or
+sent to the configured model.
 
 Where OCR reads nothing, and a model is configured, the model reads the image
 as it would without OCR: words for other files only, a reading with no word,
@@ -67,6 +80,16 @@ The bytes are sent as they arrived, with their real media type. A file named
 `.png` holding a JPEG is common enough that the format is read from the
 content; re-encoding to fit one code path would spend a decode and could only
 lose detail the reader might have used.
+
+## Images inside a document
+
+The images a document places in its flow — the pictures of a DOCX, the
+pictures anchored to an XLSX's cells, the images an e-mail shows in its
+body — are read by these same rules, each as a one-page image named
+`<stem>_m<n>` (its crop `<stem>_m<n>.png`, its words and its reading
+`<stem>_m<n>.json`), and what is read in it is placed after its figure. See
+[Office files](office-and-web.md#docx) and
+[E-mail](email.md#images-in-the-body).
 
 ## Size and coordinates
 

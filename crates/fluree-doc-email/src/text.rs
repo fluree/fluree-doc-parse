@@ -65,20 +65,44 @@ fn item(line: &str) -> Option<&str> {
 /// image was, and `<image001.png>`, which Apple Mail writes: a reference to
 /// an attachment, not words.
 pub fn strip_cid(line: &str) -> String {
+    marks(line).0
+}
+
+/// The figure key of an image a plain-text body marks where it is drawn:
+/// `cid:<id>` for Outlook's `[cid:<id>]`, `name:<file>` for Apple Mail's
+/// `<file>`. The message's reader resolves it to one of its parts.
+pub const CID_KEY: &str = "cid:";
+pub const NAME_KEY: &str = "name:";
+
+/// A line without its image marks, and the marks, as figure keys
+/// ([`CID_KEY`], [`NAME_KEY`]): Outlook's first, then Apple Mail's.
+fn marks(line: &str) -> (String, Vec<String>) {
+    let mut found = Vec::new();
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(i) = rest.find("[cid:") {
         out.push_str(&rest[..i]);
-        rest = rest[i..].find(']').map_or("", |j| &rest[i + j + 1..]);
+        let after = &rest[i + 5..];
+        match after.find(']') {
+            Some(j) => {
+                let id = after[..j].trim();
+                if !id.is_empty() {
+                    found.push(format!("{CID_KEY}{id}"));
+                }
+                rest = &after[j + 1..];
+            }
+            None => rest = "",
+        }
     }
     out.push_str(rest);
     let mut rest = std::mem::take(&mut out);
     while let Some((i, len)) = image_name(&rest) {
         out.push_str(&rest[..i]);
+        found.push(format!("{NAME_KEY}{}", &rest[i + 1..i + len - 1]));
         rest = rest[i + len..].to_string();
     }
     out.push_str(&rest);
-    out
+    (out, found)
 }
 
 /// Where `<name.png>` is in `text`, and its length: a file name in angle
@@ -116,41 +140,59 @@ pub fn visible(line: &str) -> String {
 /// signature's name, title and company are three lines, not one sentence.
 /// Consecutive lines with list markers are list items, and an indented line
 /// under one continues it.
+///
+/// An image marked in a line (`[cid:…]`, `<name.png>`) is a `doco:Figure`
+/// after the paragraph or item holding it, keyed by the mark ([`CID_KEY`],
+/// [`NAME_KEY`]) for the message's reader to resolve.
 pub fn elements(lines: &[String], provenance: &'static str, out: &mut Vec<Element>) {
     let mut para: Vec<String> = Vec::new();
+    // The images marked in the paragraph being read, drawn after it.
+    let mut pending: Vec<String> = Vec::new();
     let mut last_item: Option<usize> = None;
-    let flush = |para: &mut Vec<String>, out: &mut Vec<Element>| {
+    let figures = |keys: &mut Vec<String>, out: &mut Vec<Element>| {
+        for key in keys.drain(..) {
+            let mut f = element("doco:Figure", String::new(), provenance);
+            f.figure = Some(key);
+            out.push(f);
+        }
+    };
+    let flush = |para: &mut Vec<String>, pending: &mut Vec<String>, out: &mut Vec<Element>| {
         let text = para.join("\n").trim().to_string();
         para.clear();
         if !text.is_empty() {
             out.push(element("doco:Paragraph", text, provenance));
         }
+        figures(pending, out);
     };
     for raw in lines {
-        let line = strip_cid(raw);
+        let (line, mut found) = marks(raw);
         let text = visible(&line);
         if text.is_empty() {
-            flush(&mut para, out);
+            pending.append(&mut found);
+            flush(&mut para, &mut pending, out);
             last_item = None;
             continue;
         }
         if let Some(rest) = item(&line) {
-            flush(&mut para, out);
+            flush(&mut para, &mut pending, out);
             if !rest.is_empty() {
                 out.push(element("doc:ListItem", rest.to_string(), provenance));
                 last_item = Some(out.len() - 1);
             }
+            figures(&mut found, out);
             continue;
         }
         if let (Some(i), true) = (last_item, line.starts_with(char::is_whitespace)) {
             out[i].text.push(' ');
             out[i].text.push_str(&text);
+            figures(&mut found, out);
             continue;
         }
         last_item = None;
         para.push(text);
+        pending.append(&mut found);
     }
-    flush(&mut para, out);
+    flush(&mut para, &mut pending, out);
 }
 
 pub fn element(kind: &str, text: String, provenance: &'static str) -> Element {
@@ -165,7 +207,12 @@ mod tests {
         let lines: Vec<String> = text.lines().map(String::from).collect();
         let mut out = Vec::new();
         elements(&lines, "eml", &mut out);
-        out.into_iter().map(|e| (e.kind, e.text)).collect()
+        out.into_iter()
+            .map(|e| match e.figure {
+                Some(key) => (e.kind, key),
+                None => (e.kind, e.text),
+            })
+            .collect()
     }
 
     #[test]
@@ -178,6 +225,23 @@ mod tests {
                 ("doc:ListItem".into(), "sign the order".into()),
                 ("doc:ListItem".into(), "book the kickoff for May".into()),
                 ("doco:Paragraph".into(), "Lena Holt\nOperations Lead".into()),
+                ("doco:Figure".into(), "cid:image001.png@01DA".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_image_marked_in_a_line_is_drawn_after_its_paragraph_or_item() {
+        assert_eq!(
+            read("Before [cid:a@x] the screen\nstill before\n\n- item <b.png>\n- next\n[cid:c@x]\nAfter.[cid:]"),
+            vec![
+                ("doco:Paragraph".into(), "Before  the screen\nstill before".into()),
+                ("doco:Figure".into(), "cid:a@x".into()),
+                ("doc:ListItem".into(), "item".into()),
+                ("doco:Figure".into(), "name:b.png".into()),
+                ("doc:ListItem".into(), "next".into()),
+                ("doco:Figure".into(), "cid:c@x".into()),
+                ("doco:Paragraph".into(), "After.".into()),
             ]
         );
     }
@@ -192,6 +256,7 @@ mod tests {
                     "doco:Paragraph".into(),
                     "Lena Holt\nOps\n<lena@example.com>".into()
                 ),
+                ("doco:Figure".into(), "name:image001.png".into()),
             ]
         );
     }

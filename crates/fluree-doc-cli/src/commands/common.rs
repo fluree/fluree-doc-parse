@@ -49,6 +49,38 @@ pub(crate) fn source_kind(path: &Path) -> Option<SourceKind> {
         .map(|(kind, _)| *kind)
 }
 
+/// The reader a file goes to, by its content where that says, else by its
+/// extension: what `convert` reads it as, and `render-routed` crops it as.
+///
+/// A transcript and an email by their content first: `.vtt` has no
+/// registered type on most systems, and a saved message is `.eml`, `.mht`,
+/// `.txt` or nothing at all, so either arrives renamed as often as not. Then
+/// the formats an extension names (Markdown, plain text, HTML and the Office
+/// packages); then an image by its first bytes; anything else is read as a
+/// PDF.
+pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
+    let kind = source_kind(path);
+    if fluree_doc_transcript::Format::sniff(data).is_some() || kind == Some(SourceKind::Transcript)
+    {
+        return SourceKind::Transcript;
+    }
+    if fluree_doc_email::Format::sniff(data).is_some() || kind == Some(SourceKind::Email) {
+        return SourceKind::Email;
+    }
+    match kind {
+        Some(
+            k @ (SourceKind::Markdown
+            | SourceKind::Text
+            | SourceKind::Html
+            | SourceKind::Docx
+            | SourceKind::Pptx
+            | SourceKind::Xlsx),
+        ) => k,
+        _ if fluree_doc_pdf::image::Format::sniff(data).is_some() => SourceKind::Image,
+        _ => SourceKind::Pdf,
+    }
+}
+
 /// The files in a directory `convert` reads, in name order.
 pub(crate) fn sources_in(dir: &Path) -> Vec<PathBuf> {
     let mut v: Vec<_> = std::fs::read_dir(dir)
@@ -457,7 +489,10 @@ pub(crate) fn ocr_readings(
 }
 
 /// Splice model-tier readings (VLM crops, and optionally table-structure
-/// readings for the three-way veto) into the element stream.
+/// readings for the three-way veto) into the element stream. The readings
+/// of the region crops named in `screens` ([`pasted_regions`]) are a
+/// screen's, their headings read as paragraphs ([`screen_blocks`]).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_tiers(
     tier_results: Option<&Path>,
     structure_results: Option<&Path>,
@@ -466,6 +501,7 @@ pub(crate) fn apply_tiers(
     elements: &mut Vec<fluree_doc_pdf::document::Element>,
     pages: &[Vec<String>],
     furniture: &[(String, bool)],
+    screens: &std::collections::HashSet<String>,
 ) {
     let Some(dir) = tier_results else {
         return;
@@ -480,6 +516,7 @@ pub(crate) fn apply_tiers(
         structure.as_ref().map(|s| s as _),
         pages,
         furniture,
+        screens,
     );
 }
 
@@ -501,7 +538,10 @@ pub(crate) fn structure_backend(
 ///
 /// An anchor no reading answers drops, unless the anchors were asked for
 /// (`--emit-anchors`): then it stays where it is for a later tier to fill,
-/// and only what was read in this run lands.
+/// and only what was read in this run lands. The readings of the region
+/// crops named in `screens` ([`pasted_regions`]) are a screen's, their
+/// headings read as paragraphs ([`screen_blocks`]).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn splice(
     emit_anchors: bool,
     elements: &mut Vec<fluree_doc_pdf::document::Element>,
@@ -510,17 +550,134 @@ pub(crate) fn splice(
     structure: Option<&dyn fluree_doc_pdf::arbiter::TierBackend>,
     pages: &[Vec<String>],
     furniture: &[(String, bool)],
+    screens: &std::collections::HashSet<String>,
 ) {
+    let readings = Screens {
+        inner: readings,
+        crops: screens,
+    };
     if emit_anchors {
         fluree_doc_pdf::arbiter::splice_leaving_unanswered(
-            elements, stem, readings, structure, pages,
+            elements, stem, &readings, structure, pages,
         );
     } else {
-        fluree_doc_pdf::arbiter::splice_with_page(elements, stem, readings, structure, pages);
+        fluree_doc_pdf::arbiter::splice_with_page(elements, stem, &readings, structure, pages);
     }
     // The same furniture the deterministic pass already stripped, so a page
     // reads the same whether or not it escalated.
     fluree_doc_pdf::arbiter::scrub_furniture(elements, furniture);
+}
+
+/// A model's reading of a screen pasted into a document (a picture a DOCX,
+/// an XLSX or an e-mail places, or a region of a PDF's page of text), with
+/// its headings read as paragraphs: they
+/// are the screen's, not the document's, and as headings they would put the
+/// document's own text under them. A title block is read as text, and a
+/// line marked up as a Markdown heading loses its marks; a table is left as
+/// it is.
+pub(crate) fn screen_blocks(
+    blocks: Vec<fluree_doc_pdf::arbiter::Block>,
+) -> Vec<fluree_doc_pdf::arbiter::Block> {
+    blocks
+        .into_iter()
+        .map(|mut b| {
+            if matches!(b.label.as_str(), "title" | "doc_title" | "paragraph_title") {
+                b.label = "text".into();
+            }
+            if !b.content.trim_start().starts_with("<table") {
+                b.content = b
+                    .content
+                    .lines()
+                    .map(|line| {
+                        let t = line.trim_start();
+                        let marks = t.len() - t.trim_start_matches('#').len();
+                        let rest = &t[marks..];
+                        if (1..=6).contains(&marks) && rest.starts_with([' ', '\t']) {
+                            rest.trim_start()
+                        } else {
+                            line
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            b
+        })
+        .collect()
+}
+
+/// The crops a screen pasted into a page fills, whose readings are read as
+/// a screen's: the region crops (`p<N>_r<i>`) of the anchors in `elements`
+/// a pasted region fills ([`fluree_doc_pdf::route::pasted`]), the rule
+/// OCR's reading of it follows ([`fluree_doc_pdf::ocr::mark_provenance`]).
+/// A region that, with the images it abuts, covers half its page or more is
+/// the page's content, a scan under a stamped line the text layer carries,
+/// whole or stored in strips, and keeps its headings.
+///
+/// A page read whole (`p<N>_full`) keeps its headings, even one near blank
+/// but for such a screen, where OCR demotes those whose words land in the
+/// screen: a model's reading has no positions to tell the screen's title
+/// from the page's own, a cover's drawn in outlines or a caption that
+/// repeats the screen's name.
+pub(crate) fn pasted_regions(
+    elements: &[fluree_doc_pdf::document::Element],
+    pages: &[fluree_doc_pdf::Page],
+) -> std::collections::HashSet<String> {
+    // The anchors by page, each judged with its page's other anchors
+    // ([`fluree_doc_pdf::route::pasted_set`]): the page's pictures are
+    // measured once.
+    let mut by_page: Vec<(
+        &fluree_doc_pdf::Page,
+        Vec<String>,
+        Vec<fluree_doc_pdf::BBox>,
+    )> = Vec::new();
+    for e in elements {
+        let Some(crop) = (e.text.strip_prefix("[[VLM:")).and_then(|t| t.strip_suffix("]]")) else {
+            continue;
+        };
+        let (Some(b), Some(page)) = (e.bbox, pages.iter().find(|p| p.index == e.page)) else {
+            continue;
+        };
+        let at = match by_page.iter().position(|(p, ..)| p.index == page.index) {
+            Some(at) => at,
+            None => {
+                by_page.push((page, Vec::new(), Vec::new()));
+                by_page.len() - 1
+            }
+        };
+        // An element's box is in the display frame, the page's images in
+        // its reading frame.
+        by_page[at].1.push(crop.replace(':', "_"));
+        by_page[at].2.push(page.from_display(b));
+    }
+    by_page
+        .into_iter()
+        .flat_map(|(page, crops, boxes)| {
+            let pasted = fluree_doc_pdf::route::pasted_set(page, &boxes);
+            crops
+                .into_iter()
+                .zip(pasted)
+                .filter_map(|(c, p)| p.then_some(c))
+        })
+        .collect()
+}
+
+/// Model readings whose crops named in `crops` are read as a screen's
+/// ([`screen_blocks`]).
+struct Screens<'a> {
+    inner: &'a dyn fluree_doc_pdf::arbiter::TierBackend,
+    crops: &'a std::collections::HashSet<String>,
+}
+
+impl fluree_doc_pdf::arbiter::TierBackend for Screens<'_> {
+    fn read(&self, stem: &str, crop: &str) -> Option<Vec<fluree_doc_pdf::arbiter::Block>> {
+        let blocks = self.inner.read(stem, crop)?;
+        Some(if self.crops.contains(crop) {
+            screen_blocks(blocks)
+        } else {
+            blocks
+        })
+    }
 }
 
 #[cfg(test)]
@@ -553,6 +710,72 @@ mod tests {
             assert_eq!(cfg.tier_results, Some(PathBuf::from("flag-readings")));
             assert!(cfg.emit_anchors);
         }
+    }
+
+    #[test]
+    fn a_screens_headings_are_read_as_paragraphs() {
+        let block = |label: &str, content: &str| fluree_doc_pdf::arbiter::Block {
+            label: label.into(),
+            content: content.into(),
+        };
+        let got = screen_blocks(vec![
+            block("doc_title", "SCREENSHOT"),
+            block("text", "## Balance 9,876.54\n#7781 opened\n####### not one"),
+            block("table", "<table><tr><td># kept</td></tr></table>"),
+        ]);
+        let got: Vec<(&str, &str)> = got
+            .iter()
+            .map(|b| (b.label.as_str(), b.content.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("text", "SCREENSHOT"),
+                ("text", "Balance 9,876.54\n#7781 opened\n####### not one"),
+                ("table", "<table><tr><td># kept</td></tr></table>"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reading_of_a_pasted_region_is_spliced_as_a_screens() {
+        // The configured model's readings and those supplied go through
+        // the same splice: a region crop named a screen loses its heading,
+        // another keeps it.
+        struct Titled;
+        impl fluree_doc_pdf::arbiter::TierBackend for Titled {
+            fn read(&self, _: &str, crop: &str) -> Option<Vec<fluree_doc_pdf::arbiter::Block>> {
+                // Region crops only: a whole page's reading would replace it.
+                crop.contains("_r").then(|| {
+                    vec![fluree_doc_pdf::arbiter::Block {
+                        label: "doc_title".into(),
+                        content: format!("Balance of {crop}"),
+                    }]
+                })
+            }
+        }
+        let anchor = |region: &str| {
+            Element::new(
+                "doco:Paragraph",
+                format!("[[VLM:p0:{region}]]"),
+                "rust",
+                "region-anchor",
+            )
+        };
+        let mut elements = vec![anchor("r0"), anchor("r1")];
+        let screens = std::collections::HashSet::from(["p0_r0".to_string()]);
+        splice(
+            false,
+            &mut elements,
+            "doc",
+            &Titled,
+            None,
+            &[],
+            &[],
+            &screens,
+        );
+        let texts: Vec<&str> = elements.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, ["Balance of p0_r0", "# Balance of p0_r1"]);
     }
 
     #[test]

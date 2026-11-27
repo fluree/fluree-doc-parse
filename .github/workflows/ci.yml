@@ -10,11 +10,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo fmt --check
       - run: cargo build --release --workspace
+      # Each OOXML crate must build on its own, not only through a feature
+      # another workspace member turns on in a shared dependency (zip's
+      # flate2 backend went missing that way).
+      - run: for p in ooxml docx pptx xlsx; do cargo check -p "fluree-doc-$p" || exit 1; done
       - run: cargo test --workspace
-      # Nothing in the workspace turns on the DOCX crate's `ocr` feature (the
-      # CLI reads pictures itself), so `parse_with_ocr` and its tests build
-      # only here.
-      - run: cargo test -p fluree-doc-docx --features ocr
+      # Nothing in the workspace turns on the DOCX and XLSX crates' `ocr`
+      # feature (the CLI reads pictures itself), so `parse_with_ocr` and its
+      # tests build only here.
+      - run: cargo test -p fluree-doc-docx -p fluree-doc-xlsx --features ocr
   # The built-in OCR engine end to end: the tests `cargo test` skips because
   # they need the asset pack, which is not in the repository. build.py makes
   # the pack from its publishers' files at pinned versions, checking every

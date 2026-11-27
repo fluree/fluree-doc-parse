@@ -30,11 +30,31 @@
 //!   hold each number, date, time and boolean as the file stores it, typed,
 //!   at full precision: `0.12345` under a `12%`.
 //!
+//! * **A picture is a figure where it is anchored.** A picture a sheet's
+//!   drawing anchors to its cells (`xl/drawings`, its image in `xl/media`)
+//!   is a `doco:Figure` placed among the sheet's elements by the cell its
+//!   top-left corner is anchored to, as an island is by its first cell. Its
+//!   images are listed ([`parse_with_media`]) for an OCR engine or a model
+//!   to read, and their text placed after the figure.
+//!
 //! No `bbox`: a cell address is not a position on a page, and a consumer
 //! wanting the address has the table's row and column.
 
 use fluree_doc_model::{Datum, DocumentInfo, Element};
-use fluree_doc_ooxml::{attr, local, Package};
+pub use fluree_doc_ooxml::Package;
+use fluree_doc_ooxml::{attr, local, PartNames};
+
+/// A picture anchored to a sheet's cells: the figure it is drawn as and
+/// where each of its images is. Its bytes are read on demand, each image
+/// once however many figures draw it ([`read_pictures`]), within what one
+/// document may have read ([`Allowance`]).
+pub use fluree_doc_model::{Allowance, Media, MediaSource, PictureReader, Unread};
+
+/// The opened package [`read_media`] and [`read_pictures`] read from; the
+/// bytes of one image part, at most [`MAX_MEDIA_BYTES`] (64 MiB) of them, or
+/// only its first, to tell its format by; and the loop a document's pictures
+/// are read through.
+pub use fluree_doc_ooxml::{read_media, read_media_head, read_pictures, MAX_MEDIA_BYTES};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -70,7 +90,67 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, XlsxError> {
 /// and styles are the parts it relates to as such; `xl/` is where a package
 /// that does not say keeps them.
 pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), XlsxError> {
+    parse_with_media(bytes).map(|(elements, info, _)| (elements, info))
+}
+
+/// What [`parse_with_ocr`] gives.
+#[cfg(feature = "ocr")]
+#[derive(Debug, Clone)]
+pub struct OcrParse {
+    pub elements: Vec<Element>,
+    pub info: DocumentInfo,
+    /// The images not read, as `doc:unreadImages` lists them, once for each
+    /// figure drawing them, with why: `Missing` (not in the package),
+    /// `UnsupportedFormat` (a drawing kept as EMF or WMF, a GIF),
+    /// `PastAllowance` (past [`Allowance::DOCUMENT`]) or `Failed`. Each is
+    /// left as its figures.
+    pub unread: Vec<fluree_doc_model::UnreadImage>,
+    /// What went wrong with each image `UnsupportedFormat` or `Failed`, by
+    /// the name it goes by (`m1`).
+    pub errors: Vec<(String, String)>,
+    /// Images of more than one page (a multi-page TIFF), of which only the
+    /// first was read.
+    pub first_page_only: Vec<fluree_doc_model::Picture>,
+}
+
+/// [`parse_with_info`], with the text in the sheets' pictures read by
+/// `engine` and placed right after each picture's figure
+/// ([`fluree_doc_image::place_after_figures`]).
+#[cfg(feature = "ocr")]
+pub fn parse_with_ocr(
+    bytes: &[u8],
+    engine: &dyn fluree_doc_vision::OcrEngine,
+) -> Result<OcrParse, XlsxError> {
     let mut pkg = Package::open(bytes).map_err(XlsxError::Zip)?;
+    let (mut elements, info, media) = parse_package(&mut pkg)?;
+    let r = fluree_doc_image::read_placed(media, &mut |part| read_media(&mut pkg, part), engine);
+    fluree_doc_image::place_after_figures(&mut elements, r.read);
+    Ok(OcrParse {
+        elements,
+        info,
+        unread: r.unread,
+        errors: r.errors,
+        first_page_only: r.first_page_only,
+    })
+}
+
+/// [`parse_with_info`], with the pictures each sheet's drawing anchors to
+/// its cells, in workbook order: each a figure (`figure-<sheet>-<n>`,
+/// numbered across the workbook) placed by its anchor, and the images it
+/// holds, for an OCR engine or a model to read. Only where they are is read
+/// here; their bytes are read by [`read_media`].
+pub fn parse_with_media(
+    bytes: &[u8],
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), XlsxError> {
+    parse_package(&mut Package::open(bytes).map_err(XlsxError::Zip)?)
+}
+
+/// [`parse_with_media`] from a package already opened, for a caller that
+/// goes on to read the images' bytes from it ([`read_media`]): opening it
+/// reads the archive's whole directory, once.
+pub fn parse_package(
+    pkg: &mut Package<'_>,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), XlsxError> {
     let main = pkg.main_part("xl/workbook.xml");
     let workbook = pkg.read(&main).ok_or(XlsxError::NoWorkbook)?;
     let rels = pkg.relationships(&main);
@@ -94,10 +174,13 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Xls
         .transpose()?
         .unwrap_or_default();
     let (sheets, date1904) = parse_workbook_xml(&workbook)?;
+    let names = PartNames::new(pkg);
 
     let mut out = Vec::new();
-    for (page, sheet) in sheets.iter().enumerate() {
-        let Some(target) = rels.iter().find(|r| r.id == sheet.rid && !r.external) else {
+    let mut media = Vec::new();
+    let mut figure_count = 0usize;
+    for (page, sheet_ref) in sheets.iter().enumerate() {
+        let Some(target) = rels.iter().find(|r| r.id == sheet_ref.rid && !r.external) else {
             continue;
         };
         let Some(xml) = pkg.read(&target.target) else {
@@ -108,12 +191,178 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Xls
             styles: &styles,
             date1904,
         };
-        out.extend(parse_sheet_xml(&sheet.name, &xml, page, &ctx)?);
+        let sheet = read_sheet(&xml, &ctx)?;
+        // The sheet's drawing, by the relationship it names: the pictures
+        // anchored to its cells, each a figure where it is anchored.
+        let mut figures = Vec::new();
+        if let Some(rid) = &sheet.drawing {
+            let drawing = pkg
+                .relationships(&target.target)
+                .into_iter()
+                .find(|r| r.id == *rid && !r.external)
+                .map(|r| r.target);
+            if let Some((xml, part)) = drawing.and_then(|d| Some((pkg.read(&d)?, d))) {
+                let drawing_rels = pkg.relationships(&part);
+                let by_id = fluree_doc_ooxml::by_id(&drawing_rels);
+                for pic in pictures(&xml) {
+                    figure_count += 1;
+                    let id = format!("figure-{page}-{figure_count}");
+                    for (index, rid) in pic.rids.iter().enumerate() {
+                        media.push(Media {
+                            figure: id.clone(),
+                            source: names.resolve(&by_id, rid),
+                            index,
+                        });
+                    }
+                    let mut f = element("doco:Figure", pic.alt, None, page);
+                    f.figure = Some(id);
+                    figures.push((pic.at, f));
+                }
+            }
+        }
+        out.extend(sheet_elements(&sheet_ref.name, &sheet, page, figures));
     }
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
-    Ok((out, pkg.info()))
+    Ok((out, pkg.info(), media))
+}
+
+/// A picture a drawing anchors to a sheet's cells.
+#[derive(Debug, PartialEq, Eq)]
+struct Picture {
+    /// The cell its top-left corner is anchored to (row, column), 0-based;
+    /// a picture placed by an absolute position, which names no cell, is
+    /// set after everything on its sheet.
+    at: (u32, u32),
+    /// Its alternative text, or its title.
+    alt: String,
+    /// The relationships naming its images (`a:blip r:embed`, or `r:link`
+    /// for one linked to a file outside the package), in order: one for a
+    /// picture, several for a group of them.
+    rids: Vec<String>,
+}
+
+/// An anchor of a drawing, as it is read.
+#[derive(Default)]
+struct Anchor {
+    /// The cell its `from` corner is in, 0-based.
+    row: Option<u32>,
+    col: Option<u32>,
+    /// Placed by a position on the sheet, not by a cell.
+    absolute: bool,
+    descr: String,
+    title: String,
+    rids: Vec<String>,
+}
+
+/// The pictures of a drawing part (`xl/drawings/drawing1.xml`), in the
+/// order it anchors them. Only a picture (`xdr:pic`) has an image to read:
+/// a chart has data, and a shape's image fill is a texture. The fallback
+/// copy of an alternate content is not read twice. A drawing that does not
+/// parse anchors nothing: the cells are read without it.
+fn pictures(xml: &str) -> Vec<Picture> {
+    let mut r = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut out = Vec::new();
+    // The anchor being read.
+    let mut anchor: Option<Anchor> = None;
+    let (mut in_from, mut in_pic, mut fallback) = (false, 0usize, 0usize);
+    // Which of the anchor's `from` coordinates is being read.
+    let mut reading: Option<&'static str> = None;
+    loop {
+        let (e, start) = match r.read_event_into(&mut buf) {
+            Err(_) => return Vec::new(),
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => (e.into_owned(), true),
+            Ok(Event::Empty(e)) => (e.into_owned(), false),
+            Ok(Event::Text(t)) => {
+                if let (Some(which), Some(a), 0) = (reading, anchor.as_mut(), fallback) {
+                    let v = t.unescape().ok().and_then(|v| v.trim().parse::<u32>().ok());
+                    match which {
+                        "row" => a.row = a.row.or(v),
+                        _ => a.col = a.col.or(v),
+                    }
+                }
+                buf.clear();
+                continue;
+            }
+            Ok(Event::End(e)) => {
+                match local(e.name().as_ref()) {
+                    "Fallback" if fallback > 0 => fallback -= 1,
+                    _ if fallback > 0 => {}
+                    "from" => in_from = false,
+                    "row" | "col" => reading = None,
+                    "pic" if in_pic > 0 => in_pic -= 1,
+                    "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor" => {
+                        if let Some(a) = anchor.take().filter(|a| !a.rids.is_empty()) {
+                            let at = if a.absolute {
+                                (u32::MAX, u32::MAX)
+                            } else {
+                                (a.row.unwrap_or(0), a.col.unwrap_or(0))
+                            };
+                            out.push(Picture {
+                                at,
+                                alt: fluree_doc_ooxml::alt_text(&a.descr, &a.title),
+                                rids: a.rids,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+                buf.clear();
+                continue;
+            }
+            Ok(_) => {
+                buf.clear();
+                continue;
+            }
+        };
+        let tag = local(e.name().as_ref()).to_string();
+        if fallback > 0 {
+            if tag == "Fallback" && start {
+                fallback += 1;
+            }
+            buf.clear();
+            continue;
+        }
+        match tag.as_str() {
+            "Fallback" if start => fallback += 1,
+            "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor" if start => {
+                anchor = Some(Anchor {
+                    absolute: tag == "absoluteAnchor",
+                    ..Anchor::default()
+                });
+            }
+            "from" if start && anchor.is_some() => in_from = true,
+            "row" if start && in_from => reading = Some("row"),
+            "col" if start && in_from => reading = Some("col"),
+            "pic" if start && anchor.is_some() => in_pic += 1,
+            "cNvPr" if in_pic > 0 => {
+                // A group's first picture speaks for it.
+                if let Some(a) = anchor
+                    .as_mut()
+                    .filter(|a| a.descr.is_empty() && a.title.is_empty())
+                {
+                    a.descr = attr(&e, "descr").unwrap_or_default();
+                    a.title = attr(&e, "title").unwrap_or_default();
+                }
+            }
+            "blip" if in_pic > 0 => {
+                if let (Some(a), Some(rid)) = (
+                    anchor.as_mut(),
+                    attr(&e, "embed").or_else(|| attr(&e, "link")),
+                ) {
+                    if !a.rids.contains(&rid) {
+                        a.rids.push(rid);
+                    }
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
 }
 
 /// What the file declares about itself in its core properties: title,
@@ -921,6 +1170,9 @@ struct Sheet {
     /// `autoFilter` and table-part ranges: the header row of each is its
     /// first row.
     filtered: Vec<Range>,
+    /// The relationship naming the sheet's drawing, where its pictures
+    /// are anchored.
+    drawing: Option<String>,
 }
 
 /// Parse one sheet's XML into elements tagged with `page`.
@@ -931,14 +1183,25 @@ pub fn parse_sheet_xml(
     ctx: &Context<'_>,
 ) -> Result<Vec<Element>, XlsxError> {
     let sheet = read_sheet(xml, ctx)?;
+    Ok(sheet_elements(name, &sheet, page, Vec::new()))
+}
+
+/// A sheet's elements: its name, then its cells laid out with the figures
+/// anchored among them, each by the cell it is anchored to.
+fn sheet_elements(
+    name: &str,
+    sheet: &Sheet,
+    page: usize,
+    figures: Vec<((u32, u32), Element)>,
+) -> Vec<Element> {
     let mut out = vec![element(
         "doco:SectionTitle",
         name.to_string(),
         Some(1),
         page,
     )];
-    out.extend(layout(&sheet, page));
-    Ok(out)
+    out.extend(layout(sheet, page, figures));
+    out
 }
 
 fn read_sheet(xml: &str, ctx: &Context<'_>) -> Result<Sheet, XlsxError> {
@@ -1051,6 +1314,7 @@ fn read_sheet(xml: &str, ctx: &Context<'_>) -> Result<Sheet, XlsxError> {
                     sheet.filtered.push(range);
                 }
             }
+            "drawing" => sheet.drawing = attr(&e, "id"),
             _ => {}
         }
         buf.clear();
@@ -1084,7 +1348,11 @@ fn cell_text(kind: &str, value: &str, st: &CellStyle, ctx: &Context<'_>) -> Stri
 
 /// Lay a sheet's cells out as elements: islands of touching cells, each a
 /// table with its title peeled off the top and its note off the bottom.
-fn layout(sheet: &Sheet, page: usize) -> Vec<Element> {
+///
+/// `figures` are set among them by the cell each is anchored to: after the
+/// elements whose first cell comes before it, in rows then columns, as an
+/// island is placed by its first cell.
+fn layout(sheet: &Sheet, page: usize, figures: Vec<((u32, u32), Element)>) -> Vec<Element> {
     // Merged ranges show their anchor and hide the rest. The hidden cells
     // still occupy their positions — they are part of what the range
     // covers — but carry no text of their own.
@@ -1137,6 +1405,9 @@ fn layout(sheet: &Sheet, page: usize) -> Vec<Element> {
             &isl, &cells, &merge_of, sheet, modal_size, page,
         ));
     }
+    // After the islands: a figure anchored to an island's first cell
+    // follows it.
+    placed.extend(figures);
     placed.sort_by_key(|(at, _)| *at);
     placed.into_iter().map(|(_, e)| e).collect()
 }
@@ -2672,5 +2943,309 @@ mod tests {
         let bytes = zw.finish().unwrap().into_inner();
         assert!(matches!(parse(&bytes), Err(XlsxError::NoWorkbook)));
         assert!(matches!(parse(b"not a zip"), Err(XlsxError::Zip(_))));
+    }
+
+    const XDR: &str = r#"xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+
+    /// A picture anchored at (row, col), 0-based, of the image `rid`.
+    fn anchored(row: u32, col: u32, descr: &str, rid: &str) -> String {
+        format!(
+            "<xdr:twoCellAnchor><xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>0</xdr:colOff>\
+             <xdr:row>{row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>\
+             <xdr:to><xdr:col>9</xdr:col><xdr:row>40</xdr:row></xdr:to>\
+             <xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"2\" name=\"Picture 1\" descr=\"{descr}\"/></xdr:nvPicPr>\
+             <xdr:blipFill><a:blip r:embed=\"{rid}\"/></xdr:blipFill></xdr:pic><xdr:clientData/></xdr:twoCellAnchor>"
+        )
+    }
+
+    /// A workbook of `sheets` (name, sheet XML, drawing XML), each sheet's
+    /// drawing relating its images as `rId<k>` to `media/image<k>.png`, and
+    /// the parts `extra`.
+    fn workbook(sheets: &[(&str, String, Option<String>)], extra: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        use std::io::Write;
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
+        let list: String = (1..=sheets.len())
+            .map(|i| {
+                format!(
+                    "<sheet name=\"{}\" sheetId=\"{i}\" r:id=\"rId{i}\"/>",
+                    sheets[i - 1].0
+                )
+            })
+            .collect();
+        parts.push((
+            "xl/workbook.xml".into(),
+            format!("<workbook {NS}><sheets>{list}</sheets></workbook>").into_bytes(),
+        ));
+        let rels: String = (1..=sheets.len())
+            .map(|i| {
+                format!("<Relationship Id=\"rId{i}\" Type=\"{rel}/worksheet\" Target=\"worksheets/sheet{i}.xml\"/>")
+            })
+            .collect();
+        parts.push((
+            "xl/_rels/workbook.xml.rels".into(),
+            format!("<Relationships>{rels}</Relationships>").into_bytes(),
+        ));
+        for (i, (_, xml, drawing)) in sheets.iter().enumerate() {
+            let i = i + 1;
+            parts.push((
+                format!("xl/worksheets/sheet{i}.xml"),
+                xml.clone().into_bytes(),
+            ));
+            if let Some(d) = drawing {
+                parts.push((
+                    format!("xl/worksheets/_rels/sheet{i}.xml.rels"),
+                    format!(
+                        "<Relationships><Relationship Id=\"rIdD\" Type=\"{rel}/drawing\" \
+                         Target=\"../drawings/drawing{i}.xml\"/></Relationships>"
+                    )
+                    .into_bytes(),
+                ));
+                parts.push((
+                    format!("xl/drawings/drawing{i}.xml"),
+                    format!("<xdr:wsDr {XDR}>{d}</xdr:wsDr>").into_bytes(),
+                ));
+                let images: String = (1..=4)
+                    .map(|k| {
+                        format!("<Relationship Id=\"rId{k}\" Type=\"{rel}/image\" Target=\"../media/image{k}.png\"/>")
+                    })
+                    .collect();
+                parts.push((
+                    format!("xl/drawings/_rels/drawing{i}.xml.rels"),
+                    format!("<Relationships>{images}</Relationships>").into_bytes(),
+                ));
+            }
+        }
+        parts.extend(extra.iter().map(|(n, b)| (n.to_string(), b.clone())));
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in parts {
+            zw.start_file(name, opts).unwrap();
+            zw.write_all(&bytes).unwrap();
+        }
+        zw.finish().unwrap().into_inner()
+    }
+
+    /// A sheet that names its drawing.
+    fn drawn(cells: &[String]) -> String {
+        sheet(cells, "").replace("</sheetData>", "</sheetData><drawing r:id=\"rIdD\"/>")
+    }
+
+    #[test]
+    fn a_picture_is_a_figure_where_it_is_anchored() {
+        // A table on rows 3-4, a screenshot anchored at row 6, a note on
+        // row 9; a second sheet with a picture of its own.
+        let first = drawn(&[
+            text("A3", 1, "Item"),
+            text("B3", 1, "Amount"),
+            text("A4", 0, "Fee"),
+            num("B4", 0, "12"),
+            text("A9", 0, "See the screenshot above."),
+        ]);
+        let second = drawn(&[text("A1", 0, "Notes")]);
+        let bytes = workbook(
+            &[
+                (
+                    "Summary",
+                    first,
+                    Some(anchored(5, 0, "Account screen", "rId1")),
+                ),
+                ("Detail", second, Some(anchored(3, 2, "", "rId2"))),
+            ],
+            &[
+                ("xl/media/image1.png", b"1".to_vec()),
+                ("xl/media/image2.png", b"2".to_vec()),
+            ],
+        );
+        let (els, _, media) = parse_with_media(&bytes).unwrap();
+        let got: Vec<(&str, &str, usize)> = els
+            .iter()
+            .map(|e| {
+                (
+                    e.kind.as_str(),
+                    e.figure.as_deref().unwrap_or(&e.text),
+                    e.page,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("doco:SectionTitle", "Summary", 0),
+                ("doco:Table", els[1].text.as_str(), 0),
+                ("doco:Figure", "figure-0-1", 0),
+                ("doco:Paragraph", "See the screenshot above.", 0),
+                ("doco:SectionTitle", "Detail", 1),
+                ("doco:Paragraph", "Notes", 1),
+                ("doco:Figure", "figure-1-2", 1),
+            ]
+        );
+        assert_eq!(els[2].text, "Account screen");
+        let listed: Vec<(&str, Option<&str>, String)> = media
+            .iter()
+            .map(|m| (m.figure.as_str(), m.source.part(), m.tag()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("figure-0-1", Some("xl/media/image1.png"), "m1".to_string()),
+                ("figure-1-2", Some("xl/media/image2.png"), "m2".to_string()),
+            ]
+        );
+        let mut pkg = Package::open(&bytes).unwrap();
+        assert_eq!(read_media(&mut pkg, "xl/media/image2.png").unwrap(), b"2");
+        // The plain reader reads the same elements, figures and all.
+        let plain: Vec<String> = parse(&bytes)
+            .unwrap()
+            .iter()
+            .map(|e| format!("{e:?}"))
+            .collect();
+        let full: Vec<String> = els.iter().map(|e| format!("{e:?}")).collect();
+        assert_eq!(plain, full);
+    }
+
+    #[test]
+    fn only_a_drawings_pictures_are_read_once_each() {
+        let pic = |rid: &str, attr: &str| {
+            format!(
+                "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"2\" name=\"P\" title=\"T{rid}\"/></xdr:nvPicPr>\
+                 <xdr:blipFill><a:blip r:{attr}=\"{rid}\"/></xdr:blipFill></xdr:pic>"
+            )
+        };
+        let from = |row: u32, col: u32| {
+            format!("<xdr:from><xdr:col>{col}</xdr:col><xdr:row>{row}</xdr:row></xdr:from>")
+        };
+        let xml = format!(
+            "<xdr:wsDr {XDR}>\
+             <xdr:oneCellAnchor>{}<xdr:grpSp>{}{}</xdr:grpSp></xdr:oneCellAnchor>\
+             <xdr:twoCellAnchor>{}<xdr:graphicFrame><a:graphic><a:graphicData><c:chart r:id=\"rId9\"/></a:graphicData></a:graphic></xdr:graphicFrame></xdr:twoCellAnchor>\
+             <xdr:twoCellAnchor>{}<xdr:sp><xdr:spPr><a:blipFill><a:blip r:embed=\"rId8\"/></a:blipFill></xdr:spPr></xdr:sp></xdr:twoCellAnchor>\
+             <mc:AlternateContent><mc:Choice Requires=\"a14\"><xdr:twoCellAnchor>{}{}</xdr:twoCellAnchor></mc:Choice>\
+             <mc:Fallback><xdr:twoCellAnchor>{}{}</xdr:twoCellAnchor></mc:Fallback></mc:AlternateContent>\
+             <xdr:absoluteAnchor><xdr:pos x=\"0\" y=\"0\"/>{}</xdr:absoluteAnchor>\
+             </xdr:wsDr>",
+            from(2, 1),
+            pic("rId1", "embed"),
+            pic("rId2", "embed"),
+            from(4, 0),
+            from(5, 0),
+            from(7, 3),
+            pic("rId3", "embed"),
+            from(7, 3),
+            pic("rId6", "embed"),
+            pic("rId4", "link"),
+        );
+        let got: Vec<((u32, u32), String, Vec<String>)> = pictures(&xml)
+            .into_iter()
+            .map(|p| (p.at, p.alt, p.rids))
+            .collect();
+        let rids = |r: &[&str]| r.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            got,
+            [
+                ((2, 1), "TrId1".to_string(), rids(&["rId1", "rId2"])),
+                ((7, 3), "TrId3".to_string(), rids(&["rId3"])),
+                ((u32::MAX, u32::MAX), "TrId4".to_string(), rids(&["rId4"])),
+            ]
+        );
+        assert!(pictures("<xdr:wsDr><xdr:twoCellAnchor>").is_empty());
+    }
+
+    #[test]
+    fn a_pictures_image_not_in_the_package_is_listed_as_such() {
+        let bytes = workbook(
+            &[(
+                "S",
+                drawn(&[text("A1", 0, "x")]),
+                Some(anchored(0, 0, "", "rId3") + &anchored(1, 0, "", "rId7")),
+            )],
+            &[("xl/media/IMAGE3.PNG", b"3".to_vec())],
+        );
+        let (_, _, media) = parse_with_media(&bytes).unwrap();
+        let listed: Vec<&MediaSource> = media.iter().map(|m| &m.source).collect();
+        assert_eq!(
+            listed,
+            [
+                &MediaSource::Part("xl/media/IMAGE3.PNG".into()),
+                &MediaSource::Missing("rId7".into())
+            ]
+        );
+    }
+
+    #[cfg(feature = "ocr")]
+    #[test]
+    fn a_pictures_text_is_read_after_its_figure() {
+        /// Reads one line across whatever it is shown.
+        struct OneLine;
+        impl fluree_doc_vision::OcrEngine for OneLine {
+            fn name(&self) -> &str {
+                "one-line"
+            }
+            fn read(
+                &self,
+                image: &fluree_doc_vision::Pixels,
+            ) -> Result<fluree_doc_vision::WordReading, String> {
+                let (w, h) = (image.width as f64, image.height as f64);
+                Ok(fluree_doc_vision::WordReading {
+                    coords: fluree_doc_vision::Coords::Px,
+                    width: Some(w),
+                    height: Some(h),
+                    engine: None,
+                    words: vec![fluree_doc_vision::OcrWord {
+                        text: "Reference 4417-0093-21".into(),
+                        bbox: [w * 0.1, h * 0.4, w * 0.9, h * 0.6],
+                        angle: None,
+                        conf: Some(0.9),
+                    }],
+                    rules: Vec::new(),
+                })
+            }
+        }
+        let mut png = Vec::new();
+        // Lines of strokes a letter wide on a light ground: text, to the
+        // pixel probe, which a picture is read only when it is.
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(400, 120, |x, y| {
+            let ink = (12..24).contains(&(y % 40)) && x % 10 < 6 && x < 300;
+            image::Rgb(if ink { [40, 40, 40] } else { [240, 240, 240] })
+        }))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+        let bytes = workbook(
+            &[(
+                "S",
+                drawn(&[text("A1", 0, "Before"), text("A9", 0, "After")]),
+                Some(anchored(3, 0, "", "rId1") + &anchored(4, 0, "", "rId4")),
+            )],
+            &[("xl/media/image1.png", png)],
+        );
+        let read = parse_with_ocr(&bytes, &OneLine).unwrap();
+        let texts: Vec<(&str, &str)> = read
+            .elements
+            .iter()
+            .map(|e| (e.kind.as_str(), e.text.as_str()))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                ("doco:SectionTitle", "S"),
+                ("doco:Paragraph", "Before"),
+                ("doco:Figure", ""),
+                ("doco:Paragraph", "Reference 4417-0093-21"),
+                ("doco:Figure", ""),
+                ("doco:Paragraph", "After"),
+            ]
+        );
+        assert_eq!(read.elements[3].provenance, "ocr");
+        // The second picture's part is not in the package: named, it fails
+        // to read.
+        assert_eq!(read.unread.len(), 1);
+        assert_eq!(
+            (
+                read.unread[0].image.as_str(),
+                read.unread[0].reason.as_str()
+            ),
+            ("m2", "Failed")
+        );
     }
 }

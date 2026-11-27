@@ -21,6 +21,16 @@
 //! Attachments are not read here. Each is a document of its own for its
 //! own reader, so they come back beside the elements as bytes, described.
 //! There is no geometry: `bbox` is `None` and `page` is 0 throughout.
+//!
+//! An image the message shows in its body (an inline image, by its
+//! `cid:`) is one of those files, and it is also drawn somewhere in the
+//! body: there it is a `doco:Figure`, listed in [`Email::media`], for an
+//! OCR engine's reading of it to be placed after
+//! (`fluree_doc_image::place_after_figures`). The figure's text is the
+//! image's alternative text, except for an image under the floor a model is
+//! sent ([`fluree_doc_model::under_model_floor`]): a signature's icons
+//! (`LinkedIn`, `Logo`) would otherwise lend nearly every corporate message
+//! their words.
 
 mod address;
 mod date;
@@ -32,7 +42,9 @@ mod signature;
 mod text;
 mod thread;
 
-use fluree_doc_model::{Attachment, DocumentInfo, Element, Mailbox, Message, Notes};
+use fluree_doc_model::{
+    Attachment, DocumentInfo, Element, Mailbox, Media, MediaSource, Message, Notes,
+};
 
 /// An email, read.
 #[derive(Debug)]
@@ -46,9 +58,37 @@ pub struct Email {
     /// date.
     pub info: DocumentInfo,
     pub attachments: Vec<AttachedFile>,
+    /// The images the body shows, each drawn as a figure (`figure-0-<n>`,
+    /// in the order the body first shows them), its source naming its part:
+    /// the `cid:` URL its message names it by where no other part has that
+    /// Content-ID, else `attachment <n>`, its place among
+    /// [`Email::attachments`] from 1. An inline image the
+    /// body does not mark where it is drawn (a plain-text body read where
+    /// only the HTML one shows it) is drawn at the end of the file's own
+    /// message. Each is one of [`Email::attachments`]; its bytes are
+    /// [`Email::media_bytes`].
+    pub media: Vec<Media>,
+    /// For each of `media`, its index in `attachments`.
+    media_at: Vec<usize>,
 }
 
 impl Email {
+    /// The bytes of the image of [`Email::media`] held under `part` (its
+    /// source's [`MediaSource::part`]).
+    pub fn media_bytes(&self, part: &str) -> Option<&[u8]> {
+        Some(&self.attachments[self.media_attachment(part)?].bytes)
+    }
+
+    /// Which of [`Email::attachments`] the image of [`Email::media`] held
+    /// under `part` is.
+    pub fn media_attachment(&self, part: &str) -> Option<usize> {
+        let i = self
+            .media
+            .iter()
+            .position(|m| m.source.part() == Some(part))?;
+        Some(self.media_at[i])
+    }
+
     /// What an emitter carries beside the elements: the document's info and
     /// its attachments, described.
     pub fn notes(&self) -> Notes {
@@ -65,6 +105,10 @@ impl Email {
 pub struct AttachedFile {
     pub info: Attachment,
     pub bytes: Vec<u8>,
+    /// The id its message's body names it by (`cid:…`), without angle
+    /// brackets: a MIME part's `Content-ID`, an Outlook attachment's
+    /// content id.
+    pub content_id: Option<String>,
 }
 
 impl AttachedFile {
@@ -85,7 +129,22 @@ impl AttachedFile {
                 inline,
             },
             bytes,
+            content_id: None,
         }
+    }
+
+    /// The file, named by the id its message's body shows it by.
+    pub fn with_content_id(mut self, id: Option<&str>) -> Self {
+        self.content_id = id
+            .map(|id| {
+                id.trim()
+                    .trim_start_matches('<')
+                    .trim_end_matches('>')
+                    .trim()
+            })
+            .filter(|id| !id.is_empty())
+            .map(str::to_string);
+        self
     }
 }
 
@@ -164,6 +223,9 @@ pub(crate) struct Read {
     pub header: String,
     pub body: Body,
     pub attachments: Vec<AttachedFile>,
+    /// The content ids of the images the message's HTML versions other
+    /// than its body show (`<img src="cid:…">`).
+    pub shown: Vec<String>,
     pub provenance: &'static str,
 }
 
@@ -173,7 +235,7 @@ pub(crate) enum Body {
     None,
 }
 
-fn assemble(read: Read) -> Email {
+fn assemble(mut read: Read) -> Email {
     let prov = read.provenance;
     let mut elements = Vec::new();
     // A message with no header at all opens with nothing rather than with
@@ -189,9 +251,13 @@ fn assemble(read: Read) -> Email {
     // Per segment of the body: the element that opened its message, and
     // who sent it.
     let mut opened: Vec<(Option<usize>, Vec<Mailbox>)> = Vec::new();
+    // Where the file's own message's body ends, at the end of its first
+    // segment: an image it carries and does not mark is drawn there.
+    let mut own_end: Option<usize> = None;
     match read.body {
         Body::Plain(body) => {
             for seg in thread::split(&body) {
+                let is_own = matches!(seg.open, thread::Open::Own);
                 let mut who = owner(seg.open, own, &read.own, &opened);
                 // Only a quoted message has a header to open it; one with
                 // none opens on its body's first element.
@@ -216,18 +282,28 @@ fn assemble(read: Read) -> Email {
                 let sender = who.sender.clone();
                 let opener = open_body(&mut elements, first, who, &mut resumes);
                 opened.push((opener, sender));
+                if is_own && own_end.is_none() {
+                    own_end = Some(elements.len());
+                }
             }
         }
         Body::Html(html) => {
-            let (els, depths) = fluree_doc_html::parse_with_quote_depth(&html);
+            let (els, depths, ids) = fluree_doc_html::parse_message(&html);
+            read.shown.extend(ids);
             // A paragraph holding nothing but a zero-width character, as
             // Apple Mail and Outlook leave, is not text.
             let (els, depths): (Vec<Element>, Vec<usize>) = els
                 .into_iter()
                 .zip(depths)
-                .filter(|(e, _)| e.cells.is_some() || e.links.is_some() || !thread::blank(&e.text))
+                .filter(|(e, _)| {
+                    e.cells.is_some()
+                        || e.links.is_some()
+                        || e.figure.is_some()
+                        || !thread::blank(&e.text)
+                })
                 .unzip();
             for part in thread::split_elements(els, &depths) {
+                let is_own = matches!(part.open, thread::Open::Own);
                 let mut who = owner(part.open, own, &read.own, &opened);
                 if let Some(mut e) = part.header {
                     e.message = who.quoted.take().map(Box::new);
@@ -237,11 +313,19 @@ fn assemble(read: Read) -> Email {
                 }
                 let first = elements.len();
                 // Each element is a paragraph of its own: element `i` is
-                // line `2 * i`, with a blank line after it.
+                // line `2 * i`, with a blank line after it. A figure's
+                // alternative text is no line of a signature.
                 let lines: Vec<String> = part
                     .elements
                     .iter()
-                    .flat_map(|e| [e.text.clone(), String::new()])
+                    .flat_map(|e| {
+                        let line = if e.figure.is_some() {
+                            String::new()
+                        } else {
+                            e.text.clone()
+                        };
+                        [line, String::new()]
+                    })
                     .collect();
                 let signed = signature::find(&lines, &who.sender, who.resumed);
                 for (i, mut e) in part.elements.into_iter().enumerate() {
@@ -252,10 +336,36 @@ fn assemble(read: Read) -> Email {
                 let sender = who.sender.clone();
                 let opener = open_body(&mut elements, first, who, &mut resumes);
                 opened.push((opener, sender));
+                if is_own && own_end.is_none() {
+                    own_end = Some(elements.len());
+                }
             }
         }
         Body::None => {}
     }
+    // An image an HTML version shows by its `cid:` is shown in the message,
+    // whatever its part's disposition says: a sender's library can mark a
+    // related image `attachment` for its file name, and the plain text, read
+    // in place of the HTML, does not mark where it is drawn. Decided over the
+    // whole message, as the image and the HTML citing it need not be in one
+    // multipart: `multipart/related` can hold the alternative or sit in it.
+    // Its ids read as the HTML reader reads them (RFC 2392: the scheme in
+    // any case, percent signs decoded), and match a part as a figure's do.
+    for id in &read.shown {
+        if let Some(i) = named(&read.attachments, id, true) {
+            if is_image(&read.attachments[i]) {
+                read.attachments[i].info.inline = true;
+            }
+        }
+    }
+    let own_end = own_end.unwrap_or(elements.len());
+    let (media, media_at) = place_images(
+        &mut elements,
+        &read.attachments,
+        own_end,
+        prov,
+        &mut resumes,
+    );
     for (i, e) in elements.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
@@ -272,6 +382,182 @@ fn assemble(read: Read) -> Email {
             modified: None,
         },
         attachments: read.attachments,
+        media,
+        media_at,
+    }
+}
+
+/// Is this file an image: declared as one, or declared as no type in
+/// particular (`application/octet-stream`, as a client may send one, or
+/// none) and opening as a PNG, JPEG, TIFF, GIF or BMP does? A file declared
+/// as another type is that type, whatever its first bytes: a CSV whose
+/// first cell is `BMW` is no bitmap.
+fn is_image(a: &AttachedFile) -> bool {
+    let b = &a.bytes;
+    let declared = a.info.content_type.trim();
+    if declared.starts_with("image/") {
+        return true;
+    }
+    if !(declared.is_empty() || declared.eq_ignore_ascii_case("application/octet-stream")) {
+        return false;
+    }
+    b.starts_with(b"\x89PNG")
+        || b.starts_with(&[0xFF, 0xD8])
+        || b.starts_with(b"II*\0")
+        || b.starts_with(b"MM\0*")
+        || b.starts_with(b"GIF8")
+        || b.starts_with(b"BM")
+}
+
+/// Whether an image of the message is taken for an icon of a signature:
+/// under the floor a model is sent ([`fluree_doc_model::under_model_floor`]),
+/// its size read from its header. Such icons carry alternative text
+/// (`LinkedIn`, `Logo`) that would read as words of nearly every corporate
+/// message's body, so their figure keeps its place without it. An image
+/// whose header gives no size is not judged.
+fn is_icon(a: &AttachedFile) -> bool {
+    fluree_doc_model::stored_size(&a.bytes)
+        .is_some_and(|(w, h)| fluree_doc_model::under_model_floor(w, h))
+}
+
+/// The file a mark names by `want`, its Content-ID (`by_cid`) or its file
+/// name: the one written exactly so, else one written in another case. The
+/// one rule for a figure a body places and for an image an HTML version
+/// shows, so a message reads the same whichever version is its body.
+fn named(attachments: &[AttachedFile], want: &str, by_cid: bool) -> Option<usize> {
+    fn have(a: &AttachedFile, by_cid: bool) -> Option<&str> {
+        if by_cid {
+            a.content_id.as_deref()
+        } else {
+            a.info.filename.as_deref()
+        }
+    }
+    attachments
+        .iter()
+        .position(|a| have(a, by_cid) == Some(want))
+        .or_else(|| {
+            attachments
+                .iter()
+                .position(|a| have(a, by_cid).is_some_and(|h| h.eq_ignore_ascii_case(want)))
+        })
+}
+
+/// Resolve the figures the body marks (keyed `cid:<id>` or `name:<file>`,
+/// see [`text::elements`]) to the images among the message's files, and
+/// number them `figure-0-<n>` in the order the body first shows them. A mark
+/// naming no image the message holds is dropped, as it was before images
+/// were placed: replies keep the `[cid:…]` of images their quoted messages
+/// no longer carry. An inline image no mark names is drawn at `own_end`.
+/// Element indices in `resumes` follow the elements. Returns the images, and
+/// for each its index in `attachments`.
+fn place_images(
+    elements: &mut Vec<Element>,
+    attachments: &[AttachedFile],
+    own_end: usize,
+    provenance: &'static str,
+    resumes: &mut [(usize, usize)],
+) -> (Vec<Media>, Vec<usize>) {
+    let find = |key: &str| -> Option<usize> {
+        let i = match key.strip_prefix(text::CID_KEY) {
+            Some(id) => named(attachments, id, true),
+            None => named(attachments, key.strip_prefix(text::NAME_KEY)?, false),
+        };
+        i.filter(|&i| is_image(&attachments[i]))
+    };
+    // Each image, numbered as the body first shows it.
+    let mut number: std::collections::HashMap<usize, usize> = Default::default();
+    let mut order: Vec<usize> = Vec::new();
+    let mut resolved: Vec<Option<Option<usize>>> = Vec::with_capacity(elements.len());
+    for e in elements.iter() {
+        let at = match (&e.kind[..], &e.figure) {
+            ("doco:Figure", Some(key)) => Some(find(key)),
+            _ => None,
+        };
+        if let Some(Some(i)) = at {
+            number.entry(i).or_insert_with(|| {
+                order.push(i);
+                order.len()
+            });
+        }
+        resolved.push(at);
+    }
+    // The inline images the body does not mark, in the message's order.
+    let unmarked: Vec<usize> = (0..attachments.len())
+        .filter(|i| attachments[*i].info.inline && is_image(&attachments[*i]))
+        .filter(|i| !number.contains_key(i))
+        .collect();
+    for &i in &unmarked {
+        order.push(i);
+        number.insert(i, order.len());
+    }
+    let figure = |n: usize| format!("figure-0-{n}");
+    let unmarked_figures = || {
+        unmarked.iter().map(|i| {
+            let mut f = text::element("doco:Figure", String::new(), provenance);
+            f.figure = Some(figure(number[i]));
+            f
+        })
+    };
+    let old = std::mem::take(elements);
+    let n = old.len();
+    let mut moved: Vec<Option<usize>> = vec![None; n];
+    for (k, (mut e, at)) in old.into_iter().zip(resolved).enumerate() {
+        if k == own_end {
+            elements.extend(unmarked_figures());
+        }
+        match at {
+            Some(None) => continue,
+            Some(Some(i)) => {
+                e.figure = Some(figure(number[&i]));
+                if is_icon(&attachments[i]) {
+                    e.text.clear();
+                    e.links = None;
+                }
+            }
+            None => {}
+        }
+        moved[k] = Some(elements.len());
+        elements.push(e);
+    }
+    if own_end >= n {
+        elements.extend(unmarked_figures());
+    }
+    // A resumed message goes on at an element that is no figure (see
+    // `open_body`), so none of them names one that was dropped.
+    for (at, opener) in resumes.iter_mut() {
+        if let (Some(a), Some(o)) = (moved[*at], moved[*opener]) {
+            (*at, *opener) = (a, o);
+        }
+    }
+    let media = order
+        .iter()
+        .map(|&i| Media {
+            figure: figure(number[&i]),
+            source: MediaSource::Part(part_key(attachments, i)),
+            index: 0,
+        })
+        .collect();
+    (media, order)
+}
+
+/// The name an image of the message is read once by: the part itself, not
+/// what it is called. Its `cid:` URL where no other part has that
+/// Content-ID, else its place among the message's files (`attachment <n>`,
+/// from 1, as `doc:attachments` lists them). Never its file name: clients
+/// call every pasted image `image.png`, and two images keyed alike would be
+/// read as one, the second's text lost and the first's placed twice.
+fn part_key(attachments: &[AttachedFile], i: usize) -> String {
+    match &attachments[i].content_id {
+        Some(id)
+            if attachments
+                .iter()
+                .filter(|a| a.content_id.as_deref() == Some(id))
+                .count()
+                == 1 =>
+        {
+            format!("cid:{id}")
+        }
+        _ => format!("attachment {}", i + 1),
     }
 }
 
@@ -323,6 +609,11 @@ fn open_body(
     owner: Owner,
     resumes: &mut Vec<(usize, usize)>,
 ) -> Option<usize> {
+    // A message opens, or goes on, on words: an image drawn first is no
+    // header's place, and may not be one of the message's files at all.
+    let first = (first..elements.len())
+        .find(|&i| elements[i].kind != "doco:Figure")
+        .unwrap_or(elements.len());
     let has_body = first < elements.len();
     match owner {
         Owner {
@@ -932,5 +1223,376 @@ Content-Type: text/html; charset=utf-8\r\n\
         assert_eq!(Format::sniff(b"%PDF-1.7"), None);
         assert_eq!(Format::sniff(&msg::tests::sample()), Some(Format::Msg));
         assert!(matches!(parse(b"just words"), Err(EmailError::NotAnEmail)));
+    }
+
+    /// The figures of an email: (index, figure id), in order.
+    fn figures(email: &Email) -> Vec<(usize, &str)> {
+        email
+            .elements
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.kind == "doco:Figure")
+            .map(|(i, e)| (i, e.figure.as_deref().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn an_inline_image_only_the_html_shows_is_drawn_after_the_own_message() {
+        // Plain text and HTML alternatives; the HTML, and its image, related.
+        let src = b"From: a@example.org\r\n\
+To: b@example.org\r\n\
+Subject: Record\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/alternative; boundary=\"alt\"\r\n\
+\r\n\
+--alt\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+See below.\r\n\
+\r\n\
+On Thu, Jul 16, 2026 at 8:42 AM Kai Moreno <kai@example.com> wrote:\r\n\
+> Send the record.\r\n\
+--alt\r\n\
+Content-Type: multipart/related; boundary=\"rel\"\r\n\
+\r\n\
+--rel\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<p>See below.</p><img src=\"cid:shot1@example.org\">\r\n\
+--rel\r\n\
+Content-Type: image/png\r\n\
+Content-ID: <shot1@example.org>\r\n\
+\r\n\
+pixels\r\n\
+--rel--\r\n\
+--alt--\r\n";
+        let email = parse(src).unwrap();
+        assert_eq!(texts(&email)[1], "See below.");
+        // After the file's own message, before the one it quotes.
+        assert_eq!(figures(&email), [(2, "figure-0-1")]);
+        assert!(email.elements[3].message.as_deref().unwrap().quoted);
+        assert_eq!(texts(&email).last(), Some(&"Send the record."));
+        assert_eq!(email.media.len(), 1);
+        let m = &email.media[0];
+        assert_eq!(m.source.name(), "cid:shot1@example.org");
+        assert_eq!(m.tag(), "m1");
+        assert_eq!(email.media_bytes(m.source.name()), Some(&b"pixels"[..]));
+        // Still one of its files.
+        assert_eq!(email.attachments.len(), 1);
+        assert!(email.attachments[0].info.inline);
+    }
+
+    #[test]
+    fn only_a_file_of_no_declared_type_is_taken_for_an_image_by_its_first_bytes() {
+        // Two inline parts the body does not mark: a bitmap sent as
+        // `application/octet-stream`, drawn, and a CSV whose first cell
+        // starts as a bitmap does, which stays a file.
+        let src = b"From: a@example.org\r\n\
+To: b@example.org\r\n\
+Subject: Record\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"mix\"\r\n\
+\r\n\
+--mix\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+See below.\r\n\
+--mix\r\n\
+Content-Type: application/octet-stream\r\n\
+Content-Disposition: inline; filename=\"shot\"\r\n\
+\r\n\
+BMpixels\r\n\
+--mix\r\n\
+Content-Type: text/csv\r\n\
+Content-Disposition: inline; filename=\"fleet.csv\"\r\n\
+\r\n\
+BMW 320d,2019\r\n\
+--mix--\r\n";
+        let email = parse(src).unwrap();
+        assert_eq!(email.attachments.len(), 2);
+        let drawn: Vec<&str> = email.media.iter().map(|m| m.source.name()).collect();
+        assert_eq!(drawn, ["attachment 1"]);
+    }
+
+    #[test]
+    fn an_image_the_html_shows_is_drawn_whatever_its_disposition() {
+        // The related image marked `attachment` for its file name, as some
+        // libraries write it, and an image attached whose id the HTML only
+        // starts with: the first is shown, the second is a file. Wherever
+        // `multipart/related` sits: inside the alternative (Apple Mail),
+        // around it (Gmail, Outlook), under a `multipart/mixed`, or holding
+        // the only HTML; and however the URL is spelled (RFC 2392: the
+        // scheme in any case, the id percent-encoded, or in another case
+        // than its part's, matched alike whichever version is the body). An
+        // image named in other letters than ASCII is no part of it.
+        for url in [
+            "cid:shot1@example.org",
+            "CID:shot1@example.org",
+            "cid:shot1%40example.org",
+            "cid:SHOT1@Example.org",
+        ] {
+            let plain = "--alt\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nSee below.\r\n";
+            let html = format!(
+                "Content-Type: text/html; charset=utf-8\r\n\r\n\
+<p>See below.</p><img src=\"{url}\"><img src=\"日本.png\">\r\n"
+            );
+            let images = "--rel\r\n\
+Content-Type: image/png\r\n\
+Content-Disposition: attachment; filename=\"shot.png\"\r\n\
+Content-ID: <shot1@example.org>\r\n\
+\r\n\
+pixels\r\n\
+--rel\r\n\
+Content-Type: image/png\r\n\
+Content-Disposition: attachment; filename=\"photo.png\"\r\n\
+Content-ID: <shot1@example>\r\n\
+\r\n\
+other\r\n\
+--rel--\r\n";
+            let alt = "Content-Type: multipart/alternative; boundary=\"alt\"\r\n\r\n";
+            let rel = "Content-Type: multipart/related; boundary=\"rel\"\r\n\r\n";
+            let inside = format!("{alt}{plain}--alt\r\n{rel}--rel\r\n{html}{images}--alt--\r\n");
+            let around = format!("{rel}--rel\r\n{alt}{plain}--alt\r\n{html}--alt--\r\n{images}");
+            let mixed = format!(
+                "Content-Type: multipart/mixed; boundary=\"mix\"\r\n\r\n--mix\r\n{around}--mix--\r\n"
+            );
+            let html_only = format!("{rel}--rel\r\n{html}{images}");
+            for (shape, mime) in [
+                ("inside", inside),
+                ("around", around),
+                ("mixed", mixed),
+                ("html only", html_only),
+            ] {
+                let src = format!(
+                    "From: a@example.org\r\nTo: b@example.org\r\nSubject: Record\r\nMIME-Version: 1.0\r\n{mime}"
+                );
+                let email = parse(src.as_bytes()).unwrap();
+                assert_eq!(figures(&email).len(), 1, "{url} {shape}");
+                assert_eq!(email.media.len(), 1, "{url} {shape}");
+                assert_eq!(
+                    email.media[0].source.name(),
+                    "cid:shot1@example.org",
+                    "{url} {shape}"
+                );
+                let inline: Vec<bool> = email.attachments.iter().map(|a| a.info.inline).collect();
+                assert_eq!(inline, [true, false], "{url} {shape}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_image_outlook_marks_in_plain_text_is_drawn_where_it_is_marked() {
+        // The reply's screenshot between two paragraphs; the quoted
+        // message's image is no longer carried, and its mark is dropped.
+        let src = b"From: Lena Holt <lena@example.com>\r\n\
+To: Kai Moreno <kai@example.com>\r\n\
+Subject: RE: Record\r\n\
+Date: Fri, 17 Jul 2026 13:48:00 -0500\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"rel\"\r\n\
+\r\n\
+--rel\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Kai, the record:\r\n\
+\r\n\
+[cid:image001.png@01DC0000.00000000]\r\n\
+\r\n\
+Lena\r\n\
+\r\n\
+From: Kai Moreno <kai@example.com>\r\n\
+Sent: Thursday, July 16, 2026 8:42 AM\r\n\
+Subject: Record\r\n\
+\r\n\
+Which one? [cid:image002.png@01DC0000.00000000]\r\n\
+--rel\r\n\
+Content-Type: image/png; name=\"image001.png\"\r\n\
+Content-ID: <image001.png@01DC0000.00000000>\r\n\
+\r\n\
+pixels\r\n\
+--rel--\r\n";
+        let email = parse(src).unwrap();
+        let t = texts(&email);
+        let f = figures(&email);
+        assert_eq!(f.len(), 1, "{t:?}");
+        let at = f[0].0;
+        assert_eq!(t[at - 1], "Kai, the record:");
+        assert_eq!(t[at + 1], "Lena");
+        assert_eq!(
+            email.media[0].source.name(),
+            "cid:image001.png@01DC0000.00000000"
+        );
+        // The quoted message still opens where it did.
+        assert!(email.elements[at + 2].message.as_deref().unwrap().quoted);
+        assert_eq!(t[at + 3], "Which one?");
+    }
+
+    #[test]
+    fn an_image_shown_twice_is_one_image_and_a_message_without_any_is_unchanged() {
+        let src = b"From: a@example.org\r\n\
+Subject: Logo\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"rel\"\r\n\
+\r\n\
+--rel\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<p><img src=\"cid:logo\" alt=\"Logo\"> Hello</p><p>Bye <img src=\"cid:logo\"></p><p><img src=\"cid:pdf\"></p>\r\n\
+--rel\r\n\
+Content-Type: image/gif\r\n\
+Content-ID: <logo>\r\n\
+\r\n\
+GIF89a\r\n\
+--rel\r\n\
+Content-Type: application/pdf\r\n\
+Content-ID: <pdf>\r\n\
+\r\n\
+%PDF-1.7\r\n\
+--rel--\r\n";
+        let email = parse(src).unwrap();
+        let f: Vec<&str> = figures(&email).iter().map(|f| f.1).collect();
+        // A PDF the body shows by `cid:` is no image.
+        assert_eq!(f, ["figure-0-1", "figure-0-1"]);
+        assert_eq!(email.media.len(), 1);
+        assert_eq!(texts(&email)[1..], ["Hello", "Logo", "Bye", ""]);
+        // Without images, as before: no figure, nothing listed.
+        let plain =
+            parse(b"From: a@example.org\r\nSubject: s\r\n\r\nHi [cid:gone@x] there <old.png>\r\n")
+                .unwrap();
+        assert!(plain.media.is_empty());
+        assert_eq!(texts(&plain)[1..], ["Hi  there"]);
+    }
+
+    #[test]
+    fn a_signatures_icon_keeps_its_figure_but_not_its_alternative_text() {
+        // A GIF's header: its logical screen, `w` × `h`.
+        let gif = |w: u16, h: u16| {
+            let mut g = b"GIF89a".to_vec();
+            g.extend(w.to_le_bytes());
+            g.extend(h.to_le_bytes());
+            g.extend(b"\x80\x00\x00\xff\xff\xff\x00\x00\x00\x3b");
+            g
+        };
+        let mut src = b"From: a@example.org\r\n\
+Subject: Chart\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"rel\"\r\n\
+\r\n\
+--rel\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<p>See below.</p><p><img src=\"cid:chart@x\" alt=\"Org chart\"></p>\
+<p>Ann Smith <img src=\"cid:in@x\" alt=\"LinkedIn\"></p>\r\n"
+            .to_vec();
+        for (id, bytes) in [("chart@x", gif(800, 600)), ("in@x", gif(16, 16))] {
+            src.extend(
+                format!("--rel\r\nContent-Type: image/gif\r\nContent-ID: <{id}>\r\n\r\n").bytes(),
+            );
+            src.extend(bytes);
+            src.extend(b"\r\n");
+        }
+        src.extend(b"--rel--\r\n");
+        let email = parse(&src).unwrap();
+        assert_eq!(
+            texts(&email)[1..],
+            ["See below.", "Org chart", "Ann Smith", ""]
+        );
+        assert_eq!(
+            figures(&email).iter().map(|f| f.1).collect::<Vec<_>>(),
+            ["figure-0-1", "figure-0-2"]
+        );
+        assert_eq!(email.media.len(), 2);
+    }
+
+    /// A message of plain `text`, then `parts` (headers, bytes) as inline
+    /// files.
+    fn with_parts(text: &str, parts: &[(&str, &str)]) -> Email {
+        let mut src = format!(
+            "From: a@example.org\r\nSubject: s\r\nMIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"rel\"\r\n\r\n\
+--rel\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{text}\r\n"
+        );
+        for (headers, bytes) in parts {
+            src.push_str(&format!("--rel\r\n{headers}\r\n\r\n{bytes}\r\n"));
+        }
+        src.push_str("--rel--\r\n");
+        parse(src.as_bytes()).unwrap()
+    }
+
+    /// Each image's key, and the bytes and file its key gives back.
+    fn keyed(email: &Email) -> Vec<(String, String, usize)> {
+        email
+            .media
+            .iter()
+            .map(|m| {
+                let part = m.source.part().unwrap();
+                let bytes = String::from_utf8(email.media_bytes(part).unwrap().to_vec()).unwrap();
+                (
+                    part.to_string(),
+                    bytes,
+                    email.media_attachment(part).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn two_images_of_one_file_name_are_two_images() {
+        // Pasted images a client calls alike, with no Content-ID: each is
+        // read on its own, and its key gives back its own bytes.
+        let image =
+            "Content-Type: image/png\r\nContent-Disposition: inline; filename=\"image.png\"";
+        let email = with_parts("See below.", &[(image, "ALPHA"), (image, "BRAVO")]);
+        assert_eq!(
+            keyed(&email),
+            [
+                ("attachment 1".into(), "ALPHA".into(), 0),
+                ("attachment 2".into(), "BRAVO".into(), 1)
+            ]
+        );
+        assert_eq!(fluree_doc_model::pictures(email.media.clone()).len(), 2);
+    }
+
+    #[test]
+    fn two_images_of_one_content_id_are_two_images() {
+        // A Content-ID two parts carry names neither: the body's mark is
+        // drawn as the first, and the second, unmarked, after the message;
+        // each is read by its place among the files. A Content-ID no other
+        // part has still keys its part.
+        let dup = |name: &str| {
+            format!("Content-Type: image/png\r\nContent-Disposition: inline; filename=\"{name}\"\r\nContent-ID: <x@example.org>")
+        };
+        let (a, b) = (dup("a.png"), dup("b.png"));
+        let own =
+            "Content-Type: image/png\r\nContent-Disposition: inline\r\nContent-ID: <y@example.org>";
+        let email = with_parts(
+            "One [cid:x@example.org] two [cid:y@example.org]",
+            &[(&a, "ALPHA"), (&b, "BRAVO"), (own, "CHARLIE")],
+        );
+        assert_eq!(
+            keyed(&email),
+            [
+                ("attachment 1".into(), "ALPHA".into(), 0),
+                ("cid:y@example.org".into(), "CHARLIE".into(), 2),
+                ("attachment 2".into(), "BRAVO".into(), 1)
+            ]
+        );
+        assert_eq!(fluree_doc_model::pictures(email.media.clone()).len(), 3);
+    }
+
+    #[test]
+    fn an_image_marked_twice_is_read_once() {
+        // Apple Mail's mark of one file, twice: one image, drawn twice.
+        let image =
+            "Content-Type: image/png\r\nContent-Disposition: inline; filename=\"image.png\"";
+        let email = with_parts(
+            "Look <image.png>\r\n\r\nAgain <image.png>",
+            &[(image, "ALPHA")],
+        );
+        let f: Vec<&str> = figures(&email).iter().map(|f| f.1).collect();
+        assert_eq!(f, ["figure-0-1", "figure-0-1"]);
+        assert_eq!(keyed(&email), [("attachment 1".into(), "ALPHA".into(), 0)]);
+        let pictures = fluree_doc_model::pictures(email.media.clone());
+        assert_eq!(pictures.len(), 1);
     }
 }

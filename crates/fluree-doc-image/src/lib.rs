@@ -337,6 +337,24 @@ fn tiff_pages(b: &[u8]) -> usize {
 /// unread in the output, and a few kilobytes can chain a hundred thousand.
 const MAX_TIFF_PAGES: usize = 10_000;
 
+/// Whether a decoded image looks like text as the PDF router judges a raster
+/// region: its pixels to the probe ([`fluree_doc_vision::texty`]) — a
+/// capture, a scanned table or a labelled chart does; a photograph, a
+/// gradient or a logo does not — and enough of them on its short side for a
+/// line of text ([`fluree_doc_pdf::route::MIN_TEXT_LINE_PX`]), under which
+/// an engine misreads what it reads. Transparent pixels are laid over
+/// white, as a page draws them.
+pub fn texty(image: &Decoded) -> bool {
+    let p = &image.pixels;
+    p.width.min(p.height) >= fluree_doc_pdf::route::MIN_TEXT_LINE_PX
+        && fluree_doc_vision::texty::pixels_look_like_text(p)
+}
+
+/// [`texty`] of an image's bytes: `None` where they do not decode.
+pub fn looks_like_text(bytes: &[u8]) -> Option<bool> {
+    decode(bytes).ok().map(|image| texty(&image))
+}
+
 /// What [`read`] gives: the document, its page carrying the engine's words
 /// as glyphs, ready for analysis.
 pub struct ImageRead {
@@ -352,7 +370,9 @@ pub fn document(image: &Decoded) -> Document {
     fluree_doc_pdf::image::page_of(image.pixels.width, image.pixels.height, image.bitonal)
 }
 
-/// Decode an image and read it with an engine.
+/// Decode an image and read it with an engine, as a scanned page is read:
+/// neither the pixel probe nor the noise rule judges it, an image given on
+/// its own being given to be read.
 pub fn read(bytes: &[u8], engine: &dyn OcrEngine) -> Result<ImageRead, String> {
     let image = decode(bytes)?;
     let mut doc = document(&image);
@@ -372,20 +392,60 @@ pub struct ImageElements {
     pub elements: Vec<fluree_doc_model::Element>,
     /// The page the boxes are on: the image upright, in pixels.
     pub size: fluree_doc_model::PageSize,
+    /// The pixel probe does not take the image for text ([`texty`]): a
+    /// photograph, a chart, a logo. Nothing read it, `elements` is empty,
+    /// and the image is not read.
+    pub not_texty: bool,
+    /// The reading was noise ([`ocr::is_noise`]): a photograph or a chart
+    /// read for text it does not hold. Its words are set aside, so
+    /// `elements` is empty, and the image is not read.
+    pub noise: bool,
     /// Pages of the file not read (a multi-page TIFF's after the first).
     pub more_pages: bool,
 }
 
-/// Decode an image, read it and analyse it.
+/// Decode an image, read it and analyse it: an image the pixel probe does
+/// not take for text ([`texty`]) is not read, and comes back
+/// [`ImageElements::not_texty`]. What an engine reads in one it takes for
+/// text is still held to the noise rule ([`without_noise`]).
 pub fn elements(bytes: &[u8], engine: &dyn OcrEngine) -> Result<ImageElements, String> {
     let image = decode(bytes)?;
+    if !texty(&image) {
+        return Ok(not_texty(&image));
+    }
+    read_texty(image, engine)
+}
+
+/// As [`elements`], of an image a caller has decoded and chosen to read,
+/// having found it [`texty`] or reading it whatever the probe makes of it
+/// (a document's picture, [`read_placed`]): it is neither decoded nor
+/// probed again. What the engine reads is still held to the noise rule.
+pub fn read_texty(image: Decoded, engine: &dyn OcrEngine) -> Result<ImageElements, String> {
     let reading = engine.read(&image.pixels)?;
     Ok(analysed(document(&image), image.more_pages, reading))
 }
 
+/// What [`elements`] gives for an image the pixel probe does not take for
+/// text: nothing read in it.
+fn not_texty(image: &Decoded) -> ImageElements {
+    ImageElements {
+        elements: Vec::new(),
+        size: fluree_doc_model::PageSize {
+            index: 0,
+            width: f64::from(image.pixels.width),
+            height: f64::from(image.pixels.height),
+            folio: None,
+        },
+        not_texty: true,
+        noise: false,
+        more_pages: image.more_pages,
+    }
+}
+
 /// As [`elements`], from the words an engine already read in the image
 /// (decoded upright, as [`decode`] gives it). Only the image's header is
-/// read, for the page the words are on.
+/// read, for the page the words are on: the pixel probe is not run, the
+/// caller has chosen to read it.
 pub fn elements_from_words(
     bytes: &[u8],
     reading: fluree_doc_vision::WordReading,
@@ -396,11 +456,30 @@ pub fn elements_from_words(
     Ok(analysed(doc, h.pages > 1, reading))
 }
 
+/// `reading`, an engine's reading of the one page of `doc`, a picture, with
+/// its words set aside where they are noise ([`ocr::is_noise`]), and whether
+/// they were. A picture need not hold any text, and the pixel probe can
+/// take a photograph or a gradient for text: the words of a reading of it
+/// that is noise are set aside, as those of an OCR reading of a PDF
+/// region are, and the picture is left unread.
+pub fn without_noise(
+    doc: &Document,
+    reading: fluree_doc_vision::WordReading,
+) -> (fluree_doc_vision::WordReading, bool) {
+    if ocr::is_noise(&doc.pages[0], &reading) {
+        let words = Vec::new();
+        (fluree_doc_vision::WordReading { words, ..reading }, true)
+    } else {
+        (reading, false)
+    }
+}
+
 fn analysed(
     mut doc: Document,
     more_pages: bool,
     reading: fluree_doc_vision::WordReading,
 ) -> ImageElements {
+    let (reading, noise) = without_noise(&doc, reading);
     let injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
     let page = &doc.pages[0];
     let size = fluree_doc_model::PageSize {
@@ -414,8 +493,143 @@ fn analysed(
     ImageElements {
         elements: analysis.elements,
         size,
+        not_texty: false,
+        noise,
         more_pages,
     }
+}
+
+/// What an engine made of the images a document places in its flow.
+#[derive(Debug, Clone, Default)]
+pub struct PlacedRead {
+    /// The elements read in each image, once after each figure drawing it,
+    /// for [`place_after_figures`].
+    pub read: Vec<(String, Vec<fluree_doc_model::Element>)>,
+    /// The images not read, as `doc:unreadImages` lists them, once for each
+    /// figure drawing them, with why: `Missing` (not in the file),
+    /// `UnsupportedFormat` (not a PNG, JPEG or TIFF: a drawing kept as EMF or
+    /// WMF, a GIF), `PastAllowance` (past what one document may have read,
+    /// [`fluree_doc_model::Allowance::DOCUMENT`]), `Failed` (its bytes or its
+    /// reading failed) or `NotTexty` (its reading was noise:
+    /// [`ImageElements::noise`]). Never `NotRead`: each image held is read.
+    pub unread: Vec<fluree_doc_model::UnreadImage>,
+    /// What went wrong with each image `UnsupportedFormat` or `Failed`, by
+    /// the name it goes by (`m1`).
+    pub errors: Vec<(String, String)>,
+    /// Images of more than one page (a multi-page TIFF), of which only the
+    /// first was read.
+    pub first_page_only: Vec<fluree_doc_model::Picture>,
+}
+
+/// Read the images a document places in its flow with `engine`
+/// ([`fluree_doc_model::read_pictures`]): each image once however many
+/// figures draw it, one at a time, within what one document may have read.
+/// `bytes` reads one by the part the file holds it under; it is decoded,
+/// read and dropped before the next, so a document of many large pictures
+/// is never held decoded at once. Each is read whatever the pixel probe
+/// makes of it ([`texty`]), unlike a bare image read by [`elements`]: the
+/// probe keeps a billed model's call from a photograph or a logo, and an
+/// engine costs nothing per image; what it reads in one that holds no text
+/// is held to the noise rule ([`without_noise`]).
+pub fn read_placed(
+    media: Vec<fluree_doc_model::Media>,
+    bytes: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    engine: &dyn OcrEngine,
+) -> PlacedRead {
+    use fluree_doc_model::{Picture, PictureReader, Unread};
+    struct Engine<'e> {
+        engine: &'e dyn OcrEngine,
+        /// The picture being read, by tag.
+        current: String,
+        /// The pictures whose bytes are no image OCR decodes, by tag.
+        unsupported: std::collections::HashSet<String>,
+    }
+    impl PictureReader for Engine<'_> {
+        type Reading = ImageElements;
+        fn ready(&mut self, picture: &Picture) -> bool {
+            self.current = picture.tag();
+            true
+        }
+        fn pixels(&mut self, image: &[u8]) -> Result<u64, String> {
+            // A part emptied or cut short failed; it is no drawing.
+            if image.len() < fluree_doc_pdf::image::Format::SNIFFED {
+                return Err(format!(
+                    "its part holds {} byte(s), too few for an image",
+                    image.len()
+                ));
+            }
+            // A drawing kept as EMF or WMF, or a GIF, is no image OCR
+            // decodes.
+            header(image)
+                .map(|h| u64::from(h.width) * u64::from(h.height))
+                .inspect_err(|_| {
+                    if fluree_doc_pdf::image::Format::sniff(image).is_none() {
+                        self.unsupported.insert(self.current.clone());
+                    }
+                })
+        }
+        fn read(&mut self, _: &Picture, image: &[u8]) -> Result<ImageElements, String> {
+            read_texty(decode(image)?, self.engine)
+        }
+    }
+    // Each picture's place among the document's, by the name it goes by.
+    let mut order: std::collections::HashMap<String, usize> = Default::default();
+    for (i, m) in media.iter().enumerate() {
+        order.entry(m.tag()).or_insert(i);
+    }
+    let mut reader = Engine {
+        engine,
+        current: String::new(),
+        unsupported: Default::default(),
+    };
+    let reads = fluree_doc_model::read_pictures(
+        media,
+        bytes,
+        &mut reader,
+        fluree_doc_model::Allowance::DOCUMENT,
+    );
+    let mut out = PlacedRead::default();
+    let mut unread: Vec<(fluree_doc_model::Picture, &str)> = Vec::new();
+    for (picture, r) in reads.read {
+        // An image whose reading was noise is read by nothing.
+        if r.noise {
+            unread.push((picture, "NotTexty"));
+            continue;
+        }
+        if r.more_pages {
+            out.first_page_only.push(picture.clone());
+        }
+        out.read.extend(picture.after_each_figure(r.elements));
+    }
+    for (picture, why) in reads.unread {
+        let reason = match &why {
+            Unread::NotInPackage => "Missing",
+            Unread::PastAllowance => "PastAllowance",
+            Unread::NotAsked => "NotRead",
+            Unread::Failed(e) => {
+                out.errors.push((picture.tag(), e.clone()));
+                if reader.unsupported.contains(&picture.tag()) {
+                    "UnsupportedFormat"
+                } else {
+                    "Failed"
+                }
+            }
+        };
+        unread.push((picture, reason));
+    }
+    // In the order the document first draws them.
+    unread.sort_by_key(|(picture, _)| order.get(&picture.tag()).copied());
+    for (picture, reason) in unread {
+        for figure in picture.figures() {
+            out.unread.push(fluree_doc_model::UnreadImage {
+                figure: figure.to_string(),
+                image: picture.tag(),
+                part: picture.source.name().to_string(),
+                reason: reason.into(),
+            });
+        }
+    }
+    out
 }
 
 /// Place the text read from a document's images in its flow, each image's
@@ -425,7 +639,10 @@ fn analysed(
 /// which mean nothing on a page without geometry, so they are dropped. A
 /// heading read in a screenshot is a heading of the screen, not of the
 /// document: it is read as a paragraph, so the document's outline stays its
-/// own. Tables stay tables. Ids are renumbered in order.
+/// own. Tables stay tables. Ids are renumbered in order, and an element's
+/// reference to another by id (`resumes`, `continues`) follows it: the
+/// document's to the document's elements, a reading's to that reading's
+/// own, and one a reading makes to an element it does not hold is dropped.
 pub fn place_after_figures(
     elements: &mut Vec<fluree_doc_model::Element>,
     readings: Vec<(String, Vec<fluree_doc_model::Element>)>,
@@ -435,28 +652,60 @@ pub fn place_after_figures(
     }
     // A figure may hold several images (a group of pictures): their texts
     // follow it in order.
-    let mut by_figure: std::collections::HashMap<String, Vec<fluree_doc_model::Element>> =
+    let mut by_figure: std::collections::HashMap<String, Vec<Vec<fluree_doc_model::Element>>> =
         std::collections::HashMap::new();
     for (figure, read) in readings {
-        by_figure.entry(figure).or_default().extend(read);
+        by_figure.entry(figure).or_default().push(read);
     }
     let mut out = Vec::with_capacity(elements.len());
+    // Each reading's elements are named apart from the document's before the
+    // renaming below, by a name no element of a document has: a reading's
+    // own ids (`elem-00001`… from its analysis) name nothing of this
+    // document, and kept, they would take the place of the document's
+    // elements of the same id. A reference inside a reading (a table of the
+    // screen continued under it) follows its element; one to an element the
+    // reading does not hold names nothing here, and is dropped.
+    let mut readings = 0usize;
     for e in elements.drain(..) {
         let read = e.figure.as_ref().and_then(|f| by_figure.remove(f));
         let page = e.page;
         out.push(e);
-        for mut r in read.into_iter().flatten() {
-            r.page = page;
-            r.bbox = None;
-            if r.kind != "doco:Table" {
-                r.kind = "doco:Paragraph".into();
-                r.level = None;
+        for mut read in read.into_iter().flatten() {
+            readings += 1;
+            let own: std::collections::HashMap<String, String> = read
+                .iter()
+                .filter(|r| !r.id.is_empty())
+                .map(|r| (r.id.clone(), format!("\0reading-{readings}-{}", r.id)))
+                .collect();
+            for mut r in read.drain(..) {
+                r.id = own.get(&r.id).cloned().unwrap_or_default();
+                for to in [&mut r.resumes, &mut r.continues] {
+                    *to = to.take().and_then(|id| own.get(&id).cloned());
+                }
+                r.page = page;
+                r.bbox = None;
+                if r.kind != "doco:Table" {
+                    r.kind = "doco:Paragraph".into();
+                    r.level = None;
+                }
+                out.push(r);
             }
-            out.push(r);
         }
     }
+    let mut renamed = std::collections::HashMap::new();
     for (i, e) in out.iter_mut().enumerate() {
-        e.id = format!("elem-{:05}", i + 1);
+        let id = format!("elem-{:05}", i + 1);
+        let old = std::mem::replace(&mut e.id, id.clone());
+        if !old.is_empty() {
+            renamed.insert(old, id);
+        }
+    }
+    for e in &mut out {
+        for r in [&mut e.resumes, &mut e.continues].into_iter().flatten() {
+            if let Some(id) = renamed.get(r.as_str()) {
+                r.clone_from(id);
+            }
+        }
     }
     *elements = out;
 }
@@ -467,13 +716,98 @@ mod tests {
     use fluree_doc_vision::{Coords, OcrWord, WordReading};
 
     /// A PNG of `w` × `h` grey pixels.
+    /// A `w × h` PNG the pixel probe takes for text: lines of strokes a
+    /// letter wide on a light ground, as a capture holds.
     fn png(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(w, h, |x, y| {
+            let ink = (12..24).contains(&(y % 40)) && x % 10 < 6 && x < w * 3 / 4;
+            image::Rgb(if ink { [40, 40, 40] } else { [200, 200, 200] })
+        });
+        let mut out = Vec::new();
+        DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    /// A `w × h` PNG of one grey: no text, to the probe or to anyone.
+    fn flat_png(w: u32, h: u32) -> Vec<u8> {
         let img = image::RgbImage::from_pixel(w, h, image::Rgb([200, 200, 200]));
         let mut out = Vec::new();
         DynamicImage::ImageRgb8(img)
             .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
             .unwrap();
         out
+    }
+
+    /// An engine that must not be asked to read anything.
+    struct Unasked;
+
+    impl OcrEngine for Unasked {
+        fn name(&self) -> &str {
+            "unasked"
+        }
+        fn read(&self, _: &Pixels) -> Result<WordReading, String> {
+            panic!("an image the probe does not take for text was read")
+        }
+    }
+
+    #[test]
+    fn a_picture_too_thin_for_a_line_of_text_is_not_read() {
+        // The floor a PDF's region is held to: from 10 pixels on its short
+        // side, whichever side that is, the line is read; under it, it is
+        // not, as an engine misreads it.
+        assert_eq!(looks_like_text(&line_png(700, 10)), Some(true));
+        assert_eq!(looks_like_text(&line_png(700, 9)), Some(false));
+        let read = elements(&line_png(700, 9), &Unasked).unwrap();
+        assert!(read.not_texty);
+        let read = elements(&line_png(700, 10), &TwoLines).unwrap();
+        assert!(!read.not_texty);
+    }
+
+    #[test]
+    fn a_picture_the_probe_does_not_take_for_text_is_not_read() {
+        assert_eq!(looks_like_text(&flat_png(600, 400)), Some(false));
+        assert_eq!(looks_like_text(&png(600, 400)), Some(true));
+        assert_eq!(looks_like_text(b"not an image"), None);
+        let read = elements(&flat_png(600, 400), &Unasked).unwrap();
+        assert!(read.not_texty && !read.noise && read.elements.is_empty());
+        assert_eq!((read.size.width, read.size.height), (600.0, 400.0));
+        let media = fluree_doc_model::Media {
+            figure: "figure-0-1".into(),
+            source: fluree_doc_model::MediaSource::Part("word/media/image1.png".into()),
+            index: 0,
+        };
+        // A document's picture is read by the engine all the same: the
+        // probe gates a billed model's call, not OCR. It holds nothing.
+        let blank = Blank(Default::default());
+        let r = read_placed(vec![media], &mut |_| Ok(flat_png(600, 400)), &blank);
+        assert_eq!(blank.0.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(r.read.len(), 1);
+        assert_eq!(r.read[0].0, "figure-0-1");
+        assert!(r.read[0].1.is_empty());
+        assert!(r.unread.is_empty() && r.errors.is_empty());
+    }
+
+    /// An engine that reads no word in whatever it is shown, and counts
+    /// what it is shown.
+    struct Blank(std::sync::atomic::AtomicUsize);
+
+    impl OcrEngine for Blank {
+        fn name(&self) -> &str {
+            "blank"
+        }
+        fn read(&self, image: &Pixels) -> Result<WordReading, String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(WordReading {
+                coords: Coords::Px,
+                width: Some(image.width as f64),
+                height: Some(image.height as f64),
+                engine: Some("blank".into()),
+                words: Vec::new(),
+                rules: Vec::new(),
+            })
+        }
     }
 
     /// An engine that reads two lines across whatever it is shown.
@@ -506,13 +840,59 @@ mod tests {
     }
 
     #[test]
+    fn a_part_too_short_for_any_format_failed() {
+        // Emptied, or cut short within PNG's signature: failed, as the CLI
+        // lists it; a part long enough to tell holds another format.
+        let mut parts = [&b""[..], b"\x89PNG", b"\x01\x00\x00\x00 EMF record"].into_iter();
+        let media = (1..=3)
+            .map(|n| fluree_doc_model::Media {
+                figure: format!("figure-0-{n}"),
+                source: fluree_doc_model::MediaSource::Part(format!("word/media/image{n}")),
+                index: 0,
+            })
+            .collect();
+        let r = read_placed(
+            media,
+            &mut |_| Ok(parts.next().unwrap().to_vec()),
+            &TwoLines,
+        );
+        let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
+        assert_eq!(reasons, ["Failed", "Failed", "UnsupportedFormat"]);
+        assert_eq!(
+            r.errors[0],
+            (
+                "m1".to_string(),
+                "its part holds 0 byte(s), too few for an image".to_string()
+            )
+        );
+    }
+
+    /// A `w × h` PNG of one line of strokes, a pixel of paper above and
+    /// below: text, to the probe, however thin.
+    fn line_png(w: u32, h: u32) -> Vec<u8> {
+        let img = image::GrayImage::from_fn(w, h, |x, y| {
+            let ink = y > 0 && y + 1 < h && x % 6 < 3;
+            image::Luma([if ink { 30 } else { 230 }])
+        });
+        let mut out = Vec::new();
+        DynamicImage::ImageLuma8(img)
+            .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    #[test]
     fn an_image_reads_as_a_page_of_text() {
         let ImageElements {
             elements,
             size,
+            not_texty,
+            noise,
             more_pages,
         } = elements(&png(600, 400), &TwoLines).unwrap();
         assert_eq!((size.width, size.height), (600.0, 400.0));
+        assert!(!not_texty);
+        assert!(!noise);
         assert!(!more_pages);
         let text: String = elements
             .iter()
@@ -527,6 +907,105 @@ mod tests {
             elements.iter().all(|e| e.provenance == "ocr"),
             "{elements:?}"
         );
+    }
+
+    /// A reading of a 600 × 400 picture: `words`, in its pixels, each
+    /// scored `conf`.
+    fn reading(words: &[(&str, [f64; 4])], conf: Option<f64>) -> WordReading {
+        WordReading {
+            coords: Coords::Px,
+            width: Some(600.0),
+            height: Some(400.0),
+            engine: None,
+            words: words
+                .iter()
+                .map(|&(text, bbox)| OcrWord {
+                    text: text.into(),
+                    bbox,
+                    angle: None,
+                    conf,
+                })
+                .collect(),
+            rules: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_pictures_reading_that_is_noise_reads_nothing() {
+        let image = png(600, 400);
+        let strokes = [
+            ("Account 4417", [40.0, 60.0, 240.0, 84.0]),
+            ("Balance 9,876.54", [40.0, 100.0, 300.0, 124.0]),
+        ];
+        let fragments = [
+            ("I7", [40.0, 60.0, 60.0, 84.0]),
+            ("1", [300.0, 100.0, 310.0, 124.0]),
+            ("J", [500.0, 300.0, 510.0, 324.0]),
+        ];
+        let all_of_it = [("7", [0.0, 0.0, 600.0, 400.0])];
+        // Unsure in the mean, fragments not sure enough to be a chart's, or
+        // boxed over the whole picture however sure: a photograph's or a
+        // gradient's noise.
+        for r in [
+            reading(&strokes, Some(0.3)),
+            reading(&fragments, Some(0.6)),
+            reading(&all_of_it, None),
+            reading(&all_of_it, Some(0.66)),
+        ] {
+            let read = elements_from_words(&image, r).unwrap();
+            assert!(read.noise);
+            assert!(read.elements.is_empty(), "{:?}", read.elements);
+        }
+        // Read with confidence it is text: words, fragments as sure as a
+        // chart's axis, a large word over most of it too.
+        let large = [("SALE", [60.0, 60.0, 540.0, 340.0])];
+        for r in [
+            reading(&strokes, Some(0.6)),
+            reading(&fragments, Some(0.9)),
+            reading(&large, Some(0.99)),
+        ] {
+            let read = elements_from_words(&image, r).unwrap();
+            assert!(!read.noise);
+            assert!(!read.elements.is_empty());
+        }
+    }
+
+    /// An engine that reads one unsure stroke in whatever it is shown.
+    struct Unsure;
+
+    impl OcrEngine for Unsure {
+        fn name(&self) -> &str {
+            "unsure"
+        }
+        fn read(&self, _: &Pixels) -> Result<WordReading, String> {
+            Ok(reading(&[("M", [40.0, 60.0, 200.0, 220.0])], Some(0.2)))
+        }
+    }
+
+    #[test]
+    fn an_image_read_as_a_file_is_not_judged() {
+        // Read as a scan is: an unsure stroke a placed picture would set
+        // aside is taken, and a flat image the probe takes for no text is
+        // read all the same.
+        let read = read(&png(600, 400), &Unsure).unwrap();
+        assert_eq!(read.injected[0].taken, 1);
+        assert!(!read.doc.pages[0].glyphs.is_empty());
+        let read = super::read(&flat_png(600, 400), &Unsure).unwrap();
+        assert_eq!(read.injected[0].taken, 1);
+    }
+
+    #[test]
+    fn a_placed_picture_read_as_noise_is_listed_unread() {
+        let media = fluree_doc_model::Media {
+            figure: "figure-0-1".into(),
+            source: fluree_doc_model::MediaSource::Part("word/media/image1.png".into()),
+            index: 0,
+        };
+        let r = read_placed(vec![media], &mut |_| Ok(png(600, 400)), &Unsure);
+        assert!(r.read.is_empty(), "{:?}", r.read);
+        let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
+        assert_eq!(reasons, ["NotTexty"]);
+        assert!(r.errors.is_empty());
     }
 
     #[test]
@@ -556,6 +1035,64 @@ mod tests {
             .all(|e| e.bbox.is_none() && e.provenance == "ocr" && e.page == 3));
         let ids: std::collections::HashSet<&str> = els.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids.len(), els.len());
+    }
+
+    #[test]
+    fn an_element_naming_another_by_id_still_names_it_once_text_is_placed() {
+        // A message's opener, a picture, a quote, then the message going on
+        // after it (`resumes`) and a table continued (`continues`): the text
+        // read in the picture moves every id after it. That text comes with
+        // ids of its own analysis, the same `elem-0000N` as the document's,
+        // which must not be taken for the document's.
+        use fluree_doc_model::Element;
+        let el = |kind: &str, text: &str, id: &str, by: &'static str| {
+            let mut e = Element::new(kind, text, "eml", by);
+            e.id = id.into();
+            e
+        };
+        let opener = el("doco:Paragraph", "From: A", "elem-00001", "eml");
+        let mut figure = el("doco:Figure", "", "elem-00002", "eml");
+        figure.figure = Some("figure-0-1".into());
+        let quoted = el("doco:Table", "", "elem-00003", "eml");
+        let mut back = el("doco:Paragraph", "A's signature", "elem-00004", "eml");
+        back.resumes = Some("elem-00001".into());
+        let mut part = el("doco:Table", "", "elem-00005", "eml");
+        part.continues = Some("elem-00003".into());
+        let mut els = vec![opener, figure, quoted, back, part];
+        // The reading's own table continued under its first part, and a
+        // reference to an element the reading does not hold.
+        let mut read2 = el("doco:Table", "Read 2", "elem-00002", "ocr");
+        read2.continues = Some("elem-00001".into());
+        let mut read3 = el("doco:Paragraph", "Read 3", "elem-00003", "ocr");
+        read3.resumes = Some("elem-00004".into());
+        let read = vec![
+            el("doco:Table", "Read 1", "elem-00001", "ocr"),
+            read2,
+            read3,
+        ];
+        place_after_figures(&mut els, vec![("figure-0-1".into(), read)]);
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "From: A",
+                "",
+                "Read 1",
+                "Read 2",
+                "Read 3",
+                "",
+                "A's signature",
+                ""
+            ]
+        );
+        assert_eq!(els[6].resumes.as_deref(), Some("elem-00001"));
+        assert_eq!(els[7].continues.as_deref(), Some("elem-00006"));
+        // The reading's table goes on in the reading's own first part, not
+        // in the document's opener its old id named; and nothing the
+        // reading does not hold is named from it.
+        assert_eq!(els[3].continues.as_deref(), Some("elem-00003"));
+        assert_eq!(els[4].resumes, None);
+        assert!(els.iter().all(|e| !e.id.starts_with('\0')));
     }
 
     #[test]

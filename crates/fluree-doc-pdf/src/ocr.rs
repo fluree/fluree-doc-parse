@@ -516,6 +516,22 @@ fn fragment(text: &str) -> bool {
     text.chars().filter(|c| c.is_alphanumeric()).count() <= 2
 }
 
+/// Whether a reading of the one page of `page`, a picture read on its own,
+/// is noise ([`MIN_PICTURE_CONFIDENCE`], [`MIN_FRAGMENTS_CONFIDENCE`],
+/// [`NOISE_BOX_SHARE`]): a photograph or a chart read for text it does not
+/// hold. The rule a region of a PDF page the pixel probe does not take for
+/// text is held to, for the pictures of a DOCX, an XLSX or an e-mail and
+/// for an image read as a file. A reading that cannot be placed is not
+/// noise: [`inject`] says why it is refused.
+pub fn is_noise(page: &Page, reading: &WordReading) -> bool {
+    let Ok(placed) = place(page, None, reading) else {
+        return false;
+    };
+    let words: Vec<&Placed> = placed.iter().flatten().collect();
+    // Held to the small regions' rule, fragments judged: no router sent it.
+    noise(&words, page.width * page.height, true)
+}
+
 /// The words of `reading`, by their index among its words, that land in a
 /// region it may fill and are noise there ([`noise`]): each region judged
 /// by the words that land in it, as [`add_words`] lands them.
@@ -3991,6 +4007,75 @@ mod tests {
         assert_eq!(kinds.len(), 2, "{kinds:?}");
         assert_eq!(kinds[1].0, "doco:Paragraph");
         assert!(kinds[1].1.ends_with("more or less necessary"));
+    }
+
+    #[test]
+    fn a_heading_read_in_a_screenshot_on_a_page_of_text_is_a_paragraph() {
+        // A page of text with a heading of its own, and a pasted screenshot
+        // whose reading holds a large title line and a line of body text.
+        let mut glyphs: Vec<Glyph> = native("Findings", 72.0, 60.0)
+            .into_iter()
+            .map(|g| Glyph {
+                font_size: 18.0,
+                ..g
+            })
+            .collect();
+        // Lines whose spaces fall in different places, as prose's do.
+        let prose = [
+            "The quarterly figures are summarised in the screen shown below",
+            "where each account carries its balance and its last reference",
+            "as the branch recorded them when the period was closed for review",
+        ];
+        for row in 0..30 {
+            glyphs.extend(native(prose[row % 3], 72.0, 90.0 + row as f64 * 12.0));
+        }
+        let shot = ImagePlacement {
+            bbox: BBox {
+                x0: 60.0,
+                y0: 470.0,
+                x1: 550.0,
+                y1: 600.0,
+            },
+            texty: Some(true),
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+            key: None,
+        };
+        let doc = Document {
+            pages: vec![page(glyphs, vec![shot])],
+            title: None,
+        };
+        let mut words = vec![
+            word("Balance", [80.0, 480.0, 200.0, 510.0]),
+            word("9,876.54", [210.0, 480.0, 340.0, 510.0]),
+        ];
+        let mut x = 80.0;
+        for w in "Reference ABC-7781 opened at the branch office on the date shown".split(' ') {
+            let len = w.len() as f64 * 6.0;
+            words.push(word(w, [x, 540.0, x + len, 551.0]));
+            x += len + 6.0;
+        }
+        // The screenshot's crop read, or the whole page, whose words land in
+        // the same region: the rule is the same.
+        for crop in [Crop::Region(0), Crop::Page] {
+            let mut doc = doc.clone();
+            let injected = inject(&mut doc, &[(0, crop, page_units(words.clone()))]);
+            assert_eq!(injected[0].taken, 13, "{crop:?}");
+            let els = analysed(&mut doc, &injected);
+            let kind = |text: &str| {
+                els.iter()
+                    .find(|e| e.text.contains(text))
+                    .map(|e| (e.kind.as_str(), e.level, e.provenance))
+            };
+            // The document's heading stays one; the screen's is a paragraph.
+            assert_eq!(kind("Findings").unwrap().0, "doco:SectionTitle");
+            assert_eq!(
+                kind("9,876.54"),
+                Some(("doco:Paragraph", None, "ocr")),
+                "{crop:?} {els:?}"
+            );
+        }
     }
 
     #[test]

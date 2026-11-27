@@ -17,7 +17,9 @@ use fluree_doc_pdf::escalate::{self, Crop, CropHints, CropJobs, PageReasons, Rea
 use fluree_doc_pdf::Document;
 use std::path::Path;
 
-/// Read a bare image: one crop, which is the file itself.
+/// Read a bare image, or an image a document places in its flow: one crop,
+/// which is the image itself, read as a whole page, its reading keyed
+/// `crop` (`p0_full` for a bare image, `m<n>` for a placed one).
 ///
 /// No rendering step — the bytes already are the page, and re-encoding them
 /// would only lose information the reader could have used. No crop selection
@@ -25,11 +27,54 @@ use std::path::Path;
 /// glyphs to say where anything is.
 pub(crate) fn read_image(
     file: &Path,
+    crop: &str,
     bytes: &[u8],
     mime: &str,
     config: &Config,
     verbose: bool,
 ) -> Result<Readings, String> {
+    let load = &mut |_| Ok(std::borrow::Cow::Borrowed(bytes));
+    let mut read = read_images(file, &[(crop, mime)], load, config, verbose)?;
+    match read.failures.pop() {
+        Some((_, e)) => Err(e),
+        None => Ok(read.readings),
+    }
+}
+
+/// What [`read_images`] gives, by crop.
+#[derive(Default)]
+pub(crate) struct ImagesRead {
+    /// The text read in each image that has any.
+    pub(crate) readings: Readings,
+    /// The images read that hold no text: a real answer, and a reading.
+    pub(crate) empty: Vec<String>,
+    /// The images that could not be read, each with why.
+    pub(crate) failures: Vec<(String, String)>,
+}
+
+/// Read the images a document places in its flow, each as [`read_image`]
+/// reads one, with one reader for them all and up to
+/// `escalation.concurrency` of them in flight, as a document's crops are
+/// read: a message of many pictures pays for one sign-in, not one each, and
+/// does not wait on each picture in turn. `images` are `(crop, mime)`;
+/// `load` reads the bytes of the `i`-th, as it is about to be sent
+/// ([`in_batches`]), so no more of them are held at once than one batch.
+///
+/// Returns what came of each image: its reading, keyed by crop, that it
+/// held no text, or why it could not be read (its bytes among them). Fails
+/// as a whole only when the reader cannot be opened, before any image's
+/// bytes are read.
+pub(crate) fn read_images<'b>(
+    file: &Path,
+    images: &[(&str, &str)],
+    load: &mut dyn FnMut(usize) -> Result<std::borrow::Cow<'b, [u8]>, String>,
+    config: &Config,
+    verbose: bool,
+) -> Result<ImagesRead, String> {
+    let mut out = ImagesRead::default();
+    if images.is_empty() {
+        return Ok(out);
+    }
     let gemini = &config.escalation.gemini;
     let credentials = gemini
         .credentials
@@ -38,25 +83,116 @@ pub(crate) fn read_image(
     let reader = gemini::Reader::open(credentials, gemini.project.as_deref(), config.model())?;
     if verbose {
         eprintln!(
-            "{}: reading as one page ({mime}) with {}",
+            "{}: reading {} image(s) as one page each with {}",
             file.display(),
+            images.len(),
             config.model()
         );
     }
-    let crop = Crop {
+    // Prompted as the whole page it is, whatever its reading is keyed by:
+    // an image is a whole page, so its reading has to carry structure and
+    // not only text.
+    let page = Crop {
         name: "p0_full".into(),
         page: 0,
         bbox: None,
-        png: bytes.to_vec(),
+        png: Vec::new(),
     };
-    // The page prompt: an image is a whole page, so its reading has to carry
-    // structure and not only text.
-    let prompt = escalate::prompt_for_crop(&crop, &[]);
-    let mut readings = Readings::default();
-    if let Some(text) = reader.read_typed(&crop.png, mime, &prompt)? {
-        readings.insert(crop.name, text);
+    let prompt = escalate::prompt_for_crop(&page, &[]);
+    let workers = config.escalation.concurrency.clamp(1, 32);
+    let read = in_batches(images.len(), workers, HELD_BYTES, load, |batch| {
+        read_each(batch, workers, |(i, bytes)| {
+            reader.read_typed(bytes.as_ref(), images[*i].1, &prompt)
+        })
+    });
+    for ((crop, _), got) in images.iter().zip(read) {
+        match got {
+            Ok(Some(text)) => out.readings.insert(crop.to_string(), text),
+            // An image with nothing printed on it is a real answer.
+            Ok(None) => out.empty.push(crop.to_string()),
+            Err(e) => out.failures.push((crop.to_string(), e)),
+        }
     }
-    Ok(readings)
+    Ok(out)
+}
+
+/// The bytes of the images [`read_images`] holds to send at once, past the
+/// first of a batch: 64 MiB, the most one image part is read to
+/// (`MAX_MEDIA_BYTES`). With the image loaded last, a batch never holds more
+/// than twice that, however many images a document sends: a DOCX of two
+/// hundred parts of 64 MiB each, a few megabytes zipped, would otherwise be
+/// held whole, some 12.8 GiB, until its last image was read.
+const HELD_BYTES: usize = 64 << 20;
+
+/// `read` applied to the `n` items `load` gives, in batches: each of at
+/// most `workers` items, loaded one after the other until the batch holds
+/// `held` bytes or more, read, and dropped before the next batch is loaded.
+/// An item that cannot be loaded is answered with why. The answers in the
+/// order of the items.
+fn in_batches<B: AsRef<[u8]>>(
+    n: usize,
+    workers: usize,
+    held: usize,
+    load: &mut dyn FnMut(usize) -> Result<B, String>,
+    mut read: impl FnMut(&[(usize, B)]) -> Vec<Answer>,
+) -> Vec<Answer> {
+    let mut answers: Vec<Option<Answer>> = (0..n).map(|_| None).collect();
+    let mut next = 0;
+    while next < n {
+        let mut batch: Vec<(usize, B)> = Vec::new();
+        let mut bytes = 0usize;
+        while next < n && batch.len() < workers.max(1) && (batch.is_empty() || bytes < held) {
+            match load(next) {
+                Ok(b) => {
+                    bytes += b.as_ref().len();
+                    batch.push((next, b));
+                }
+                Err(e) => answers[next] = Some(Err(e)),
+            }
+            next += 1;
+        }
+        for ((i, _), got) in batch.iter().zip(read(&batch)) {
+            answers[*i] = Some(got);
+        }
+    }
+    answers
+        .into_iter()
+        .map(|a| a.expect("each item is answered"))
+        .collect()
+}
+
+/// What a reader answers for one image: its text, `None` for an image with
+/// nothing printed on it, or why it could not be read.
+type Answer = Result<Option<String>, String>;
+
+/// `read` applied to each of `items` by up to `workers` threads, the
+/// results in the order of `items`. A panic in `read` is not caught: the
+/// scope raises it again once the threads are joined, as it would be raised
+/// on one thread.
+fn read_each<T: Sync>(
+    items: &[T],
+    workers: usize,
+    read: impl Fn(&T) -> Answer + Sync,
+) -> Vec<Answer> {
+    let workers = workers.clamp(1, items.len().max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let out: std::sync::Mutex<Vec<Option<Answer>>> = std::sync::Mutex::new(vec![None; items.len()]);
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(item) = items.get(i) else { break };
+                let got = read(item);
+                out.lock().unwrap()[i] = Some(got);
+            });
+        }
+    });
+    // Past the scope, every worker returned, so every item has its answer.
+    out.into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .into_iter()
+        .map(|r| r.expect("each item is answered"))
+        .collect()
 }
 
 /// The crops of `jobs` a run reads: those on the pages `keep` names, and of
@@ -224,6 +360,67 @@ fn answer(crop: &str, text: Option<String>) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn images_sent_are_held_a_batch_at_a_time() {
+        // Two hundred images of 64 units each, sent four at a time with 100
+        // units held past the first: each is loaded only as its batch is
+        // read, so what is held at once stays under twice the bound, not
+        // the 12,800 units of the whole document. One that cannot be
+        // loaded is answered with why, in its place.
+        let loaded = std::cell::Cell::new(0usize);
+        let mut load = |i: usize| -> Result<Vec<u8>, String> {
+            if i == 7 {
+                return Err("gone".into());
+            }
+            loaded.set(loaded.get() + 1);
+            Ok(vec![0; 64])
+        };
+        let mut most = 0usize;
+        let mut batches = 0usize;
+        let answers = in_batches(200, 4, 100, &mut load, |batch| {
+            batches += 1;
+            let held: usize = batch.iter().map(|(_, b)| b.len()).sum();
+            most = most.max(held);
+            // Nothing past this batch has been loaded yet.
+            let last = batch.last().map_or(0, |(i, _)| *i);
+            assert!(loaded.get() <= last + 1);
+            batch.iter().map(|(i, _)| Ok(Some(i.to_string()))).collect()
+        });
+        assert_eq!(answers.len(), 200);
+        assert!(most <= 128, "{most}");
+        assert!(batches >= 100, "{batches}");
+        assert_eq!(answers[7], Err("gone".into()));
+        assert_eq!(answers[8], Ok(Some("8".into())));
+        assert_eq!(answers[199], Ok(Some("199".into())));
+    }
+
+    #[test]
+    fn images_are_read_side_by_side_and_answered_in_order() {
+        // Eight images, four workers, each read taking a while: more than
+        // one is in flight at once, and each answer stays with its image.
+        let images: Vec<usize> = (0..8).collect();
+        let in_flight = std::sync::atomic::AtomicUsize::new(0);
+        let most = std::sync::atomic::AtomicUsize::new(0);
+        let got = read_each(&images, 4, |&i| {
+            use std::sync::atomic::Ordering::SeqCst;
+            let now = in_flight.fetch_add(1, SeqCst) + 1;
+            most.fetch_max(now, SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            in_flight.fetch_sub(1, SeqCst);
+            match i {
+                3 => Err("refused".into()),
+                5 => Ok(None),
+                _ => Ok(Some(format!("image {i}"))),
+            }
+        });
+        assert!(most.into_inner() > 1);
+        assert_eq!(got.len(), 8);
+        assert_eq!(got[0], Ok(Some("image 0".into())));
+        assert_eq!(got[3], Err("refused".into()));
+        assert_eq!(got[5], Ok(None));
+        assert_eq!(got[7], Ok(Some("image 7".into())));
+    }
 
     fn crop(name: &str) -> Crop {
         Crop {

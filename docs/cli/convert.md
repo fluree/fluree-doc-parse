@@ -110,7 +110,12 @@ gets 2×.
 
 A bare PNG, JPEG or TIFF is read the same way, as one page decoded upright;
 see [Images](../inputs/images.md). So are the pictures in a DOCX, whose text
-follows their figure; see [Office files](../inputs/office-and-web.md).
+follows their figure (see [Office files](../inputs/office-and-web.md)), the
+pictures anchored to an XLSX sheet's cells, placed by their anchor, and
+the images an e-mail shows in its body, whose text is placed where they are
+shown (see [E-mail](../inputs/email.md#images-in-the-body)). A
+picture nothing read is counted on stderr and listed in the graph's
+[`doc:unreadImages`](../formats/doco.md#images-nothing-read).
 
 What either reads is the same: the pages whose text is pixels (scanned,
 near-blank, broken text), whole, and on other pages the raster regions the
@@ -161,9 +166,10 @@ whatever the page's layout.
 
 ## Inputs
 
-Files, directories, or `-` for stdin. **Stdin is read as a PDF, an email or
-a transcript**, which are told apart by their content; the other readers
-identify the format by extension.
+Files, directories, or `-` for stdin. **Stdin is read as a PDF, an email, a
+transcript or an image** (PNG, JPEG, TIFF), which are told apart by their
+content; Markdown, HTML and the Office formats are known only by their
+extension, so they are read from a file.
 
 Directories are scanned for every extension `convert` reads, including
 Word, PowerPoint and Excel's macro-enabled, template and show variants

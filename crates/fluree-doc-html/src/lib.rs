@@ -122,7 +122,7 @@ fn skipped(h: &Handle) -> bool {
 /// read as section titles: see [`fluree_doc_model::outline`]. A mail body,
 /// read through [`parse_with_quote_depth`], is not.
 pub fn parse(src: &str) -> Vec<Element> {
-    let mut elements = parse_with_quote_depth(src).0;
+    let mut elements = read(src, false).0;
     if fluree_doc_model::outline::infer_headings(&mut elements) {
         number(&mut elements);
     }
@@ -199,24 +199,80 @@ fn repair_c1(c: char) -> char {
 /// address, or a class naming a quote (`gmail_quote`), and the containers
 /// Gmail, Yahoo and Proton put around one. A plain `<blockquote>` is left
 /// out, since Gmail's indent button writes one with no quotation in it.
+///
+/// Read as a message's body, an image the message shows from one of its
+/// own parts (`<img src="cid:…">`) is a `doco:Figure` where it is drawn,
+/// after the paragraph or table holding it, its text the image's
+/// alternative text and its `figure` the `cid:` URL as the message writes
+/// it, for the e-mail reader to resolve to the part. An image on the web is
+/// not in the message, and is left out as [`parse`] leaves every image out.
 pub fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
-    let dom = html5ever::parse_document(RcDom::default(), Default::default())
-        .from_utf8()
-        .read_from(&mut src.as_bytes())
-        .unwrap_or_default();
-    let mut out = Out::default();
-    // A page that marks its main content is read for that alone: what lies
-    // outside it is the site around the document. One whose main holds no
-    // text has marked it wrongly, and is read whole.
+    read(src, true)
+}
+
+/// The content ids of the images a message's HTML shows from its own parts
+/// (`<img src="cid:…">`), as [`parse_with_quote_depth`] reads them: the
+/// scheme in any case, percent signs decoded, an image the page does not
+/// draw left out, and so is one outside the content the page marks as its
+/// main, which the body is read for alone. What tells which of a message's
+/// files its HTML shows.
+pub fn cid_ids(src: &str) -> Vec<String> {
+    ids_in(&dom(src))
+}
+
+/// [`parse_with_quote_depth`] and [`cid_ids`] from one parse of the page:
+/// what a message's HTML body is read for.
+pub fn parse_message(src: &str) -> (Vec<Element>, Vec<usize>, Vec<String>) {
+    let dom = dom(src);
+    let (elements, depths) = read_dom(&dom, true);
+    (elements, depths, ids_in(&dom))
+}
+
+fn ids_in(dom: &RcDom) -> Vec<String> {
+    let mut found = Vec::new();
+    for root in read_roots(dom) {
+        for c in root.children.borrow().iter() {
+            cid_images(c, &mut found);
+        }
+    }
+    found.into_iter().map(|(id, _)| id).collect()
+}
+
+/// What a page is read for: the content it marks as its main, where some of
+/// it holds text, else the whole page. What lies outside a main is the site
+/// around the document. One whose main holds no text has marked it wrongly,
+/// and is read whole.
+fn read_roots(dom: &RcDom) -> Vec<Handle> {
     let mut mains = Vec::new();
     find_mains(&dom.document, &mut mains);
     mains.retain(|m| !text_of(m).0.is_empty());
     if mains.is_empty() {
-        walk(&dom.document, &mut out);
+        vec![dom.document.clone()]
     } else {
-        for m in &mains {
-            walk(m, &mut out);
-        }
+        mains
+    }
+}
+
+fn dom(src: &str) -> RcDom {
+    html5ever::parse_document(RcDom::default(), Default::default())
+        .from_utf8()
+        .read_from(&mut src.as_bytes())
+        .unwrap_or_default()
+}
+
+/// The walk, with or without a message's own images.
+fn read(src: &str, cid_images: bool) -> (Vec<Element>, Vec<usize>) {
+    read_dom(&dom(src), cid_images)
+}
+
+fn read_dom(dom: &RcDom, cid_images: bool) -> (Vec<Element>, Vec<usize>) {
+    let mut out = Out {
+        cid_images,
+        ..Out::default()
+    };
+    // A page that marks its main content is read for that alone.
+    for root in read_roots(dom) {
+        walk(&root, &mut out);
     }
     number(&mut out.elements);
     (out.elements, out.depths)
@@ -244,6 +300,8 @@ struct Out {
     elements: Vec<Element>,
     depths: Vec<usize>,
     depth: usize,
+    /// Read a message's own images (`<img src="cid:…">`) as figures.
+    cid_images: bool,
     /// How many list items the walk is inside: a list item's depth.
     items: usize,
     /// Whether the walk is directly in a list, not in one of its items.
@@ -258,6 +316,79 @@ impl Out {
         self.elements.push(e);
         self.depths.push(self.depth);
     }
+
+    /// A figure for each of a message's own images drawn under `nodes`
+    /// (each node included), in order, where they are read as such.
+    fn figures<'a>(&mut self, nodes: impl IntoIterator<Item = &'a Handle>) {
+        if !self.cid_images {
+            return;
+        }
+        let mut found = Vec::new();
+        for n in nodes {
+            cid_images(n, &mut found);
+        }
+        for (cid, alt) in found {
+            let mut f = element("doco:Figure", alt, None);
+            f.figure = Some(format!("cid:{cid}"));
+            self.push(f);
+        }
+    }
+}
+
+/// The images under a node, the node included, that a message shows from
+/// its own parts: `<img src="cid:…">`, by content id (RFC 2392, percent
+/// signs decoded), with their alternative text. An image the page does not
+/// draw is not shown.
+fn cid_images(h: &Handle, out: &mut Vec<(String, String)>) {
+    let Some(tag) = tag_of(h) else { return };
+    if skipped(h) {
+        return;
+    }
+    if tag == "img" {
+        let src = attr_of(h, "src").unwrap_or_default();
+        let src = src.trim();
+        // By bytes: a source is any text, and its fourth byte can fall
+        // inside a character (`日本.png`).
+        let id = src
+            .get(..4)
+            .filter(|scheme| scheme.eq_ignore_ascii_case("cid:"))
+            .map(|_| &src[4..]);
+        if let Some(id) = id.filter(|id| !id.is_empty()) {
+            let alt = attr_of(h, "alt").unwrap_or_default();
+            let alt = alt.split_whitespace().collect::<Vec<_>>().join(" ");
+            out.push((percent_decoded(id), alt));
+        }
+        return;
+    }
+    for c in h.children.borrow().iter() {
+        cid_images(c, out);
+    }
+}
+
+/// `%XX` escapes decoded, as a URL writes the bytes it cannot hold; a `%`
+/// that escapes nothing is kept.
+fn percent_decoded(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        match (
+            b[i],
+            b.get(i + 1).copied().and_then(hex),
+            b.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(h), Some(l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            (c, _, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Does this element mark its content as quoted from another text?
@@ -495,13 +626,15 @@ fn is_inline(h: &Handle) -> bool {
 fn flush_run(run: &mut Vec<Handle>, out: &mut Out) {
     let mut raw = String::new();
     let mut anchors = Vec::new();
-    for node in run.drain(..) {
-        collect_node(&node, &mut raw, &mut anchors);
+    for node in run.iter() {
+        collect_node(node, &mut raw, &mut anchors);
     }
     let (text, links) = squeeze(&raw, &anchors);
     if !text.is_empty() {
         out.push(linked("doco:Paragraph", text, None, links));
     }
+    out.figures(run.iter());
+    run.clear();
 }
 
 /// Walk a container's children, reading each run of inline content set
@@ -807,6 +940,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
                     }
                 }
                 emit_table(h, out); // innermost wins: cells own their text
+                out.figures([h]);
             }
             return;
         }
@@ -815,6 +949,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
             if !text.is_empty() {
                 out.push(linked("doco:SectionTitle", text, Some(level), links));
             }
+            out.figures([h]);
             return;
         }
         match t {
@@ -825,7 +960,13 @@ fn walk_node(h: &Handle, out: &mut Out) {
                 if !own.is_empty() {
                     out.push(linked("doc:ListItem", own, None, links));
                 }
-                for c in children_of(h) {
+                let children = children_of(h);
+                out.figures(
+                    children
+                        .iter()
+                        .filter(|c| !matches!(tag_of(c).as_deref(), Some("ul" | "ol" | "table"))),
+                );
+                for c in children {
                     match tag_of(&c).as_deref() {
                         // A list in an item is one deeper than the item.
                         Some("ul" | "ol") => {
@@ -861,6 +1002,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
                 if !text.is_empty() {
                     out.push(linked("doco:Paragraph", text, None, links));
                 }
+                out.figures([h]);
                 return;
             }
             _ => {}
@@ -1664,6 +1806,65 @@ mod tests {
         // A drawing's title is not the page's.
         let bare = super::info("<p>Text</p><svg><title>a chart</title></svg>");
         assert_eq!(bare.title, None);
+    }
+
+    #[test]
+    fn a_messages_own_image_is_a_figure_where_it_is_drawn() {
+        let src = "<p>See below.</p><p><img src=\"cid:shot1%40example.org\" alt=\"  Record \n screen \"></p>\
+                   <table><tr><td>Name</td><td>Logo <img src=\"CID:logo@x\"></td></tr>\
+                   <tr><td>a</td><td>b</td></tr></table>\
+                   <ul><li>Item <img src=\"cid:i@x\"><ul><li>Inner <img src=\"cid:j@x\"></li></ul></li></ul>\
+                   <div>Loose <img src=\"cid:k@x\"> text<img src=\"https://example.org/web.png\"><img src=\"日本.png\"><img src=\"aéé.png\"></div>\
+                   <p style=\"display:none\"><img src=\"cid:hidden@x\"></p>";
+        let (els, depths) = parse_with_quote_depth(src);
+        assert_eq!(els.len(), depths.len());
+        let got: Vec<(&str, Option<&str>)> = els
+            .iter()
+            .map(|e| (e.kind.as_str(), e.figure.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("doco:Paragraph", None),
+                ("doco:Figure", Some("cid:shot1@example.org")),
+                ("doco:Table", None),
+                ("doco:Figure", Some("cid:logo@x")),
+                ("doc:ListItem", None),
+                ("doco:Figure", Some("cid:i@x")),
+                ("doc:ListItem", None),
+                ("doco:Figure", Some("cid:j@x")),
+                ("doco:Paragraph", None),
+                ("doco:Figure", Some("cid:k@x")),
+            ]
+        );
+        assert_eq!(els[1].text, "Record screen");
+        assert_eq!(els[8].text, "Loose text");
+        // One parse for both, as a message's body is read.
+        let (body, _, ids) = parse_message(src);
+        assert_eq!(body.len(), els.len());
+        assert_eq!(ids, ["shot1@example.org", "logo@x", "i@x", "j@x", "k@x"]);
+        assert_eq!(ids, cid_ids(src));
+        // Read as a page, not a message, no image is anything.
+        assert!(parse(src).iter().all(|e| e.kind != "doco:Figure"));
+    }
+
+    #[test]
+    fn a_messages_image_outside_its_main_content_is_not_shown() {
+        // A body that marks its main content is read for that alone: an
+        // image of the template around it is not shown in the message, so
+        // no figure draws it and the e-mail reader is not told it is shown
+        // (it would draw it at the end of the message).
+        let src = "<div><img src=\"cid:banner@x\"></div>\
+                   <main><p>Totals below.</p><p><img src=\"cid:shot@x\"></p></main>\
+                   <footer><img src=\"cid:logo@x\"></footer>";
+        let (els, _, ids) = parse_message(src);
+        let figures: Vec<&str> = els.iter().filter_map(|e| e.figure.as_deref()).collect();
+        assert_eq!(figures, ["cid:shot@x"]);
+        assert_eq!(ids, ["shot@x"]);
+        assert_eq!(cid_ids(src), ["shot@x"]);
+        // A main with no text is no main: the page is read whole.
+        let src = "<main><img src=\"cid:shot@x\"></main><p>Hi <img src=\"cid:logo@x\"></p>";
+        assert_eq!(cid_ids(src), ["shot@x", "logo@x"]);
     }
 
     #[test]

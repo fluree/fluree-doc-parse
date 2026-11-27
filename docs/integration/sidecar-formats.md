@@ -20,7 +20,23 @@ Model readings are keyed by a **crop name**: `p{page}_{tag}`, where the tag is
 ([escalation tiers](escalation-tiers.md#producing-the-crops)). A `full`
 reading replaces its page whatever the reason, so a reader that does not see
 structure should skip the crops asked for on a heading, figure or column
-doubt.
+doubt. An `r{i}` reading of a region under half its page, a screen pasted
+into a page of text, has its headings (`doc_title`, `paragraph_title`, a
+Markdown `#` line) read as paragraphs: they are the screen's, not the
+document's. A region that, with the images it abuts, covers half its page
+or more keeps them, as a page read whole does: a scan stored in strips is
+one picture. So does the `full` reading of a page near blank but for
+such a screen (one alone on its page with its caption), where OCR's reading
+demotes the headings whose words land in the screen: a model's reading has
+no positions, and its text cannot tell the screen's title from the page's
+own, a cover's title drawn in outlines (no text layer) or a caption that
+repeats the screen's name.
+
+An image a DOCX, an XLSX or an e-mail places in its flow has no page: its
+crop name is `m{n}` (`m{n}_{k}` for a figure's later images), the name
+`render-routed` gives its crop, `{stem}_m{n}.png`. Its reading is read as a
+whole page's is, its headings read as paragraphs as a pasted screen's are,
+and placed after the image's figure.
 
 ## 1. Layout boxes — `--layout-boxes`
 
@@ -121,7 +137,10 @@ of the two, it reads the one sized as it is. A DOCX's pictures are read from
 `{stem}_m{n}.json`, for the figure `figure-0-{n}`, and `{stem}_m{n}_{k}.json`
 for the figure's `k`-th image after the first; their text follows the figure.
 An image several figures draw is read once, from the name of the first figure
-drawing it, and its text follows each of them (see [Office files](../inputs/office-and-web.md)). Readings are looked up by
+drawing it, and its text follows each of them (see [Office files](../inputs/office-and-web.md)).
+So are the pictures anchored to an XLSX's cells, for the figure
+`figure-{sheet}-{n}`, and the images an e-mail shows in its body (see
+[E-mail](../inputs/email.md#images-in-the-body)). Readings are looked up by
 stem, so two inputs of one stem in a batch (`report.pdf` and `report.png`)
 are warned about, and `render-routed` crops only the first.
 
@@ -228,13 +247,13 @@ looked up only for the page's unread regions. A word over a glyph the
 page already has is dropped, so a stamp the text layer carries is not read
 twice.
 
-Only those names are looked up — `full` on every page, `r{i}` for each unread region — so a batch can share one directory. The elements these words make up are marked `provenance: "ocr"`.
+Only those names are looked up — `full` on every page, `r{i}` for each unread region — so a batch can share one directory. The elements these words make up are marked `provenance: "ocr"`. A word read in a region `r{i}` of a page with text of its own is the picture's text, read apart from the page's and never a heading; a word of a `full` reading is the page's text.
 
 **What to read.** The `render-routed` manifest says why each crop exists
 ([escalation tiers](escalation-tiers.md#producing-the-crops)). An OCR engine
 needs to read only the crops whose `reason` is `scanned`, `near_blank`,
-`broken_text`, `region`, `small_region` or `embedded_image` (a DOCX's
-picture): those are the ones whose readings the document takes. A
+`broken_text`, `region`, `small_region`, `embedded_image` (a DOCX's or an
+XLSX's picture, an e-mail's inline image) or `small_image` (one under a model's floor): those are the ones whose readings the document takes. A
 `table_missing` crop it reads only where the page's text does not cover it
 (see [escalation tiers](escalation-tiers.md#producing-the-crops)). [`fdoc ocr`](../cli/ocr.md) reads a crops directory that way.
 A `heading_doubt`, `figure_doubt` or `column_doubt` page has all its text,
@@ -287,8 +306,9 @@ asks a model for nothing — neither its whole page nor its tables: escalating
 past OCR is a decision of its own. Such a page is not reported unread unless
 its text stays under the floor every page is held to (40 characters): then it
 is listed in `doc:unreadPages` as `OcrSparse`, with a warning on stderr, since
-an engine that gave two words for a dense scan has not read it. A reading
-that took no word reads nothing: the page or region stays as it was, routed
+an engine that gave two words for a dense scan has not read it; not an image
+given on its own, read once a word in it was taken. A reading that took no
+word reads nothing: the page or region stays as it was, routed
 and reported unread (in
 [`doc:unreadPages`](../formats/doco.md#pages-nothing-read) or
 [`doc:unreadRegions`](../formats/doco.md#regions-nothing-read)). So does a whole-page reading
@@ -313,7 +333,7 @@ skipped silently: it comes from your pipeline, not from a partial batch. A
 ```bash
 fdoc dev render-routed scan.pdf ./crops --ocr-regions --stored-resolution
 # the crops whose readings the page takes
-jq -r 'select(.reason | IN("scanned", "near_blank", "broken_text", "region", "small_region", "embedded_image")) | "./crops/" + .png' \
+jq -r 'select(.reason | IN("scanned", "near_blank", "broken_text", "region", "small_region", "embedded_image", "small_image")) | "./crops/" + .png' \
   ./crops/manifest.jsonl > ./crops/for-ocr.txt
 your-ocr $(cat ./crops/for-ocr.txt) --out ./words   # one {stem}_p{N}_{tag}.json per crop
 fdoc convert scan.pdf -f doco --ocr-words ./words

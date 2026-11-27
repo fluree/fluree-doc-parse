@@ -2469,7 +2469,9 @@ pub fn detect_with_kickers(
 /// own: the picture's, as a drawing's labels are, and never the page's
 /// heading or its title, however large it is set. A logo's `LAW LIBRARY`
 /// over a report's title, a funder's `Co-funded by the European Union`, a
-/// callout in a photograph. A page read whole is the page's text.
+/// callout in a photograph. A page read whole, or a scan stored as a
+/// region over half its page, is the page's text
+/// ([`crate::glyph::OcrSource`]).
 fn from_picture(b: &Block) -> bool {
     b.ocr() == Some(crate::glyph::OcrSource::Region)
 }
