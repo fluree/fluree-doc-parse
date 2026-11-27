@@ -1,0 +1,13 @@
+[package]
+name = "fluree-doc-conform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Projection conformance: each format's writer read back and held to the element model"
+publish = false
+
+[dependencies]
+fluree-doc-model.workspace = true
+fluree-doc-markdown.workspace = true
+fluree-doc-html.workspace = true
+serde.workspace = true
