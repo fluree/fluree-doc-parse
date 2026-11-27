@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "bunge-ex21-subsidiaries-2025.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1996862/000162828026009842/subsidiarieslistex21112312.htm",
+    "sha256": "7cc7f828f7593a6a1f0fba87726eecbf441b75cdbe99ee5d7d8b31b8530945d4",
+    "about": "SEC filing, Exhibit 21: a list of subsidiaries set in tables, every row one cell across. Each country is bold and underlined over its companies in plain type, a blank row after each group."
+  },
+  "notes": [
+    "The filing parts the list into several tables at its page breaks. A group carried on into the next table has no band over it there: the first companies of the second table carry no country."
+  ],
+  "checks": [
+    {
+      "id": "company-under-its-country",
+      "found": "2026-11-27",
+      "issue": "Every row of one cell was read as a band, the companies as well as the countries. A company was in no cell, and a blank row carried every name above it as its section label, up to 21 names and 604 characters.",
+      "cell": {"value": "Bunge Global SA", "section": "Switzerland"}
+    },
+    {
+      "id": "the-largest-group-labels-alone",
+      "found": "2026-11-27",
+      "issue": "As above, for the largest group.",
+      "cell": {"value": "The Crete Mills, Inc.", "section": "United States of America"}
+    },
+    {
+      "id": "one-company-group",
+      "found": "2026-11-27",
+      "issue": "As above, for a country with one company.",
+      "cell": {"value": "Greenleaf, Ltd.", "section": "Bermuda"}
+    }
+  ]
+}

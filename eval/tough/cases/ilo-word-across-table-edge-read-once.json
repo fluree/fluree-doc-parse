@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "ilo-weso-trends-2025.pdf",
+    "url": "https://www.ilo.org/sites/default/files/2025-01/WESO25_Trends_EN_WEB5.pdf",
+    "sha256": "4db4247dcc3077829096d71946a042e56be3a25d957995d1132e9efb03e5b717",
+    "about": "ILO World Employment and Social Outlook: Trends 2025. Page 22's Figure 1.1 is a table of figures under stacked column heads. The first column's head, `World`, is set across the table's left edge: `Wor` outside it, `ld` inside."
+  },
+  "notes": [
+    "The heads are read out of the table as its title. `World` has its centre of mass outside the table, so the page's prose reads it whole."
+  ],
+  "checks": [
+    {
+      "id": "world-read-once",
+      "found": "2026-11-27",
+      "issue": "The title read each glyph by its own centre: `World`'s `l` and `d`, centred inside the table, were read into the title as well as into `World` in the prose (`… income ld countries …`).",
+      "no_text": "income ld countries"
+    },
+    {
+      "id": "world-whole",
+      "found": "2026-11-27",
+      "issue": "Guard: the prose keeps the word whole.",
+      "element": {"type": "doco:Paragraph", "text": "World"}
+    }
+  ]
+}

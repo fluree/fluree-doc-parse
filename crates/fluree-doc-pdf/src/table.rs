@@ -58,6 +58,22 @@ const SIGN_SPACE: f64 = 0.6;
 /// this are a border rule adjacent to a cell edge, not two cells.
 const MIN_CELL_EXTENT: f64 = 8.0;
 
+/// Least distance, in points, from a cell's edge for a rule drawn down
+/// through the cell to part its text ([`Grid::cell_texts_parted`]). A
+/// column's own rule stands on its edge, within a stroke's width of it.
+const PARTING_RULE_MARGIN: f64 = 3.0;
+
+/// Fewest lines, and fewest words in one of them, each side of a rule
+/// parting a cell holds ([`Grid::cell_texts_parted`]): a box of text runs
+/// over its lines in phrases, where a small table's column holds a value or
+/// a word a row.
+const PARTED_SIDE_LINES: usize = 2;
+const PARTED_LINE_WORDS: usize = 3;
+
+/// How far, in points, a glyph's ink may reach over a parting rule: the
+/// rule's stroke and the glyph's side bearing.
+const RULE_CLEARANCE: f64 = 0.5;
+
 /// Fraction of the grid's span a clustered line must cover to count. A short
 /// rule under a heading is not a table row boundary.
 const MIN_LINE_COVERAGE: f64 = 0.30;
@@ -89,12 +105,38 @@ pub struct Grid {
 
 impl TableLayout {
     /// Each cell's text, a span's read whole into its first cell.
+    ///
+    /// Blank glyphs off the cell's ink, above or under it, are left out: a
+    /// line's spaces under the cell (a description's under a row of
+    /// figures) are no line of it, and read with it they were a line of
+    /// gaps that parted the cell's own line as a gutter would
+    /// (`26.0 7.2012`, `Delivery da te`).
     pub fn texts(&self, glyphs: &[crate::glyph::Glyph], cols: usize) -> Vec<String> {
         let mut out: Vec<String> = self
             .cells
             .iter()
             .map(|ids| {
-                let gs: Vec<crate::glyph::Glyph> = ids.iter().map(|&i| glyphs[i].clone()).collect();
+                let inked: Vec<&crate::glyph::Glyph> = ids
+                    .iter()
+                    .map(|&i| &glyphs[i])
+                    .filter(|g| !g.text.trim().is_empty())
+                    .collect();
+                // The cell's ink, top to foot: a space set between a
+                // subscript and the line it hangs from (`ŜrT (%)`) is in it.
+                let span = inked.iter().filter_map(|g| {
+                    let b = g.bbox?;
+                    let slack = f64::from(g.font_size.max(1.0)) * 0.3;
+                    Some((b.y0 - slack, b.y1 + slack))
+                });
+                let (top, foot) =
+                    span.fold((f64::MAX, f64::MIN), |(t, f), (a, b)| (t.min(a), f.max(b)));
+                let in_ink = |g: &crate::glyph::Glyph| g.origin.1 >= top && g.origin.1 <= foot;
+                let gs: Vec<crate::glyph::Glyph> = ids
+                    .iter()
+                    .map(|&i| &glyphs[i])
+                    .filter(|g| !g.text.trim().is_empty() || inked.is_empty() || in_ink(g))
+                    .cloned()
+                    .collect();
                 join_cell_lines(crate::line::assemble(&gs).iter().map(|l| l.text.as_str()))
             })
             .collect();
@@ -174,6 +216,53 @@ impl Grid {
     /// constraint as column segmentation: segment first, assemble second.
     pub fn cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
         crate::cells::texts(glyphs, &self.xs, &self.ys, || self.read_cell_texts(glyphs))
+    }
+
+    /// Each cell's text as [`Self::cell_texts`] reads it, but a cell a drawn
+    /// rule parts is read a side at a time.
+    ///
+    /// A rule drawn down through a cell, with text on both sides of it
+    /// within its height, parts two boxes the grid's columns do not: a form
+    /// sizes each row's boxes on its own, so a rule drawn in one row only is
+    /// no column of the grid. Read as one, the boxes' lines were joined
+    /// across the rule, one line of each by turns (`Ordered on behalf of the
+    /// Secretary of LONDON 102 PETTY FRANCE (MOJ), Ministry of … State for
+    /// Justice:`). Read a side at a time: the lines over the rule, each
+    /// side's, left to right, then the lines under it.
+    pub fn cell_texts_parted(&self, glyphs: &[crate::glyph::Glyph], rules: &[Rule]) -> Vec<String> {
+        let mut texts = self.cell_texts(glyphs);
+        let cols = self.cols();
+        let homes = self.glyph_cells(glyphs);
+        for (cell, text) in texts.iter_mut().enumerate() {
+            let ids: Vec<usize> = (0..glyphs.len())
+                .filter(|&i| homes[i] == Some(cell))
+                .collect();
+            let (x0, x1) = (self.xs[cell % cols], self.xs[cell % cols + 1]);
+            if let Some(t) = parted_text(glyphs, &ids, rules, x0, x1) {
+                *text = t;
+            }
+        }
+        texts
+    }
+
+    /// The text of a merged block of cells, rows `rows` by columns `cols`,
+    /// read a side at a time where a rule drawn down through it parts it, as
+    /// [`Self::cell_texts_parted`] reads a cell. `None` where no rule does.
+    pub fn region_parted(
+        &self,
+        glyphs: &[crate::glyph::Glyph],
+        rules: &[Rule],
+        rows: std::ops::Range<usize>,
+        cols: std::ops::Range<usize>,
+    ) -> Option<String> {
+        let n = self.cols();
+        let homes = self.glyph_cells(glyphs);
+        let ids: Vec<usize> = (0..glyphs.len())
+            .filter(|&i| {
+                homes[i].is_some_and(|h| rows.contains(&(h / n)) && cols.contains(&(h % n)))
+            })
+            .collect();
+        parted_text(glyphs, &ids, rules, self.xs[cols.start], self.xs[cols.end])
     }
 
     fn read_cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
@@ -723,21 +812,44 @@ impl Grid {
     /// The text of one row read across the whole grid, ignoring columns —
     /// for a row that spans them.
     pub fn row_text(&self, glyphs: &[crate::glyph::Glyph], row: usize) -> String {
-        let inside: Vec<crate::glyph::Glyph> = glyphs
-            .iter()
-            .filter(|g| {
-                g.bbox.is_some() && !g.text.trim().is_empty() && g.is_horizontal() && {
-                    let (x, y) = g.center();
-                    self.cell_at(x, y).is_some_and(|(r, _)| r == row)
-                }
-            })
-            .cloned()
-            .collect();
-        crate::line::assemble(&inside)
+        crate::line::assemble(&self.row_glyphs(glyphs, row))
             .iter()
             .map(|l| l.text.as_str())
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// The inked glyphs row `row`'s cells read ([`Self::glyph_cells`]), and
+    /// so take from the page ([`Self::takes`]).
+    ///
+    /// Not each glyph by its own centre. A cell reads a word whole, in the
+    /// cell holding its centre of mass. Picked glyph by glyph, a word an
+    /// edge of the grid runs through lost letters or was read twice. With
+    /// its centre of mass inside, its letters outside the edge were neither
+    /// the row's nor the prose's: a head line set out past a table's edge,
+    /// read out as the table's title, read `ECIMAL` for `DECIMAL`. With it
+    /// outside, the prose kept the word whole and the row read its letters
+    /// inside the edge again: `World` in the prose, `ld` in the title.
+    ///
+    /// Ink only, the words spaced by their gaps as before: a space the text
+    /// draws between two cells' labels (`Quota Measures ␠ 0-50%`) joins
+    /// them into one line, run across the cut between them.
+    pub(crate) fn row_glyphs(
+        &self,
+        glyphs: &[crate::glyph::Glyph],
+        row: usize,
+    ) -> Vec<crate::glyph::Glyph> {
+        let cols = self.cols().max(1);
+        glyphs
+            .iter()
+            .zip(self.glyph_cells(glyphs))
+            .filter(|(g, home)| {
+                home.is_some_and(|i| i / cols == row)
+                    && g.bbox.is_some()
+                    && !g.text.trim().is_empty()
+            })
+            .map(|(g, _)| g.clone())
+            .collect()
     }
 
     /// The text of a block of cells read as one label, rows `rows` by
@@ -1263,6 +1375,56 @@ impl Grid {
         }
     }
 
+    /// Whether the grid's boxes are numbered as a form's are: numbered
+    /// fields ([`numbered_field`]), or a field's lettered parts (`a. NAME`,
+    /// `b. STREET ADDRESS`), in half its rows under the first or more, two
+    /// or more, across two columns or more, one of them numbered; and the
+    /// first row holding a numbered field of its own.
+    fn numbered_boxes(&self, rows: &[Vec<String>]) -> bool {
+        let lettered = |t: &str| {
+            let mut chars = t.chars();
+            chars.next().is_some_and(|c| c.is_ascii_lowercase())
+                && t[1..].starts_with(". ")
+                && t[3..].chars().next().is_some_and(char::is_uppercase)
+        };
+        let boxed = |t: &str| numbered_field(t) || lettered(t);
+        let below = rows.get(1..).unwrap_or(&[]);
+        let boxed_rows = below
+            .iter()
+            .filter(|r| r.iter().any(|c| boxed(c.trim())))
+            .count();
+        let columns: std::collections::BTreeSet<usize> = below
+            .iter()
+            .flat_map(|r| {
+                r.iter()
+                    .enumerate()
+                    .filter(|(_, c)| boxed(c.trim()))
+                    .map(|(i, _)| i)
+            })
+            .collect();
+        let numbered = below.iter().flatten().any(|c| numbered_field(c.trim()));
+        // The first row a box of the form too, holding a numbered field in
+        // its text (`… 1. REQUISITION NUMBER`, `18. SHIPPING POINT`): a
+        // row of plain names over numbered entries (`Institutioneel |
+        // Statistische Processen` over `1. Professionele …`, `7. …`) heads
+        // the columns it lists them in.
+        let first_boxed = rows.first().is_some_and(|r| {
+            r.iter().any(|c| {
+                let c = c.trim();
+                c.char_indices().any(|(i, ch)| {
+                    ch.is_ascii_digit()
+                        && (i == 0 || c[..i].ends_with(char::is_whitespace))
+                        && numbered_field(&c[i..])
+                })
+            })
+        });
+        numbered
+            && first_boxed
+            && boxed_rows >= 2
+            && boxed_rows * 2 >= below.len()
+            && columns.len() >= 2
+    }
+
     /// How many leading rows are column headers.
     ///
     /// Row 0 is presumed to be the header — that is overwhelmingly the layout
@@ -1299,12 +1461,56 @@ impl Grid {
         if row0.iter().all(|c| c.trim().is_empty()) {
             return 0;
         }
+        // A first row of numbered fields (`1. DATE OF ORDER`, `2. CONTRACT
+        // NO. …`, `6. SHIP TO:`) is a form's, its boxes numbered on down the
+        // rows under it (`3. ORDER NO.`): each names its own box, and no
+        // column under it. Numbered heads over columns of text (`1. Ingest |
+        // 2. Classify` over each step's notes) number nothing under them.
+        let filled: Vec<&str> = row0
+            .iter()
+            .map(|c| c.trim())
+            .filter(|c| !c.is_empty())
+            .collect();
+        if filled.len() >= 2
+            && filled.iter().all(|c| numbered_field(c))
+            && rows[1..].iter().flatten().any(|c| numbered_field(c.trim()))
+        {
+            return 0;
+        }
+        // So is a grid whose boxes are numbered down most of its rows and
+        // across its columns, whatever its first row holds: a form's title
+        // set in the first box (`SOLICITATION/CONTRACT/ORDER … 1.
+        // REQUISITION NUMBER`) beside its page box, over `2. CONTRACT NO. |
+        // 3. AWARD DATE | 4. ORDER NUMBER`. A list numbered down one column
+        // (`1. Introduction | 3`) numbers its entries, not boxes.
+        if self.numbered_boxes(rows) {
+            return 0;
+        }
         let mut run = self.leading_fill_run(fills);
         // The run's last row is the body's first stripe where the rows from
         // it on are shaded every other row and it holds figures as they do:
         // an exposure table's `ethanol | 1000 | - | 1000` shaded under its
         // header's own cells, the next row bare, the one after shaded.
         if run >= 2 && self.stripes_from(fills, run - 1) && figures_row(&rows[run - 1]) {
+            run -= 1;
+        }
+        // The run's last row is the table's first band where it holds a
+        // label in its first cell alone, as a row further down does under a
+        // fill of its own: a funding table's `Months 1 – 12`, shaded as its
+        // header is, over the CLINs it groups, and `Months 13-24` over the
+        // next. A band labels the rows under it; it names no column.
+        let band = |r: usize| {
+            rows[r].first().is_some_and(|t| !t.trim().is_empty())
+                && rows[r].iter().skip(1).all(|t| t.trim().is_empty())
+        };
+        // Beside other columns only, and in a run that leaves rows bare: a
+        // one-column listing shaded throughout holds nothing but such rows.
+        if run >= 2
+            && run < rows.len()
+            && self.cols() >= 2
+            && band(run - 1)
+            && (run..rows.len()).any(|r| band(r) && self.band_has_fill(fills, r))
+        {
             run -= 1;
         }
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
@@ -1591,6 +1797,13 @@ impl Grid {
     ///   it. In most of the columns both fill, that would mean one type
     ///   (quantities or words) and one weight, as a field list's rows are,
     ///   whose values are figures in some fields and words in others.
+    ///
+    /// The row it is set apart from is the first under it filling two
+    /// cells or more, and more than half as many as the header names. A
+    /// section's band under the header (`MAS Contract Year 4 …`, its words
+    /// dealt into two cells by the cuts), bold or shaded as a header is,
+    /// or the header's own second line (`run` of `Longer run`) is no row of
+    /// the table's values to tell it from.
     pub(crate) fn heads_its_rows(
         &self,
         header: usize,
@@ -1600,19 +1813,22 @@ impl Grid {
         fills: &[crate::rule::Fill],
     ) -> bool {
         let n = rows.len().min(self.rows());
-        if header == 0 || header >= n {
+        let h = header;
+        if header == 0 || h >= n {
             return false;
         }
         let cols = self.cols();
         let text = |r: usize, c: usize| rows[r].get(c).map_or("", |t| t.trim());
-        let bold = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, header);
+        let filled = |r: usize| (0..cols).filter(|&c| !text(r, c).is_empty()).count();
+        let first = (h..n)
+            .find(|&r| filled(r) >= 2 && filled(r) * 2 > filled(0))
+            .unwrap_or(h);
+        let bold = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, first);
         let shaded = self.band_has_fill(fills, 0)
-            && !self.band_has_fill(fills, header)
-            && !(header + 1 < n && self.band_has_fill(fills, header + 1));
-        let under = self.rule_between(rules, header);
-        let below: Vec<Option<f64>> = (header + 1..n)
-            .map(|r| self.rule_between(rules, r))
-            .collect();
+            && !self.band_has_fill(fills, first)
+            && !(first + 1 < n && self.band_has_fill(fills, first + 1));
+        let under = self.rule_between(rules, h);
+        let below: Vec<Option<f64>> = (h + 1..n).map(|r| self.rule_between(rules, r)).collect();
         let others = below.iter().flatten().copied().fold(0.0, f64::max);
         let ruled = under.is_some_and(|u| {
             (others > 0.0 && u > others * HEAVIER_RULE)
@@ -1621,7 +1837,7 @@ impl Grid {
         let stacked = header > 1;
         let (mut typed, mut named) = (0usize, 0usize);
         for c in 0..cols {
-            let cells: Vec<&str> = (header..n)
+            let cells: Vec<&str> = (h..n)
                 .map(|r| text(r, c))
                 .filter(|t| !t.is_empty())
                 .collect();
@@ -1638,11 +1854,11 @@ impl Grid {
         }
         let contrast = typed > 0 && named * 2 > typed;
         let weights0 = self.cell_weights(glyphs, 0);
-        let weights1 = self.cell_weights(glyphs, header);
+        let weights1 = self.cell_weights(glyphs, first);
         let heavy = |(w, h): (usize, usize)| w > 0 && h * 2 > w;
         let (mut compared, mut alike) = (0usize, 0usize);
         for c in 0..cols {
-            let (a, b) = (text(0, c), text(header, c));
+            let (a, b) = (text(0, c), text(first, c));
             if a.is_empty() || b.is_empty() {
                 continue;
             }
@@ -2408,6 +2624,100 @@ const SHARED_BASELINE: f64 = 0.1;
 /// (`long-` over `term`) more often than prose does, and only the rest of
 /// the document says which of the two this is. See
 /// `document::settle_cell_breaks`.
+/// The text of glyphs `ids`, set between `x0` and `x1`, read a side at a
+/// time where a rule drawn down between those edges parts them: the lines
+/// over the rules, each side's lines left to right, then the lines under
+/// them. `None` where no rule stands there with ink on both sides of it
+/// within its height. See [`Grid::cell_texts_parted`].
+fn parted_text(
+    glyphs: &[crate::glyph::Glyph],
+    ids: &[usize],
+    rules: &[Rule],
+    x0: f64,
+    x1: f64,
+) -> Option<String> {
+    let centre = |g: &crate::glyph::Glyph| {
+        g.bbox
+            .map_or(g.origin, |b| ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5))
+    };
+    let within = |r: &Rule, i: usize| {
+        let y = centre(&glyphs[i]).1;
+        y > r.bbox.y0 && y < r.bbox.y1
+    };
+    // A side of the rule reads as text set in a box of its own: two lines
+    // or more, one of them three words or more. The rule between two boxes
+    // of text parts them; the rules of a small table set in the cell part
+    // its columns of values, which read across its rows.
+    let boxed = |r: &Rule, left: bool| {
+        let side: Vec<crate::glyph::Glyph> = ids
+            .iter()
+            .filter(|&&i| within(r, i) && (centre(&glyphs[i]).0 < r.axis_pos()) == left)
+            .map(|&i| glyphs[i].clone())
+            .collect();
+        let lines = crate::line::assemble(&side);
+        lines.len() >= PARTED_SIDE_LINES
+            && lines
+                .iter()
+                .any(|l| l.text.split_whitespace().count() >= PARTED_LINE_WORDS)
+    };
+    // The rule runs between the two: through no glyph's ink. A stroke
+    // drawn through a word is no box's edge.
+    let clear = |r: &Rule| {
+        let x = r.axis_pos();
+        !ids.iter().any(|&i| {
+            within(r, i)
+                && glyphs[i]
+                    .bbox
+                    .is_some_and(|b| b.x0 < x - RULE_CLEARANCE && b.x1 > x + RULE_CLEARANCE)
+        })
+    };
+    let parting: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| {
+            let x = r.axis_pos();
+            r.orientation == Orientation::Vertical
+                && x > x0 + PARTING_RULE_MARGIN
+                && x < x1 - PARTING_RULE_MARGIN
+                && clear(r)
+                && boxed(r, true)
+                && boxed(r, false)
+        })
+        .collect();
+    if parting.is_empty() {
+        return None;
+    }
+    let top = parting.iter().map(|r| r.bbox.y0).fold(f64::MAX, f64::min);
+    let foot = parting.iter().map(|r| r.bbox.y1).fold(f64::MIN, f64::max);
+    // Each glyph's place: over the rules, between them on the side it stands,
+    // or under them.
+    let mut groups: std::collections::BTreeMap<(u8, usize), Vec<crate::glyph::Glyph>> =
+        Default::default();
+    for &i in ids {
+        let (x, y) = centre(&glyphs[i]);
+        let key = if y <= top {
+            (0, 0)
+        } else if y >= foot {
+            (2, 0)
+        } else {
+            let side = parting
+                .iter()
+                .filter(|r| r.axis_pos() < x && y > r.bbox.y0 && y < r.bbox.y1)
+                .count();
+            (1, side)
+        };
+        groups.entry(key).or_default().push(glyphs[i].clone());
+    }
+    let lines: Vec<String> = groups
+        .values()
+        .flat_map(|gs| {
+            turned_in_order(crate::line::assemble(gs))
+                .into_iter()
+                .map(|l| l.text)
+        })
+        .collect();
+    Some(join_cell_lines(lines.iter().map(String::as_str)))
+}
+
 fn join_cell_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     use crate::block::HyphenJoin;
     let mut out = String::new();
@@ -5100,8 +5410,113 @@ pub fn detect_framed(
     let grids = detect_framed_rules(rules, fills, glyphs, page, frames)
         .into_iter()
         .map(|g| cut_to_box(g, rules, fills, glyphs))
+        .map(|g| cut_page_head(g, rules, glyphs))
         .collect();
     with_column_bands(with_header_band_edges(grids, fills, glyphs), rules, glyphs)
+}
+
+/// Whether a cell opens on a form's field number and the field's name: one
+/// or two digits, a box's letter where the form parts a field (`13a.`),
+/// and a stop, then a capital (`1. DATE OF ORDER`, `12. F.O.B. POINT`,
+/// `17a. CONTRACTOR/OFFEROR`).
+fn numbered_field(text: &str) -> bool {
+    let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let rest = &text[digits.len()..];
+    let rest = match rest.chars().next() {
+        Some(l) if l.is_ascii_lowercase() => &rest[1..],
+        _ => rest,
+    };
+    (1..=2).contains(&digits.len())
+        && rest.starts_with(". ")
+        && rest[2..].chars().next().is_some_and(char::is_uppercase)
+}
+
+/// Whether a cell's text is a page counter and nothing else: `PAGE 1 OF
+/// 30`, `Page 2 of 7`, a form's `PAGE OF PAGES` box with its two figures.
+fn page_counter(text: &str) -> bool {
+    let words: Vec<String> = text.split_whitespace().map(|w| w.to_lowercase()).collect();
+    words.len() <= 6
+        && words.first().is_some_and(|w| w == "page")
+        && words.iter().any(|w| w == "of")
+        && words.iter().any(|w| w.chars().all(|c| c.is_ascii_digit()))
+        && words.iter().all(|w| {
+            matches!(w.as_str(), "page" | "of" | "pages") || w.chars().all(|c| c.is_ascii_digit())
+        })
+}
+
+/// Most rows a form's head band runs to: its title and a notice under it.
+const PAGE_HEAD_ROWS: usize = 2;
+
+/// A ruled grid cut under the page's head: its first rows a band holding
+/// the page's counter (`PAGE OF PAGES` over `1 30`, read down its column)
+/// beside a line or two of words and no figure (the form's title, a
+/// notice), down to the first rule across the grid under the counter. A
+/// form sets its head inside its frame; the head names nothing of the
+/// fields under it, and a row of it is no header. The band's text is read
+/// as the page's.
+fn cut_page_head(g: Grid, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) -> Grid {
+    if g.layout.is_some() || g.rows() < PAGE_HEAD_ROWS + 3 {
+        return g;
+    }
+    let cols = g.cols();
+    let texts = g.cell_texts(glyphs);
+    let cell = |r: usize, c: usize| texts[r * cols + c].trim();
+    // The counter's column, and the rows it is read down.
+    let down = |c: usize, rows: usize| {
+        (0..rows)
+            .map(|r| cell(r, c))
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let Some((counter, rows)) = (0..cols).find_map(|c| {
+        (1..=PAGE_HEAD_ROWS)
+            .find(|&n| page_counter(&down(c, n)))
+            .map(|n| (c, n))
+    }) else {
+        return g;
+    };
+    let (x0, x1) = (g.xs[0], g.xs[cols]);
+    let counter_bottom = glyphs
+        .iter()
+        .filter(|gl| !gl.text.trim().is_empty())
+        .filter_map(|gl| gl.bbox.map(|b| (gl.center(), b)))
+        .filter(|((x, y), _)| {
+            *x >= g.xs[counter] && *x < g.xs[counter + 1] && *y >= g.ys[0] && *y < g.ys[rows]
+        })
+        .map(|(_, b)| b.y1)
+        .fold(f64::MIN, f64::max);
+    // The first boundary under it a rule runs across the grid along.
+    let across = |y: f64| {
+        rules.iter().any(|r| {
+            r.orientation == Orientation::Horizontal
+                && (r.axis_pos() - y).abs() <= EDGE_TOLERANCE
+                && r.bbox.x0 <= x0 + EDGE_TOLERANCE
+                && r.bbox.x1 >= x1 - EDGE_TOLERANCE
+        })
+    };
+    let Some(cut) = (1..=PAGE_HEAD_ROWS).find(|&k| g.ys[k] > counter_bottom && across(g.ys[k]))
+    else {
+        return g;
+    };
+    // Beside the counter, each row of the band a line of words: no figure.
+    let words_only = (0..cut).all(|r| {
+        (0..cols)
+            .filter(|&c| c != counter)
+            .all(|c| !cell(r, c).chars().any(|ch| ch.is_ascii_digit()))
+    });
+    if !words_only || g.rows() - cut < 3 {
+        return g;
+    }
+    let ys = g.ys[cut..].to_vec();
+    Grid {
+        bbox: BBox {
+            y0: ys[0],
+            ..g.bbox
+        },
+        ys,
+        ..g
+    }
 }
 
 /// Fewest of a grid's row boundaries a box holds inside it to frame rows of
@@ -7847,6 +8262,19 @@ pub fn detect_aligned(
     fills: &[crate::rule::Fill],
     page: usize,
 ) -> Vec<Grid> {
+    detect_aligned_with_refused(glyphs, rules, fills, page).0
+}
+
+/// [`detect_aligned`]'s grids, and the runs of aligned rows it refused for
+/// want of anything to corroborate them: text that lines up into columns,
+/// which is not a table. Bulleted lists set side by side are such a run
+/// (`document::list_boxes`).
+pub fn detect_aligned_with_refused(
+    glyphs: &[crate::glyph::Glyph],
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    page: usize,
+) -> (Vec<Grid>, Vec<Grid>) {
     // The page's lines, read only for a candidate its geometry does not
     // already accept and big enough for a caption to name.
     let captions = std::cell::OnceCell::new();
@@ -7860,9 +8288,9 @@ pub fn detect_aligned(
         })
     };
     let (rows, cells) = aligned_rows(glyphs);
-    let mut out: Vec<Grid> = aligned_runs(&rows, &cells, page)
+    let (mut out, refused): (Vec<Grid>, Vec<Grid>) = aligned_runs(&rows, &cells, page)
         .into_iter()
-        .filter(|g| {
+        .partition(|g| {
             let captioned = || {
                 g.cols() >= 3
                     && g.rows() >= 3
@@ -7877,8 +8305,7 @@ pub fn detect_aligned(
                 || captioned()
                 || has_typeset_header(g, glyphs)
                 || has_two_axis_header(g, glyphs)
-        })
-        .collect();
+        });
     // Two unruled tables set close together — a key/value block of two
     // columns just above a line table of five — align as one run, and the
     // run is neither: its first row is no header and its rows disagree on
@@ -7904,8 +8331,10 @@ pub fn detect_aligned(
     for g in out.iter_mut() {
         extend_by_banner(g, &rows);
         drop_field_line(g, glyphs, rules);
+        fit_right_aligned_heads(g, glyphs);
+        fit_heads_to_figures(g, glyphs);
     }
-    out
+    (out, refused)
 }
 
 /// Least share of an aligned grid's width a rule spans to rule its first
@@ -7914,10 +8343,12 @@ const FIELD_LINE_RULE_SPAN: f64 = 0.9;
 
 /// Drop an aligned grid's first row where it is a line of fields, each a
 /// label set inline with its value (`Guest Name: Sanjay | Date:
-/// 31/12/2017`), ruled off from the rows under it by a rule across the
-/// grid: the page's facts over the table, not the names of its columns. A
-/// header names its columns; a field states its own value. The grid starts
-/// at the rule.
+/// 31/12/2017`), or a line holding a figure over a row that names the
+/// columns in words (`Date limite de paiement … | 29.99` over `Montant EUR
+/// HT | Montant TVA | …`), ruled off from the rows under it by a rule
+/// across the grid: the page's facts over the table, not the names of its
+/// columns. A header names its columns; a field states its own value, and
+/// the table's head is its top. The grid starts at the rule.
 fn drop_field_line(g: &mut Grid, glyphs: &[crate::glyph::Glyph], rules: &[Rule]) {
     if g.layout.is_some() || g.rows() < 3 {
         return;
@@ -7929,7 +8360,18 @@ fn drop_field_line(g: &mut Grid, glyphs: &[crate::glyph::Glyph], rules: &[Rule])
         .map(|t| t.trim())
         .filter(|t| !t.is_empty())
         .collect();
-    if first.len() < 2 || !first.iter().all(|t| label_colon(t) == Some(false)) {
+    let fields = first.len() >= 2 && first.iter().all(|t| label_colon(t) == Some(false));
+    // A line holding an amount of its own (`29.99`) over heads named in
+    // words, figures under them: the heads are the table's top.
+    let figures_under = (2..g.rows()).any(|r| {
+        cells[r * cols..(r + 1) * cols]
+            .iter()
+            .any(|t| is_numeric_cell(t.trim()))
+    });
+    let over_names = first.iter().any(|t| is_numeric_cell(t))
+        && !head_runs(g, glyphs, 1).is_empty()
+        && figures_under;
+    if !fields && !over_names {
         return;
     }
     let (x0, x1) = (g.xs[0], g.xs[cols]);
@@ -7958,6 +8400,363 @@ fn drop_field_line(g: &mut Grid, glyphs: &[crate::glyph::Glyph], rules: &[Rule])
     g.ys.remove(0);
     g.ys[0] = top;
     g.bbox.y0 = top;
+}
+
+/// The runs of words in row `r` of a grid where the row names its columns
+/// in words: two runs or more, parted by a cell's gap, letters in them and
+/// no figure. Empty where the row is no such row. Read from the row's
+/// glyphs, not its cells' text: edges cutting through the names regroup
+/// their words.
+fn head_runs(g: &Grid, glyphs: &[crate::glyph::Glyph], r: usize) -> Vec<(f64, f64)> {
+    let mut inked: Vec<(f64, f64, f64)> = Vec::new();
+    let mut letters = false;
+    // The row's glyphs as its cells take them, whole words by their
+    // centres of mass ([`Grid::row_glyphs`]).
+    for gl in g
+        .row_glyphs(glyphs, r)
+        .iter()
+        .filter(|gl| gl.is_horizontal())
+    {
+        let Some(b) = gl.bbox else { continue };
+        if gl.text.chars().any(|c| c.is_ascii_digit()) {
+            return Vec::new();
+        }
+        letters |= gl.text.chars().any(char::is_alphabetic);
+        inked.push((b.x0, b.x1, f64::from(gl.font_size).max(1.0)));
+    }
+    inked.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    for (a, b, fs) in inked {
+        match runs.last_mut() {
+            Some(run) if a - run.1 <= fs * TABLE_CELL_GAP => run.1 = run.1.max(b),
+            _ => runs.push((a, b)),
+        }
+    }
+    if letters && runs.len() >= 2 {
+        runs
+    } else {
+        Vec::new()
+    }
+}
+
+/// The median size of the glyphs between `y0` and `y1`: a row's type.
+fn head_size(glyphs: &[crate::glyph::Glyph], y0: f64, y1: f64) -> f64 {
+    let mut sizes: Vec<f64> = glyphs
+        .iter()
+        .filter(|gl| !gl.text.trim().is_empty())
+        .filter(|gl| {
+            let (_, y) = gl.center();
+            y > y0 && y < y1
+        })
+        .map(|gl| f64::from(gl.font_size))
+        .collect();
+    sizes.sort_by(f64::total_cmp);
+    sizes.get(sizes.len() / 2).copied().unwrap_or(1.0).max(1.0)
+}
+
+/// Move an aligned grid's column edges into the gutters between its
+/// columns, each column its head and the figures under it together, where
+/// the heads stand over their figures but not within the edges set where
+/// the figures start: a chart's table sets each head centred over its bar
+/// and figure (`Low-income countries` over a bar and `–4.3`), the bar left
+/// of the figure, so each head falls in the column before its own. Cut so,
+/// the heads' row is no header and is left out, its lines read as the
+/// page's, the heads' words interleaved (`Lower-Upper-Lowmiddlemiddle-…`).
+///
+/// Every column past the first holds figures: most of its words (the
+/// body's, by their centres) are numbers. Text set in panels under their
+/// titles lines up word for word as well, and is no such table. Each head
+/// (a run of the header row's words) stands over the figures of exactly
+/// one column, taken at their median extent, and each column's figures
+/// under one head at most. Each edge moves to the middle of the gutter
+/// between the column before it, head and figures, and its own, where that
+/// gutter is as wide as the columns are parted by and the edge cuts through
+/// no run of the body's words: a chart sets each figure at its bar's end,
+/// and a negative bar's figure stands out in the gutter, a run of its own.
+/// A head set just past the grid's first edge over the first column's
+/// figures (`World`) moves that edge out to it.
+fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
+    let cols = g.cols();
+    if g.layout.is_some() || g.rows() < 2 || cols < 2 {
+        return;
+    }
+    let fs = head_size(glyphs, g.ys[0], g.ys[1]);
+    let (top, bottom) = (g.ys[0], g.ys[g.rows()]);
+    // The page's words, each glyph joined to the one before it on its line
+    // where they touch (a sign to its digits): a word is placed whole, by
+    // its centre, as the grid's cells take it.
+    let mut placed: Vec<(f64, f64, f64, f64, &str)> = glyphs
+        .iter()
+        .filter(|gl| !gl.text.trim().is_empty() && gl.is_horizontal())
+        .filter_map(|gl| {
+            let b = gl.bbox?;
+            Some((
+                b.x0,
+                b.x1,
+                gl.origin.1,
+                f64::from(gl.font_size).max(1.0),
+                gl.text.as_str(),
+            ))
+        })
+        .collect();
+    placed.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.0.total_cmp(&b.0)));
+    let mut inked: Vec<(f64, f64, f64)> = Vec::new();
+    let mut texts: Vec<String> = Vec::new();
+    let mut last: Option<(f64, f64)> = None;
+    for (a, b, y, size, t) in placed {
+        match (inked.last_mut(), last) {
+            (Some(w), Some((ly, _))) if (y - ly).abs() <= size * 0.3 && a - w.1 <= size * 0.25 => {
+                w.1 = w.1.max(b);
+                if let Some(s) = texts.last_mut() {
+                    s.push_str(t);
+                }
+            }
+            _ => {
+                inked.push((a, b, y));
+                texts.push(t.to_string());
+            }
+        }
+        last = Some((y, size));
+    }
+    // The figures of each column: the body's words by their centres.
+    let body: Vec<(f64, f64, &str)> = inked
+        .iter()
+        .zip(&texts)
+        .filter(|(&(_, _, y), _)| y >= g.ys[1] && y < bottom)
+        .map(|(&(a, b, _), t)| (a, b, t.as_str()))
+        .collect();
+    // The body's runs: its words on one line a cell's gap apart joined.
+    let runs: Vec<(f64, f64, f64)> = {
+        let mut lines: Vec<(f64, f64, f64)> = inked
+            .iter()
+            .filter(|&&(_, _, y)| y >= g.ys[1] && y < bottom)
+            .copied()
+            .collect();
+        lines.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.0.total_cmp(&b.0)));
+        let mut runs: Vec<(f64, f64, f64)> = Vec::new();
+        for (a, b, y) in lines {
+            match runs.last_mut() {
+                Some(r) if (y - r.2).abs() <= fs * 0.3 && a - r.1 <= fs * TABLE_CELL_GAP => {
+                    r.1 = r.1.max(b)
+                }
+                _ => runs.push((a, b, y)),
+            }
+        }
+        runs
+    };
+    // Taken at their median start and end: a figure the edges set in the
+    // wrong column stretches no column.
+    let mut words: Vec<(Vec<f64>, Vec<f64>)> = vec![(Vec::new(), Vec::new()); cols];
+    let mut numeric = vec![0usize; cols];
+    for &(a, b, t) in &body {
+        let m = (a + b) / 2.0;
+        if let Some(c) = g.xs.windows(2).position(|w| m >= w[0] && m < w[1]) {
+            words[c].0.push(a);
+            words[c].1.push(b);
+            let t: String = t.chars().map(|c| if c == '–' { '-' } else { c }).collect();
+            numeric[c] += usize::from(is_numeric_cell(&t) || is_amount_unit(&t));
+        }
+    }
+    // Columns of figures past the first, which may be a stub of labels: most
+    // of each one's words are figures, or the units a statement sets over
+    // them (`£m`). Text set in panels under their titles lines up as well,
+    // word for word, and is no table of heads over figures.
+    if (1..cols).any(|c| numeric[c] * 2 <= words[c].0.len()) {
+        return;
+    }
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let mut figures: Vec<(f64, f64)> = Vec::with_capacity(cols);
+    for (mut starts, mut ends) in words {
+        if starts.is_empty() {
+            return;
+        }
+        figures.push((median(&mut starts), median(&mut ends)));
+    }
+    // The header row's runs, and any just past the first edge.
+    let mut heads: Vec<(f64, f64)> = Vec::new();
+    {
+        let mut row: Vec<(f64, f64)> = inked
+            .iter()
+            .filter(|&&(a, b, y)| {
+                y > top - fs * 0.5 && y < g.ys[1] && b > g.xs[0] - fs * 4.0 && a < g.xs[cols]
+            })
+            .map(|&(a, b, _)| (a, b))
+            .collect();
+        if inked
+            .iter()
+            .any(|&(a, b, y)| y > top && y < g.ys[1] && a < g.xs[cols] && b > g.xs[0] - fs * 4.0)
+            && head_runs(g, glyphs, 0).is_empty()
+        {
+            return;
+        }
+        row.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (a, b) in row {
+            match heads.last_mut() {
+                Some(h) if a - h.1 <= fs * TABLE_CELL_GAP => h.1 = h.1.max(b),
+                _ => heads.push((a, b)),
+            }
+        }
+    }
+    if heads.len() < 2 {
+        return;
+    }
+    // Each head over one column's figures, each column under one head.
+    let over = |h: (f64, f64), f: (f64, f64)| h.0 < f.1 && f.0 < h.1;
+    let mut owner: Vec<Option<(f64, f64)>> = vec![None; cols];
+    for &h in &heads {
+        let under: Vec<usize> = (0..cols).filter(|&c| over(h, figures[c])).collect();
+        let [c] = under[..] else {
+            return;
+        };
+        if owner[c].is_some() {
+            return;
+        }
+        owner[c] = Some(h);
+    }
+    // Some head must stand outside its column's edges, or nothing is cut.
+    let cut =
+        (0..cols).any(|c| owner[c].is_some_and(|h| h.0 < g.xs[c] - 0.5 || h.1 > g.xs[c + 1] + 0.5));
+    if !cut {
+        return;
+    }
+    let block = |c: usize| match owner[c] {
+        Some(h) => (h.0.min(figures[c].0), h.1.max(figures[c].1)),
+        None => figures[c],
+    };
+    let mut xs = g.xs.clone();
+    for k in 1..cols {
+        let (left, right) = (block(k - 1).1, block(k).0);
+        let edge = (left + right) / 2.0;
+        // No run of the body's words cut through, words a cell's gap apart
+        // one run: a chart sets a figure at its bar's end, and a negative
+        // bar's figure stands out in the gutter on one side of the edge or
+        // the other; a line of text run past the edge is a cell's.
+        let clear = !runs.iter().any(|&(a, b, _)| a < edge && b > edge);
+        if right - left < fs * ALIGNED_SPLIT_GAP_EMS || !clear {
+            return;
+        }
+        xs[k] = edge;
+    }
+    xs[0] = xs[0].min(block(0).0 - 0.5);
+    xs[cols] = xs[cols].max(block(cols - 1).1 + 0.5);
+    // One figure to a column on each line, by the fitted edges: a chart's
+    // axis sets its ticks along one line (`5 4 3 2 1 0`), runs apart in one
+    // column, where a table sets one figure to a cell. (By the old edges, a
+    // negative bar's figure falls in the column before, beside that
+    // column's own.)
+    let column = |a: f64, b: f64| {
+        let m = (a + b) / 2.0;
+        xs.windows(2).position(|w| m >= w[0] && m < w[1])
+    };
+    let mut prev: Option<(usize, f64)> = None;
+    for &(a, b, y) in &runs {
+        let Some(c) = column(a, b) else {
+            continue;
+        };
+        if prev.is_some_and(|(pc, py)| pc == c && (y - py).abs() <= fs * 0.3) {
+            return;
+        }
+        prev = Some((c, y));
+    }
+    g.bbox.x0 = xs[0];
+    g.bbox.x1 = xs[cols];
+    g.xs = xs;
+}
+
+/// The unit a statement sets over a column of amounts: a currency with its
+/// scale (`£m`, `$000`, `(€bn)`), or a percentage sign.
+fn is_amount_unit(t: &str) -> bool {
+    let t = t.trim().trim_start_matches('(').trim_end_matches(')');
+    if t == "%" {
+        return true;
+    }
+    t.strip_prefix(['£', '$', '€', '¥'])
+        .is_some_and(|scale| matches!(scale, "m" | "mn" | "bn" | "k" | "000" | "'000" | "’000"))
+}
+
+/// Move an aligned grid's column edges out from under its heads where a
+/// head is set right-aligned over its figures and wider than them (`Montant
+/// EUR HT` over `24.99`): the column starts where its figures do, and the
+/// head reaches back over the gutter, cut through by the edge. Where the
+/// rows are labelled in a stub, the head ends where the column's figures
+/// end, it reaches back a letter's width or more, and nothing of the column
+/// before stands between its start and the edge, the edge moves into the
+/// gutter before the head, midway to the text before it.
+fn fit_right_aligned_heads(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
+    if g.layout.is_some() || g.rows() < 2 || g.cols() < 2 {
+        return;
+    }
+    let cols = g.cols();
+    let runs = head_runs(g, glyphs, 0);
+    if runs.is_empty() {
+        return;
+    }
+    // Amounts beside a stub of labels, as an invoice or a statement sets
+    // them: most body rows name themselves in words in the first column.
+    let cells = g.cell_texts(glyphs);
+    let named = (1..g.rows())
+        .filter(|&r| {
+            cells[r * cols]
+                .trim_start()
+                .starts_with(char::is_alphabetic)
+        })
+        .count();
+    if named < 2 || named * 2 < g.rows() - 1 {
+        return;
+    }
+    let (y1, bottom) = (g.ys[1], g.ys[g.rows()]);
+    let body: Vec<(f64, f64)> = glyphs
+        .iter()
+        .filter(|gl| !gl.text.trim().is_empty() && gl.is_horizontal())
+        .filter_map(|gl| {
+            let b = gl.bbox?;
+            let (x, y) = gl.center();
+            (x >= g.xs[0] && x <= g.xs[cols] && y >= y1 && y < bottom).then_some((b.x0, b.x1))
+        })
+        .collect();
+    for k in 1..cols {
+        let edge = g.xs[k];
+        let Some(&(a, b)) = runs.iter().find(|&&(a, b)| a < edge && b > edge) else {
+            continue;
+        };
+        if b > g.xs[k + 1] {
+            continue;
+        }
+        // Set right-aligned over the column's figures: the head ends where
+        // they end, within a letter's width. A head centred over them is
+        // another layout's.
+        let fs = head_size(glyphs, g.ys[0], g.ys[1]);
+        // Reaching back over the gutter, not set at the edge a hair before it.
+        if edge - a < fs {
+            continue;
+        }
+        let right = body
+            .iter()
+            .filter(|&&(s, e)| (s + e) / 2.0 >= edge && (s + e) / 2.0 < g.xs[k + 1])
+            .map(|&(_, e)| e)
+            .fold(f64::MIN, f64::max);
+        if right == f64::MIN || (b - right).abs() > fs {
+            continue;
+        }
+        // The text before the head: the body's and the head's own.
+        let before = body
+            .iter()
+            .chain(runs.iter())
+            .filter(|&&(_, e)| e < a)
+            .map(|&(_, e)| e)
+            .fold(g.xs[k - 1], f64::max);
+        // Nothing of the column before reaches under the head; the
+        // column's own figures may start a hair before its edge.
+        let clear = !body.iter().any(|&(s, e)| (s + e) / 2.0 < edge && e > a);
+        // Into a gutter, as wide as one the columns are parted by: letters
+        // set apart in a word (`D ECIMAL`) leave a narrower gap.
+        if clear && a - before >= fs * ALIGNED_SPLIT_GAP_EMS {
+            g.xs[k] = (before + a) / 2.0;
+        }
+    }
 }
 
 /// Take into an accepted grid the column banner set just above it.
@@ -9776,6 +10575,41 @@ mod header_tests {
             .map(|r| (0..4).map(|c| format!("r{r}c{c}")).collect())
             .collect();
         assert_eq!(g.header_rows(&rows, &[], &[], &fills), 3);
+    }
+
+    #[test]
+    fn a_shaded_first_band_is_no_header_row() {
+        // A funding table: its header shaded, its first period band shaded
+        // under it, and the next period's band shaded further down. The
+        // shaded run is the header and the first band, not a two-row header.
+        let g = grid_with_bands();
+        let row = |r: usize| fill(0.0, 100.0 + 20.0 * r as f64, 400.0, 120.0 + 20.0 * r as f64);
+        let rows: Vec<Vec<String>> = [
+            ["CLIN", "Funding Amount", "Estimated Date", "Note"],
+            ["Months 1 – 12", "", "", ""],
+            ["0001 – Storage", "TBD", "TBD", "a"],
+            ["Months 13-24", "", "", ""],
+            ["0006 – Storage", "$2,947,920.24", "December 3, 2021", "b"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1), row(3)]), 1);
+        // With no band of the kind further down, a shaded second row under
+        // the header is the header's own.
+        assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1)]), 2);
+        // A one-column listing holds such rows alone: its shading, broken
+        // once, is no band's. Its run is deeper than a header is, and it
+        // keeps the single header row it falls back to; shortened by one
+        // as though it ended on a band, it read as four header rows.
+        let one = Grid {
+            xs: vec![0.0, 400.0],
+            ys: (0..10).map(|r| 100.0 + 20.0 * r as f64).collect(),
+            ..grid_with_bands()
+        };
+        let lines: Vec<Vec<String>> = (0..9).map(|r| vec![format!("line {r}")]).collect();
+        let shaded: Vec<_> = (0..9).filter(|&r| r != 5).map(row).collect();
+        assert_eq!(one.header_rows(&lines, &[], &[], &shaded), 1);
     }
 
     #[test]
@@ -12166,6 +13000,112 @@ mod header_tests {
         }
     }
 
+    #[test]
+    fn a_grid_of_numbered_boxes_is_a_form_without_a_header() {
+        // A form's first box holds its title and box 1 beside its page box;
+        // the boxes under it are numbered across the rows and columns.
+        let g = plain_grid(vec![0.0, 100.0, 200.0, 300.0], vec![0.0, 20.0, 40.0, 60.0]);
+        let rows = |r: &[[&str; 3]]| -> Vec<Vec<String>> {
+            r.iter()
+                .map(|r| r.iter().map(|t| t.to_string()).collect())
+                .collect()
+        };
+        let form = rows(&[
+            [
+                "ORDER FOR SUPPLIES 1. REQUISITION NUMBER",
+                "",
+                "PAGE OF 1 34",
+            ],
+            [
+                "2. CONTRACT NO. 47Q",
+                "3. AWARD DATE",
+                "4. ORDER NUMBER 8930",
+            ],
+            [
+                "13a. THIS CONTRACT IS",
+                "b. TELEPHONE NUMBER",
+                "14. METHOD RFQ",
+            ],
+        ]);
+        assert_eq!(g.header_rows(&form, &[], &[], &[]), 0);
+        // A list numbered down its first column numbers its entries: its
+        // first row still heads it.
+        let list = rows(&[
+            ["Section", "Pages", "Owner"],
+            ["1. Introduction", "3", "Office A"],
+            ["2. Scope", "4", "Office B"],
+        ]);
+        assert_eq!(g.header_rows(&list, &[], &[], &[]), 1);
+        // Plain names over entries numbered across the columns head them.
+        let principles = rows(&[
+            ["Institutional", "Processes", "Output"],
+            ["1. Independence", "7. Sound methods", "11. Relevance"],
+            ["2. Mandate", "8. Procedures", "12. Accuracy"],
+        ]);
+        assert_eq!(g.header_rows(&principles, &[], &[], &[]), 1);
+    }
+
+    #[test]
+    fn a_page_counter_and_a_numbered_field_are_read_as_such() {
+        assert!(page_counter("PAGE OF PAGES 1 30"));
+        assert!(page_counter("Page 2 of 7"));
+        assert!(!page_counter("Page Size of the tray"));
+        assert!(!page_counter("Copybooks, 88 page, pack of 10"));
+        assert!(numbered_field("1. DATE OF ORDER"));
+        assert!(numbered_field("12. F.O.B. POINT"));
+        assert!(!numbered_field("1.5 mm"));
+        assert!(!numbered_field("2. results were"));
+        assert!(numbered_field("17a. CONTRACTOR/OFFEROR"));
+        assert!(numbered_field("13b. RATING"));
+        assert!(!numbered_field("3ab. Notes"));
+    }
+
+    /// A form's frame: a head band of its title over a notice beside a page
+    /// box (`PAGE OF PAGES` over `1 30`), a rule across under them, then
+    /// numbered fields ruled row by row. `counter` sets the page box.
+    fn form(counter: bool) -> (Grid, Vec<crate::glyph::Glyph>, Vec<Rule>) {
+        let g = plain_grid(
+            vec![20.0, 300.0, 500.0, 596.0],
+            vec![13.0, 28.0, 40.0, 60.0, 80.0, 100.0],
+        );
+        let mut glyphs = vec![
+            gly(160.0, 26.0, 120.0, "ORDER FOR SUPPLIES OR SERVICES"),
+            gly(22.0, 38.0, 200.0, "IMPORTANT: Mark all packages"),
+            gly(22.0, 55.0, 60.0, "1. DATE OF ORDER"),
+            gly(302.0, 55.0, 60.0, "2. CONTRACT NO."),
+            gly(22.0, 75.0, 60.0, "3. ORDER NO."),
+            gly(22.0, 95.0, 60.0, "5. ISSUING OFFICE"),
+        ];
+        if counter {
+            glyphs.push(gly(505.0, 24.0, 60.0, "PAGE OF PAGES"));
+            glyphs.push(gly(505.0, 37.0, 20.0, "1 30"));
+        }
+        let rules = vec![
+            h(19.0, 597.0, 13.0),
+            h(19.0, 499.0, 28.0),
+            h(19.0, 597.0, 40.0),
+        ];
+        (g, glyphs, rules)
+    }
+
+    #[test]
+    fn a_form_s_page_head_is_cut_from_its_grid() {
+        let (g, glyphs, rules) = form(true);
+        let g = cut_page_head(g, &rules, &glyphs);
+        assert_eq!(g.ys, vec![40.0, 60.0, 80.0, 100.0]);
+        // Its fields are numbered: no header.
+        let rows: Vec<Vec<String>> = g
+            .cell_texts(&glyphs)
+            .chunks(g.cols())
+            .map(|r| r.to_vec())
+            .collect();
+        assert_eq!(g.header_rows(&rows, &glyphs, &rules, &[]), 0);
+        // With no page counter in it, the band is the grid's.
+        let (g, glyphs, rules) = form(false);
+        let ys = g.ys.clone();
+        assert_eq!(cut_page_head(g, &rules, &glyphs).ys, ys);
+    }
+
     /// A receipt's grid as the page's rules read it: two rows over a filled
     /// box (the page's fields, then stay details), the box's header in the
     /// second row with them, its rows ruled inside it, and a note under it.
@@ -12261,6 +13201,121 @@ mod header_tests {
         glyphs[1] = gly(402.0, 88.0, 70.0, "Date");
         drop_field_line(&mut g, &glyphs, &rules);
         assert_eq!(g.rows(), 3);
+    }
+
+    /// An invoice's amounts under right-aligned heads wider than their
+    /// figures, the grid's edges where the figures start; `over` sets a due
+    /// date and its amount on a line over the heads, ruled off from them.
+    fn amounts(over: bool) -> (Grid, Vec<crate::glyph::Glyph>, Vec<Rule>) {
+        let mut ys = vec![370.0, 390.0, 410.0, 430.0];
+        let mut glyphs = vec![
+            gly(297.0, 384.0, 74.0, "Montant EUR HT"),
+            gly(402.0, 384.0, 58.0, "Montant TVA"),
+            gly(487.0, 384.0, 79.0, "Montant EUR TTC"),
+            gly(40.0, 402.0, 160.0, "Abonnements"),
+            gly(335.0, 402.0, 30.0, "24.99"),
+            gly(431.0, 402.0, 22.0, "5.00"),
+            gly(530.0, 402.0, 29.0, "29.99"),
+            gly(40.0, 422.0, 84.0, "Communications"),
+            gly(341.0, 422.0, 22.0, "0.00"),
+            gly(431.0, 422.0, 22.0, "0.00"),
+            gly(536.0, 422.0, 22.0, "0.00"),
+        ];
+        if over {
+            ys.insert(0, 340.0);
+            glyphs.push(gly(40.0, 348.0, 220.0, "Date limite de paiement"));
+            glyphs.push(gly(488.0, 348.0, 37.0, "29.99"));
+        }
+        let g = plain_grid(vec![40.0, 336.0, 431.0, 531.0, 566.0], ys);
+        (g, glyphs, vec![h(40.0, 555.0, 367.0)])
+    }
+
+    #[test]
+    fn right_aligned_heads_keep_their_columns() {
+        let (mut g, glyphs, _) = amounts(false);
+        fit_right_aligned_heads(&mut g, &glyphs);
+        let texts = g.cell_texts(&glyphs);
+        assert_eq!(
+            &texts[..4],
+            &["", "Montant EUR HT", "Montant TVA", "Montant EUR TTC"],
+            "{:?}",
+            g.xs
+        );
+        assert_eq!(texts[5], "24.99");
+    }
+
+    #[test]
+    fn a_line_with_a_figure_ruled_off_over_named_columns_leaves_the_grid() {
+        let (mut g, glyphs, rules) = amounts(true);
+        drop_field_line(&mut g, &glyphs, &rules);
+        assert_eq!(g.rows(), 3);
+        assert_eq!(g.ys[0], 367.3);
+        // Not where no rule parts it from the heads.
+        let (mut g, glyphs, _) = amounts(true);
+        drop_field_line(&mut g, &glyphs, &[]);
+        assert_eq!(g.rows(), 4);
+    }
+
+    /// A chart's table under `heads` (`(x, width, text)`), its figures right
+    /// of where their bars would stand, the edges where the figures start.
+    fn chart_table(heads: &[(f64, f64, &str)]) -> (Grid, Vec<crate::glyph::Glyph>) {
+        let g = plain_grid(
+            vec![202.0, 266.0, 331.0, 398.0, 465.0, 484.0],
+            vec![174.0, 215.0, 233.0, 250.0],
+        );
+        let mut glyphs: Vec<crate::glyph::Glyph> =
+            heads.iter().map(|&(x, w, t)| gly(x, 206.0, w, t)).collect();
+        for (r, y) in [(0, 226.0), (1, 243.0)] {
+            for (k, x) in [200.0, 265.0, 330.0, 397.0, 462.0].iter().enumerate() {
+                glyphs.push(gly(
+                    *x,
+                    y,
+                    13.0,
+                    ["-0.8", "-4.3", "1.0", "-2.5", "0.9"][(k + r) % 5],
+                ));
+            }
+        }
+        (g, glyphs)
+    }
+
+    #[test]
+    fn amount_units_stand_with_figures() {
+        assert!(is_amount_unit("£m") && is_amount_unit("($000)") && is_amount_unit("€bn"));
+        assert!(is_amount_unit("%"));
+        assert!(!is_amount_unit("£") && !is_amount_unit("Sales") && !is_amount_unit("$m2"));
+    }
+
+    #[test]
+    fn heads_over_their_figures_set_the_columns_edges() {
+        // Each head centred over its bar and figure, so left of its column's
+        // edge, set where the figures start.
+        let (mut g, glyphs) = chart_table(&[
+            (187.0, 21.0, "World"),
+            (244.0, 33.0, "Low"),
+            (311.0, 33.0, "Lower"),
+            (378.0, 33.0, "Upper"),
+            (445.0, 33.0, "High"),
+        ]);
+        fit_heads_to_figures(&mut g, &glyphs);
+        let texts = g.cell_texts(&glyphs);
+        assert_eq!(
+            &texts[..5],
+            &["World", "Low", "Lower", "Upper", "High"],
+            "{:?}",
+            g.xs
+        );
+        assert_eq!(&texts[5..10], &["-0.8", "-4.3", "1.0", "-2.5", "0.9"]);
+        // Heads set within their columns' edges: nothing moves.
+        let (mut g, glyphs) = chart_table(&[
+            (203.0, 18.0, "World"),
+            (267.0, 18.0, "Low"),
+            (332.0, 18.0, "Lower"),
+            (399.0, 18.0, "Upper"),
+            (466.0, 17.0, "High"),
+        ]);
+        let xs = g.xs.clone();
+        fit_heads_to_figures(&mut g, &glyphs);
+        assert_eq!(g.xs, xs);
     }
 }
 
@@ -13309,6 +14364,89 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_header_is_set_apart_from_its_rows_past_a_band() {
+        // A labour table's labels, bold, over a contract year's band, bold
+        // too and its words in two cells, over plain rows of figures: the
+        // labels head the rows, set apart from the first row of figures.
+        let g = grid(
+            &[0.0, 100.0, 200.0, 300.0, 400.0],
+            &[0.0, 20.0, 40.0, 60.0, 80.0],
+        );
+        let rows: Vec<Vec<String>> = [
+            ["Labor Category", "Hours", "Rate", "Amount"],
+            ["MAS Contract Year 4", "(Base period)", "", ""],
+            ["Expert 8", "0", "$407.51", "$0.00"],
+            ["Expert 7", "14", "$378.34", "$5,297.00"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        let mut gl = Vec::new();
+        for (r, row) in rows.iter().enumerate() {
+            let weight = Some(if r < 2 { 700 } else { 400 });
+            for (c, t) in row.iter().enumerate() {
+                if !t.is_empty() {
+                    gl.push(word(c as f64 * 100.0 + 5.0, r, t, weight));
+                }
+            }
+        }
+        assert!(g.heads_its_rows(1, &rows, &gl, &[], &[]));
+        // A first row set as the rows under it are, words over words in
+        // one weight, earns nothing past the band either: a list's first
+        // entry is no header.
+        let names: Vec<Vec<String>> = [
+            ["Alder", "Birch", "Cedar", "Dogwood"],
+            ["Group one", "(native)", "", ""],
+            ["Elm", "Fir", "Ginkgo", "Hazel"],
+            ["Ironwood", "Juniper", "Larch", "Maple"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert!(!g.heads_its_rows(1, &names, &[], &[], &[]));
+    }
+
+    #[test]
+    fn a_cells_text_leaves_out_blank_glyphs_under_it() {
+        // A date in a cell, glyph by glyph, and three spaces of the
+        // description line under it the cell took in: read with them, the
+        // spaces' gaps parted the date (`26.0 7.2012`).
+        let ch = |x: f64, y: f64, t: &str, inked: bool| crate::glyph::Glyph {
+            text: t.into(),
+            bbox: inked.then_some(crate::geom::BBox {
+                x0: x,
+                y0: y - 8.6,
+                x1: x + 6.0,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x, y),
+            rotation_deg: 0.0,
+            font_size: if inked { 12.0 } else { 8.0 },
+            weight: Some(400),
+            italic: false,
+            advance: Some(if t == "." { 3.33 } else { 6.67 }),
+            draw_index: 0,
+            ocr: None,
+        };
+        let mut glyphs = Vec::new();
+        let mut x = 126.75;
+        for c in "26.07.2012".chars() {
+            let t = c.to_string();
+            glyphs.push(ch(x, 579.5, &t, true));
+            x += if c == '.' { 3.33 } else { 6.67 };
+        }
+        for bx in [140.14, 145.06, 168.17] {
+            glyphs.push(ch(bx, 587.7, " ", false));
+        }
+        let layout = TableLayout {
+            cells: vec![(0..glyphs.len()).collect()],
+            ..TableLayout::default()
+        };
+        assert_eq!(layout.texts(&glyphs, 1), ["26.07.2012"]);
+    }
+
     /// A word as one glyph run at `x`, 5pt a character, on row `r`.
     fn word(x: f64, r: usize, text: &str, weight: Option<u32>) -> crate::glyph::Glyph {
         let y = r as f64 * 20.0;
@@ -13469,6 +14607,94 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_drawn_down_through_a_cell_parts_its_text() {
+        // Two boxes side by side in one cell of a form, a rule between them
+        // for their height, a line under both.
+        let mut gl = vec![
+            word(5.0, 0, "Ordered", None),
+            word(45.0, 0, "on", None),
+            word(60.0, 0, "behalf", None),
+            word(160.0, 0, "LONDON", None),
+            word(195.0, 0, "102", None),
+            word(215.0, 0, "PETTY", None),
+            word(5.0, 1, "State", None),
+            word(35.0, 1, "for", None),
+            word(55.0, 1, "Justice:", None),
+            word(160.0, 1, "Petty", None),
+            word(190.0, 1, "France", None),
+            word(5.0, 2, "Tel:", None),
+            word(30.0, 2, "Fax:", None),
+            word(160.0, 2, "Email", None),
+        ];
+        for (i, g) in gl.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: crate::geom::BBox {
+                x0: 0.0,
+                y0: -1.0,
+                x1: 300.0,
+                y1: 55.0,
+            },
+            xs: vec![0.0, 300.0],
+            ys: vec![-1.0, 55.0],
+        };
+        let rule = |x: f64, y0: f64, y1: f64| Rule {
+            bbox: crate::geom::BBox {
+                x0: x,
+                y0,
+                x1: x + 0.5,
+                y1,
+            },
+            orientation: Orientation::Vertical,
+            page: 0,
+        };
+        // Read as one, the boxes' lines take turns.
+        let whole = grid.cell_texts(&gl)[0].clone();
+        assert!(
+            whole.starts_with("Ordered on behalf LONDON 102 PETTY"),
+            "{whole}"
+        );
+        // Parted: each box whole, the left first, then the line under them.
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(150.0, -1.0, 32.0)])[0],
+            "Ordered on behalf State for Justice: LONDON 102 PETTY Petty France Tel: Fax: Email"
+        );
+        // Nor does a stroke drawn through a word: `behalf` runs 60 to 90.
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(75.0, -1.0, 32.0)])[0],
+            whole
+        );
+        // A small table set in the cell, its columns of values parted by a
+        // rule, reads across its rows.
+        let mut small = vec![
+            word(5.0, 0, "DI1", None),
+            word(160.0, 0, "Stop", None),
+            word(5.0, 1, "0", None),
+            word(160.0, 1, "Start", None),
+        ];
+        for (i, g) in small.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        assert_eq!(
+            grid.cell_texts_parted(&small, &[rule(150.0, -1.0, 32.0)]),
+            grid.cell_texts(&small)
+        );
+        // A rule on the cell's edge is its column's, and one with text on
+        // one side of it only parts nothing.
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(1.0, -1.0, 55.0)])[0],
+            whole
+        );
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(250.0, -1.0, 55.0)])[0],
+            whole
+        );
+    }
+
+    #[test]
     fn a_word_across_the_grids_edge_is_in_the_cell_or_the_prose() {
         // Letters 5pt apart, one pen run: a word.
         let letters = |x: f64, text: &str| -> Vec<crate::glyph::Glyph> {
@@ -13504,6 +14730,11 @@ mod tests {
         let w = letters(92.0, "warranty");
         assert!(grid.takes(&w).iter().all(|&t| t));
         assert_eq!(grid.cell_texts(&w)[0], "warranty");
+        // Read across the row, as a title or a spanning row is, the word is
+        // whole too: its first letters, taken, are read.
+        assert_eq!(grid.row_text(&w, 0), "warranty");
+        assert_eq!(grid.row_glyphs(&w, 0).len(), w.len());
+        assert_eq!(grid.row_text(&see, 0), "");
     }
 
     /// A spec sheet's fields, labels and values in one face, every other

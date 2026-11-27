@@ -167,21 +167,13 @@ fn table_title(
     // between columns (`Hex Cap Screws` over four of them). Labels set
     // apart, each within its column, are the columns' own (`Area |
     // Competence` under one ruled cell).
-    let row_lines = || {
-        let inside: Vec<crate::glyph::Glyph> = page
-            .glyphs
-            .iter()
-            .filter(|gl| {
-                gl.bbox.is_some() && !gl.text.trim().is_empty() && gl.is_horizontal() && {
-                    let (x, y) = gl.center();
-                    g.cell_at(x, y).is_some_and(|(r, _)| r == 0)
-                }
-            })
-            .cloned()
-            .collect();
-        crate::line::assemble(&inside)
+    // The row's glyphs are those its cells read, its words whole: the grid
+    // takes them from the page, and the title is all that reads them.
+    let lines = if across {
+        crate::line::assemble(&g.row_glyphs(&page.glyphs, 0))
+    } else {
+        Vec::new()
     };
-    let lines = if across { row_lines() } else { Vec::new() };
     let runs_across = lines.iter().any(|l| {
         g.xs[1..g.xs.len() - 1]
             .iter()
@@ -913,6 +905,12 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
                 .all(|(x, y)| x.split_whitespace().eq(y.split_whitespace()))
     };
     let mut last = None;
+    // Each linked part's table's own header rows, as its first part sets
+    // them: a part carried on from a part with no header of its own (a
+    // page of rows) is headed by those, and a later page repeating them
+    // repeats the table's header.
+    let mut table_heads: std::collections::HashMap<String, Vec<Vec<String>>> =
+        std::collections::HashMap::new();
     for i in 0..elements.len() {
         if is_splice_anchor(&elements[i]) {
             continue;
@@ -938,7 +936,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         let (Some(a), Some(b)) = (frame(prev), frame(next)) else {
             continue;
         };
-        let (Some(head), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
+        let (Some(prev_cells), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
             continue;
         };
         let aligned = a.xs.len() == b.xs.len()
@@ -952,10 +950,16 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         // A second part that is the first one over again, every row, is
         // the next copy of a form printed box after box down the pages, not
         // the rest of the first: no table carries on by repeating its body.
-        if head.len() == rows.len() && head.iter().zip(rows).all(|(a, b)| same(a, b)) {
+        if prev_cells.len() == rows.len() && prev_cells.iter().zip(rows).all(|(a, b)| same(a, b)) {
             continue;
         }
-        let n = prev.header_rows.unwrap_or(0).min(head.len());
+        let own = prev.header_rows.unwrap_or(0).min(prev_cells.len());
+        let head: Vec<Vec<String>> = if own > 0 {
+            prev_cells[..own].to_vec()
+        } else {
+            table_heads.get(&prev.id).cloned().unwrap_or_default()
+        };
+        let n = head.len();
         let repeats = n > 0 && rows.len() > n && (0..n).all(|r| same(&head[r], &rows[r]));
         // The header repeated with a cell of it read on into the label under
         // it: the stub's head drawn open into the first group's cell
@@ -1026,6 +1030,34 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         } else {
             0
         });
+        // A row further down that sets the table's header again (a new
+        // period's label row under its band, `Labor Category | Hours | …`)
+        // names the columns for the rows under it.
+        if n > 0 {
+            let start = next.header_rows.unwrap_or(0);
+            let subs = next.sub_headers.clone().unwrap_or_default();
+            let again: Vec<usize> = next
+                .cells
+                .as_ref()
+                .map(|cells| {
+                    (start..cells.len())
+                        .filter(|r| !subs.contains(r))
+                        .filter(|&r| {
+                            cells[r].iter().filter(|t| !t.trim().is_empty()).count() >= 2
+                                && same(&head[n - 1], &cells[r])
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !again.is_empty() {
+                let mut restated = next.restated_headers.clone().unwrap_or_default();
+                restated.extend(again);
+                restated.sort_unstable();
+                restated.dedup();
+                next.restated_headers = Some(restated);
+            }
+            table_heads.insert(next.id.clone(), head);
+        }
     }
 }
 
@@ -1873,6 +1905,33 @@ const RULED_TABLE_FILL: f64 = 0.5;
 /// How far, as a share of the page's height, a block may stand from a
 /// running line's row and still be on it: a baseline's wobble between pages.
 const FURNITURE_ROW_SLACK: f64 = 0.005;
+
+/// The running strings of `scrub` a box `at` (`[x0, y0, x1, y1]`, as shares
+/// of the page's width and height) reaches: those standing, on a page they
+/// run on, at a place (`places`, by [`furniture_key`]) that overlaps the
+/// box, within [`FURNITURE_ROW_SLACK`]. A string with no place known is
+/// kept. A form's first page sets its order number in a box of its own,
+/// the number every later page carries as its head beside that box's row:
+/// the box is no place of the head's.
+fn furniture_reaching(
+    scrub: &[(String, bool)],
+    places: &std::collections::HashMap<String, Vec<[f64; 4]>>,
+    at: [f64; 4],
+) -> Vec<(String, bool)> {
+    let slack = FURNITURE_ROW_SLACK;
+    let [x0, y0, x1, y1] = at;
+    scrub
+        .iter()
+        .filter(|(t, vary)| {
+            places.get(&furniture_key(t, *vary)).is_none_or(|places| {
+                places.iter().any(|&[a, b, c, d]| {
+                    a < x1 + slack && x0 < c + slack && b < y1 + slack && y0 < d + slack
+                })
+            })
+        })
+        .cloned()
+        .collect()
+}
 
 /// Least share of a page's text lying on its pictures for the page to be
 /// pictures and a caption: all but a caption's or a title's line or two.
@@ -3614,6 +3673,116 @@ fn lists_its_rows(g: &Grid, glyphs: &[Glyph]) -> bool {
     bulleted(&cells) || (g.rows() >= 3 && bulleted(&cells[2..]))
 }
 
+/// How far left of its column a bullet may hang, in its own font size: a
+/// bullet stands about an em before its item's text, and the rest leaves
+/// room for a wider indent.
+const HANGING_BULLET_EMS: f64 = 2.0;
+
+/// A grid read from alignment that is bulleted lists set side by side, a
+/// list to a column. Where the lists' lines fall level, their items line up
+/// into rows, the gap between the lists reading as a gutter. Each column's
+/// cells open on a bullet, or carry on the item above in lower case, and
+/// each column holds two bullets or more. Read as prose, the page's columns
+/// part the lists, each item whole under its own heading.
+///
+/// A bullet may hang just left of its column, its centre outside the grid's
+/// edge, so no cell reads it; it is looked for beside the cell, on the
+/// cell's row, within [`HANGING_BULLET_EMS`].
+///
+/// Bullets only, as in [`lists_its_rows`]. A row of other text, a head over
+/// a column of points, keeps the grid a table; so do rules across it above
+/// and below ([`in_a_ruled_row`]): it is a ruled table's row whose cells
+/// hold points, read in part.
+fn lists_side_by_side(g: &Grid, glyphs: &[Glyph], rules: &[crate::rule::Rule]) -> bool {
+    if in_a_ruled_row(g, rules) {
+        return false;
+    }
+    let cols = g.cols();
+    let cells = g.cell_texts(glyphs);
+    let hangs = |r: usize, c: usize| {
+        let (edge, top, foot) = (g.xs[c], g.ys[r], g.ys[r + 1]);
+        glyphs.iter().any(|gl| {
+            let mut chars = gl.text.chars();
+            let bullet = chars.next().is_some_and(block::is_bullet) && chars.next().is_none();
+            bullet
+                && gl.bbox.is_some_and(|b| {
+                    let (x, y) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                    x < edge
+                        && x > edge - HANGING_BULLET_EMS * f64::from(gl.font_size)
+                        && (top..foot).contains(&y)
+                })
+        })
+    };
+    (0..cols).all(|c| {
+        let mut bullets = 0;
+        let mut in_item = false;
+        for r in 0..g.rows() {
+            let t = cells[r * cols + c].trim();
+            let first = t.chars().next();
+            if t.is_empty() {
+                in_item = false;
+            } else if first.is_some_and(block::is_bullet) || hangs(r, c) {
+                bullets += 1;
+                in_item = true;
+            } else if !(in_item && first.is_some_and(char::is_lowercase)) {
+                return false;
+            }
+        }
+        bullets >= 2
+    })
+}
+
+/// Share of a grid's width a rule must draw across to rule it: a table's
+/// rules are often drawn a cell at a time, meeting at the column edges.
+const RULED_ROW_SHARE: f64 = 0.9;
+
+/// Whether `g` lies in a ruled row: a rule across it above and another
+/// below, each within the grid's own height of it. The rules that close a
+/// table's row lie by its lines; one further off bounds something else.
+/// Rules drawn a cell at a time count together when they stand within a
+/// quarter of the grid's shortest row of one another.
+fn in_a_ruled_row(g: &Grid, rules: &[crate::rule::Rule]) -> bool {
+    use crate::rule::Orientation;
+    let b = g.bbox;
+    let (width, height) = (b.x1 - b.x0, b.y1 - b.y0);
+    if width <= 0.0 || height <= 0.0 {
+        return false;
+    }
+    let row = (0..g.rows())
+        .map(|r| g.ys[r + 1] - g.ys[r])
+        .fold(f64::INFINITY, f64::min);
+    let level = 0.25 * row;
+    let flat: Vec<&crate::rule::Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    let across = |at: f64| {
+        let mut spans: Vec<(f64, f64)> = flat
+            .iter()
+            .filter(|r| (r.axis_pos() - at).abs() <= level)
+            .map(|r| (r.bbox.x0.max(b.x0), r.bbox.x1.min(b.x1)))
+            .filter(|(x0, x1)| x1 > x0)
+            .collect();
+        spans.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let (mut got, mut reach) = (0.0, b.x0);
+        for (x0, x1) in spans {
+            let x0 = x0.max(reach);
+            if x1 > x0 {
+                got += x1 - x0;
+                reach = x1;
+            }
+        }
+        got >= RULED_ROW_SHARE * width
+    };
+    let ruled = |near: &dyn Fn(f64) -> bool| {
+        flat.iter()
+            .map(|r| r.axis_pos())
+            .any(|y| near(y) && across(y))
+    };
+    ruled(&|y| y <= b.y0 + level && y >= b.y0 - height)
+        && ruled(&|y| y >= b.y1 - level && y <= b.y1 + height)
+}
+
 /// Run the pipeline over an already-extracted document.
 /// Configuration for [`analyze`]. The library API: no environment variables.
 /// (The `fdoc` CLI maps its `FDOC_*` variables onto this struct.)
@@ -5066,6 +5235,145 @@ fn side_of(
     (cut.rows() >= 2 && held >= 2 && ruled).then_some(cut)
 }
 
+/// Fewest items a column of aligned rows holds to be a list ([`list_boxes`]):
+/// one bullet is an item, not a list.
+const LIST_COLUMN_ITEMS: usize = 2;
+
+/// Farthest, in the list's own font size, from one line's foot to the top
+/// of the next that carries its item on past the rows alignment read: a
+/// wrapped line's leading, short of a paragraph's gap.
+const LIST_TAIL_LEADING: f64 = 1.0;
+
+/// The boxes of bulleted lists set side by side, a list to each column of a
+/// run of rows alignment lined up but refused as a table
+/// ([`table::detect_aligned_with_refused`]).
+///
+/// Where two lists' lines fall level, the page has no gutter between them
+/// where its text runs on below them in one column, and the lists' lines
+/// were read across both by turns: a flyer's `What is the ACS?` items
+/// between its `ACS Webpage` items, each item's wrapped line parted from it.
+/// Given each list's box, the page reads them as boxes side by side, each
+/// whole, left to right, each under its own head.
+///
+/// Every column must be a bulleted list: [`LIST_COLUMN_ITEMS`] lines or
+/// more open on a bullet, every other line its head (its first) or set in
+/// past the bullets. A column's bullets may hang left of it: columns are
+/// parted at the middle of each gutter, and the outer ones run on outward.
+/// A list's last item may wrap past the run's last row: lines set where its
+/// items' wrapped lines are, a leading apart, carry it on.
+fn list_boxes(refused: &[Grid], glyphs: &[Glyph]) -> Vec<crate::geom::BBox> {
+    let mut out = Vec::new();
+    for g in refused.iter().filter(|g| g.cols() >= 2 && g.rows() >= 2) {
+        let cells = g.glyph_cells(glyphs);
+        let cols = g.cols();
+        // Each column's ink, from the glyphs its cells read.
+        let mut ink: Vec<(f64, f64)> = vec![(f64::MAX, f64::MIN); cols];
+        for (gl, home) in glyphs.iter().zip(&cells) {
+            if let (Some(i), Some(b)) = (home, gl.bbox) {
+                let e = &mut ink[i % cols];
+                *e = (e.0.min(b.x0), e.1.max(b.x1));
+            }
+        }
+        if ink.iter().any(|e| e.0 > e.1) {
+            continue;
+        }
+        let parts: Vec<(f64, f64)> = (0..cols)
+            .map(|c| {
+                let lo = if c == 0 {
+                    f64::MIN
+                } else {
+                    (ink[c - 1].1 + ink[c].0) / 2.0
+                };
+                let hi = if c + 1 == cols {
+                    f64::MAX
+                } else {
+                    (ink[c].1 + ink[c + 1].0) / 2.0
+                };
+                (lo, hi)
+            })
+            .collect();
+        let boxes: Vec<Option<crate::geom::BBox>> = parts
+            .iter()
+            .map(|&side| list_column(glyphs, side, (g.bbox.y0, g.bbox.y1)))
+            .collect();
+        if boxes.iter().all(Option::is_some) {
+            out.extend(boxes.into_iter().flatten());
+        }
+    }
+    out
+}
+
+/// The box of the bulleted list set between `x0` and `x1` over the rows
+/// `band`, its last item carried on below them; see [`list_boxes`].
+fn list_column(
+    glyphs: &[Glyph],
+    (x0, x1): (f64, f64),
+    band: (f64, f64),
+) -> Option<crate::geom::BBox> {
+    let at = |lo: f64, hi: f64| -> Vec<crate::line::Line> {
+        let side: Vec<Glyph> = glyphs
+            .iter()
+            .filter(|q| {
+                q.bbox.is_some_and(|b| {
+                    let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                    cx >= x0 && cx < x1 && cy >= lo && cy <= hi
+                })
+            })
+            .cloned()
+            .collect();
+        crate::line::assemble(&side)
+    };
+    let lines = at(band.0 - 1.0, band.1 + 1.0);
+    let opens = |l: &crate::line::Line| {
+        l.text
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(block::is_bullet)
+    };
+    let bullets: Vec<f64> = lines
+        .iter()
+        .filter(|l| opens(l))
+        .map(|l| l.bbox.x0)
+        .collect();
+    if bullets.len() < LIST_COLUMN_ITEMS {
+        return None;
+    }
+    let edge = bullets.iter().copied().fold(f64::MAX, f64::min);
+    let carried = |l: &crate::line::Line| l.bbox.x0 > edge + 1.0;
+    let top = lines.iter().map(|l| l.bbox.y0).fold(f64::MAX, f64::min);
+    if !lines
+        .iter()
+        .all(|l| opens(l) || carried(l) || l.bbox.y0 <= top)
+    {
+        return None;
+    }
+    let mut kept: Vec<crate::line::Line> = lines;
+    kept.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+    // The wrapped lines' indent: where an item's text carries on.
+    let indents: Vec<f64> = kept
+        .iter()
+        .filter(|l| !opens(l) && carried(l))
+        .map(|l| l.bbox.x0)
+        .collect();
+    let fs = kept
+        .iter()
+        .map(|l| l.font_size as f64)
+        .fold(0.0, f64::max)
+        .max(1.0);
+    let mut foot = kept.last().map_or(band.1, |l| l.bbox.y1);
+    let mut tail = at(band.1 + 1.0, band.1 + 4.0 * fs);
+    tail.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+    for l in tail {
+        let wraps = indents.iter().any(|x| (l.bbox.x0 - x).abs() <= 2.0);
+        if l.bbox.y0 > foot - 1.0 && l.bbox.y0 - foot <= LIST_TAIL_LEADING * fs && wraps {
+            foot = l.bbox.y1;
+            kept.push(l);
+        }
+    }
+    kept.iter().map(|l| l.bbox).reduce(|a, b| a.union(&b))
+}
+
 /// Alignment's tables, each read across the page's gutter between two of
 /// its columns of text read again on each side of the gutter alone.
 fn aligned_by_columns<'a>(
@@ -5333,9 +5641,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let col_lines = || -> &[table::TextRun] {
             page_runs.get_or_init(|| crate::textgrid::runs(text_lines()))
         };
-        let page_aligned = timed(&mut timings.tables, || {
-            let found = table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index);
-            aligned_by_columns(found, &p.glyphs, p, col_lines)
+        let (page_aligned, side_lists) = timed(&mut timings.tables, || {
+            let (found, refused) =
+                table::detect_aligned_with_refused(&p.glyphs, &p.rules, &p.fills, p.index);
+            (
+                aligned_by_columns(found, &p.glyphs, p, col_lines),
+                list_boxes(&refused, &p.glyphs),
+            )
         });
         // Alignment is read again below from the glyphs outside the grids
         // (`glyphs_outside_grids`, which keeps them in order). Where no grid
@@ -5821,6 +6133,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 && !table::reads_as_prose(g, &prose)
                 && !table::walled_in(&g.bbox, &walls)
                 && !lists_its_rows(g, &prose)
+                && !lists_side_by_side(g, &prose, &p.rules)
         });
         // Field lists set without rules, found between the page's gutters
         // where a row across the page holds more than a label and its
@@ -6002,7 +6315,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let pictures: Vec<crate::geom::BBox> = p.images.iter().map(|im| im.bbox).collect();
         // Drawn boxes, outlined or filled: a stretch's lines read box by
         // box where they stand in boxes side by side.
-        let frames: Vec<crate::geom::BBox> = p.fills.iter().map(|f| f.bbox).collect();
+        // Bulleted lists set side by side ([`list_boxes`]) are read as boxes
+        // side by side are, each list whole.
+        let frames: Vec<crate::geom::BBox> = p
+            .fills
+            .iter()
+            .map(|f| f.bbox)
+            .chain(side_lists.iter().copied())
+            .collect();
         // Boxes drawn to be seen: shaded, not white, or outlined, and not
         // the page's background nor a tint laid under most of it.
         let panels: Vec<crate::geom::BBox> = p
@@ -6322,18 +6642,32 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // running head parted into its groups (`July 26, 2023`, `Chair Powell's
     // Press Conference`) is set again in the transcript's title under it.
     let mut furniture_rows: std::collections::HashMap<String, Vec<(f64, f64)>> = Default::default();
+    // And the places it stands at, its line's box as shares of the page's
+    // width and height: a table's cell takes it in only where the cell
+    // reaches one of them.
+    let mut furniture_places: std::collections::HashMap<String, Vec<[f64; 4]>> = Default::default();
     for (pi, page_marks) in marks.iter().enumerate() {
         let (lines, height) = &flat_lines[pi];
         if *height <= 0.0 {
             continue;
         }
+        let width = raw.pages[pi].width;
         for (li, kind) in page_marks.iter() {
             let l = &lines[*li];
+            let key = furniture_key(
+                l.text.trim(),
+                matches!(kind, furniture::Furniture::PageNumber),
+            );
+            if width > 0.0 {
+                furniture_places.entry(key.clone()).or_default().push([
+                    l.bbox.x0 / width,
+                    l.bbox.y0 / height,
+                    l.bbox.x1 / width,
+                    l.bbox.y1 / height,
+                ]);
+            }
             furniture_rows
-                .entry(furniture_key(
-                    l.text.trim(),
-                    matches!(kind, furniture::Furniture::PageNumber),
-                ))
+                .entry(key)
                 .or_default()
                 .push((l.bbox.y0 / height, l.bbox.y1 / height));
         }
@@ -6894,6 +7228,34 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             } else {
                 scrub_texts.clone()
             };
+            // And into a cell only where the cell reaches a place it stands
+            // at on the pages it runs on: a form's first page sets its
+            // order number in a box of its own, the number that heads every
+            // later page beside the box's row. Read from the cells' edges;
+            // a grid read by its layout scrubs as a whole.
+            let width = raw.pages[pi].width;
+            let cell_scrub = |g: &crate::table::Grid,
+                              rs: std::ops::Range<usize>,
+                              cs: std::ops::Range<usize>|
+             -> Vec<(String, bool)> {
+                if g.layout.is_some()
+                    || height <= 0.0
+                    || width <= 0.0
+                    || rs.end > g.rows()
+                    || cs.end > g.cols()
+                    || rs.is_empty()
+                    || cs.is_empty()
+                {
+                    return scrub_texts.clone();
+                }
+                let at = [
+                    g.xs[cs.start] / width,
+                    g.ys[rs.start] / height,
+                    g.xs[cs.end] / width,
+                    g.ys[rs.end] / height,
+                ];
+                furniture_reaching(&scrub_texts, &furniture_places, at)
+            };
             // A title band over the table is the table's title, not its
             // header: it is read out as text above the table, and the table
             // is read from the row under it.
@@ -6983,13 +7345,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             };
             let flat: Vec<String> = match g.layout.as_deref() {
                 Some(lay) => lay.texts(&raw.pages[pi].glyphs, g.cols()),
-                None => g.cell_texts(cell_glyphs),
+                None => g.cell_texts_parted(cell_glyphs, &raw.pages[pi].rules),
             }
             .into_iter()
             .enumerate()
             .map(|(i, c)| {
                 unfolio(
-                    furniture::scrub_cell(&c, &scrub_texts),
+                    furniture::scrub_cell(
+                        &c,
+                        &cell_scrub(g, i / cols..i / cols + 1, i % cols..i % cols + 1),
+                    ),
                     i / cols,
                     i / cols + 1,
                 )
@@ -7186,7 +7551,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .filter_map(|&r| r.checked_sub(shift))
             {
                 rows[r][0] = unfolio(
-                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &scrub_texts),
+                    furniture::scrub_cell(
+                        &g.row_text(&raw.pages[pi].glyphs, r),
+                        &cell_scrub(g, r..r + 1, 0..cols),
+                    ),
                     r,
                     r + 1,
                 );
@@ -7316,7 +7684,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         .collect();
                     let text =
                         match g.region_text(&raw.pages[pi].glyphs, &merges, r..r_end, c..c_end) {
-                            Some(t) => unfolio(furniture::scrub_cell(&t, &scrub_texts), r, r_end),
+                            Some(t) => {
+                                // A rule drawn down through the block parts
+                                // its text into the boxes either side.
+                                let t = g
+                                    .region_parted(
+                                        &raw.pages[pi].glyphs,
+                                        &raw.pages[pi].rules,
+                                        r..r_end,
+                                        c..c_end,
+                                    )
+                                    .unwrap_or(t);
+                                unfolio(
+                                    furniture::scrub_cell(&t, &cell_scrub(g, r..r_end, c..c_end)),
+                                    r,
+                                    r_end,
+                                )
+                            }
                             None if held.len() == 1 => rows[held[0].0][held[0].1].clone(),
                             None => {
                                 // A block across rows and columns that reads
@@ -7383,7 +7767,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                         };
                                         row[c..ce].iter_mut().for_each(String::clear);
                                         row[c] = unfolio(
-                                            furniture::scrub_cell(&t, &scrub_texts),
+                                            furniture::scrub_cell(
+                                                &t,
+                                                &cell_scrub(g, i..i + 1, c..ce),
+                                            ),
                                             i,
                                             i + 1,
                                         );
@@ -7451,7 +7838,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                         match joined {
                                             Some((p, t)) => {
                                                 rows[i][p] = unfolio(
-                                                    furniture::scrub_cell(&t, &scrub_texts),
+                                                    furniture::scrub_cell(
+                                                        &t,
+                                                        &cell_scrub(g, i..i + 1, p..k + 1),
+                                                    ),
                                                     i,
                                                     i + 1,
                                                 );
@@ -7973,6 +8363,34 @@ fn furniture_key(text: &str, digits_vary: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_running_string_leaves_only_cells_at_its_place() {
+        let key = furniture_key("ORDER 0019", false);
+        let scrub = vec![
+            ("ORDER 0019".to_string(), false),
+            ("Draft".to_string(), false),
+        ];
+        // The head runs at the page's top right on its later pages.
+        let places: std::collections::HashMap<String, Vec<[f64; 4]>> =
+            [(key, vec![[0.72, 0.076, 0.88, 0.095]])]
+                .into_iter()
+                .collect();
+        let texts = |v: Vec<(String, bool)>| v.into_iter().map(|(t, _)| t).collect::<Vec<_>>();
+        // A box on the head's row, left of it, keeps the number; a string
+        // with no place known is scrubbed wherever it is.
+        let box_on_row = [0.40, 0.060, 0.66, 0.094];
+        assert_eq!(
+            texts(furniture_reaching(&scrub, &places, box_on_row)),
+            ["Draft"]
+        );
+        // A cell where the head stands takes it in.
+        let under_head = [0.70, 0.060, 0.95, 0.094];
+        assert_eq!(
+            texts(furniture_reaching(&scrub, &places, under_head)),
+            ["ORDER 0019", "Draft"]
+        );
+    }
+
     use super::*;
     use crate::geom::BBox;
 
@@ -8864,6 +9282,200 @@ mod tests {
         // of the table.
         let (g, page) = table(60.0);
         assert!(table_title(&g, &page, &[], false).is_none());
+    }
+
+    #[test]
+    fn a_title_set_out_past_the_grids_edge_reads_whole() {
+        // A head line read across the grid's first row, its first word set
+        // out 5 pt past the grid's left edge: `D` centred outside it, the
+        // word's centre of mass inside.
+        let glyph = |x0: f64, w: f64, y: f64, t: &str| Glyph {
+            text: t.into(),
+            bbox: Some(BBox {
+                x0,
+                y0: y - 7.0,
+                x1: x0 + w,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x0, y),
+            rotation_deg: 0.0,
+            font_size: 8.0,
+            weight: None,
+            italic: false,
+            advance: Some(w),
+            draw_index: 0,
+            ocr: None,
+        };
+        let mut glyphs = Vec::new();
+        let mut x = 95.0;
+        for w in ["DECIMAL", "MILLIMETERS", "FRACTION"] {
+            for c in w.chars() {
+                glyphs.push(glyph(x, 5.0, 10.0, &c.to_string()));
+                x += 5.0;
+            }
+            x += 4.0;
+        }
+        for (r, row) in [
+            ["1/64", ".01563", ".3969"],
+            ["1/32", ".03125", ".7938"],
+            ["3/64", ".04688", "1.1906"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 25.0 + r as f64 * 15.0;
+            for (c, t) in row.iter().enumerate() {
+                glyphs.push(glyph(110.0 + c as f64 * 100.0, 20.0, y, t));
+            }
+        }
+        for (i, g) in glyphs.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 100.0,
+                y0: 0.0,
+                x1: 400.0,
+                y1: 60.0,
+            },
+            xs: vec![100.0, 200.0, 300.0, 400.0],
+            ys: vec![0.0, 15.0, 30.0, 45.0, 60.0],
+        };
+        let page = crate::extract::Page {
+            index: 0,
+            glyphs,
+            images: Vec::new(),
+            rules: Vec::new(),
+            fills: Vec::new(),
+            dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
+            width: 600.0,
+            height: 800.0,
+            rotation: 0,
+            ocr: None,
+            routing: None,
+            warnings: Vec::new(),
+        };
+        // The grid takes the `D` from the page with its word: the title
+        // reads it, or no element does.
+        assert!(grid.takes(&page.glyphs)[0]);
+        let titled = table_title(&grid, &page, &[], true);
+        assert_eq!(
+            titled.map(|(t, _)| t).as_deref(),
+            Some("DECIMAL MILLIMETERS FRACTION")
+        );
+    }
+
+    #[test]
+    fn spaces_drawn_between_a_rows_labels_do_not_run_it_across() {
+        use crate::rule::{Orientation, Rule};
+        // A header row ruled open across (its verticals start under it),
+        // each label in its own column, the text drawing a space after
+        // each: the spaces have no ink, and the labels are the columns'.
+        let glyph = |x0: f64, y: f64, t: &str| {
+            let w = if t == " " {
+                2.5
+            } else {
+                5.0 * t.chars().count() as f64
+            };
+            Glyph {
+                text: t.into(),
+                bbox: (t != " ").then_some(BBox {
+                    x0,
+                    y0: y - 7.0,
+                    x1: x0 + w,
+                    y1: y,
+                }),
+                page: 0,
+                origin: (x0, y),
+                rotation_deg: 0.0,
+                font_size: 10.0,
+                weight: None,
+                italic: false,
+                advance: Some(w),
+                draw_index: 0,
+                ocr: None,
+            }
+        };
+        let mut glyphs = Vec::new();
+        for (x, t) in [
+            (105.0, "Quota"),
+            (135.0, "Measures"),
+            (210.0, "0-50%"),
+            (310.0, "51%-75%"),
+        ] {
+            glyphs.push(glyph(x, 10.0, t));
+            glyphs.push(glyph(x + 5.0 * t.chars().count() as f64, 10.0, " "));
+        }
+        for (r, row) in [["Target", "$300", "$150"], ["Licence", "8%", "10%"]]
+            .iter()
+            .enumerate()
+        {
+            for (c, t) in row.iter().enumerate() {
+                glyphs.push(glyph(105.0 + c as f64 * 100.0, 25.0 + r as f64 * 15.0, t));
+            }
+        }
+        for (i, g) in glyphs.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        let ys = [0.0, 15.0, 30.0, 45.0];
+        let xs = [100.0, 200.0, 300.0, 400.0];
+        let mut rules: Vec<Rule> = ys
+            .iter()
+            .map(|&y| Rule {
+                bbox: BBox {
+                    x0: 100.0,
+                    y0: y,
+                    x1: 400.0,
+                    y1: y + 0.5,
+                },
+                orientation: Orientation::Horizontal,
+                page: 0,
+            })
+            .collect();
+        rules.extend(xs.iter().map(|&x| Rule {
+            bbox: BBox {
+                x0: x,
+                y0: if x == 100.0 || x == 400.0 { 0.0 } else { 15.0 },
+                x1: x + 0.5,
+                y1: 45.0,
+            },
+            orientation: Orientation::Vertical,
+            page: 0,
+        }));
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 100.0,
+                y0: 0.0,
+                x1: 400.0,
+                y1: 45.0,
+            },
+            xs: xs.to_vec(),
+            ys: ys.to_vec(),
+        };
+        let page = crate::extract::Page {
+            index: 0,
+            glyphs,
+            images: Vec::new(),
+            rules,
+            fills: Vec::new(),
+            dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
+            width: 600.0,
+            height: 800.0,
+            rotation: 0,
+            ocr: None,
+            routing: None,
+            warnings: Vec::new(),
+        };
+        assert!(table_title(&grid, &page, &[], false).is_none());
     }
 
     #[test]
@@ -9960,6 +10572,136 @@ mod tests {
     }
 
     #[test]
+    fn lists_side_by_side_alignment_refused_are_read_as_boxes() {
+        // Two bulleted lists under their heads, their items level: the
+        // left's bullets hang outside the run's edge, and its last item wraps
+        // past the run's last row.
+        let word = |x0: f64, y: f64, t: &str| Glyph {
+            text: t.into(),
+            bbox: Some(BBox {
+                x0,
+                y0: y - 8.0,
+                x1: x0 + 5.0 * t.chars().count() as f64,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x0, y),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            italic: false,
+            advance: Some(5.0 * t.chars().count() as f64),
+            draw_index: 0,
+            ocr: None,
+        };
+        let page = |right_bulleted: bool| {
+            let b = |x: f64, y: f64| word(x, y, "•");
+            let mut gl = vec![
+                word(40.0, 10.0, "Survey"),
+                b(40.0, 22.0),
+                word(50.0, 22.0, "Ongoing survey"),
+                word(50.0, 34.0, "of the nation"),
+                b(40.0, 46.0),
+                word(50.0, 46.0, "Geographies include"),
+                word(50.0, 58.0, "tracts and more."),
+                word(340.0, 10.0, "Webpage"),
+                word(350.0, 22.0, "Available online"),
+                word(350.0, 34.0, "Includes resources"),
+                word(350.0, 46.0, "for data users"),
+            ];
+            if right_bulleted {
+                gl.push(b(340.0, 22.0));
+                gl.push(b(340.0, 34.0));
+            }
+            for (i, g) in gl.iter_mut().enumerate() {
+                g.draw_index = i;
+            }
+            gl
+        };
+        let run = Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 45.0,
+                y0: 0.0,
+                x1: 450.0,
+                y1: 50.0,
+            },
+            xs: vec![45.0, 330.0, 450.0],
+            ys: vec![0.0, 14.0, 26.0, 38.0, 50.0],
+        };
+        let boxes = list_boxes(std::slice::from_ref(&run), &page(true));
+        assert_eq!(boxes.len(), 2, "{boxes:?}");
+        // The left list holds its hanging bullets and its wrapped last line.
+        assert!(boxes[0].x0 <= 40.0 && boxes[0].y1 >= 58.0, "{:?}", boxes[0]);
+        assert!(boxes[1].x0 >= 330.0, "{:?}", boxes[1]);
+        // A column that is no list, and no boxes.
+        assert!(list_boxes(std::slice::from_ref(&run), &page(false)).is_empty());
+    }
+
+    #[test]
+    fn bulleted_lists_side_by_side_are_no_table() {
+        // A list to a column, an item carried on to a second line.
+        let (g, glyphs) = aligned_grid(&[
+            &["• Insulate", "• Clean"],
+            &["• Seal", "and tune"],
+            &["• Glaze", "• Repair"],
+        ]);
+        assert!(lists_side_by_side(&g, &glyphs, &[]));
+        // Between rules across it, drawn a cell at a time, it is a ruled
+        // table's row whose cells hold points.
+        let rule = |x0: f64, x1: f64, y: f64| crate::rule::Rule {
+            bbox: BBox {
+                x0,
+                y0: y - 0.25,
+                x1,
+                y1: y + 0.25,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let ruled = [
+            rule(-50.0, 100.0, -2.0),
+            rule(100.0, 200.0, -2.0),
+            rule(-50.0, 100.0, 66.0),
+            rule(100.0, 200.0, 66.0),
+        ];
+        assert!(!lists_side_by_side(&g, &glyphs, &ruled));
+        // A rule above alone is a heading's.
+        assert!(lists_side_by_side(&g, &glyphs, &ruled[..2]));
+        // The first list's bullets hang left of the grid's edge: no cell
+        // reads them, and they are found beside it.
+        let (g, mut glyphs) = aligned_grid(&[&["Insulate", "• Clean"], &["Seal", "• Repair"]]);
+        assert!(!lists_side_by_side(&g, &glyphs, &[]));
+        for r in 0..2 {
+            let y = r as f64 * 20.0 + 12.0;
+            let mut bullet = glyphs[0].clone();
+            bullet.text = "•".into();
+            bullet.bbox = Some(BBox {
+                x0: -4.0,
+                y0: y - 3.0,
+                x1: -1.0,
+                y1: y,
+            });
+            glyphs.push(bullet);
+        }
+        assert!(lists_side_by_side(&g, &glyphs, &[]));
+        // A head over each column's points keeps the table.
+        let (g, glyphs) = aligned_grid(&[
+            &["Pros", "Cons"],
+            &["• Cheap", "• Slow"],
+            &["• Light", "• Loud"],
+        ]);
+        assert!(!lists_side_by_side(&g, &glyphs, &[]));
+        // A line that opens in capitals without a bullet is no item's.
+        let (g, glyphs) = aligned_grid(&[&["• Insulate", "• Clean"], &["Seal", "• Repair"]]);
+        assert!(!lists_side_by_side(&g, &glyphs, &[]));
+        // Labels down one column, points beside them: a table.
+        let (g, glyphs) = aligned_grid(&[&["Width", "• 40"], &["Depth", "• 25"]]);
+        assert!(!lists_side_by_side(&g, &glyphs, &[]));
+    }
+
+    #[test]
     fn a_bulleted_list_lined_up_as_a_table_is_a_list() {
         // Its bullets, and its items beside them.
         let (g, glyphs) = aligned_grid(&[&["•", "Pipettes"], &["•", "Rack"], &["•", "Tray"]]);
@@ -10032,6 +10774,58 @@ mod tests {
         link_continued_tables(&mut els, &[fa, fb]);
         assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
         assert_eq!(els[1].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_later_page_repeating_the_tables_header_is_headed_by_it() {
+        // A labour table over three pages: its header on the first; the
+        // second carries the rows on, then a new period's band and the
+        // header set again; the third opens on the header.
+        let (a, fa) = part(
+            "elem-00001",
+            0,
+            &[
+                &["Labor Category", "Hours", "Rate"],
+                &["Expert 8", "0", "$407.51"],
+            ],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        let (mut b, fb) = part(
+            "elem-00002",
+            1,
+            &[
+                &["Expert 7", "14", "$378.34"],
+                &["Base Period: Months 13-24", "", ""],
+                &["Labor Category", "Hours", "Rate"],
+                &["Expert 8", "0", "$416.07"],
+            ],
+            0,
+            &XS,
+            false,
+            false,
+        );
+        b.sub_headers = Some(vec![1]);
+        let (c, fc) = part(
+            "elem-00003",
+            2,
+            &[
+                &["Labor Category", "Hours", "Rate"],
+                &["Expert 6", "3", "$297.83"],
+            ],
+            0,
+            &XS,
+            false,
+            false,
+        );
+        let mut els = vec![a, b, c];
+        link_continued_tables(&mut els, &[fa, fb, fc]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[1].restated_headers, Some(vec![2]));
+        assert_eq!(els[2].continues.as_deref(), Some("elem-00002"));
+        assert_eq!(els[2].header_rows, Some(1));
     }
 
     #[test]
