@@ -599,6 +599,18 @@
   "xhtml block.merged": 21,
   "xhtml table.sub_headers": 1
  },
+ "icon-grid-labels-read-whole": {
+  "xhtml block.merged": 6
+ },
+ "icon-labels-read-row-by-row": {
+  "xhtml block.merged": 1
+ },
+ "icon-row-in-a-panel-labels-whole": {
+  "xhtml block.merged": 5
+ },
+ "icon-row-labels-read-whole": {
+  "xhtml block.merged": 5
+ },
  "ilcor-prisma-diagram": {
   "xhtml block.merged": 1
  },
