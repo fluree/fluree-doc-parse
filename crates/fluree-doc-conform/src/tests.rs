@@ -75,9 +75,10 @@ fn each_class_is_caught() {
     let t = [table("t", &[&["a", "1"], &["b", "2"]], 0)];
     assert_eq!(classes(&t, Format::Md), Vec::<&str>::new());
     assert_eq!(classes(&t, Format::Xhtml), Vec::<&str>::new());
-    // So a header row with nothing in it reads back as no row at all.
+    // So a header row with nothing in it reads back as no row at all, which
+    // loses nothing.
     let t = [table("t", &[&["", ""], &["b", "2"]], 1)];
-    assert_eq!(classes(&t, Format::Md), ["table.shape"]);
+    assert_eq!(classes(&t, Format::Md), Vec::<&str>::new());
     // Restated header rows have no markup of their own yet.
     let mut r = table(
         "t",

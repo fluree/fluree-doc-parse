@@ -101,6 +101,9 @@ Markdown only:
 - A link's target where the writer was asked for anchor text only
   (`--md-links text`).
 - A list item's own ordinal is part of its text (`3. FAQ`).
+- A header row with nothing in it, over a pipe table: an empty header row is
+  how a pipe table says it has none, so it reads back as no header and no row.
+  It held nothing to lose.
 
 ## Tooling
 
