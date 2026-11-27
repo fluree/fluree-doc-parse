@@ -225,17 +225,16 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
-    // The largest input, which a document holds whole beside its budget,
-    // whichever worker takes it.
-    let largest = files
+    // Each input, which its document holds whole beside its budget.
+    let sizes: Vec<u64> = files
         .iter()
-        .filter_map(|f| std::fs::metadata(f).ok())
-        .map(|m| m.len())
-        .max()
-        .unwrap_or(0);
+        .map(|f| std::fs::metadata(f).map_or(0, |m| m.len()))
+        .collect();
+    let smallest = sizes.iter().copied().min().unwrap_or(0);
     // The OCR engine reads for every document, in memory of its own.
     let ocr = cfg.ocr.as_ref().map_or(0, |e| e.0.most_memory());
-    let (jobs, lowered) = batch_jobs(args.jobs, cores, free_memory(), largest, ocr);
+    let free = free_memory();
+    let (jobs, lowered) = batch_jobs(args.jobs, cores, free, smallest, ocr);
     // Lowered to no fewer than the files there are, it changes nothing.
     if let Some(why) = lowered.filter(|_| !quiet && jobs < files.len()) {
         eprintln!("note: {why}");
@@ -248,6 +247,9 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     let slots = slots(&files);
     let cursor = AtomicUsize::new(0);
     let failures = AtomicUsize::new(0);
+    // Each document admitted by its own size: a large input waits for room
+    // rather than lowering `-j` for the whole batch.
+    let admission = Admission::new(free.map(|f| f.saturating_sub(ocr)));
     // Each worker reads within the limits this command was given.
     let limits = fluree_doc_model::budget::limits();
     std::thread::scope(|s| {
@@ -256,6 +258,7 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
                 fluree_doc_model::budget::limited_to(limits, || loop {
                     let i = cursor.fetch_add(1, Ordering::Relaxed);
                     let Some(f) = files.get(i) else { break };
+                    let _room = admission.admit(document_memory(sizes[i]));
                     let t0 = std::time::Instant::now();
                     match convert_path(f, &slots[i], cfg, args, pages.as_deref(), quiet) {
                         Ok(out) => {
@@ -326,27 +329,98 @@ fn document_memory(input: u64) -> u64 {
         .saturating_add(input)
 }
 
+/// The memory a batch's documents take at once ([`document_memory`]),
+/// within `room`, the memory free less what OCR sets aside: each admitted
+/// by its own size, waiting while those in flight leave too little, and
+/// admitted alone when none is. `None`, not known: each admitted at once.
+struct Admission {
+    room: Option<u64>,
+    /// What the documents in flight take, and how many they are.
+    taken: std::sync::Mutex<(u64, usize)>,
+    freed: std::sync::Condvar,
+}
+
+/// A document admitted: its memory given back when it is dropped.
+struct Admitted<'a> {
+    admission: &'a Admission,
+    need: u64,
+}
+
+impl Admission {
+    fn new(room: Option<u64>) -> Self {
+        Self {
+            room,
+            taken: std::sync::Mutex::new((0, 0)),
+            freed: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Wait for room for a document that may take `need`, and take it.
+    fn admit(&self, need: u64) -> Admitted<'_> {
+        let mut taken = self.taken.lock().unwrap_or_else(|e| e.into_inner());
+        while !self.fits(*taken, need) {
+            taken = self.freed.wait(taken).unwrap_or_else(|e| e.into_inner());
+        }
+        self.take(&mut taken, need)
+    }
+
+    /// [`Admission::admit`], or `None` where it would wait.
+    #[cfg(test)]
+    fn try_admit(&self, need: u64) -> Option<Admitted<'_>> {
+        let mut taken = self.taken.lock().unwrap_or_else(|e| e.into_inner());
+        self.fits(*taken, need).then(|| self.take(&mut taken, need))
+    }
+
+    /// Whether a document taking `need` runs beside those in flight,
+    /// `(taken, count)`: within the room, or alone.
+    fn fits(&self, (taken, count): (u64, usize), need: u64) -> bool {
+        count == 0
+            || self
+                .room
+                .is_none_or(|room| taken.saturating_add(need) <= room)
+    }
+
+    fn take(&self, taken: &mut (u64, usize), need: u64) -> Admitted<'_> {
+        *taken = (taken.0.saturating_add(need), taken.1 + 1);
+        Admitted {
+            admission: self,
+            need,
+        }
+    }
+}
+
+impl Drop for Admitted<'_> {
+    fn drop(&mut self) {
+        let a = self.admission;
+        let mut taken = a.taken.lock().unwrap_or_else(|e| e.into_inner());
+        *taken = (taken.0.saturating_sub(self.need), taken.1.saturating_sub(1));
+        a.freed.notify_all();
+    }
+}
+
 /// How many documents a batch converts at once, and why, where it is fewer
-/// than `requested` (`0`, one per core of `cores`), its largest input
-/// `largest` bytes, with `beside` bytes set aside for an OCR engine the
+/// than `requested` (`0`, one per core of `cores`), its smallest input
+/// `smallest` bytes, with `beside` bytes set aside for an OCR engine the
 /// documents share.
 ///
 /// Each document may take its whole budget and what goes with it
-/// ([`document_memory`], counted at the largest input, which any worker
-/// may take) at once, so no more run together than `memory`, the
-/// memory free to the process less `beside`, holds, and at least one; where
-/// that is not known, no more than one per core. A document past its budget fails on its
-/// own, but documents within theirs that together pass what the machine has
-/// would abort the whole batch, or have it killed.
+/// ([`document_memory`]) at once, so no more run together than `memory`,
+/// the memory free to the process less `beside`, holds, and at least one;
+/// where that is not known, no more than one per core. Counted here at the
+/// smallest input, as many as could ever run at once: each document is
+/// then admitted by its own size ([`Admission`]), so one large input waits
+/// for room rather than lowering `-j` for every other. A document past its
+/// budget fails on its own, but documents within theirs that together pass
+/// what the machine has would abort the whole batch, or have it killed.
 fn batch_jobs(
     requested: usize,
     cores: usize,
     memory: Option<u64>,
-    largest: u64,
+    smallest: u64,
     beside: u64,
 ) -> (usize, Option<String>) {
     let asked = if requested == 0 { cores } else { requested };
-    let document = document_memory(largest);
+    let document = document_memory(smallest);
     let (bound, why) = match memory {
         Some(free) => (
             usize::try_from(free.saturating_sub(beside) / document)
@@ -3200,7 +3274,8 @@ mod tests {
         assert!(why
             .unwrap()
             .ends_with("4096 MiB of memory free, 1281 MiB a document"));
-        // And a document holds its input whole: 400 MiB inputs make it two.
+        // And a document holds its input whole: inputs of 400 MiB at the
+        // least make it two.
         let (jobs, _) =
             fluree_doc_model::budget::limited_to(tiny, || batch_jobs(64, 12, four, 400 << 20, 0));
         assert_eq!(jobs, 2);
@@ -3249,6 +3324,43 @@ mod tests {
         let unlimited =
             "Max address space         unlimited            unlimited            bytes\n";
         assert_eq!(address_space(unlimited), None);
+    }
+
+    #[test]
+    fn a_batch_admits_each_document_by_its_own_size() {
+        // Room for three small documents: a large input waits for room,
+        // runs alone if it needs it, and leaves the others their `-j`.
+        let small = document_memory(0);
+        let room = Admission::new(Some(3 * small + (small >> 1)));
+        let a = room.try_admit(small).unwrap();
+        let b = room.try_admit(small).unwrap();
+        let large = document_memory(2 << 30);
+        assert!(room.try_admit(large).is_none());
+        let c = room.try_admit(small).unwrap();
+        assert!(room.try_admit(small).is_none());
+        drop((a, b, c));
+        // Alone, whatever it needs: past the room, nothing runs beside it.
+        let l = room.try_admit(4 * large).unwrap();
+        assert!(room.try_admit(1).is_none());
+        drop(l);
+        assert!(room.try_admit(small).is_some());
+        // The memory not known: every document at once.
+        let unknown = Admission::new(None);
+        let held: Vec<_> = (0..10).map(|_| unknown.try_admit(large).unwrap()).collect();
+        assert_eq!(held.len(), 10);
+        // A worker waiting is woken as one before it finishes.
+        let room = Admission::new(Some(small));
+        let first = room.admit(small);
+        std::thread::scope(|s| {
+            let waiting = s.spawn(|| drop(room.admit(small)));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drop(first);
+            waiting.join().unwrap();
+        });
+        // And the workers are counted at the smallest input: one 2 GiB file
+        // among small ones lowers no `-j`.
+        let free = Some(3 * small + (small >> 1));
+        assert_eq!(batch_jobs(3, 12, free, 0, 0), (3, None));
     }
 
     #[test]
