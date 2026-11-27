@@ -19,8 +19,10 @@ is, with no geometry and nothing to escalate. Provenance and evidence are
   LibreOffice number a heading by putting it in a list too); one in the
   style named `Title` is the document's `doco:Title`.
 - **Lists**: a paragraph in a list (`\lsN`) that is no heading is a list
-  item. The number or bullet a list draws (`\listtext`, `\pntext`) is not
-  written, as for an OpenDocument list.
+  item, its level (`\ilvlN`) its `depth`. The number a list draws
+  (`\listtext`, `\pntext`, as Word wrote it) opens the paragraph, as a Word
+  file's computed number does (`2. Nuts`, `1. Introduction`); a bullet adds
+  nothing.
 - **Tables**: paragraphs in a table (`\intbl`) fill its cells, `\cell` ends
   a cell and `\row` a row. Each row states its cells' right edges
   (`\cellxN`); the table's columns are the edges all its rows state, so a
@@ -28,7 +30,8 @@ is, with no geometry and nothing to escalate. Provenance and evidence are
   (`merged_left`), as is a cell merged into the one before it (`\clmrg`);
   one merged into the cell above (`\clvmrg`) is a `merged_down`
   continuation. A row that states no edges is read cell by cell from the
-  left. Nested tables are read flat; no header row is declared, so
+  left. Nested tables are read flat. The rows a table opens with that
+  repeat as its header (`\trhdr`) are its `header_rows`; where none does,
   `header_rows` is left undetected.
 - **Footnotes and endnotes** (`\footnote`, `\ftnalt`) are read after the
   body, each opening with its number (`1`, `i`), marked `footnote` or
@@ -38,7 +41,8 @@ is, with no geometry and nothing to escalate. Provenance and evidence are
   page **header and footer** (`\header`, `\footer` and their first-page and
   left/right variants) are read once each, before and after the body: a
   line the first page's header says again is read once, a line one header
-  repeats as often as it does.
+  repeats as often as it does. A note, comment, header or footer the file
+  ends inside of (its group never closed) is read as far as it goes.
 - **Encodings**: `\ansicpg` names the code page of the text's bytes and of
   `\'hh` escapes (Windows-1252 by default, so `\'e9` is `é`), and a font's
   character set (`\fcharsetN` in the font table) that of text set in that
@@ -48,10 +52,12 @@ is, with no geometry and nothing to escalate. Provenance and evidence are
 - **Pictures** (`\pict`) are each an empty `doco:Figure` where they stand;
   a picture Word also writes for older readers (`\nonshppict`) is not a
   second one. A field shows its result, not its instruction.
+- **Text boxes**: a shape's text (`\shptxt`) is read after the paragraph
+  it is anchored in, as an OpenDocument frame's is.
 - **Skipped**: the colour, list and revision tables, the font table's and
-  the style sheet's own text, document variables, shapes (their drawing
-  data, and the text of a text box, `\shptxt`, which is lost), embedded
-  objects, and any destination marked ignorable (`\*`) not named above.
+  the style sheet's own text, document variables, shapes' drawing data,
+  embedded objects, and any destination marked ignorable (`\*`) not named
+  above.
 
 A file is recognised by its opening, `{\rtf`, whatever its name: Word and
 Outlook save RTF as `.doc` often enough. Groups nest at most 1,024 deep;
