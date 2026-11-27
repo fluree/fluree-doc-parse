@@ -121,6 +121,9 @@ fn a_text_document_reads_as_a_word_file_does() {
             ("doco:Paragraph", None, "Sam Example: Source?", "comment"),
         ]
     );
+    // A list in a list's item is a level deeper.
+    let depths: Vec<usize> = els[5..8].iter().map(|e| e.depth).collect();
+    assert_eq!(depths, [0, 0, 1]);
     let t = &els[8];
     assert_eq!(t.header_rows, Some(1));
     assert!(t.merged_left.as_ref().unwrap()[1]);
@@ -564,4 +567,145 @@ fn a_corrupt_part_is_a_broken_file_not_one_too_large() {
     }
     let err = parse(&pkg).unwrap_err();
     assert!(matches!(err, OdfError::Zip(_)), "{err}");
+}
+
+/// A text document whose content part is `prefix`, `bytes`, then the end of
+/// a paragraph: bytes that need not be UTF-8.
+fn text_with_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    z.start_file("mimetype", stored).unwrap();
+    write!(z, "application/vnd.oasis.opendocument.text").unwrap();
+    z.start_file("content.xml", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    write!(
+        z,
+        "<office:document-content {NS}><office:body><office:text><text:p>a"
+    )
+    .unwrap();
+    z.write_all(bytes).unwrap();
+    write!(
+        z,
+        "b</text:p></office:text></office:body></office:document-content>"
+    )
+    .unwrap();
+    z.finish().unwrap();
+    buf.into_inner()
+}
+
+#[test]
+fn a_part_not_utf8_is_spent_at_its_replacements_before_they_are_made() {
+    // Each byte that is not UTF-8 is read as U+FFFD, three bytes of it.
+    let els = parse(&text_with_bytes(b"\xff")).unwrap();
+    assert_eq!(els[0].text, "a\u{fffd}b");
+    // A megabyte of them makes three of replacements beside it: past a
+    // budget that holds the part at two bytes a byte, and more, refused
+    // as bytes of the part, before they are made.
+    let n = 1 << 20;
+    let pkg = text_with_bytes(&vec![0xff; n]);
+    let budget = (n as u64 + 1_000) * PART_BYTES + (n as u64);
+    let refused = parse_within(&pkg, &mut Budget::new(budget, u64::MAX)).unwrap_err();
+    assert!(
+        refused.to_string().contains("bytes of parts inflated"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn frames_nested_in_paragraphs_are_read_in_linear_time() {
+    // A paragraph holding a text box holding a paragraph, `n` deep, each
+    // with text of its own: each paragraph checked the room for the text
+    // of every frame under it, again at each level.
+    let nested = |n: usize| {
+        let words = "word ".repeat(20_000);
+        let mut body = String::new();
+        for _ in 0..n {
+            body.push_str(&format!("<text:p>{words}<draw:frame><draw:text-box>"));
+        }
+        for _ in 0..n {
+            body.push_str("</draw:text-box></draw:frame></text:p>");
+        }
+        text(&body)
+    };
+    let els = parse(&nested(3)).unwrap();
+    assert_eq!(els.len(), 3);
+    fluree_doc_model::scaling::assert_linear("frames nested", 20, nested, |pkg| {
+        assert!(parse(pkg).is_ok())
+    });
+}
+
+#[test]
+fn a_notes_citation_is_its_own() {
+    // The citation is the note's child: one inside its body is text.
+    let body = "<text:p>Cited<text:note><text:note-body><text:p>Body \
+                <text:note-citation>9</text:note-citation></text:p></text:note-body>\
+                <text:note-citation>1</text:note-citation></text:note></text:p>";
+    let els = parse(&text(body)).unwrap();
+    assert_eq!(els.last().unwrap().text, "1 Body 9");
+}
+
+#[test]
+fn a_texts_tables_and_paragraphs_spend_the_documents_budget() {
+    // A hundred rows of a cell repeated a hundred times: 10,000 cells that
+    // hold text from a few kilobytes. DoCO writes each as a node, at
+    // 4 KiB; Markdown writes each once in its row.
+    let row = "<table:table-row><table:table-cell table:number-columns-repeated=\"100\">\
+               <text:p>x</text:p></table:table-cell></table:table-row>";
+    let table = text(&format!("<table:table>{}</table:table>", row.repeat(100)));
+    let budget = || Budget::new(5_000 * ELEMENT_BYTES, 0);
+    let refused = parse_within(&table, &mut budget()).unwrap_err();
+    assert!(refused.to_string().contains("past"), "{refused}");
+    let els = parse_within(&table, &mut budget().for_output(Output::Flat)).unwrap();
+    assert_eq!(els.0[0].cells.as_ref().unwrap().len(), 100);
+    // Paragraphs, each an element and its text, are spent as well.
+    let paras = text(&"<text:p>x</text:p>".repeat(100));
+    let need = reading(&paras) + 100 * (ELEMENT_BYTES + TEXT_BYTES);
+    assert!(parse_within(&paras, &mut Budget::new(need, 0)).is_ok());
+    assert!(parse_within(&paras, &mut Budget::new(need - 1, 0)).is_err());
+}
+
+#[test]
+fn a_cells_tabs_spaces_and_line_breaks_part_its_words() {
+    let body = "<office:spreadsheet><table:table table:name=\"S\"><table:table-row>\
+        <table:table-cell office:value-type=\"string\"><text:p>Total<text:tab/>42</text:p></table:table-cell>\
+        <table:table-cell office:value-type=\"string\"><text:p>A<text:s text:c=\"3\"/>B<text:line-break/>C</text:p></table:table-cell>\
+        </table:table-row></table:table></office:spreadsheet>";
+    let els = parse(&package("spreadsheet", body, &[])).unwrap();
+    let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
+    // A cell is one line in a table, as an .xlsx cell's is.
+    assert_eq!(t.cells.as_ref().unwrap()[0], ["Total 42", "A B C"]);
+}
+
+#[test]
+fn broken_or_deep_documents_read_as_far_as_they_go() {
+    // No content part: refused as such.
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    z.start_file("mimetype", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    z.write_all(b"application/vnd.oasis.opendocument.text")
+        .unwrap();
+    z.finish().unwrap();
+    assert!(matches!(parse(&buf.into_inner()), Err(OdfError::NoContent)));
+    // Not a zip at all, past its signature.
+    assert!(parse(b"PK\x03\x04 cut short").is_err());
+    // XML cut off mid-element keeps what was read before it, the
+    // paragraph it stops in included.
+    let cut = "<office:text><text:p>Kept</text:p><text:p>Cut off<text:span";
+    let els = parse(&package("text", cut, &[])).unwrap();
+    assert_eq!(texts(&els), ["Kept", "Cut off"]);
+    // Lists nested as deep as the tree allows, 126 lists in 126 items in
+    // the three elements around a text: each item read, its depth capped,
+    // within a test thread's 2 MiB stack.
+    let deep = format!(
+        "<office:text>{}<text:p>Deepest</text:p>{}</office:text>",
+        "<text:list><text:list-item>".repeat(126),
+        "</text:list-item></text:list>".repeat(126)
+    );
+    let els = parse(&package("text", &deep, &[])).unwrap();
+    assert_eq!(texts(&els), ["Deepest"]);
+    assert_eq!(els[0].kind, "doc:ListItem");
+    assert_eq!(els[0].depth, MAX_LIST_DEPTH);
 }

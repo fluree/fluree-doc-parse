@@ -37,14 +37,18 @@
 //! walk makes, whichever version its cross-reference table picks: a node
 //! named twice is counted twice, and a cycle, which the parser cuts where
 //! it meets an object already on its path, is counted as though every path
-//! through it were walked.
+//! through it were walked. The walk starts at the object a catalog names by
+//! `/Pages`, so only what is reachable from one is measured: a structure
+//! tree's array of a million references, or a name tree's `/Kids`, are no
+//! pages. Where no dictionary naming `/Pages` is seen (a catalog packed in
+//! an object stream the measure cannot decode), every node is measured.
 //!
 //! What the measure does not see is listed in `docs/reference/limits.md`
 //! (*A PDF's page tree*); the parser walking the tree with a bound of its
 //! own is the complete answer.
 
 use crate::extract::ExtractError;
-use fluree_doc_model::budget::{scaled, TooLarge};
+use fluree_doc_model::budget::{scaled, Limit, TooLarge};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::{Array, Dict, MaybeRef, Name, Object, Stream};
 use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
@@ -63,15 +67,30 @@ use std::sync::Arc;
 /// tests' own).
 pub const MAX_PAGE_TREE_DEPTH: usize = 256;
 
-/// The most pages a page tree may list: 250,000. The parser keeps each
-/// page it walks, about 1.4 KB of them, before the page limit can leave
-/// any unread: a tree of 250,000 pages took 360 MB more than one of a
-/// single page as `fdoc convert` opened it. This bounds that to about 370
-/// MB, within the 1.25 GiB a batch keeps beside each document's budget for
-/// what the readers' own bounds let them take ([Batches] in
+/// The most pages a page tree may list, unless the page limit
+/// ([`Limits::pages`](fluree_doc_model::budget::Limits::pages)) is more:
+/// 250,000. The parser keeps each page it walks, about 1.4 KB of them
+/// ([`PAGE_TREE_PAGE_BYTES`]), before the page limit can leave any unread:
+/// a tree of 250,000 pages took 360 MB more than one of a single page as
+/// `fdoc convert` opened it. This bounds that to about 370 MB, within the
+/// 1.25 GiB a batch keeps beside each document's budget for what the
+/// readers' own bounds let them take ([Batches] in
 /// `docs/reference/limits.md`), with [`MAX_XREF_ENTRIES`]'s. The longest
 /// real documents run to tens of thousands of pages.
+///
+/// A caller that raises the page limit past it asks for that many pages
+/// read, and the parser's pages are let grow with it: `fdoc` counts what
+/// they take past this bound in what a batch sets aside for a document.
 pub const MAX_PAGE_TREE_PAGES: u64 = 250_000;
+
+/// What the parser keeps for each page it walks, rounded up: 1.5 KiB.
+pub const PAGE_TREE_PAGE_BYTES: u64 = 1536;
+
+/// The most pages a page tree may list under the limits in effect: the
+/// page limit, or [`MAX_PAGE_TREE_PAGES`] where that is more.
+pub fn most_pages_listed() -> u64 {
+    MAX_PAGE_TREE_PAGES.max(fluree_doc_model::budget::limits().pages as u64)
+}
 
 /// The deepest an object may nest its dictionaries and arrays: 2,048. The
 /// parser reads one by recursion, and on a 2 MiB thread overflowed past
@@ -99,15 +118,19 @@ pub const MAX_OBJECT_STREAMS_BYTES: u64 = scaled(256 << 20);
 /// for each of its objects, a few hundred thousand for the longest.
 pub const MAX_XREF_ENTRIES: u64 = scaled(4_000_000);
 
-/// How many times over the file the measure may scan, reading its objects
-/// where the parser could read them: a real file is scanned about once,
-/// an object that starts where another one does not end being rare.
+/// How many times over the file, and over what its object streams decode
+/// to, the measure may scan, reading its objects where the parser could
+/// read them: a real file is scanned about once, an object that starts
+/// where another one does not end being rare. What object streams decode
+/// to counts beside the file: their objects are scanned there, and a
+/// stream compresses its objects many times over.
 const SCANS: usize = 16;
 
 /// Open `data` as a PDF, its page tree measured first: past
-/// [`MAX_PAGE_TREE_DEPTH`] or [`MAX_PAGE_TREE_PAGES`], or where it cannot
-/// be measured within the bounds above, it is refused rather than walked
-/// into a stack overflow or an allocation that fails.
+/// [`MAX_PAGE_TREE_DEPTH`] or [`most_pages_listed`], or where it cannot be
+/// measured within the bounds above, it is refused rather than walked into
+/// a stack overflow or an allocation that fails. Past the pages, the error
+/// is [`Limit::Pages`], which a higher page limit raises.
 pub fn open(data: impl Into<Arc<Vec<u8>>>) -> Result<Pdf, ExtractError> {
     let data = data.into();
     let shape = measure(&data).map_err(ExtractError::TooLarge)?;
@@ -116,16 +139,18 @@ pub fn open(data: impl Into<Arc<Vec<u8>>>) -> Result<Pdf, ExtractError> {
             "its page tree nests more than {MAX_PAGE_TREE_DEPTH} deep"
         ))));
     }
-    if shape.pages > MAX_PAGE_TREE_PAGES {
-        return Err(ExtractError::TooLarge(TooLarge::fixed(format!(
-            "its page tree lists more than {MAX_PAGE_TREE_PAGES} pages"
-        ))));
+    let most = most_pages_listed();
+    if shape.pages > most {
+        return Err(ExtractError::TooLarge(
+            TooLarge::new(Limit::Pages, most, "pages").within("its page tree lists"),
+        ));
     }
     Pdf::new(data).map_err(|e| ExtractError::Parse(format!("{e:?}")))
 }
 
 /// What the measure found: no less than the parser's walk of the tree
-/// makes, whichever version of each object it reads.
+/// makes, whichever version of each object it reads, from whichever
+/// catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shape {
     /// The most `/Pages` nodes on one path down the tree.
@@ -138,7 +163,8 @@ pub struct Shape {
 /// Measure the page tree of the PDF in `data`, over every object the file
 /// holds. An error is the file refused before the measure could finish:
 /// an object nesting past [`MAX_OBJECT_NESTING`], object streams decoding
-/// past their bounds, objects overlapping past [`SCANS`] passes.
+/// past their bounds, objects overlapping past [`SCANS`] passes over the
+/// file and what its object streams decode to.
 pub fn measure(data: &[u8]) -> Result<Shape, TooLarge> {
     let mut m = Measure {
         data,
@@ -442,7 +468,8 @@ struct Measure<'a> {
     /// The entries read from cross-reference streams, against
     /// [`MAX_XREF_ENTRIES`].
     entries: u64,
-    /// Bytes scanned, against [`SCANS`] passes over the file.
+    /// Bytes scanned, against [`SCANS`] passes over the file and
+    /// [`Measure::decoded`].
     scanned: usize,
     /// Bytes object streams were decoded to, against
     /// [`MAX_OBJECT_STREAMS_BYTES`].
@@ -461,17 +488,18 @@ struct StreamKind {
 }
 
 impl<'a> Measure<'a> {
-    /// Spend `n` bytes of scanning: past [`SCANS`] passes over the file,
-    /// the file is refused.
+    /// Spend `n` bytes of scanning: past [`SCANS`] passes over the file
+    /// and what its object streams decoded to, the file is refused. That is
+    /// bounded too, by [`MAX_OBJECT_STREAMS_BYTES`], so the scan is.
     fn scan_spent(&mut self, n: usize) -> Result<(), TooLarge> {
         self.scanned = self.scanned.saturating_add(n);
-        if self.scanned
-            > SCANS
-                .saturating_mul(self.data.len())
-                .saturating_add(1 << 20)
-        {
+        let read = self
+            .data
+            .len()
+            .saturating_add(usize::try_from(self.decoded).unwrap_or(usize::MAX));
+        if self.scanned > SCANS.saturating_mul(read).saturating_add(1 << 20) {
             return Err(TooLarge::fixed(format!(
-                "its objects overlap past {SCANS} passes over the file"
+                "its objects overlap past {SCANS} passes over the file and its object streams"
             )));
         }
         Ok(())
@@ -1109,6 +1137,9 @@ struct Graph {
     /// The objects some version of which is a dictionary: a page, where a
     /// kid names one.
     dicts: HashSet<i32>,
+    /// The objects a dictionary names by `/Pages`: where the parser's walk
+    /// starts, from the catalog it reads, whichever version that is.
+    roots: HashSet<i32>,
 }
 
 impl Graph {
@@ -1144,6 +1175,11 @@ impl Graph {
     /// `/Pages`, or a reference that may resolve to it; its `/Kids` either
     /// way, as the root is walked whatever its type.
     fn dict(&mut self, d: &Dict<'_>, nesting: usize) -> Option<Node> {
+        // A catalog names the root by reference (the parser takes no other):
+        // any dictionary that does is taken for one.
+        if let Some(MaybeRef::Ref(r)) = d.get_raw::<Object<'_>>(b"Pages") {
+            self.roots.insert(r.obj_number);
+        }
         let level = match d.get_raw::<Name<'_>>(b"Type") {
             Some(MaybeRef::NotRef(n)) => &*n == b"Pages",
             Some(MaybeRef::Ref(_)) => true,
@@ -1194,8 +1230,9 @@ impl Graph {
         })
     }
 
-    /// The depth and the pages, over every node: no less than the parser's
-    /// walk from the root makes.
+    /// The depth and the pages: no less than the parser's walk from the
+    /// root makes. Those of the nodes a catalog names (each version), what
+    /// they reach included; where no catalog is seen, the most of any node.
     ///
     /// Over the graph's strongly connected components, each measured after
     /// those it reaches. A node in no cycle has its own level and pages
@@ -1321,7 +1358,22 @@ impl Graph {
                 shape.pages = shape.pages.max(pages[v]);
             }
         }
-        shape
+        if self.roots.is_empty() {
+            return shape;
+        }
+        // A node's depth and pages are those of everything it reaches: the
+        // roots' are the walk's.
+        let mut walked = Shape { depth: 0, pages: 0 };
+        for &v in self
+            .roots
+            .iter()
+            .filter_map(|n| self.objects.get(n))
+            .flatten()
+        {
+            walked.depth = walked.depth.max(depth[v]);
+            walked.pages = walked.pages.max(pages[v]);
+        }
+        walked
     }
 
     /// The strongly connected components of the graph `nodes` (of the `n`
@@ -1452,7 +1504,11 @@ mod tests {
     fn refused(data: Vec<u8>) -> String {
         match open(data) {
             Err(ExtractError::TooLarge(e)) => {
-                assert_eq!(e.limit(), fluree_doc_model::budget::Limit::Fixed);
+                // The pages a tree lists, which a higher page limit raises;
+                // anything else, a bound of the measure's own.
+                let pages = e.to_string().contains("lists more than");
+                let limit = if pages { Limit::Pages } else { Limit::Fixed };
+                assert_eq!(e.limit(), limit, "{e}");
                 e.to_string()
             }
             Err(e) => panic!("{e}"),
@@ -1759,7 +1815,7 @@ mod tests {
         let header: String = (0..200).map(|i| format!("{} 0 ", 3 + i)).collect();
         let plain = format!("{header}<< /Type /Pages /Kids [3 0 R] >>{pad}");
         let packed = zlib(plain.as_bytes());
-        let mut file = pdf(&["<< /Type /Catalog /Pages 2 0 R >>".into()]);
+        let mut file = pdf(&["<< /Type /Catalog /Pages 3 0 R >>".into()]);
         file.extend(
             format!(
                 "400 0 obj\n<< /Type /ObjStm /N 200 /First {} /Filter /FlateDecode /Length {} >>\nstream\n",
@@ -1899,6 +1955,105 @@ mod tests {
             "<< /Type /Page >>".into(),
         ]);
         assert_eq!(measure(&quiet).unwrap(), Shape { depth: 1, pages: 1 });
+    }
+
+    #[test]
+    fn only_what_a_catalog_reaches_is_measured() {
+        // A structure tree's `/K` written as an array of its own, and a name
+        // tree's node, each naming 300,000 dictionaries: past the pages a
+        // tree may list, were they pages, and no page of the parser's walk.
+        let refs = vec!["5 0 R"; 300_000].join(" ");
+        let objects = |catalog: &str| -> Vec<String> {
+            vec![
+                catalog.into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /MediaBox [0 0 612 792] >>".into(),
+                format!("[{refs}]"),
+                "<< /S /P >>".into(),
+                format!("<< /Kids [{refs}] >>"),
+                "<< /Type /StructTreeRoot /K 4 0 R >>".into(),
+            ]
+        };
+        let tagged = pdf(&objects(
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R /Names << /Dests 6 0 R >> >>",
+        ));
+        assert_eq!(measure(&tagged).unwrap(), Shape { depth: 1, pages: 1 });
+        assert_eq!(open(tagged).unwrap().pages().len(), 1);
+        // Where no catalog is seen, every node is measured, as the parser
+        // may start from any.
+        let bare = pdf(&objects("<< /Type /Catalog >>"));
+        assert_eq!(pages(&bare), 300_000);
+        // Every version of a catalog, and what each names, is a root.
+        let mut updated = pdf(&objects(
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>",
+        ));
+        updated.extend(b"1 0 obj\n<< /Type /Catalog /Pages 6 0 R >>\nendobj\n");
+        assert_eq!(pages(&updated), 300_000);
+    }
+
+    #[test]
+    fn an_object_stream_s_objects_are_scanned_within_what_it_decodes_to() {
+        // 3,000 objects of a thousand bytes each, packed in a stream of a
+        // few kilobytes: 3 MB scanned, more than sixteen passes over the
+        // file, and once each over what the stream decodes to.
+        let bodies: Vec<String> = (0..3000)
+            .map(|_| format!("<< /P /{} >>", "a".repeat(1000)))
+            .collect();
+        let mut header = String::new();
+        let mut off = 0;
+        for (i, b) in bodies.iter().enumerate() {
+            header.push_str(&format!("{} {off} ", 10 + i));
+            off += b.len() + 1;
+        }
+        let body: String = bodies.iter().map(|b| format!("{b} ")).collect();
+        let packed = zlib(format!("{header}{body}").as_bytes());
+        let mut file = chain(3);
+        file.extend(
+            format!(
+                "400 0 obj\n<< /Type /ObjStm /N 3000 /First {} /Filter /FlateDecode /Length {} >>\nstream\n",
+                header.len(),
+                packed.len()
+            )
+            .bytes(),
+        );
+        file.extend(&packed);
+        file.extend(b"\nendstream\nendobj\n");
+        assert!(16 * file.len() + (1 << 20) < 3_000_000, "{}", file.len());
+        assert_eq!(depth(&file), 3);
+    }
+
+    #[test]
+    fn a_page_limit_past_the_pages_a_tree_may_list_raises_it() {
+        // 260 times 1000: past the 250,000 a tree may list by default,
+        // refused as the pages, which `--max-pages` raises.
+        let fan = |kid: usize, n: usize| {
+            let kids = vec![format!("{kid} 0 R"); n].join(" ");
+            format!("<< /Type /Pages /Kids [{kids}] >>")
+        };
+        let file = pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            fan(3, 260),
+            fan(4, 1000),
+            "<< /Type /Page >>".into(),
+        ]);
+        match open(file.clone()) {
+            Err(ExtractError::TooLarge(e)) => {
+                assert_eq!((e.limit(), e.max()), (Limit::Pages, MAX_PAGE_TREE_PAGES));
+                assert_eq!(e.to_string(), "its page tree lists more than 250000 pages");
+            }
+            other => panic!("{:?}", other.map(|p| p.pages().len())),
+        }
+        let mut limits = fluree_doc_model::budget::Limits::default();
+        limits.pages = 300_000;
+        let opened = fluree_doc_model::budget::limited_to(limits, || {
+            assert_eq!(most_pages_listed(), 300_000);
+            open(file).map(|p| p.pages().len())
+        });
+        assert_eq!(opened.unwrap(), 260_000);
+        // A page limit below the bound leaves it as it is.
+        limits.pages = 100;
+        let most = fluree_doc_model::budget::limited_to(limits, most_pages_listed);
+        assert_eq!(most, MAX_PAGE_TREE_PAGES);
     }
 
     #[test]

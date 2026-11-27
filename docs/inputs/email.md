@@ -308,6 +308,23 @@ Outlook's `[cid:…]` or Apple Mail's `<name.png>` in plain text, or by
 its name): the one written exactly so, else one written in another case.
 An image shown twice is one image, its figure drawn twice.
 
+A figure's text is the image's alternative text (`alt`), where the HTML
+gives it one, and nothing where the plain text marks it. A signature's
+icons carry such text (`LinkedIn`, `Logo`), which would otherwise read as
+words of nearly every corporate message: the reader leaves out the
+alternative text of an image under the floor a model is sent (below), its
+size read from its PNG, JPEG, TIFF, GIF or BMP header, and keeps its
+figure. An image whose header gives no size keeps its text. In Markdown and
+plain text a figure with no words prints nothing; in the graph, JSON and
+XHTML it still marks where the image is shown. In Rust,
+`fluree_doc_email::parse` reads them so too: `email.elements` holds no
+alternative text for such an icon, and `fluree_doc_model::under_model_floor`
+and `stored_size` are the rule, for a caller to judge an image by it. With
+no reader configured, each image the body shows is a figure all
+the same, the elements after it numbered one further, and the graph lists
+it in [`doc:unreadImages`](../formats/doco.md#images-nothing-read)
+(`NotRead`).
+
 Its text is read as a DOCX picture's is (see
 [Office files](office-and-web.md#docx)): by OCR (`--ocr`, `--ocr-words`,
 `<stem>_m<n>.json`), by a model's reading supplied (`--tier-results`,
@@ -326,25 +343,25 @@ whatever is configured, and listed there as `UnsupportedFormat`, but neither
 counted nor warned about, since nearly every signed message carries one.
 
 With a model configured and no OCR, an image the body shows is sent to it
-when it has at least 400 pixels on its longer side and 48 on its shorter:
-a message has no page to measure it against, and a small signature logo,
-a social icon or a rule is under that floor, and when the pixel probe
-takes it for text ([as a document's pictures](office-and-web.md)): a
-capture of a few lines on a wide screen, a one-line capture of a form, a
-labelled chart or a phone's photograph of a page are sent, each a request
-the provider bills, and each image leaving the machine. A photograph, a
-logo drawn large or an illustration the probe does not take for text is
-read by nothing, OCR included, and listed as `NotTexty`, not counted on
-stderr either. A small dialog box can be under the floor (380
-pixels wide): an image not sent is listed in `doc:unreadImages` as
-`Small`, and not counted in the note on stderr, since a PNG logo is under
-the floor on nearly every signed message; `--verbose` names each, and
-`--ocr` reads them.
-`escalation.max_crops` caps how many a message sends. With `--ocr` or
-`--ocr-words`, only an image OCR read no text in is sent; with
-`--tier-results`, none is. OCR reads every image with a line's pixels, 10
-on its shorter side, as a PDF's region must have; a thinner one is listed as
-`NotTexty`.
+as a document's picture is ([the rules](office-and-web.md#docx)): when its
+header reads, when it has at least 400 pixels on its longer side and 48 on
+its shorter (a message has no page to measure it against, and a small
+signature logo, a social icon or a rule is under that floor), and when the
+pixel probe takes it for text: a capture of a few lines on a wide screen, a
+one-line capture of a form, a labelled chart or a phone's photograph of a
+page are sent, each a request the provider bills, and each image leaving
+the machine. A photograph, a logo drawn large or an illustration the probe
+does not take for text is not sent, and listed as `NotTexty`, not counted on
+stderr either. A small dialog box can be under the floor (380 pixels wide):
+an image not sent is listed in `doc:unreadImages` as `Small`, and not
+counted in the note on stderr, since a PNG logo is under the floor on nearly
+every signed message; `--verbose` names each, and `--ocr` reads them.
+`escalation.max_crops` caps how many a message sends, and `--no-escalate`
+sends none. With `--ocr` or `--ocr-words`, only an image OCR read no text in
+is sent; with `--tier-results`, none is. OCR reads every image, whatever the
+probe makes of it, and words written for an image (`--ocr-words`) and a
+reading supplied (`--tier-results`) are taken whatever it shows: neither
+costs a call.
 
 Where the body does not mark it — the plain text is read and only the HTML
 version shows the image, as most clients send it — an inline image is drawn

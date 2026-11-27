@@ -150,14 +150,24 @@ pub fn unread_pages(
     out
 }
 
-/// The pages after the last one read, past the page limit
-/// ([`Document::pages_past_limit`]): listed `PastPageLimit`, so a document
-/// cut short is never taken for a whole one.
+/// The pages after the last one read ([`Document::pages_past_limit`]),
+/// each listed by the limit that left it unread, so a document cut short
+/// is never taken for a whole one: `PastMemoryLimit` or `PastWorkLimit`
+/// from the page the budget ran out on to the page limit
+/// ([`Document::cut_short`]), `PastPageLimit` past that.
 pub fn past_limit(doc: &Document) -> impl Iterator<Item = fluree_doc_model::UnreadPage> {
     let first = doc.pages.last().map_or(0, |p| p.index + 1);
-    (first..first + doc.pages_past_limit).map(|index| fluree_doc_model::UnreadPage {
+    let (budget, reason) = doc.cut_short.map_or((0, ""), |c| {
+        (c.pages, fluree_doc_model::past_limit_reason(c.limit))
+    });
+    (first..first + doc.pages_past_limit).map(move |index| fluree_doc_model::UnreadPage {
         index,
-        reason: fluree_doc_model::PAST_PAGE_LIMIT.into(),
+        reason: if index < first + budget {
+            reason
+        } else {
+            fluree_doc_model::PAST_PAGE_LIMIT
+        }
+        .into(),
     })
 }
 
@@ -187,9 +197,8 @@ pub fn past_limit(doc: &Document) -> impl Iterator<Item = fluree_doc_model::Unre
 /// `Unprobed`, an image extraction did not decode
 /// ([`ExtractOptions::probe_images`] off), half an inch or more on its
 /// longer side, which nothing reads and is always listed. Only `Region` is
-/// worth a warning of its own: the declined ones are logos, photographs and
-/// charts as often as content, and the unprobed ones are said once, by
-/// page.
+/// worth a warning ([`fluree_doc_model::Notes::summary`]): the declined and
+/// the unprobed ones are logos, photographs and charts as often as content.
 pub fn unread_regions(
     doc: &Document,
     elements: &[fluree_doc_model::Element],
@@ -271,6 +280,11 @@ pub fn unread_regions(
 /// context, which reads whatever it reads (a reference is not followed, a
 /// string is decrypted or not but read either way), and the array's own
 /// iterator is taken no further than those that read.
+///
+/// Each entry is read as it is asked for, not the whole array first: a
+/// link or an outline item asks for its destination's first entry, and
+/// 20,000 links sharing one destination of 100,000 entries read it whole
+/// each time, 48 s.
 pub(crate) fn array_entries<'a>(
     array: &hayro_syntax::object::Array<'a>,
 ) -> impl Iterator<Item = hayro_syntax::object::MaybeRef<hayro_syntax::object::Object<'a>>> {
@@ -278,15 +292,15 @@ pub(crate) fn array_entries<'a>(
     use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
     let ctx = ReaderContext::dummy();
     let mut r = Reader::new(array.data());
-    let mut readable = 0;
-    loop {
+    let mut raw = array.raw_iter();
+    std::iter::from_fn(move || {
         r.skip_white_spaces_and_comments();
         if r.at_end() || r.read_with_context::<MaybeRef<Object<'_>>>(&ctx).is_none() {
-            break;
+            return None;
         }
-        readable += 1;
-    }
-    array.raw_iter().take(readable)
+        raw.next()
+    })
+    .fuse()
 }
 
 /// What the PDF interpreter reported on each page ([`Page::warnings`]),
@@ -294,8 +308,12 @@ pub(crate) fn array_entries<'a>(
 pub fn parse_warnings(doc: &Document) -> Vec<fluree_doc_model::ParseWarning> {
     let mut out: Vec<fluree_doc_model::ParseWarning> = Vec::new();
     for p in &doc.pages {
+        // Only this page's entries are searched, a kind or two: searched
+        // from the first page's, a document of a warning on each of many
+        // pages took a time quadratic in its pages.
+        let start = out.len();
         for &kind in &p.warnings {
-            match out.iter_mut().find(|w| w.page == p.index && w.kind == kind) {
+            match out[start..].iter_mut().find(|w| w.kind == kind) {
                 Some(w) => w.count += 1,
                 None => out.push(fluree_doc_model::ParseWarning {
                     page: p.index,
@@ -337,8 +355,8 @@ pub mod watermark;
 
 pub use block::Block;
 pub use extract::{
-    extract_bytes, extract_bytes_with, extract_file, extract_pdf, extract_pdf_with, Document,
-    ExtractError, ExtractOptions, ImagePlacement, Page,
+    extract_bytes, extract_bytes_with, extract_file, extract_pdf, extract_pdf_with, CutShort,
+    Document, ExtractError, ExtractOptions, ImagePlacement, Page,
 };
 pub use furniture::Furniture;
 pub use geom::BBox;
@@ -369,6 +387,29 @@ mod tests {
         assert!(matches!(entries[0], MaybeRef::Ref(_)));
         assert_eq!(array_entries(&read(b"[+ ]")).count(), 0);
         assert_eq!(array_entries(&read(b"[1 2 (x)]")).count(), 3);
+    }
+
+    #[test]
+    fn an_arrays_first_entry_is_read_alone() {
+        use hayro_syntax::object::Array;
+        use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
+        // A destination of n entries, its first asked for n times, as n
+        // links sharing it ask: the array was read whole each time.
+        let ctx = ReaderContext::dummy();
+        fluree_doc_model::scaling::assert_linear(
+            "a shared destination's first entry",
+            2_000,
+            |n| format!("[3 0 R{}]", " 1".repeat(n)).into_bytes(),
+            |src| {
+                let array = Reader::new(src)
+                    .read_with_context::<Array<'_>>(&ctx)
+                    .unwrap();
+                let n = src.len() / 2;
+                for _ in 0..n {
+                    assert!(array_entries(&array).next().is_some());
+                }
+            },
+        );
     }
     use crate::extract::{ImagePlacement, OcrRead};
     use fluree_doc_model::Element;
@@ -448,6 +489,7 @@ mod tests {
     fn a_routed_region_nothing_read_is_unread_with_its_box() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG, OTHER])],
             title: None,
         };
@@ -464,6 +506,7 @@ mod tests {
     fn a_region_a_model_read_is_not_unread() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG, OTHER])],
             title: None,
         };
@@ -491,6 +534,7 @@ mod tests {
     fn an_image_drawn_twice_in_one_place_is_one_unread_region() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG, OTHER, BIG])],
             title: None,
         };
@@ -501,6 +545,7 @@ mod tests {
         next.index = 1;
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG]), next],
             title: None,
         };
@@ -511,6 +556,7 @@ mod tests {
     fn a_whole_page_reading_reads_every_region() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG, OTHER])],
             title: None,
         };
@@ -530,6 +576,7 @@ mod tests {
         });
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p.clone()],
             title: None,
         };
@@ -540,6 +587,7 @@ mod tests {
         p.ocr.as_mut().unwrap().whole = true;
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -561,6 +609,7 @@ mod tests {
         let small = b(50.0, 100.0, 250.0, 130.0);
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[small, BIG])],
             title: None,
         };
@@ -580,6 +629,7 @@ mod tests {
         });
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -588,6 +638,7 @@ mod tests {
         // nothing, and the region is still the router's to decline.
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[small])],
             title: None,
         };
@@ -608,6 +659,7 @@ mod tests {
         let doc = Document {
             pages: vec![p],
             pages_past_limit: 0,
+            cut_short: None,
             title: None,
         };
         assert_eq!(route::decide(&doc.pages[0]).0, route::Route::Deterministic);
@@ -628,6 +680,7 @@ mod tests {
         }
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p.clone()],
             title: None,
         };
@@ -646,6 +699,7 @@ mod tests {
         });
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![read],
             title: None,
         };
@@ -668,6 +722,7 @@ mod tests {
         }));
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![covered],
             title: None,
         };
@@ -675,6 +730,7 @@ mod tests {
         // A model's reading of the whole page reads it too.
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG])],
             title: None,
         };
@@ -689,6 +745,7 @@ mod tests {
         let small = b(50.0, 100.0, 250.0, 130.0);
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[small, BIG, small])],
             title: None,
         };
@@ -702,6 +759,7 @@ mod tests {
         }
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -734,6 +792,7 @@ mod tests {
         assert_eq!(route::decide(&p).0, route::Route::Deterministic);
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -755,6 +814,7 @@ mod tests {
         assert_ne!(shown, BIG);
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -778,6 +838,7 @@ mod tests {
         b.warnings = vec!["ImageDecodeFailure"];
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![a, page(&[]), b],
             title: None,
         };
@@ -794,6 +855,27 @@ mod tests {
                 (1, "ImageDecodeFailure", 1)
             ]
         );
+        // A warning on each of many pages: one entry a page, each counted
+        // on its own page, found among that page's entries alone.
+        let pages: Vec<Page> = (0..5000)
+            .map(|i| {
+                let mut p = page(&[]);
+                p.index = i;
+                p.warnings = vec!["ImageDecodeFailure"; 1 + i % 3];
+                p
+            })
+            .collect();
+        let got = parse_warnings(&Document {
+            pages,
+            title: None,
+            pages_past_limit: 0,
+            cut_short: None,
+        });
+        assert_eq!(got.len(), 5000);
+        assert!(got
+            .iter()
+            .enumerate()
+            .all(|(i, w)| w.page == i && w.count == 1 + i % 3));
     }
 
     #[test]
@@ -803,6 +885,7 @@ mod tests {
         p.glyphs.clear();
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };

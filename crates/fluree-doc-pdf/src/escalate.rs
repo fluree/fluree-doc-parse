@@ -1563,6 +1563,7 @@ mod tests {
             pages: vec![page],
             title: None,
             pages_past_limit: 0,
+            cut_short: None,
         };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
@@ -1655,6 +1656,7 @@ mod tests {
     fn a_page_read_whole_says_why() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(0, 0, true), page(1, 500, false), page(2, 500, false)],
             title: None,
         };
@@ -1709,6 +1711,7 @@ mod tests {
         };
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![
                 page(0, 0, true),
                 page(1, 50, true),
@@ -1731,6 +1734,7 @@ mod tests {
         // engine may skip.
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(0, 50, true), broken_page(1, 300)],
             title: None,
         };
@@ -1744,6 +1748,7 @@ mod tests {
     fn a_heading_doubt_comes_before_a_figure_doubt() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(0, 500, false), page(1, 500, false)],
             title: None,
         };
@@ -1819,6 +1824,7 @@ mod tests {
         }
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -1865,6 +1871,7 @@ mod tests {
         ));
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -2074,6 +2081,7 @@ mod tests {
         }];
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -2108,6 +2116,7 @@ mod tests {
         }];
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -2153,6 +2162,7 @@ mod tests {
         let doc = Document {
             pages: vec![p, page(1, 500, false)],
             pages_past_limit: 0,
+            cut_short: None,
             title: None,
         };
         let (mut jobs, reasons) = reasons_with_doubts(&doc, &[0]);
@@ -2308,6 +2318,7 @@ mod tests {
     fn a_page_that_routes_whole_once_cleaned_is_read_whole() {
         let extracted = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page_that_reads_as_a_scan_once_cleaned()],
             title: None,
         };
@@ -2347,6 +2358,7 @@ mod tests {
     fn a_page_that_reads_as_a_scan_once_cleaned_ranks_as_one() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![
                 page_that_reads_as_a_scan_once_cleaned(),
                 page(1, 500, false),
@@ -2419,6 +2431,7 @@ mod tests {
     fn a_doubt_page_over_a_region_found_once_cleaned_ranks_with_regions() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page_with_a_region_only_once_cleaned(), page(1, 500, false)],
             title: None,
         };
@@ -2473,6 +2486,7 @@ mod tests {
         }
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(0, 0, true), broken_page(1, 300), cleaned, regions],
             title: None,
         };
@@ -2512,6 +2526,7 @@ mod tests {
         p.images = vec![image(550.0), image(150.0)];
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };

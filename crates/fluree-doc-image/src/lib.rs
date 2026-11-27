@@ -432,8 +432,10 @@ pub fn elements(bytes: &[u8], engine: &dyn OcrEngine) -> Result<ImageElements, S
     read_texty(image, engine)
 }
 
-/// As [`elements`], of an image a caller has decoded and found [`texty`]
-/// itself: it is neither decoded nor probed again.
+/// As [`elements`], of an image a caller has decoded and chosen to read,
+/// having found it [`texty`] or reading it whatever the probe makes of it
+/// (a document's picture, [`read_placed`]): it is neither decoded nor
+/// probed again. What the engine reads is still held to the noise rule.
 pub fn read_texty(image: Decoded, engine: &dyn OcrEngine) -> Result<ImageElements, String> {
     let reading = engine.read(&image.pixels)?;
     Ok(analysed(document(&image), image.more_pages, reading))
@@ -482,11 +484,25 @@ pub fn without_noise(
     doc: &Document,
     reading: fluree_doc_vision::WordReading,
 ) -> (fluree_doc_vision::WordReading, bool) {
-    if ocr::is_noise(&doc.pages[0], &reading) {
-        let words = Vec::new();
-        (fluree_doc_vision::WordReading { words, ..reading }, true)
-    } else {
-        (reading, false)
+    let (reading, noise) = set_aside_noise(doc, reading);
+    (reading, noise.is_some())
+}
+
+/// As [`without_noise`], with the words set aside and the engine's
+/// confidence in them, for the reading to be listed as one set aside.
+fn set_aside_noise(
+    doc: &Document,
+    reading: fluree_doc_vision::WordReading,
+) -> (fluree_doc_vision::WordReading, Option<ocr::Noise>) {
+    match ocr::noise_of(&doc.pages[0], &reading) {
+        Some(noise) => {
+            let words = Vec::new();
+            (
+                fluree_doc_vision::WordReading { words, ..reading },
+                Some(noise),
+            )
+        }
+        None => (reading, None),
     }
 }
 
@@ -495,8 +511,14 @@ fn analysed(
     more_pages: bool,
     reading: fluree_doc_vision::WordReading,
 ) -> ImageElements {
-    let (reading, noise) = without_noise(&doc, reading);
-    let injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
+    let (reading, noise) = set_aside_noise(&doc, reading);
+    let mut injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
+    // Listed as set aside, with what it held: the confidence of a reading
+    // that came back as noise is what tells it apart from one of a blank
+    // picture.
+    if let (Some(r), Some(_)) = (injected.first_mut(), noise) {
+        r.noise = noise;
+    }
     // A page OCR turned a quarter to read is still the image as shown.
     let (width, height) = doc.pages[0].display_size();
     let size = fluree_doc_model::PageSize {
@@ -512,7 +534,7 @@ fn analysed(
         elements: analysis.elements,
         size,
         not_texty: false,
-        noise,
+        noise: noise.is_some(),
         refused: injected.first().and_then(|r| r.refused),
         more_pages,
         ocr,
@@ -531,10 +553,9 @@ pub struct PlacedRead {
     /// WMF, a GIF), `PastAllowance` (past what one document may have read,
     /// [`fluree_doc_model::Allowance::DOCUMENT`]), `Failed` (its bytes or its
     /// reading failed, or was set aside as one whose words could not be
-    /// placed: [`ImageElements::refused`]) or `NotTexty` (the pixel probe
-    /// does not take it for text, [`ImageElements::not_texty`], or its
-    /// reading was noise, [`ImageElements::noise`]). Never `NotRead`: each
-    /// image held is read.
+    /// placed: [`ImageElements::refused`]) or `NotTexty` (its reading was
+    /// noise: [`ImageElements::noise`]). Never `NotRead`: each image held
+    /// is read.
     pub unread: Vec<fluree_doc_model::UnreadImage>,
     /// What went wrong with each image `UnsupportedFormat` or `Failed`, by
     /// the name it goes by (`m1`).
@@ -552,7 +573,11 @@ pub struct PlacedRead {
 /// figures draw it, one at a time, within what one document may have read.
 /// `bytes` reads one by the part the file holds it under; it is decoded,
 /// read and dropped before the next, so a document of many large pictures
-/// is never held decoded at once.
+/// is never held decoded at once. Each is read whatever the pixel probe
+/// makes of it ([`texty`]), unlike a bare image read by [`elements`]: the
+/// probe keeps a billed model's call from a photograph or a logo, and an
+/// engine costs nothing per image; what it reads in one that holds no text
+/// is held to the noise rule ([`without_noise`]).
 pub fn read_placed(
     media: Vec<fluree_doc_model::Media>,
     bytes: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
@@ -591,7 +616,7 @@ pub fn read_placed(
                 })
         }
         fn read(&mut self, _: &Picture, image: &[u8]) -> Result<ImageElements, String> {
-            elements(image, self.engine)
+            read_texty(decode(image)?, self.engine)
         }
     }
     // Each picture's place among the document's, by the name it goes by.
@@ -623,14 +648,8 @@ pub fn read_placed(
                 ..o
             })
         };
-        // An image the pixel probe does not take for text is read by
-        // nothing.
-        if r.not_texty {
-            unread.push((picture, "NotTexty"));
-            continue;
-        }
-        // A reading that is noise is set aside: listed all the same, as a
-        // reading that took no word.
+        // A reading that is noise is set aside: listed all the same, with
+        // the words it held and the engine's confidence in them.
         if r.noise {
             out.ocr.extend(listed(r.ocr));
             unread.push((picture, "NotTexty"));
@@ -690,7 +709,9 @@ pub fn read_placed(
 /// heading read in a screenshot is a heading of the screen, not of the
 /// document: it is read as a paragraph, so the document's outline stays its
 /// own. Tables stay tables. Ids are renumbered in order, and an element's
-/// reference to another by id (`resumes`, `continues`) follows it.
+/// reference to another by id (`resumes`, `continues`) follows it: the
+/// document's to the document's elements, a reading's to that reading's
+/// own, and one a reading makes to an element it does not hold is dropped.
 pub fn place_after_figures(
     elements: &mut Vec<fluree_doc_model::Element>,
     readings: Vec<(String, Vec<fluree_doc_model::Element>)>,
@@ -700,28 +721,44 @@ pub fn place_after_figures(
     }
     // A figure may hold several images (a group of pictures): their texts
     // follow it in order.
-    let mut by_figure: std::collections::HashMap<String, Vec<fluree_doc_model::Element>> =
+    let mut by_figure: std::collections::HashMap<String, Vec<Vec<fluree_doc_model::Element>>> =
         std::collections::HashMap::new();
     for (figure, read) in readings {
-        by_figure.entry(figure).or_default().extend(read);
+        by_figure.entry(figure).or_default().push(read);
     }
     let mut out = Vec::with_capacity(elements.len());
+    // Each reading's elements are named apart from the document's before the
+    // renaming below, by a name no element of a document has: a reading's
+    // own ids (`elem-00001`… from its analysis) name nothing of this
+    // document, and kept, they would take the place of the document's
+    // elements of the same id. A reference inside a reading (a table of the
+    // screen continued under it) follows its element; one to an element the
+    // reading does not hold names nothing here, and is dropped.
+    let mut readings = 0usize;
     for e in elements.drain(..) {
         let read = e.figure.as_ref().and_then(|f| by_figure.remove(f));
         let page = e.page;
         out.push(e);
-        for mut r in read.into_iter().flatten() {
-            // The reading's own ids (`elem-00001`… from its analysis) name
-            // nothing of this document: kept, they would take the place of
-            // the document's elements of the same id in the renaming below.
-            r.id.clear();
-            r.page = page;
-            r.bbox = None;
-            if r.kind != "doco:Table" {
-                r.kind = "doco:Paragraph".into();
-                r.level = None;
+        for mut read in read.into_iter().flatten() {
+            readings += 1;
+            let own: std::collections::HashMap<String, String> = read
+                .iter()
+                .filter(|r| !r.id.is_empty())
+                .map(|r| (r.id.clone(), format!("\0reading-{readings}-{}", r.id)))
+                .collect();
+            for mut r in read.drain(..) {
+                r.id = own.get(&r.id).cloned().unwrap_or_default();
+                for to in [&mut r.resumes, &mut r.continues] {
+                    *to = to.take().and_then(|id| own.get(&id).cloned());
+                }
+                r.page = page;
+                r.bbox = None;
+                if r.kind != "doco:Table" {
+                    r.kind = "doco:Paragraph".into();
+                    r.level = None;
+                }
+                out.push(r);
             }
-            out.push(r);
         }
     }
     let mut renamed = std::collections::HashMap::new();
@@ -810,11 +847,36 @@ mod tests {
             source: fluree_doc_model::MediaSource::Part("word/media/image1.png".into()),
             index: 0,
         };
-        let r = read_placed(vec![media], &mut |_| Ok(flat_png(600, 400)), &Unasked);
-        assert!(r.read.is_empty(), "{:?}", r.read);
-        let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
-        assert_eq!(reasons, ["NotTexty"]);
-        assert!(r.errors.is_empty());
+        // A document's picture is read by the engine all the same: the
+        // probe gates a billed model's call, not OCR. It holds nothing.
+        let blank = Blank(Default::default());
+        let r = read_placed(vec![media], &mut |_| Ok(flat_png(600, 400)), &blank);
+        assert_eq!(blank.0.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(r.read.len(), 1);
+        assert_eq!(r.read[0].0, "figure-0-1");
+        assert!(r.read[0].1.is_empty());
+        assert!(r.unread.is_empty() && r.errors.is_empty());
+    }
+
+    /// An engine that reads no word in whatever it is shown, and counts
+    /// what it is shown.
+    struct Blank(std::sync::atomic::AtomicUsize);
+
+    impl OcrEngine for Blank {
+        fn name(&self) -> &str {
+            "blank"
+        }
+        fn read(&self, image: &Pixels) -> Result<WordReading, String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(WordReading {
+                coords: Coords::Px,
+                width: Some(image.width as f64),
+                height: Some(image.height as f64),
+                engine: Some("blank".into()),
+                words: Vec::new(),
+                rules: Vec::new(),
+            })
+        }
     }
 
     /// An engine that reads two lines across whatever it is shown.
@@ -1023,12 +1085,21 @@ mod tests {
         let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
         assert_eq!(reasons, ["NotTexty"]);
         assert!(r.errors.is_empty());
-        // Its reading is listed all the same, as one that took no word.
+        // Its reading is listed all the same, set aside as noise, with the
+        // word it held and the engine's confidence in it: what tells it
+        // apart from a reading of a blank picture.
         assert_eq!(
-            (r.ocr.len(), r.ocr[0].words, r.ocr[0].image.as_deref()),
-            (1, 0, Some("m1")),
-            "{:?}",
-            r.ocr
+            r.ocr,
+            [fluree_doc_model::OcrReading {
+                page: None,
+                image: Some("m1".into()),
+                crop: "full".into(),
+                engine: None,
+                words: 1,
+                mean_confidence: Some(0.2),
+                min_confidence: Some(0.2),
+                set_aside: Some("noise".into()),
+            }]
         );
     }
 
@@ -1135,10 +1206,16 @@ mod tests {
         let mut part = el("doco:Table", "", "elem-00005", "eml");
         part.continues = Some("elem-00003".into());
         let mut els = vec![opener, figure, quoted, back, part];
+        // The reading's own table continued under its first part, and a
+        // reference to an element the reading does not hold.
+        let mut read2 = el("doco:Table", "Read 2", "elem-00002", "ocr");
+        read2.continues = Some("elem-00001".into());
+        let mut read3 = el("doco:Paragraph", "Read 3", "elem-00003", "ocr");
+        read3.resumes = Some("elem-00004".into());
         let read = vec![
-            el("doco:Paragraph", "Read 1", "elem-00001", "ocr"),
-            el("doco:Paragraph", "Read 2", "elem-00002", "ocr"),
-            el("doco:Paragraph", "Read 3", "elem-00003", "ocr"),
+            el("doco:Table", "Read 1", "elem-00001", "ocr"),
+            read2,
+            read3,
         ];
         place_after_figures(&mut els, vec![("figure-0-1".into(), read)]);
         let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
@@ -1157,6 +1234,12 @@ mod tests {
         );
         assert_eq!(els[6].resumes.as_deref(), Some("elem-00001"));
         assert_eq!(els[7].continues.as_deref(), Some("elem-00006"));
+        // The reading's table goes on in the reading's own first part, not
+        // in the document's opener its old id named; and nothing the
+        // reading does not hold is named from it.
+        assert_eq!(els[3].continues.as_deref(), Some("elem-00003"));
+        assert_eq!(els[4].resumes, None);
+        assert!(els.iter().all(|e| !e.id.starts_with('\0')));
     }
 
     #[test]

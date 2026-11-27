@@ -38,7 +38,7 @@
 //! its page, so no coordinate reaching the layout pipeline is beyond a
 //! page's reach.
 
-use fluree_doc_model::budget::{scaled, TooLarge};
+use fluree_doc_model::budget::{scaled, Limit, TooLarge};
 use fluree_doc_model::DocumentInfo;
 use fluree_doc_ooxml::{attr, local, Package};
 use fluree_doc_pdf::geom::BBox;
@@ -61,10 +61,12 @@ pub const MAX_TOTAL_BYTES: u64 = scaled(512 << 20);
 /// past it are counted, not read ([`Document::pages_past_limit`]).
 pub const MAX_PAGES: usize = fluree_doc_model::budget::MAX_PAGES;
 /// The most pages a document may list, those read and those past the page
-/// limit: 250,000, as many as a PDF's page tree may. Each page past the
-/// limit is counted, and listed unread, so this bounds that list: a 163 KB
-/// package whose one fixed document, named eight times, listed 2.1 million
-/// pages each time made 16.7 million, 1.2 GB as JSON and an abort as DoCO.
+/// limit: 250,000, as many as a PDF's page tree may, or the page limit
+/// where that is more (a caller asking for that many pages read). Each
+/// page past the limit is counted, and listed unread, so this bounds that
+/// list: a 163 KB package whose one fixed document, named eight times,
+/// listed 2.1 million pages each time made 16.7 million, 1.2 GB as JSON and
+/// an abort as DoCO.
 pub const MAX_LISTED_PAGES: usize = 250_000;
 /// The most glyphs, and pictures, read from one document: four million.
 ///
@@ -209,6 +211,10 @@ pub fn is_xps(bytes: &[u8]) -> bool {
         && Package::open(bytes).is_ok_and(|mut p| p.root("fixedrepresentation").is_some())
 }
 
+/// The warning a page carries ([`Page::warnings`]) whose part the package
+/// does not hold or that does not read: it is read as an empty page.
+pub const MISSING_PAGE: &str = "MissingPagePart";
+
 /// A picture's bytes, at most [`MAX_PART_BYTES`].
 pub fn read_image(bytes: &[u8], part: &str) -> Result<Vec<u8>, String> {
     Package::open(bytes)?.read_bytes(part, MAX_PART_BYTES)
@@ -216,6 +222,11 @@ pub fn read_image(bytes: &[u8], part: &str) -> Result<Vec<u8>, String> {
 
 /// Read an XPS document's pages.
 pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
+    parse_within(bytes, MAX_GLYPHS)
+}
+
+/// [`parse`], at most `max_glyphs` glyphs and pictures in all.
+fn parse_within(bytes: &[u8], max_glyphs: usize) -> Result<Xps, XpsError> {
     let mut pkg = Package::open(bytes).map_err(XpsError::Zip)?;
     if pkg.part_names().len() > MAX_PARTS {
         return Err(XpsError::TooLarge(TooLarge::fixed(format!(
@@ -237,6 +248,7 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
     let seq_xml = read(&mut pkg, &seq)?.ok_or(XpsError::NotXps)?;
     let mut page_parts = Vec::new();
     let (limit, mut past_limit) = (fluree_doc_model::budget::limits().pages, 0);
+    let most = MAX_LISTED_PAGES.max(limit);
     let mut docs = Vec::new();
     sources(&seq_xml, "DocumentReference", |src| {
         docs.push(resolved(&seq, src));
@@ -254,10 +266,10 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
             } else {
                 past_limit += 1;
             }
-            if page_parts.len() + past_limit > MAX_LISTED_PAGES {
-                return Err(XpsError::TooLarge(TooLarge::fixed(format!(
-                    "it lists more than {MAX_LISTED_PAGES} pages"
-                ))));
+            if page_parts.len() + past_limit > most {
+                return Err(XpsError::TooLarge(
+                    TooLarge::new(Limit::Pages, most as u64, "pages").within("it lists"),
+                ));
             }
             Ok(())
         })?;
@@ -267,12 +279,18 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
     let mut glyphs = 0usize;
     for part in page_parts {
         let index = pages.len();
-        // A page the package does not hold is an empty page, so the pages
-        // after it keep their numbers.
-        let xml = read(&mut pkg, &part)?.unwrap_or_default();
-        let room = MAX_PAGE_GLYPHS.min(MAX_GLYPHS - glyphs);
-        let (page, imgs) = page(&xml, &part, index, room)?;
-        glyphs += page.glyphs.len();
+        // A page the package does not hold, or that does not read, is an
+        // empty page, so the pages after it keep their numbers, and says so
+        // ([`MISSING_PAGE`]): read as blank, it would pass for one.
+        let xml = read(&mut pkg, &part)?;
+        let room = MAX_PAGE_GLYPHS.min(max_glyphs - glyphs);
+        let (mut page, imgs) = page(xml.as_deref().unwrap_or_default(), &part, index, room)?;
+        if xml.is_none() {
+            page.warnings.push(MISSING_PAGE);
+        }
+        // Its glyphs and its pictures, both counted against the document's
+        // bound as against the page's.
+        glyphs += page.glyphs.len() + imgs.len();
         pages.push(page);
         images.extend(imgs);
     }
@@ -280,6 +298,7 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
         doc: Document {
             pages,
             pages_past_limit: past_limit,
+            cut_short: None,
             title: None,
         },
         images,

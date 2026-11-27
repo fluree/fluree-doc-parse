@@ -21,9 +21,9 @@ pub mod symbols;
 
 pub use doco::{to_doco, to_text, DocoOptions};
 pub use element::{
-    is_stray_control, xsd_date_time, xsd_temporal, Attachment, Datum, DocumentInfo, Element, Link,
-    Notes, OcrReading, ParseWarning, Target, Turn, UnreadImage, UnreadPage, UnreadRegion,
-    PAST_PAGE_LIMIT,
+    is_past_limit, is_stray_control, past_limit_reason, xsd_date_time, xsd_temporal, Attachment,
+    Datum, DocumentInfo, Element, Link, Notes, OcrReading, ParseWarning, Target, Turn, UnreadImage,
+    UnreadPage, UnreadRegion, PAST_MEMORY_LIMIT, PAST_PAGE_LIMIT, PAST_WORK_LIMIT,
 };
 pub use emit::{
     to_markdown, to_markdown_with, to_markdown_with_options, to_xhtml, to_xhtml_with,
@@ -31,8 +31,8 @@ pub use emit::{
 };
 pub use geom::{BBox, PageSize};
 pub use media::{
-    pictures, read_pictures, Allowance, Media, MediaSource, Picture, PictureReader, PictureReads,
-    Unread,
+    pictures, read_pictures, stored_size, under_model_floor, Allowance, Media, MediaSource,
+    Picture, PictureReader, PictureReads, Unread, MIN_LONG_SIDE_PX, MIN_SHORT_SIDE_PX,
 };
 pub use merges::{denormalize, Merges};
 pub use message::{Mailbox, Message};

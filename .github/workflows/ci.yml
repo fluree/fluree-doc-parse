@@ -55,7 +55,12 @@ jobs:
       TARGET: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      # A dated nightly, not the latest: a nightly that breaks cargo-fuzz or
+      # libFuzzer would fail this job on a change that did nothing wrong.
+      # Moved forward by hand, with the date in fuzz/README.md.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-11-20
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz

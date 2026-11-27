@@ -81,8 +81,10 @@ footnotes and `i`, `ii`, … for endnotes, or the format the document sets
 (`w:footnotePr`, `w:endnotePr`). The reference mark in the body adds nothing
 to the body's text, so the body reads as it did. A note no reference cites,
 or cited only inside a tracked deletion, is not shown by Word and is not
-read; Word's separator lines are no notes. Comments come last, after the
-footer, since Word does not print them: in the order the body anchors them,
+read; Word's separator lines are no notes. Comments are read only when
+asked for (`--comments`; `fluree_doc_docx::Options::comments` in a
+library), since Word does not print them, and come last, after the footer:
+in the order the body anchors them,
 then any anchored elsewhere, each `evidence` `comment` and opening with its
 author (`Sam Example: Source?`). A heading inside a note is read as a
 paragraph, and a picture in one is left out. Footnote reference marks set
@@ -113,24 +115,16 @@ writes the image as `<stem>_m<n>.png`, reason `embedded_image` (`small_image`
 under the floor a model is sent, below), for the
 figure `figure-0-<n>`, and each reader takes it under that name.
 
-First, the pixel probe a PDF's raster regions are routed by
-([the router](../design/router.md#the-pixel-probe)) looks at the picture.
-One it does not take for text (a photograph, a chart, a logo, a flat
-illustration), or too thin for a line of text (under 10 pixels on its
-shorter side, the floor a PDF's region is held to, under which an engine
-misreads what it reads), is read by nothing: neither OCR, which reads noise in such
-pixels, nor a model, whose call is billed and sends the picture off the
-machine. It is listed in
-[`doc:unreadImages`](../formats/doco.md#images-nothing-read) as
-`NotTexty`, not counted in the note on stderr, and `render-routed` writes no
-crop of it. A capture, a scanned table or a labelled chart is taken for
-text, a capture with a few lines on a wide, light screen included. A
-picture that does not decode is not judged. The others go on:
+Each reader below is asked in turn. Only the last, the configured model,
+is held to the pixel probe:
 
 1. **OCR**, when `convert` has an engine (`--ocr`) or the words one wrote
-   (`--ocr-words`, `<stem>_m<n>.json`). What it reads is held to a noise
-   rule, a net behind the probe for a photograph or a gradient it took for
-   text, as an OCR reading of a PDF's region is: words whose mean
+   (`--ocr-words`, `<stem>_m<n>.json`). The engine reads every picture it
+   decodes, whatever it shows, and words written for a picture are read
+   whatever the probe makes of it: OCR costs nothing per image and sends
+   nothing off the machine. What it reads is held to a noise
+   rule instead, for a photograph or a gradient read for text it does not
+   hold, as an OCR reading of a PDF's region is: words whose mean
    confidence is under 0.5, or under 0.8 when most of them are fragments of
    one or two letters or figures, or one fragment, or one word read under
    0.8, boxed over nearly all of the picture. A line of text cropped close,
@@ -140,26 +134,38 @@ picture that does not decode is not judged. The others go on:
    `NotTexty`, not counted in the note on stderr.
 2. **A model's reading supplied** (`--tier-results`, `<stem>_m<n>.json`),
    which replaces what OCR read, as a scanned page's reading does, unless it
-   lost most of OCR's letters (a truncated reply). With `--tier-results`,
-   no model is called for any picture, even one it holds no reading of.
-3. **The configured model** (`--escalate`, or a reader configured), for a
-   picture OCR read no text in, or with no OCR at all; at most
-   `escalation.max_crops` pictures a document (0 for no limit), the others
-   noted on stderr and left unread. Only a PNG, JPEG or TIFF is sent. A
-   document's pictures go through one reader, up to
-   `escalation.concurrency` at a time, as a PDF's crops do.
+   lost most of OCR's letters (a truncated reply). It is taken whatever the
+   picture shows. With `--tier-results`, no model is called for any
+   picture, even one it holds no reading of.
+3. **The configured model** (`--escalate`, or a reader configured, unless
+   `--no-escalate`), for a picture OCR read no text in, or with no OCR at
+   all; at most `escalation.max_crops` pictures a document (0 for no
+   limit), the others noted on stderr and left unread. A document's
+   pictures go through one reader, up to `escalation.concurrency` at a
+   time, as a PDF's crops do; each picture's bytes are read from the file
+   again as it is sent, so a document of many large pictures is not held
+   whole until the last is read (a batch of them at most, some 64 MiB).
 
-   A picture is sent when it has at least 400 pixels on its longer side and
-   48 on its shorter, as an e-mail's image needs, whatever size the
-   document shows it at: a small logo or an icon is under that floor.
-   With the probe, nothing else is judged: a sparse screenshot or a
-   labelled chart over the floor is sent, a request the provider bills,
-   even one the document shows an inch wide. One under the floor is listed in
-   [`doc:unreadImages`](../formats/doco.md#images-nothing-read) as `Small`
-   and, as a logo is, not counted in the note on stderr (`--verbose` names
-   it). OCR and a reading supplied are not held to the floor: they read
-   every picture with a line's pixels (see above), whatever size the
-   document shows it at.
+   A request is billed and sends the picture off the machine, so a picture
+   is sent only when it is worth one:
+   - **its header reads.** Only a PNG, JPEG or TIFF is sent, and one whose
+     header does not parse (a part that only opens like an image) is not: it
+     is listed as `Failed`, stderr saying why;
+   - **it is over the floor:** at least 400 pixels on its longer side and
+     48 on its shorter, as an e-mail's image needs, whatever size the
+     document shows it at. A small logo or an icon is under it, and listed
+     as `Small`, not counted in the note on stderr (`--verbose` names it);
+   - **the pixel probe takes it for text.** The probe a PDF's raster regions
+     are routed by ([the router](../design/router.md#the-pixel-probe)) looks
+     at the picture: one it does not take for text (a photograph, a chart, a
+     logo, a flat illustration), or too thin for a line of text (under 10
+     pixels on its shorter side), is listed as `NotTexty`, not counted in
+     the note on stderr, and `render-routed` writes no crop of it. A
+     capture, a scanned table or a labelled chart is taken for text, a
+     capture with a few lines on a wide, light screen included: sent, a
+     request the provider bills, even one the document shows an inch wide.
+     A picture whose header reads but that does not decode is not judged,
+     and is sent: the model may read what the decoder refuses.
 
 A group of pictures is one figure holding several images:
 the second and later are `m<n>_1`, `m<n>_2`, … and their text follows the
@@ -228,22 +234,48 @@ A `.doc` (or `.dot`) is read for its text, through its piece table: the
 after a fast save, one byte a character (Windows-1252) or two (UTF-16), and
 the piece table says which run of the document each holds. What is read:
 
-- The main text, as paragraphs at Word's paragraph marks; a line break keeps
-  its line, and a page break parts lines.
+- The main text, as paragraphs at Word's paragraph marks, and at the
+  section marks ending its sections (a section break ends a paragraph, as
+  in Word); a line break keeps its line, and a page break inside a
+  paragraph parts lines.
 - **Tables**, by each paragraph's own properties (in a table; the end of a
   row), as `doco:Table`s of their cells, a cell's paragraphs joined.
 - A field shows its result (`PAGE` its last page number), not its code;
   a footnote reference in the body adds nothing to it.
+- Text a tracked change deleted, and hidden text, are left out, as Word
+  shows the document (by the characters' own properties; text a character
+  style hides is still read). A character past the first plane, an emoji,
+  is read as itself.
+- The **title and author** the summary information declares go on the
+  document node.
 - **Footnotes, endnotes and comments** after the body, marked by `evidence`
   `footnote`, `endnote` and `comment` as in a DOCX; a note opens with its
-  number (`1`, `2`, … and `i`, `ii`, … for endnotes).
+  number (`1`, `2`, … and `i`, `ii`, … for endnotes). `fdoc convert` keeps
+  the comments only with `--comments`, as a DOCX's.
+- **Headers and footers**, as a DOCX's: those Word shows, each section's
+  first page's where the section has a title page, its odd pages' (or only
+  one), and its even pages' where the document sets them apart, each story
+  read once and a line two of them share kept once. The headers come before
+  the body and the footers after the notes, their `evidence` `header` and
+  `footer`. The notes' separators are not read.
+- **Text boxes**, the body's and the headers', each after the paragraph
+  holding the shape it is drawn in, with that paragraph's `evidence`; a box
+  whose shape is not found comes after the body (or the headers). A box
+  Word keeps for reuse after it was deleted is not read. A DOCX's text box
+  is read in its anchor paragraph, its first line run on to the anchor
+  paragraph's text; here the box's paragraphs stay its own.
 
 What this round leaves out, and says so here rather than guessing: styles
 (so no heading, title or list is told apart from a paragraph, and list
-numbers Word computes are absent), headers and footers, text boxes, comment
-authors, a table's header row (`header_rows` is left undetected), merged
-cells, pictures, and the summary information. Word 95 and earlier and
-encrypted files are refused. Provenance and evidence are `doc`.
+numbers Word computes are absent), comment authors, a table's header row
+(`header_rows` is left undetected), merged cells, pictures, and the summary
+information's dates. Headers, footers or text boxes whose list in the table
+stream does not read (it is missing, lies outside the stream, or its
+positions go backwards) are left out and named in a warning
+(`not read: headers and footers, text boxes`;
+`fluree_doc_doc::parse_with_info` lists them in `left_out`), so what they
+say is not lost without a word. Word 95 and earlier and encrypted files
+are refused. Provenance is `doc`, and so is the body's evidence.
 
 A file is recognised as a Word document by its content, a compound file
 holding a `WordDocument` stream, whatever its name. As for any compound
@@ -254,12 +286,17 @@ pieces and 64 million characters, a piece table whose positions go
 backwards (pieces that overlap, reading the same characters again) failing
 as malformed. Each page of paragraph properties is read once however many
 times the bin table names it, at most about four million runs of them, and
-a paragraph finds its own by a binary search. The characters are read one
-at a time, never all held; every character kept, element made and table
-cell (a row padded to the widest included), and the copies DoCO writes of
-a table's cells (each cell's labels), is spent from the document's
-budget ([limits on what one document may make](../reference/limits.md)) first, so pieces that all point at the
-same text cannot make millions of paragraphs of it. Returns `DocError`
+a paragraph finds its own by a binary search, as a run of characters (a
+header's story, a text box's) finds its first piece. The header stories and
+the text boxes are read only where their positions never go backwards, so
+none is read twice, each held to its story; the sections' properties are
+looked through once each, at most 16 MiB of them, past which the headers are
+left out and said to be. The characters are read one at a time, never all
+held; every character kept, element made and table cell (a row padded to the
+widest included), and the copies DoCO writes of a table's cells (each cell's
+labels), is spent from the document's budget ([limits on what one document may make](../reference/limits.md))
+first, so pieces that all point at the same text cannot make millions of
+paragraphs of it. Returns `DocError`
 (`fluree_doc_doc::parse`) otherwise.
 
 ## PPTX
@@ -322,9 +359,13 @@ the text's own header, is a level-1 heading; every other text is a
 paragraph a paragraph mark, a line break kept as a line. A paragraph whose
 properties (`StyleTextPropAtom`) give it a bullet or an indent level past the
 first is a list item, as a PPTX paragraph is; where they say nothing, a body
-placeholder's paragraph, which the master bullets, is one. The level itself
-is not kept: the element model gives a level to headings only. A slide whose shapes hold no text, as an older writer
-keeps it, is read from the slide list. A slide's **speaker notes** (the
+placeholder's paragraph, which the master bullets, is one. Its indent
+level is its `depth`, so a point under a point nests inside it. PowerPoint
+keeps a placeholder's text (the title, the body) in the slide list, the
+placeholder naming it there (`OutlineTextRefAtom`): it is read where the
+placeholder stands, among the slide's pictures, tables and text boxes. A
+slide whose shapes show nothing and name nothing, as an older writer keeps
+it, is read from the slide list. A slide's **speaker notes** (the
 notes slide its own atom names) follow its content on its page, as
 paragraphs whose `evidence` is `notes`: what the presenter said, kept apart
 from what the audience saw.
@@ -361,9 +402,14 @@ at most 64 deep, at most 4,096 edits are followed (each once, so an edit
 chain that loops ends), each persist directory read once and about four
 million of their entries in all, and 10,000 slides read. A slide or a notes
 slide is read once however many ids the persist directory sends to its
-place in the stream, and every text read, element made and table cell, and
-the copies DoCO writes of a table's cells (a merged value in each cell it
-covers, each cell's labels), is spent from the document's budget ([limits on what one document may make](../reference/limits.md)) first. A
+place in the stream, or however many slides list or name it; the text read,
+however many slides name one place in the stream, is at most 256 MiB. Each
+text a placeholder names is a copy, counted each time. Every text read,
+element made and table cell, and the copies DoCO writes of a table's cells
+(a merged value in each cell it covers, each cell's labels), is spent from
+the document's budget ([limits on what one document may make](../reference/limits.md))
+first, and each record a slide's walk visits is a step of its work, so
+slides laid inside each other's records are not walked without end. A
 picture several shapes show is read once by OCR or a model, its text placed
 after each of its figures, as a DOCX's is.
 Provenance and evidence are `ppt`. Returns `PptError`
@@ -418,6 +464,11 @@ flattened out of it. So this reader measures after all, but only shape.
   as too large. Past 2,048 islands a sheet's islands are not mended. The
   `.xls`, `.xlsb` and `.ods` readers lay their sheets out the same way,
   within the same budget.
+- **Size.** A cell is spent at what the output makes of it: a cell that
+  holds text is a node of its own in DoCO (4 KiB), a cell of its row in
+  Markdown, XHTML, JSON and the text (512 bytes). So a sheet of 50,000 rows
+  by 12 columns converts to Markdown, and is refused as DoCO. The same holds
+  for `.xls`, `.xlsb` and `.ods`, laid out alike.
 - **Values are the cached ones.** A formula's last computed value is what
   the file holds and what Excel shows; nothing is recalculated.
 - **A cell's text is what Excel shows.** A number is rendered through its
@@ -458,7 +509,11 @@ read. Only pictures (`xdr:pic`) are read: a chart has its data in the sheet,
 and a shape's image fill is a texture. A group of pictures is one figure
 holding several images. Pictures in a header or footer, comments' shapes,
 and Excel's pictures placed *in* a cell (`IMAGE()`, Place in Cell) are not
-read. A workbook without pictures converts as it did. In a library,
+read. A workbook without pictures converts as it did. One with pictures
+does not, with no reader configured either: each picture is a figure in
+every format, its alternative text in the text, Markdown and JSON, the
+elements after it numbered one further, and the graph lists it in
+`doc:unreadImages` (`NotRead`) when nothing read it. In a library,
 `fluree_doc_xlsx::parse_with_ocr` (feature `ocr`) does it with an engine, and
 `parse_with_media` and `read_media` list and read the pictures as DOCX's do.
 
@@ -494,9 +549,11 @@ chain that loops or runs past the file; its workbook stream at most
 256 MiB; and its records walked as calamine would walk them, each one
 calamine reads checked against what calamine indexes in it. A workbook
 whose cells, sheets' grids or merged ranges pass about four million in all
-(a sheet named twice counting twice), or whose cells would copy more than
-64 million characters of text, fails as too large, as does one whose cells
-pass the document's budget once read ([limits on what one document may make](../reference/limits.md)); one whose records are
+(a sheet named twice counting twice), whose cells would copy more than
+64 million characters of text, which lists more than 65,536 sheet records,
+or whose sheets' walks cover more than twice the stream (sheets laid inside
+each other, each walked to the end), fails as too large, as does one whose
+cells pass the document's budget once read ([limits on what one document may make](../reference/limits.md)); one whose records are
 cut short, or whose sheet offsets point at no sheet, fails as malformed.
 calamine then reads a compound file written for it, holding a workbook
 stream of only the records it needs, each sheet once and its formulas
@@ -509,13 +566,14 @@ A `.xlsb` is a workbook saved as binary records in a zip. Its records are
 read here, each checked against its length, rather than by calamine, which
 indexes them unchecked; a sheet's cells are laid out the same way as an
 `.xls`'s, and provenance and evidence are `xlsb`. Numbers read as General,
-dates as ISO dates, as for `.xls`; bold cells, frozen rows and merges are
-not read. Every part is first inflated to nowhere against 64 MiB each and
-256 MiB in all (and at most 10,000 parts), and lists at most 10,000 sheets;
-a sheet part is read once however many times it is listed, at most about
-four million cells are read, a cell past Excel's grid is none, and each
-cell and its text (a shared string for each cell naming it) are spent from
-the document's budget ([limits on what one document may make](../reference/limits.md)) before they are copied. A file is
+dates as ISO dates, as for `.xls`; bold cells (a font of weight 700 or
+more) and merged ranges are read as an `.xls`'s are, frozen rows are not.
+Every part is first inflated to nowhere against 64 MiB each and 256 MiB in
+all (and at most 10,000 parts), and lists at most 10,000 sheets; a sheet part
+is read once however many times it is listed, at most about four million
+cells are read, a cell past Excel's grid is none, and each cell and its text
+(a shared string for each cell naming it) are spent from the document's
+budget ([limits on what one document may make](../reference/limits.md)) before they are copied. A file is
 recognised by its content, a zip holding `xl/workbook.bin`, whatever its
 name and on stdin. `.ods` is read by its own reader
 ([OpenDocument](opendocument.md)).

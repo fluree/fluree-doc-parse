@@ -287,6 +287,11 @@ thread_local! {
 /// counting at `output`'s costs: a converter wraps the reading of a document
 /// in it once, and every reader's budget follows, without each taking the
 /// output as an argument.
+///
+/// The setting is the calling thread's, as [`within`]'s is. A reader run on
+/// another thread, a worker of a caller's own pool, does not see it and
+/// counts at DoCO's costs: wrap the reading in it inside the task, on the
+/// thread that reads.
 pub fn converting_to<R>(output: Output, read: impl FnOnce() -> R) -> R {
     struct Restore(Output);
     impl Drop for Restore {
@@ -358,10 +363,16 @@ pub const PAGE_GLYPH_BYTES: u64 = 192;
 /// spaces peaked at 4.0 GB.
 pub const PART_BYTES: u64 = 2;
 
-/// Which bound a document passed: the memory or the work of [`Limits`],
-/// which a caller may raise, or a reader's own. The other two never refuse
-/// a document: past the page limit it is read to it and the rest listed
-/// unread, and a page past the render pixels is drawn smaller.
+/// Which bound a document passed: the memory, the work or the pages of
+/// [`Limits`], which a caller may raise, or a reader's own. The render
+/// pixels never refuse a document: a page past them is drawn smaller.
+///
+/// The pages refuse only a document listing more than a reader can hold
+/// before it reads any (a PDF's page tree past 250,000 pages, or past
+/// [`Limits::pages`] where that is more): past the page limit, a document
+/// is read to it and the rest listed unread. A PDF past its memory or work
+/// on a page after the first is read to the page before, the rest listed
+/// unread too ([`crate::past_limit_reason`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Limit {
@@ -369,9 +380,11 @@ pub enum Limit {
     Memory,
     /// [`Limits::work`], in steps.
     Work,
+    /// [`Limits::pages`], or a reader's own bound on the pages it lists
+    /// where that is more.
+    Pages,
     /// A reader's own bound, fixed (a part read beside the document, the
-    /// cells calamine may allocate, how deep a page tree nests and how many
-    /// pages it lists).
+    /// cells calamine may allocate, how deep a page tree nests).
     Fixed,
 }
 
@@ -530,6 +543,11 @@ thread_local! {
 /// beside the message) shares what the outer one leaves rather than
 /// taking a budget of its own on top of it, without each reader's entry
 /// point taking a budget to be handed one.
+///
+/// The share is the calling thread's. A reader run on another thread, a
+/// worker of a caller's own pool, does not see it and takes a whole
+/// budget: call this inside the task, on the thread that reads, with what
+/// the caller means that reading to have.
 pub fn within<R>(memory: u64, f: impl FnOnce() -> R) -> R {
     /// The share before, put back however `f` ends.
     struct Restore(u64);
@@ -551,7 +569,7 @@ impl Budget {
         Self {
             memory: 0,
             max_memory: memory,
-            work: Meter::of(Limit::Work, work, "steps of layout"),
+            work: Meter::of(Limit::Work, work, "steps of work"),
             output: Output::Doco,
         }
     }
@@ -1038,12 +1056,28 @@ mod tests {
     }
 
     #[test]
+    fn a_csv_records_cell_costs_its_own() {
+        // A record's cell, with its text; an empty one costs nothing
+        // beyond its slot.
+        for output in [Output::Doco, Output::Flat, Output::Text] {
+            let cell = output.csv_cell_bytes();
+            assert_eq!(filled_csv_cell_bytes(output, "a&"), cell + 7 * TEXT_BYTES);
+            assert_eq!(filled_csv_cell_bytes(output, ""), 0);
+            let need = 2 * cell + 13 * TEXT_BYTES;
+            let mut b = Budget::new(need, 0).for_output(output);
+            b.spend_csv_cell_texts(["a&", "", "\u{1}"]).unwrap();
+            assert!(b.spend_csv_cell_texts([""]).is_ok());
+            assert!(b.spend_csv_cell_texts(["y"]).is_err());
+        }
+    }
+
+    #[test]
     fn work_is_counted_apart_from_memory() {
         let mut b = Budget::new(0, 10);
         b.spend_work(10).unwrap();
         assert_eq!(
             b.spend_work(1).unwrap_err().to_string(),
-            "more than 10 steps of layout"
+            "more than 10 steps of work"
         );
         // Memory is still whole.
         assert!(Budget::new(ELEMENT_BYTES, 0).spend_elements(1).is_ok());

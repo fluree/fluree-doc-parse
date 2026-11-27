@@ -332,6 +332,12 @@ fn render_and_forms_say_which_bound_a_pdf_is_past() {
 
 /// A PDF of `n` pages, each saying its number.
 fn pages_pdf(n: usize) -> Vec<u8> {
+    pages_pdf_with(n, 0, |_| String::new())
+}
+
+/// A PDF of `n` pages, each saying its number, then `lines` lines of
+/// words, with `extra(i)` written in the dictionary of page `i`.
+fn pages_pdf_with(n: usize, lines: usize, extra: impl Fn(usize) -> String) -> Vec<u8> {
     let font = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
     let mut objs = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
@@ -345,11 +351,18 @@ fn pages_pdf(n: usize) -> Vec<u8> {
         font.to_string(),
     ];
     for i in 0..n {
-        let text = format!("BT /F1 12 Tf 72 700 Td (Page number {}) Tj ET", i + 1);
+        let words: String = (0..lines)
+            .map(|l| format!(" 0 -14 Td (Line {l} of page {}, in words) Tj", i + 1))
+            .collect();
+        let text = format!(
+            "BT /F1 12 Tf 72 740 Td (Page number {}) Tj{words} ET",
+            i + 1
+        );
         objs.push(format!(
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
-             /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>",
-            5 + 2 * i
+             /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R {} >>",
+            5 + 2 * i,
+            extra(i)
         ));
         objs.push(format!(
             "<< /Length {} >>\nstream\n{text}\nendstream",
@@ -449,4 +462,142 @@ fn a_page_tree_nested_past_the_parsers_stack_is_refused_not_a_crash() {
         "{}",
         stderr(&o)
     );
+}
+
+#[test]
+fn a_pdf_past_its_memory_is_read_to_the_last_whole_page_and_says_so() {
+    let dir = scratch("cut");
+    let pdf = dir.join("long.pdf");
+    std::fs::write(&pdf, pages_pdf_with(20, 40, |_| String::new())).unwrap();
+    let pdf = pdf.to_str().unwrap();
+    let o = fdoc(
+        &dir,
+        &["convert", pdf, "--no-escalate", "--max-memory", "1"],
+        &[],
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let out = String::from_utf8_lossy(&o.stdout);
+    let e = stderr(&o);
+    // Read to a page, the rest listed by the limit that stopped it, and
+    // the flag that raises it named.
+    let read: usize = e
+        .split("read to page ")
+        .nth(1)
+        .and_then(|t| t.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("{e}"));
+    assert!(read > 0 && read < 20, "{e}");
+    assert!(out.contains(&format!("of page {read},")), "{out}");
+    assert!(!out.contains(&format!("of page {},", read + 1)), "{out}");
+    assert!(
+        e.contains(&format!(
+            "pages {}-20 are past the memory limit, not read ({} pages)",
+            read + 1,
+            20 - read
+        )),
+        "{e}"
+    );
+    assert!(
+        e.contains(&format!("read to page {read} (raise it with --max-memory)")),
+        "{e}"
+    );
+    // In the graph, each page by its reason; quiet, nothing said, the
+    // graph saying it.
+    let o = fdoc(
+        &dir,
+        &[
+            "convert",
+            pdf,
+            "-f",
+            "doco",
+            "--no-escalate",
+            "-q",
+            "--max-memory",
+            "1",
+        ],
+        &[],
+    );
+    let graph = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(
+        graph.matches("PastMemoryLimit").count(),
+        20 - read,
+        "{graph}"
+    );
+    assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+}
+
+#[test]
+fn a_document_read_short_is_said_under_quiet_where_its_output_cannot() {
+    // JSON and text carry no notes: quiet, the cut is still said.
+    let dir = scratch("quiet");
+    let pdf = dir.join("long.pdf");
+    std::fs::write(&pdf, pages_pdf(5)).unwrap();
+    let pdf = pdf.to_str().unwrap();
+    for format in ["json", "text"] {
+        let o = fdoc(
+            &dir,
+            &[
+                "convert",
+                pdf,
+                "-f",
+                format,
+                "--no-escalate",
+                "-q",
+                "--max-pages",
+                "2",
+            ],
+            &[],
+        );
+        assert!(o.status.success(), "{}", stderr(&o));
+        assert_eq!(
+            stderr(&o),
+            "note: long: read to page 2 (raise it with --max-pages)\n",
+            "{format}"
+        );
+    }
+    // Within the limit, quiet is quiet.
+    let o = fdoc(
+        &dir,
+        &["convert", pdf, "-f", "json", "-q", "--no-escalate"],
+        &[],
+    );
+    assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+}
+
+#[test]
+fn a_note_on_a_page_past_the_page_limit_is_not_read() {
+    let dir = scratch("notes");
+    let pdf = dir.join("noted.pdf");
+    let note = |i: usize| {
+        format!(
+            "/Annots [<< /Type /Annot /Subtype /Text /Rect [100 700 120 720] \
+             /Contents (A note on page {}) >>]",
+            i + 1
+        )
+    };
+    std::fs::write(&pdf, pages_pdf_with(3, 0, note)).unwrap();
+    let pdf = pdf.to_str().unwrap();
+    let o = fdoc(
+        &dir,
+        &["convert", pdf, "--no-escalate", "-q", "--comments"],
+        &[],
+    );
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("A note on page 3"), "{out}");
+    let o = fdoc(
+        &dir,
+        &[
+            "convert",
+            pdf,
+            "--no-escalate",
+            "-q",
+            "--comments",
+            "--max-pages",
+            "2",
+        ],
+        &[],
+    );
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("A note on page 2"), "{out}");
+    assert!(!out.contains("A note on page 3"), "{out}");
 }

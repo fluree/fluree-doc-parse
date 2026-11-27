@@ -190,8 +190,23 @@ fn tree(pkg: &mut Package<'_>, name: &str, budget: &mut Budget) -> Result<Option
         Err(e) => return Err(OdfError::Zip(e)),
     };
     budget.spend_bytes(bytes.len() as u64)?;
-    let xml = String::from_utf8(bytes)
-        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+    let xml = match String::from_utf8(bytes) {
+        Ok(xml) => xml,
+        Err(e) => {
+            // Read with each byte that is not UTF-8 replaced, a copy made
+            // beside the bytes and up to three times as long (U+FFFD is
+            // three bytes): spent at its length before it is made. A
+            // `content.xml` of 1.2 GiB of `0xFF`, a megabyte zipped, made
+            // 3.6 GB of replacements past the 2.4 its bytes were spent at.
+            let bytes = e.as_bytes();
+            let lossy = bytes.utf8_chunks().fold(0u64, |n, chunk| {
+                let bad = if chunk.invalid().is_empty() { 0 } else { 3 };
+                n.saturating_add(chunk.valid().len() as u64 + bad)
+            });
+            budget.spend_bytes(lossy)?;
+            String::from_utf8_lossy(bytes).into_owned()
+        }
+    };
     Tree::parse(&xml, budget)
         .map(Some)
         .map_err(OdfError::TooLarge)
@@ -241,6 +256,15 @@ struct Aside {
 /// is read after its paragraph ([`frames_in`]).
 fn para_text(t: &Tree, id: usize, asides: &mut Vec<Aside>) -> String {
     let mut s = String::new();
+    para_text_into(t, id, asides, &mut s);
+    s
+}
+
+/// [`para_text`], written at the end of `s`. Each element's text is written
+/// where it goes, not gathered into a string of its own and copied into
+/// its parent's: a run of text under 5,000 nested spans was copied once
+/// for each.
+fn para_text_into(t: &Tree, id: usize, asides: &mut Vec<Aside>, s: &mut String) {
     for &c in &t.node(id).children {
         let n = t.node(c);
         match n.name.as_str() {
@@ -254,11 +278,13 @@ fn para_text(t: &Tree, id: usize, asides: &mut Vec<Aside>) -> String {
                 } else {
                     "footnote"
                 };
-                let label = t
-                    .find(c, "note-citation")
+                // Its citation and body are its own children: looked for
+                // through the whole note, a note in a note in a note was
+                // walked again at each.
+                let label = child(t, c, "note-citation")
                     .map(|n| t.all_text(n).trim().to_string())
                     .unwrap_or_default();
-                if let Some(body) = t.find(c, "note-body") {
+                if let Some(body) = child(t, c, "note-body") {
                     asides.push(Aside {
                         evidence,
                         label,
@@ -267,8 +293,7 @@ fn para_text(t: &Tree, id: usize, asides: &mut Vec<Aside>) -> String {
                 }
             }
             "annotation" => {
-                let label = t
-                    .find(c, "creator")
+                let label = child(t, c, "creator")
                     .map(|n| format!("{}:", t.all_text(n).trim()))
                     .filter(|l| l.len() > 1)
                     .unwrap_or_default();
@@ -285,13 +310,12 @@ fn para_text(t: &Tree, id: usize, asides: &mut Vec<Aside>) -> String {
             // A block in a cell: apart from its neighbours.
             "p" | "h" | "list" | "list-item" | "list-header" => {
                 s.push(' ');
-                s.push_str(&para_text(t, c, asides));
+                para_text_into(t, c, asides, s);
                 s.push(' ');
             }
-            _ => s.push_str(&para_text(t, c, asides)),
+            _ => para_text_into(t, c, asides, s),
         }
     }
-    s
 }
 
 /// The frames a paragraph holds, anchored to it or to a character in it,
@@ -329,6 +353,11 @@ fn tidy(s: &str) -> String {
     out
 }
 
+/// The element child of `id` named `name`.
+fn child(t: &Tree, id: usize, name: &str) -> Option<usize> {
+    t.elements(id).find(|&c| t.node(c).name == name)
+}
+
 /// Refuse the block `id` where what is left of `budget` could not hold its
 /// text, before the copies it is made through (its runs joined, then
 /// tidied) are made: each as long as the text under it, which one run of a
@@ -336,6 +365,35 @@ fn tidy(s: &str) -> String {
 /// made, tidied, and no longer than this.
 fn room_for_text(t: &Tree, id: usize, budget: &Budget) -> Result<(), TooLarge> {
     budget.clone().spend_chars(t.text_chars(id))
+}
+
+/// [`room_for_text`] for a block [`para_text`] reads: its text, not a
+/// note's, a comment's or a frame's, each read as a block of its own,
+/// which checks its own; and a space for each element, the most it adds
+/// (`text:s`, a tab, or a block in a cell set apart by two). Checked with
+/// the text of the notes or frames it holds, nested in one another, the
+/// text was walked again at each level.
+///
+/// A table cell's text is each of its children's [`para_text`]: `cell`
+/// says `id` is one, whose children are read whole whatever they are.
+fn room_for_para(t: &Tree, id: usize, cell: bool, budget: &Budget) -> Result<(), TooLarge> {
+    // Each node with whether it is read whole.
+    let mut stack = vec![(id, true)];
+    let mut spaces = 0usize;
+    let mut cost = budget.clone();
+    while let Some((n, whole)) = stack.pop() {
+        let node = t.node(n);
+        if !whole && matches!(node.name.as_str(), "note" | "annotation" | "frame") {
+            continue;
+        }
+        if !node.name.is_empty() {
+            spaces += 2;
+        }
+        cost.spend_chars(node.text.chars())?;
+        let whole = cell && n == id;
+        stack.extend(node.children.iter().map(|&c| (c, whole)));
+    }
+    cost.spend_chars(std::iter::repeat_n(' ', spaces))
 }
 
 /// A table as a `doco:Table`: its rows, inside header rows or not, each
@@ -366,7 +424,7 @@ fn table(
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(1)
                 .clamp(1, 1024);
-            room_for_text(t, c, budget)?;
+            room_for_para(t, c, true, budget)?;
             let text = t
                 .elements(c)
                 .map(|p| tidy(&para_text(t, p, asides)))
@@ -487,13 +545,18 @@ fn paragraph(
     Ok(element(kind, text, level, page))
 }
 
+/// The deepest a list item is nested, as its `depth`: OpenDocument styles
+/// ten levels.
+const MAX_LIST_DEPTH: usize = 9;
+
 /// The flow of a text body, a text box or a note: headings, paragraphs,
-/// lists, tables, sections.
+/// lists, tables, sections. `list` is the depth of the list it is in, if
+/// it is in one: a paragraph there is a list item at that depth.
 fn flow(
     t: &Tree,
     id: usize,
     page: usize,
-    list: bool,
+    list: Option<usize>,
     out: &mut Vec<Element>,
     asides: &mut Vec<Aside>,
     budget: &mut Budget,
@@ -507,64 +570,99 @@ fn flow(
         let mut frames = Vec::new();
         frames_in(t, c, &mut frames);
         for f in frames {
-            flow(t, f, page, false, out, asides, budget)?;
+            flow(t, f, page, None, out, asides, budget)?;
         }
         Ok(())
     };
     for c in t.elements(id) {
         match t.node(c).name.as_str() {
-            "h" => {
-                let level = t
-                    .attr(c, "outline-level")
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(1)
-                    .clamp(1, 6);
-                room_for_text(t, c, budget)?;
-                let text = tidy(&para_text(t, c, asides));
-                if !text.is_empty() {
-                    out.push(paragraph(
-                        "doco:SectionTitle",
-                        text,
-                        Some(level),
-                        page,
-                        budget,
-                    )?);
-                }
+            name @ ("h" | "p") => {
+                block(t, c, name == "h", page, list, out, asides, budget)?;
                 frames_after(c, out, asides, budget)?;
             }
-            "p" => {
-                room_for_text(t, c, budget)?;
-                let text = tidy(&para_text(t, c, asides));
-                if text.is_empty() {
-                    frames_after(c, out, asides, budget)?;
-                    continue;
-                }
-                let style = t.attr(c, "style-name");
-                // A style named `Title` is the built-in one, defined or not.
-                let role = style
-                    .and_then(|s| t.roles.get(s))
-                    .or((style == Some("Title")).then_some(&Role::Title));
-                let (kind, level) = match role {
-                    _ if list => ("doc:ListItem", None),
-                    Some(Role::Title) => ("doco:Title", None),
-                    Some(Role::Heading(l)) => ("doco:SectionTitle", Some(*l)),
-                    None => ("doco:Paragraph", None),
-                };
-                out.push(paragraph(kind, text, level, page, budget)?);
-                frames_after(c, out, asides, budget)?;
+            // A list in a list's item is a level deeper.
+            "list" => {
+                let depth = list.map_or(0, |d| d + 1).min(MAX_LIST_DEPTH);
+                flow(t, c, page, Some(depth), out, asides, budget)?
             }
-            "list" | "list-item" | "list-header" => flow(t, c, page, true, out, asides, budget)?,
-            "table" => {
-                if let Some(e) = table(t, c, page, asides, budget)? {
-                    out.push(e);
-                }
+            "list-item" | "list-header" => {
+                flow(t, c, page, Some(list.unwrap_or(0)), out, asides, budget)?
             }
+            "table" => push_table(t, c, page, out, asides, budget)?,
             "section" | "index-body" | "table-of-content" | "alphabetical-index"
             | "illustration-index" | "table-index" | "bibliography" | "text-box" | "frame" => {
                 flow(t, c, page, list, out, asides, budget)?
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+/// A heading (`heading`) or a paragraph of [`flow`], `list` as there,
+/// pushed onto `out` where it holds text. Apart from [`flow`], which
+/// recurses once or twice for each level of a list: the element made here
+/// and its result would otherwise be held in each of its frames, and lists
+/// nested as deep as the tree allows overflowed a 2 MiB stack in a debug
+/// build.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn block(
+    t: &Tree,
+    c: usize,
+    heading: bool,
+    page: usize,
+    list: Option<usize>,
+    out: &mut Vec<Element>,
+    asides: &mut Vec<Aside>,
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
+    room_for_para(t, c, false, budget)?;
+    let text = tidy(&para_text(t, c, asides));
+    if text.is_empty() {
+        return Ok(());
+    }
+    let (kind, level) = if heading {
+        let level = t
+            .attr(c, "outline-level")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1)
+            .clamp(1, 6);
+        ("doco:SectionTitle", Some(level))
+    } else {
+        let style = t.attr(c, "style-name");
+        // A style named `Title` is the built-in one, defined or not.
+        let role = style
+            .and_then(|s| t.roles.get(s))
+            .or((style == Some("Title")).then_some(&Role::Title));
+        match role {
+            _ if list.is_some() => ("doc:ListItem", None),
+            Some(Role::Title) => ("doco:Title", None),
+            Some(Role::Heading(l)) => ("doco:SectionTitle", Some(*l)),
+            None => ("doco:Paragraph", None),
+        }
+    };
+    let mut e = paragraph(kind, text, level, page, budget)?;
+    if !heading {
+        e.depth = list.unwrap_or(0);
+    }
+    out.push(e);
+    Ok(())
+}
+
+/// A table of [`flow`], pushed onto `out` where it has cells; apart from
+/// it for the same reason as [`block`].
+#[inline(never)]
+fn push_table(
+    t: &Tree,
+    c: usize,
+    page: usize,
+    out: &mut Vec<Element>,
+    asides: &mut Vec<Aside>,
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
+    if let Some(e) = table(t, c, page, asides, budget)? {
+        out.push(e);
     }
     Ok(())
 }
@@ -583,7 +681,7 @@ fn read_asides(
     for a in asides {
         let mut els = Vec::new();
         let mut nested = Vec::new();
-        flow(t, a.body, page, false, &mut els, &mut nested, budget)?;
+        flow(t, a.body, page, None, &mut els, &mut nested, budget)?;
         for (i, e) in els.iter_mut().enumerate() {
             if e.kind != "doco:Table" {
                 e.kind = "doco:Paragraph".into();
@@ -616,7 +714,7 @@ fn text_elements(
     let mut body = Vec::new();
     let mut asides = Vec::new();
     if let Some(text) = content.find(0, "text") {
-        flow(content, text, 0, false, &mut body, &mut asides, budget)?;
+        flow(content, text, 0, None, &mut body, &mut asides, budget)?;
     }
     let (notes, comments): (Vec<Aside>, Vec<Aside>) =
         asides.into_iter().partition(|a| a.evidence != "comment");
@@ -635,7 +733,7 @@ fn text_elements(
         for m in styles.elements(masters) {
             for h in styles.elements(m).filter(|&h| styles.node(h).name == name) {
                 let mut els = Vec::new();
-                flow(styles, h, 0, false, &mut els, &mut Vec::new(), budget)?;
+                flow(styles, h, 0, None, &mut els, &mut Vec::new(), budget)?;
                 for mut e in els {
                     if e.kind != "doco:Table" {
                         e.kind = "doco:Paragraph".into();
@@ -759,7 +857,7 @@ fn slide_shapes(
                     // Its paragraphs, each spent as it is read, joined.
                     let mut parts = Vec::new();
                     for b in t.elements(c) {
-                        flow(t, b, page, false, &mut parts, asides, budget)?;
+                        flow(t, b, page, None, &mut parts, asides, budget)?;
                     }
                     let text = tidy(
                         &parts
@@ -776,7 +874,7 @@ fn slide_shapes(
                 let before = out.len();
                 // A shape's own paragraphs (a custom shape holds them), or
                 // the text box or table inside a frame.
-                flow(t, c, page, false, out, asides, budget)?;
+                flow(t, c, page, None, out, asides, budget)?;
                 // A bulleted text box: its paragraphs are list items when
                 // the frame is an outline.
                 if class == "outline" {

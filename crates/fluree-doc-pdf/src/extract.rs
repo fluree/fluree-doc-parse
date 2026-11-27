@@ -90,7 +90,10 @@ pub struct ImagePlacement {
     /// with one key show the same pixels the same way: a form's checkbox
     /// drawn two hundred times is one image an OCR engine reads once
     /// ([`crate::ocr::copies`]). `None` when not known: a stencil of more
-    /// than [`MAX_KEYED_STENCIL_PX`] pixels, which is not decoded for it.
+    /// than [`MAX_KEYED_STENCIL_PX`] pixels, which is not decoded for it;
+    /// and every one when extraction keys none
+    /// ([`ExtractOptions::key_images`] off): each region is then read on
+    /// its own.
     ///
     /// `None` too when its box shows more than the image, or less, since a
     /// crop of it would show something else than the image's pixels: when
@@ -120,6 +123,13 @@ pub struct ExtractOptions {
     /// with an engine turns it on. Off by default; nothing is probed while
     /// [`ExtractOptions::probe_images`] is off.
     pub probe_small_images: bool,
+    /// Key each placement by what it shows ([`ImagePlacement::key`]), so an
+    /// OCR engine reads an image drawn again once ([`crate::ocr::copies`]).
+    /// The key hashes a raster image's encoded stream (decrypted, in an
+    /// encrypted file) and decodes a small stencil, at every placement:
+    /// a caller that reads with no engine turns it off, and every key is
+    /// `None`. On by default.
+    pub key_images: bool,
 }
 
 impl Default for ExtractOptions {
@@ -127,6 +137,7 @@ impl Default for ExtractOptions {
         Self {
             probe_images: true,
             probe_small_images: false,
+            key_images: true,
         }
     }
 }
@@ -299,14 +310,33 @@ impl Page {
 #[derive(Clone)]
 pub struct Document {
     pub pages: Vec<Page>,
-    /// Pages the file holds after the last one read, past the page limit
-    /// ([`Limits::pages`](fluree_doc_model::budget::Limits::pages)): not
-    /// read, and listed unread, `PastPageLimit`, by [`crate::unread_pages`].
+    /// Pages the file holds after the last one read: past the page limit
+    /// ([`Limits::pages`](fluree_doc_model::budget::Limits::pages)), or
+    /// left by the budget ([`Document::cut_short`]). Not read, and listed
+    /// unread by [`crate::unread_pages`].
     pub pages_past_limit: usize,
+    /// Where the budget ran out before the page limit: the document is
+    /// read to the last page whole, and the pages from there to the page
+    /// limit, the first of [`Document::pages_past_limit`], listed unread
+    /// by the limit passed (`PastMemoryLimit`, `PastWorkLimit`); those
+    /// past the page limit as well are `PastPageLimit`. `None` where the
+    /// reading ran to the page limit or to the end.
+    pub cut_short: Option<CutShort>,
     /// The title the file's information dictionary states (`/Title`), as
     /// written: what the document is called by whoever made the file, and
     /// often stale or a file's name.
     pub title: Option<String>,
+}
+
+/// The budget passed on a page after the first ([`Document::cut_short`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CutShort {
+    /// Which: [`Limit::Memory`](fluree_doc_model::budget::Limit::Memory)
+    /// or [`Limit::Work`](fluree_doc_model::budget::Limit::Work).
+    pub limit: fluree_doc_model::budget::Limit,
+    /// The pages it left unread before the page limit, from the one it was
+    /// passed on.
+    pub pages: usize,
 }
 
 impl Document {
@@ -440,6 +470,9 @@ struct Collector<'a, 'b> {
 struct Probes {
     /// No image is probed: nothing will read the result.
     off: bool,
+    /// No placement is keyed ([`ImagePlacement::key`]): no OCR engine will
+    /// read the copies ([`ExtractOptions::key_images`] off).
+    unkeyed: bool,
     /// The images too small to be routed to a model are probed too: an OCR
     /// engine will read them ([`ExtractOptions::probe_small_images`]).
     small: bool,
@@ -452,6 +485,16 @@ struct Probes {
 }
 
 impl Probes {
+    /// Whether [`Probes::texty`] decodes `image`: it is probed, and not an
+    /// image found already in a document known to decode it alike. Only
+    /// then is its probe's work spent: a picture bullet drawn on every
+    /// line costs a step a draw, not a decode.
+    fn decodes(&self, image: &hayro_interpret::RasterImage<'_>) -> bool {
+        let found =
+            || (image.stream().dict().obj_id()).is_some_and(|id| self.found.contains_key(&id));
+        !self.off && !(self.plain == Some(true) && found())
+    }
+
     /// Whether the image's pixels look like text, decoding it unless the
     /// document has drawn it before.
     fn texty(&mut self, image: &hayro_interpret::RasterImage<'_>) -> Option<bool> {
@@ -501,10 +544,16 @@ fn sets_transfer(pdf: &Pdf) -> bool {
                 Object::Dict(d) => d,
                 Object::Stream(s) => s.dict().clone(),
                 Object::Array(a) => {
-                    open.extend(a.raw_iter().filter_map(|m| match m {
-                        MaybeRef::NotRef(v) => Some(v),
-                        MaybeRef::Ref(_) => None,
-                    }));
+                    // Read entry by entry ([`crate::array_entries`]): an
+                    // array that skips but does not read back (`[+ ]`)
+                    // panics in `raw_iter`.
+                    let entries: Vec<_> = crate::array_entries(&a)
+                        .filter_map(|m| match m {
+                            MaybeRef::NotRef(v) => Some(v),
+                            MaybeRef::Ref(_) => None,
+                        })
+                        .collect();
+                    open.extend(entries);
                     continue;
                 }
                 _ => continue,
@@ -892,8 +941,9 @@ fn outline_bytes(path: &kurbo::BezPath) -> u64 {
     (std::mem::size_of_val(path.elements()) as u64).saturating_add(64)
 }
 
-/// Steps of work for one image's probe: decoded at most
-/// [`PROBE_DIM`] pixels square, a step for each sixteen.
+/// Steps of work for one image's probe, where it decodes
+/// ([`Probes::decodes`]): decoded at most [`PROBE_DIM`] pixels square, a
+/// step for each sixteen.
 const PROBE_STEPS: u64 = (PROBE_DIM as u64 * PROBE_DIM as u64) / 16;
 
 /// A drawn shape's paint: its colour, or the kind of pattern it is painted
@@ -1079,8 +1129,9 @@ impl<'a> Device<'a> for Collector<'a, '_> {
     ) {
     }
     fn draw_image(&mut self, i: hayro_interpret::Image<'a, '_>, t: Affine) {
-        // Its probe, and its placement kept.
-        if !self.spend(|b| b.spend_work(PROBE_STEPS).and_then(|()| b.spend_cells(1))) {
+        // A step for the call, and its placement kept; its probe apart,
+        // where it decodes (below).
+        if !self.spend(|b| b.spend_work(1).and_then(|()| b.spend_cells(1))) {
             return;
         }
         // The transform maps the image's *pixel* space onto the page.
@@ -1133,6 +1184,8 @@ impl<'a> Device<'a> for Collector<'a, '_> {
                 if !self.probes.small && area < 0.99 * crate::route::MIN_REGION_FRACTION * page_area
                 {
                     None
+                } else if self.probes.decodes(ri) && !self.spend(|b| b.spend_work(PROBE_STEPS)) {
+                    return;
                 } else {
                     self.probes.texty(ri)
                 }
@@ -1153,7 +1206,11 @@ impl<'a> Device<'a> for Collector<'a, '_> {
                     || c.y1 < b.y1 - OVERLAP_EPS
             })
         });
-        let key = if cut { None } else { image_key(&i, t) };
+        let key = if cut || self.probes.unkeyed {
+            None
+        } else {
+            image_key(&i, t)
+        };
         self.images.push(ImagePlacement {
             bbox,
             texty,
@@ -2421,6 +2478,7 @@ pub fn extract_pdf_with(
     let mut italics = std::collections::HashMap::new();
     let mut probes = Probes {
         off: !options.probe_images,
+        unkeyed: !options.key_images,
         small: options.probe_small_images,
         ..Probes::default()
     };
@@ -2428,6 +2486,7 @@ pub fn extract_pdf_with(
     // Past the page limit, the pages are not read, and said to be.
     let all = pdf.pages();
     let read = all.len().min(fluree_doc_model::budget::limits().pages);
+    let mut cut_short = None;
     for (index, page) in all.iter().take(read).enumerate() {
         let (w, h) = page.render_dimensions();
         faces.read(page);
@@ -2477,7 +2536,11 @@ pub fn extract_pdf_with(
             settings.clone(),
         );
         // Stopped by the collector once the budget is spent, the page is
-        // left where it stopped, and the document refused.
+        // left where it stopped, and dropped: the document is read to the
+        // page before, and the rest listed unread, as past the page limit.
+        // A text PDF of 5,000 pages, past the memory at its 3,500th or so,
+        // is read to there rather than refused. A first page past it alone
+        // leaves nothing read: refused.
         let interpreted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             interpret_page(page, &mut ctx, &mut dev)
         }));
@@ -2487,7 +2550,18 @@ pub fn extract_pdf_with(
             }
         }
         if let Some(e) = dev.over.take() {
-            return Err(ExtractError::TooLarge(e));
+            use fluree_doc_model::budget::Limit;
+            if index == 0 || !matches!(e.limit(), Limit::Memory | Limit::Work) {
+                return Err(ExtractError::TooLarge(e));
+            }
+            // What the pages before it found, read again once all are.
+            letters = std::mem::take(&mut dev.letters);
+            faces = std::mem::take(&mut dev.faces);
+            cut_short = Some(CutShort {
+                limit: e.limit(),
+                pages: read - index,
+            });
+            break;
         }
         // A span the page left open still covers what it drew.
         while let Some(open) = dev.open.pop() {
@@ -2586,8 +2660,9 @@ pub fn extract_pdf_with(
     }
 
     Ok(Document {
+        pages_past_limit: all.len() - pages.len(),
         pages,
-        pages_past_limit: all.len() - read,
+        cut_short,
         title: crate::info::read(&pdf).title,
     })
 }
@@ -2688,8 +2763,14 @@ fn read_upright(page: &mut Page) {
 
 /// Turn every coordinate a page carries by `turn` degrees (90, 180 or 270)
 /// counter-clockwise, and record the turn in [`Page::rotation`], on top of
-/// any it had, so the display frame stays where it was.
+/// any it had, so the display frame stays where it was. A turn is taken
+/// modulo 360 (-90 is 270); one of no quarter turn, or of a part of one,
+/// leaves the page as it is.
 pub(crate) fn turn_page(page: &mut Page, turn: i32) {
+    let turn = turn.rem_euclid(360);
+    if !matches!(turn, 90 | 180 | 270) {
+        return;
+    }
     let (w, h) = (page.width, page.height);
     let point = |p: (f64, f64)| turn_point(w, h, turn, p);
     let rect = |b: BBox| turn_box(w, h, turn, b);
@@ -2740,12 +2821,15 @@ pub(crate) fn turn_page(page: &mut Page, turn: i32) {
 }
 
 /// Where a point of a page `w` × `h` lands once the page is turned by `turn`
-/// degrees (90, 180 or 270) counter-clockwise, as [`turn_page`] turns it.
+/// degrees (90, 180 or 270) counter-clockwise, as [`turn_page`] turns it:
+/// modulo 360, and where it is for any other turn, which [`turn_page`]
+/// does not make.
 pub(crate) fn turn_point(w: f64, h: f64, turn: i32, (x, y): (f64, f64)) -> (f64, f64) {
-    match turn {
+    match turn.rem_euclid(360) {
         90 => (y, w - x),
         180 => (w - x, h - y),
-        _ => (h - y, x),
+        270 => (h - y, x),
+        _ => (x, y),
     }
 }
 
@@ -3006,6 +3090,34 @@ mod tests {
         let mut v: PageInk = (0..body).map(|_| Some((1u128, Some(0.50)))).collect();
         v.extend((0..heavy).map(|_| Some((2u128, Some(ratio)))));
         vec![v]
+    }
+
+    #[test]
+    fn a_page_turns_by_quarter_turns_only() {
+        let (w, h, p) = (600.0, 800.0, (100.0, 50.0));
+        assert_eq!(turn_point(w, h, 90, p), (50.0, 500.0));
+        assert_eq!(turn_point(w, h, 180, p), (500.0, 750.0));
+        assert_eq!(turn_point(w, h, 270, p), (750.0, 100.0));
+        assert_eq!(turn_point(w, h, -90, p), (750.0, 100.0));
+        // No turn, a whole one, or a part of a quarter: the point stays.
+        for turn in [0, 360, 45, -10] {
+            assert_eq!(turn_point(w, h, turn, p), p, "{turn}");
+        }
+        for turn in [0, 360, 45] {
+            let mut pg = page(1);
+            pg.glyphs[0].origin = p;
+            turn_page(&mut pg, turn);
+            assert_eq!((pg.width, pg.height, pg.rotation), (w, h, 0), "{turn}");
+            assert_eq!(pg.glyphs[0].origin, p, "{turn}");
+        }
+        // A quarter, and back by a quarter the other way.
+        let mut pg = page(1);
+        pg.glyphs[0].origin = p;
+        turn_page(&mut pg, 90);
+        assert_eq!((pg.width, pg.height, pg.rotation), (h, w, 90));
+        turn_page(&mut pg, -90);
+        assert_eq!((pg.width, pg.height, pg.rotation), (w, h, 0));
+        assert_eq!(pg.glyphs[0].origin, p);
     }
 
     #[test]
@@ -3859,10 +3971,144 @@ mod budget_tests {
         }
         assert!(within(need, 1 << 20, letters()).is_ok());
         // Each line spent once, not each glyph, and the largest page's
-        // glyphs once, not each page's.
+        // glyphs once, not each page's: a byte less, and the fifth page is
+        // not read.
         let need = letters_cost(5);
-        assert!(within(need, 1 << 20, letters_on(5)).is_ok());
-        assert!(within(need - 1, 1 << 20, letters_on(5)).is_err());
+        assert_eq!(within(need, 1 << 20, letters_on(5)).unwrap().pages.len(), 5);
+        let short = within(need - 1, 1 << 20, letters_on(5)).unwrap();
+        assert_eq!(short.pages.len(), 4);
+    }
+
+    /// The reasons the pages after the last one read are listed by.
+    fn past(doc: &Document) -> Vec<(usize, String)> {
+        crate::past_limit(doc)
+            .map(|u| (u.index, u.reason))
+            .collect()
+    }
+
+    #[test]
+    fn a_long_text_pdf_past_its_budget_is_read_to_the_last_whole_page() {
+        // Forty pages of a thousand glyphs, the memory enough for ten and
+        // a half: read to the tenth, the thirty after it listed unread by
+        // the memory, rather than the document refused.
+        let doc = within(
+            letters_cost(10) + 500 * GLYPH_BYTES,
+            1 << 30,
+            letters_on(40),
+        )
+        .unwrap();
+        assert_eq!(doc.pages.len(), 10);
+        assert!(doc.pages.iter().all(|p| p.glyphs.len() == 1000));
+        assert_eq!(doc.pages_past_limit, 30);
+        assert_eq!(
+            doc.cut_short,
+            Some(CutShort {
+                limit: Limit::Memory,
+                pages: 30
+            })
+        );
+        let listed = past(&doc);
+        assert_eq!(listed.len(), 30);
+        assert_eq!(listed[0], (10, "PastMemoryLimit".to_string()));
+        assert!(listed.iter().all(|(_, r)| r == "PastMemoryLimit"));
+        // With a page limit of 20 as well: the memory's to it, the page
+        // limit's past it, whichever is raised first.
+        let mut l = Limits::default();
+        (l.memory, l.work, l.pages) = (letters_cost(10) + 500 * GLYPH_BYTES, 1 << 30, 20);
+        let doc = limited_to(l, || extract_bytes(letters_on(40))).unwrap();
+        assert_eq!((doc.pages.len(), doc.pages_past_limit), (10, 30));
+        let listed = past(&doc);
+        assert_eq!(listed[9], (19, "PastMemoryLimit".to_string()));
+        assert_eq!(listed[10], (20, "PastPageLimit".to_string()));
+        assert_eq!(listed.last().unwrap().0, 39);
+        // The work runs out the same way: a step a glyph, two pages and a
+        // half.
+        let doc = within(1 << 30, 2500, letters_on(6)).unwrap();
+        assert_eq!(doc.pages.len(), 2);
+        assert_eq!(past(&doc)[0], (2, "PastWorkLimit".to_string()));
+        // Within both, read whole and nothing listed.
+        let doc = within(1 << 30, 1 << 30, letters_on(6)).unwrap();
+        assert_eq!((doc.pages.len(), doc.cut_short), (6, None));
+        assert!(past(&doc).is_empty());
+    }
+
+    /// A PDF whose pages each draw one picture, a 500 pt square, as often
+    /// as `draws` says.
+    fn pictures(draws: &[usize]) -> Vec<u8> {
+        let n = draws.len();
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+        let pixels = [0x80u8; 16];
+        let mut objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" ")).into_bytes(),
+            [
+                b"<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray                   /BitsPerComponent 8 /Length 16 >>\nstream\n"
+                    .to_vec(),
+                pixels.to_vec(),
+                b"\nendstream".to_vec(),
+            ]
+            .concat(),
+        ];
+        for (i, d) in draws.iter().enumerate() {
+            let content = "q 500 0 0 500 50 50 cm /Im1 Do Q ".repeat(*d);
+            objects.push(
+                format!(
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {} 0 R \
+                     /Resources << /XObject << /Im1 3 0 R >> >> >>",
+                    5 + 2 * i
+                )
+                .into_bytes(),
+            );
+            objects.push(
+                format!(
+                    "<< /Length {} >>\nstream\n{content}\nendstream",
+                    content.len()
+                )
+                .into_bytes(),
+            );
+        }
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n", i + 1).bytes());
+            out.extend(o);
+            out.extend(b"\nendobj\n");
+        }
+        let xref = out.len();
+        let size = objects.len() + 1;
+        out.extend(format!("xref\n0 {size}\n0000000000 65535 f \n").bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").bytes());
+        }
+        out.extend(
+            format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").bytes(),
+        );
+        out
+    }
+
+    #[test]
+    fn a_picture_drawn_again_costs_its_probe_only_where_it_is_decoded() {
+        let read = |work: u64, draws: &[usize], probe: bool| {
+            let mut l = Limits::default();
+            l.work = work;
+            let mut o = ExtractOptions::default();
+            o.probe_images = probe;
+            let pdf = pictures(draws);
+            limited_to(l, || extract_bytes_with(pdf, &o)).map(|d| d.pages.len())
+        };
+        // Not probed: a step a draw. A thousand draws of a picture bullet
+        // were four million steps, as many as 65,536 draws past the
+        // shipped work.
+        assert_eq!(read(1000, &[1000], false).unwrap(), 1);
+        assert!(read(999, &[1000], false).is_err());
+        // Probed: decoded on the first page, drawn twice there, so the
+        // document is asked whether it decodes alike; on the second, a
+        // thousand times, decoded no more.
+        let probes = 2 * PROBE_STEPS;
+        assert_eq!(read(probes + 1002, &[2, 1000], true).unwrap(), 2);
+        // A step short, the second page is not read.
+        assert_eq!(read(probes + 1001, &[2, 1000], true).unwrap(), 1);
     }
 
     #[test]
@@ -4004,6 +4250,18 @@ mod transfer_tests {
         assert!(sets_transfer(&with_state("/TR2 [/Default]")));
         assert!(!sets_transfer(&with_state("/CA 0.5 /ca 0.5")));
     }
+
+    #[test]
+    fn an_array_that_does_not_read_back_is_looked_through_up_to_where_it_stops() {
+        // `[+ ]` skips as an array but its entry does not read: looked
+        // through entry by entry, it ends there, and what follows it is
+        // still searched.
+        assert!(!sets_transfer(&with_state("/Junk [+ ] /CA 0.5")));
+        assert!(sets_transfer(&with_state("/Junk [+ ] /TR /Identity")));
+        assert!(sets_transfer(&with_state(
+            "/Junk [[+ ] << /TR /Identity >>]"
+        )));
+    }
 }
 
 #[cfg(test)]
@@ -4083,6 +4341,22 @@ mod probe_tests {
         // An image a model is sent is probed either way.
         let doc = extract_bytes(striped_page_drawn(40)).expect("pdf");
         assert_eq!(doc.pages[0].images[0].texty, Some(true));
+    }
+
+    #[test]
+    fn an_image_is_keyed_only_for_an_engine_that_reads_its_copies() {
+        let keyed = extract_bytes(striped_page()).expect("pdf");
+        assert!(keyed.pages[0].images[0].key.is_some());
+        // A plain run: nothing probed, nothing keyed, the stream neither
+        // decoded nor hashed.
+        let options = ExtractOptions {
+            probe_images: false,
+            key_images: false,
+            ..ExtractOptions::default()
+        };
+        let plain = extract_bytes_with(striped_page(), &options).expect("pdf");
+        assert_eq!(plain.pages[0].images[0].texty, None);
+        assert_eq!(plain.pages[0].images[0].key, None);
     }
 }
 

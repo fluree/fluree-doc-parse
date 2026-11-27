@@ -1036,10 +1036,13 @@ report, so malformed files fail as errors you can catch.
 
 A PDF is read within [limits](../reference/limits.md): its pages to the
 10,000th (those past it listed unread, `PastPageLimit`), what they draw
-within the document's memory and work budget, its page tree at most 256
-deep and 250,000 pages, and a page rendered for a crop with at most 64
-million pixels and 32,767 a side. Past the budget or the tree's bounds,
-`extract_bytes` returns `ExtractError::TooLarge`, which says which limit.
+within the document's memory and work budget (past it, read to the last
+whole page, the rest listed unread, `PastMemoryLimit` or `PastWorkLimit`),
+its page tree at most 256 deep and 250,000 pages (or the page limit, where
+that is more), and a page rendered for a crop with at most 64 million
+pixels and 32,767 a side. Past the tree's bounds, or the budget on its
+first page, `extract_bytes` returns `ExtractError::TooLarge`, which says
+which limit; the notes on the pages not read are not read either.
 
 ## Performance
 
@@ -1051,7 +1054,9 @@ what the thousandth does.
 
 A reviewer's sticky note, the comment on a highlight, a free-text box typed
 onto a form: none is drawn by the page's content, and each is text to a
-person reading the page in a viewer. Text (sticky note), `FreeText`,
+person reading the page in a viewer. They are read only when asked for
+(`fdoc convert --comments`), since they are not the document's own text:
+without it a PDF converts as it did before notes were read. Text (sticky note), `FreeText`,
 `Highlight`, `Underline`, `StrikeOut` and `Squiggly` annotations with
 something written in them (`/Contents`) are read, each a `doco:Paragraph`
 after its page's own text, with the annotation's rectangle as its `bbox`,
@@ -1059,9 +1064,12 @@ after its page's own text, with the annotation's rectangle as its `bbox`,
 transcript turn's speaker does: `Sam Example: Check this total`. An
 annotation is read once however many times or pages list it, a note keeps
 at most 65,536 characters, at most 20,000 notes are read, and each is
-counted, with its text, against the memory one document may take; a
-document past it fails as too large. What a
-highlight covers is the page's text already, and is not repeated. A note is
+counted, with its text, against the memory one document may take; past
+it, the notes are left out with a warning and the pages are still read.
+What a highlight covers is the page's text already, and is not repeated: a
+text markup (highlight, underline, strike-out, squiggly) whose note is the
+text under it, as viewers often copy it there, is left out, while one that
+says something of its own is kept (`fluree_doc_pdf::annot::drop_quoting_markups`). A note is
 not counted as the page's text when deciding whether a page was read, so a
 scan with a sticky note on it is still reported unread. Link annotations
 are read as the `links` of the text they cover, and form widgets by
@@ -1077,7 +1085,12 @@ out. Each is decoded within bounds: at most 1,000 files, 64 MiB each and
 no bound. A file is decoded once however many entries name it, and what
 decoding inflates is counted whether the file is kept or refused, at most
 512 MiB for the document, so entries naming streams that inflate past
-their bound cannot make a small file costly. A file encoded otherwise than
+their bound cannot make a small file costly; a stream that chains Flate
+filters inflates each pass within what is left of it. The files are found
+as the notes are: each node of the `/EmbeddedFiles` name tree read once
+however many nodes list it as a kid, at most 10,000 of them, and each page's
+annotation list once however many pages share it, at most 200,000 entries
+in all. A file encoded otherwise than
 with Flate (or not encoded), one past a bound, or one that does not inflate
 is named in a warning, once, and left out. In a library, `fluree_doc_pdf::annot::annotations` and
 `embedded_files` return both.

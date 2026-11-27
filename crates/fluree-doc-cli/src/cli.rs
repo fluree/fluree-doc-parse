@@ -38,17 +38,20 @@ pub struct Cli {
 #[command(next_help_heading = "Limits")]
 pub struct LimitArgs {
     /// Memory one document's elements, cells, text and parts may take, in
-    /// MiB (default 2560) [env: FDOC_MAX_MEMORY]
+    /// MiB (default 2560); a PDF past it is read to its last whole page,
+    /// the rest listed unread, `PastMemoryLimit` [env: FDOC_MAX_MEMORY]
     #[arg(long, global = true, value_name = "MIB")]
     pub max_memory: Option<u64>,
 
     /// Steps of the layout passes and parsers' loops one document may take
-    /// (default 268435456) [env: FDOC_MAX_WORK]
+    /// (default 268435456); a PDF past it is read to its last whole page,
+    /// the rest listed unread, `PastWorkLimit` [env: FDOC_MAX_WORK]
     #[arg(long, global = true, value_name = "STEPS")]
     pub max_work: Option<u64>,
 
     /// Pages a PDF or XPS document is read to; those past it are listed
-    /// unread, `PastPageLimit` (default 10000) [env: FDOC_MAX_PAGES]
+    /// unread, `PastPageLimit` (default 10000). Past 250000, it also raises
+    /// the pages a document may list [env: FDOC_MAX_PAGES]
     #[arg(long, global = true, value_name = "N")]
     pub max_pages: Option<usize>,
 
@@ -249,6 +252,14 @@ pub struct ConvertArgs {
     #[arg(long, short = 'j', default_value_t = 0, value_name = "N")]
     pub jobs: usize,
 
+    /// Memory, in MiB, each document of a batch takes beside its input, in
+    /// place of the estimate (3840 at the default limits): each waits for
+    /// room for that and its input, and is read within two thirds of it.
+    /// Given, it lifts the one-per-core bound where free memory is not
+    /// known [env: FDOC_JOB_MEMORY]
+    #[arg(long, value_name = "MIB")]
+    pub job_memory: Option<u64>,
+
     /// Directory of layout-detector sidecars (`<stem>_p<N>_page.json`) used
     /// to promote missed section titles [env: FDOC_TITLE_BOXES]
     #[arg(long, value_name = "DIR")]
@@ -351,6 +362,17 @@ pub struct ConvertArgs {
     /// flag it counts as a failed input, and the exit status is non-zero.
     #[arg(long)]
     pub strict: bool,
+
+    /// Also read the notes reviewers left: a PDF's annotations (sticky
+    /// notes, free text, the comments on highlights) and the comments of a
+    /// Word, OpenDocument or RTF document
+    ///
+    /// Each is marked as what it is (`evidence` `annotation` or `comment`):
+    /// a PDF's after its page's text, a document's comments after the rest.
+    /// Off by default: they are not the document's own text, and a
+    /// highlight's note often repeats the text it marks.
+    #[arg(long)]
+    pub comments: bool,
 
     /// Save each email's attachments, and the files each PDF embeds, under
     /// DIR/<input stem>/, to convert on their own

@@ -26,7 +26,11 @@ eval/tables-full/
 eval/tough/docs/
 eval/tough/private/
 
-# The scanned-PDF set, written by eval/scanned/make_scans.py.
+# Generated sets: eval/scanned/make_scans.py writes the scanned-PDF set and
+# eval/twins/make_twins.py the twins set. Both write the same bytes on every
+# run, so the set is not kept in the tree.
 eval/scanned/corpus/
-# The twins set, written by eval/twins/make_twins.py.
 eval/twins/corpus/
+
+# Python's bytecode cache, written by running the bench adapter.
+__pycache__/

@@ -88,7 +88,9 @@ cargo +nightly fuzz run xls corpus/xls seeds/xls -O -a -s none -- \
 
 The `fuzz` job of `.github/workflows/ci.yml` builds every target once, as
 above, and runs each for 15 seconds over its seeds, one after the other,
-with the same limits: about five minutes of fuzzing after the build. Every
+with the same limits: about five minutes of fuzzing after the build, on
+a dated nightly (`nightly-2026-11-20`), so that a nightly breaking
+cargo-fuzz does not fail the job; it is moved forward by hand. Every
 target runs whatever an earlier one found, and the job fails at the end,
 naming the targets that failed, if any did: stopped at the first, a
 failure would hide whether the targets after it still hold. A target list

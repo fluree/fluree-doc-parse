@@ -125,8 +125,8 @@ pub fn parse_with_ocr(
     bytes: &[u8],
     engine: &dyn fluree_doc_vision::OcrEngine,
 ) -> Result<OcrParse, DocxError> {
-    let (mut elements, info, media) = parse_with_media(bytes)?;
     let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
+    let (mut elements, info, media) = parse_package(&mut pkg)?;
     let r = fluree_doc_image::read_placed(media, &mut |part| read_media(&mut pkg, part), engine);
     fluree_doc_image::place_after_figures(&mut elements, r.read);
     Ok(OcrParse {
@@ -139,15 +139,52 @@ pub fn parse_with_ocr(
     })
 }
 
+/// What a document is read with beyond its printed text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Options {
+    /// Read the comments reviewers left (`word/comments.xml`), each after
+    /// the footer, `evidence` `comment`, opening with its author. Off by
+    /// default: Word does not print them, and they are not the document's
+    /// text.
+    pub comments: bool,
+}
+
 /// [`parse_with_info`], with the images of each figure in the body that has
 /// any, in reading order: what an OCR engine or a model can read, and the
 /// figure its text belongs after. Only where they are is read here; their
 /// bytes are read by [`read_pictures`], each image once, or one at a time
-/// by [`read_media`].
+/// by [`read_media`]. Read with the default [`Options`]: no comments.
 pub fn parse_with_media(
     bytes: &[u8],
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
-    let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
+    parse_with_media_options(bytes, &Options::default())
+}
+
+/// [`parse_with_media`], with what is read beyond the printed text as
+/// `options` says.
+pub fn parse_with_media_options(
+    bytes: &[u8],
+    options: &Options,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
+    parse_package_options(&mut Package::open(bytes).map_err(DocxError::Zip)?, options)
+}
+
+/// [`parse_with_media`] from a package already opened, for a caller that
+/// goes on to read the images' bytes from it ([`read_media`]): opening it
+/// reads the archive's whole directory, once. Read with the default
+/// [`Options`]: no comments.
+pub fn parse_package(
+    pkg: &mut Package<'_>,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
+    parse_package_options(pkg, &Options::default())
+}
+
+/// [`parse_package`], with what is read beyond the printed text as
+/// `options` says.
+pub fn parse_package_options(
+    pkg: &mut Package<'_>,
+    options: &Options,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
     let main = pkg.main_part("word/document.xml");
     // What the document makes, its body, header, footer and notes, is spent
     // from one budget as it is made, and the parts it is read from, each
@@ -159,7 +196,9 @@ pub fn parse_with_media(
     // Styles refine what a table's first row is and which paragraphs are
     // the title; a package without them, or with ones that do not parse,
     // still reads.
-    let styles = pkg.related(&main, "styles", "word/styles.xml");
+    let styles = pkg
+        .related(&main, "styles", "word/styles.xml")
+        .map_err(DocxError::Zip)?;
     let styles = pkg.read_within(&styles, &mut budget)?;
     let (header_styles, title_styles) = match &styles {
         Some(styles) => (header_row_styles(styles), title_styles(styles)),
@@ -167,7 +206,9 @@ pub fn parse_with_media(
     };
     // List numbering, which Word computes rather than stores; without the
     // part the document numbers nothing.
-    let numbering = pkg.related(&main, "numbering", "word/numbering.xml");
+    let numbering = pkg
+        .related(&main, "numbering", "word/numbering.xml")
+        .map_err(DocxError::Zip)?;
     let numbering = pkg.read_within(&numbering, &mut budget)?;
     let numbering = Numbering::new(numbering.as_deref(), styles.as_deref());
     let (body, figure_rids) =
@@ -182,12 +223,14 @@ pub fn parse_with_media(
         pkg.read_capped(part, fluree_doc_ooxml::MAX_XML_BYTES)
             .map_err(DocxError::Zip)
     };
-    let settings = pkg.related(&main, "settings", "word/settings.xml");
-    let settings_xml = aside(&mut pkg, &settings)?;
+    let settings = pkg
+        .related(&main, "settings", "word/settings.xml")
+        .map_err(DocxError::Zip)?;
+    let settings_xml = aside(pkg, &settings)?;
     let even_odd = settings_xml
         .as_deref()
         .is_some_and(|x| toggled_on(x, "evenAndOddHeaders"));
-    let rels = pkg.relationships(&main);
+    let rels = pkg.relationships(&main).map_err(DocxError::Zip)?;
     // Each header, footer and image the document names found in one lookup
     // among its relationships, not a scan of them all for each.
     let relations = fluree_doc_ooxml::Relations::new(&rels);
@@ -248,12 +291,18 @@ pub fn parse_with_media(
     let footer = read_parts("footer", "footer", &mut budget)?;
     // Footnotes and endnotes, after the body, each labelled with the
     // number Word shows it by; then the footer; then the comments, which
-    // Word does not print. Each marked as what it is, so a consumer that
-    // wants the body alone leaves them out.
+    // Word does not print, when asked for. Each marked as what it is, so a
+    // consumer that wants the body alone leaves them out.
     let mut notes = Vec::new();
-    for kind in [&FOOTNOTES, &ENDNOTES, &COMMENTS] {
-        let part = pkg.related(&main, kind.rel, kind.fallback);
-        let Some(part_xml) = aside(&mut pkg, &part)? else {
+    let kinds = [&FOOTNOTES, &ENDNOTES, &COMMENTS];
+    for kind in kinds
+        .into_iter()
+        .filter(|k| options.comments || k.item != "comment")
+    {
+        let part = pkg
+            .related(&main, kind.rel, kind.fallback)
+            .map_err(DocxError::Zip)?;
+        let Some(part_xml) = aside(pkg, &part)? else {
             continue;
         };
         notes.extend(read_notes(
@@ -281,7 +330,7 @@ pub fn parse_with_media(
     // file outside it, a relationship not defined) is still listed, so it
     // is counted among those not read; a part that is not there is listed
     // under the name it was given, and fails to read.
-    let names = fluree_doc_ooxml::PartNames::new(&pkg);
+    let names = fluree_doc_ooxml::PartNames::new(pkg);
     let media = figure_rids
         .into_iter()
         .map(|(figure, rid, index)| {
@@ -919,10 +968,15 @@ fn parse_body(
     // stolen by the outer one; nested tables are flattened in reading order,
     // which is what a flat cell grid can express.
     let mut table_depth = 0usize;
+    // Whether the subtitle a document may have is read ([`flush_para`]).
+    let mut subtitled = false;
     let mut rows: Vec<Row> = Vec::new();
     let mut row = Row::default();
     let mut cell = Cell::default();
     let mut in_cell = false;
+    // The cell slots the table's cells and rows were spent at as they were
+    // read, which its grid's spending counts as its own.
+    let mut held = 0u64;
     let mut look = TableLook::default();
     // Run formatting: whether the run being read is bold. Only a run's own
     // `w:rPr` counts; the one inside `w:pPr` formats the paragraph mark.
@@ -1273,7 +1327,7 @@ fn parse_body(
                             let at = out.len();
                             let (level, label) = (para.level, para.label.clone());
                             let list = para.list.clone().unwrap_or_default();
-                            flush_para(&mut out, &mut para, title_styles, budget)?;
+                            flush_para(&mut out, &mut para, title_styles, &mut subtitled, budget)?;
                             // Whether it reads as a title is a question about
                             // the element it became: a paragraph's lines after
                             // a blank one are paragraphs of their own.
@@ -1303,11 +1357,20 @@ fn parse_body(
                             }
                         }
                     }
+                    // Each cell and row is spent as it is kept, not when
+                    // the table ends: a megabyte zipped of `<w:tc></w:tc>`
+                    // held gigabytes of cells before its grid was spent.
                     "tc" => {
                         in_cell = false;
+                        budget.spend_cells(1)?;
+                        held += 1;
                         row.cells.push(std::mem::take(&mut cell));
                     }
-                    "tr" => rows.push(std::mem::take(&mut row)),
+                    "tr" => {
+                        budget.spend_cells(1)?;
+                        held += 1;
+                        rows.push(std::mem::take(&mut row));
+                    }
                     "tbl" => {
                         table_depth = table_depth.saturating_sub(1);
                         if table_depth == 0 {
@@ -1316,7 +1379,8 @@ fn parse_body(
                                     .style
                                     .as_ref()
                                     .is_some_and(|s| header_styles.contains(s));
-                            emit_table(&mut out, std::mem::take(&mut rows), styled, budget)?;
+                            let rows = std::mem::take(&mut rows);
+                            emit_table(&mut out, rows, styled, std::mem::take(&mut held), budget)?;
                             // A picture in a cell has no place in a grid of
                             // text; it follows the table.
                             out.append(&mut figures);
@@ -1329,7 +1393,7 @@ fn parse_body(
         }
         buf.clear();
     }
-    flush_para(&mut out, &mut para, title_styles, budget)?;
+    flush_para(&mut out, &mut para, title_styles, &mut subtitled, budget)?;
     out.append(&mut figures);
     promote_numbered_titles(&mut out, &outline);
     for (i, e) in out.iter_mut().enumerate() {
@@ -1494,10 +1558,15 @@ struct Numbered {
     capitals: bool,
 }
 
+/// Make `para` into elements at the end of `out`. `subtitled` says whether
+/// a subtitle is among them already, kept rather than looked for in `out`
+/// at each paragraph after a title: a title and a subtitle repeated made
+/// that a scan of everything before for each.
 fn flush_para(
     out: &mut Vec<Element>,
     para: &mut Para,
     title_styles: &TitleStyles,
+    subtitled: &mut bool,
     budget: &mut Budget,
 ) -> Result<(), TooLarge> {
     let p = std::mem::take(para);
@@ -1540,9 +1609,9 @@ fn flush_para(
     }
     .filter(|&kind| {
         kind != "doco:Subtitle"
-            || (out.last().is_some_and(|e| e.kind == "doco:Title")
-                && !out.iter().any(|e| e.kind == "doco:Subtitle"))
+            || (out.last().is_some_and(|e| e.kind == "doco:Title") && !*subtitled)
     });
+    *subtitled |= declared == Some("doco:Subtitle");
     let e = if let Some(kind) = declared {
         element(kind, title, None)
     } else if let Some(level) = heading_level(&p.style) {
@@ -1585,11 +1654,13 @@ fn flush_para(
 /// convention the PDF engine derives from ruling. `w:vMerge` without
 /// `val="restart"` continues the cell above.
 ///
-/// `styled` says the table's style draws its first row as a header.
+/// `styled` says the table's style draws its first row as a header. The
+/// cells and rows `held` as they were read are spent already.
 fn emit_table(
     out: &mut Vec<Element>,
     rows: Vec<Row>,
     styled: bool,
+    held: u64,
     budget: &mut Budget,
 ) -> Result<(), TooLarge> {
     let rows: Vec<Row> = rows.into_iter().filter(|r| !r.cells.is_empty()).collect();
@@ -1610,8 +1681,13 @@ fn emit_table(
     }
     let n_rows = rows.len();
     // The grid, as wide as the widest row's spans make it, before it is
-    // made: one cell spanning a billion columns asks for a billion.
-    budget.spend_cells((n_rows as u64).saturating_mul(width as u64))?;
+    // made: one cell spanning a billion columns asks for a billion. The
+    // cells and rows `held` as they were read are spent already.
+    budget.spend_cells(
+        (n_rows as u64)
+            .saturating_mul(width as u64)
+            .saturating_sub(held),
+    )?;
     let mut grid = vec![String::new(); n_rows * width];
     let mut m_left = vec![false; n_rows * width];
     let mut m_down = vec![false; n_rows * width];
@@ -2157,6 +2233,7 @@ mod tests {
                 words: 1,
                 mean_confidence: Some(0.9),
                 min_confidence: Some(0.9),
+                set_aside: None,
             }]
         );
         let els = read.elements;
@@ -3021,6 +3098,32 @@ mod tests {
     }
 
     #[test]
+    fn a_tables_cells_are_spent_as_they_are_read() {
+        let cell = fluree_doc_model::budget::CELL_BYTES;
+        let read = |body: &str, budget: &mut Budget| {
+            parse_body(
+                &doc(body),
+                &HashSet::new(),
+                &TitleStyles::new(),
+                Numbering::default(),
+                budget,
+            )
+        };
+        // 100,000 empty cells in a table that never ends: held until it
+        // did, and never spent, they are refused by a budget of 10,000 as
+        // they are read. A megabyte zipped of them held gigabytes.
+        let open = format!("<w:tbl><w:tr>{}", "<w:tc></w:tc>".repeat(100_000));
+        let err = read(&open, &mut Budget::new(10_000 * cell, 0)).unwrap_err();
+        assert!(matches!(err, DocxError::TooLarge(_)), "{err}");
+        // A table that ends is spent at its grid, what it was spent at as
+        // it was read part of it, not on top: 3,000 cells and 1,000 rows
+        // read, a grid of 3,000, and the table's element.
+        let rows = "<w:tr><w:tc></w:tc><w:tc></w:tc><w:tc></w:tc></w:tr>".repeat(1_000);
+        let closed = format!("<w:tbl>{rows}</w:tbl>");
+        read(&closed, &mut Budget::new(4_100 * cell, 0)).unwrap();
+    }
+
+    #[test]
     fn notes_and_comments_follow_the_body_as_what_they_are() {
         use std::io::Write;
         let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -3086,21 +3189,33 @@ mod tests {
             z.write_all(xml.as_bytes()).unwrap();
         }
         z.finish().unwrap();
-        let els = parse(&buf.into_inner()).unwrap();
+        let bytes = buf.into_inner();
+        let els = with_comments(&bytes).unwrap();
         let got: Vec<(&str, &str)> = els.iter().map(|e| (e.text.as_str(), e.evidence)).collect();
-        assert_eq!(
-            got,
-            [
-                ("Yield rose", "docx"),
-                ("Costs fell", "docx"),
-                ("1 Survey of Alex Sample, 2026.", "footnote"),
-                ("2 Annual report, p. 4.", "footnote"),
-                ("i Method in the annex.", "endnote"),
-                ("Sam Example: Source?", "comment"),
-                ("Alex Sample: On the header.", "comment"),
-            ]
-        );
+        let printed = [
+            ("Yield rose", "docx"),
+            ("Costs fell", "docx"),
+            ("1 Survey of Alex Sample, 2026.", "footnote"),
+            ("2 Annual report, p. 4.", "footnote"),
+            ("i Method in the annex.", "endnote"),
+        ];
+        let comments = [
+            ("Sam Example: Source?", "comment"),
+            ("Alex Sample: On the header.", "comment"),
+        ];
+        assert_eq!(got, [&printed[..], &comments[..]].concat());
         assert!(els.iter().all(|e| e.kind == "doco:Paragraph"));
+        // Not asked for, the comments are not read: what Word prints is,
+        // under the same ids.
+        let els = parse(&bytes).unwrap();
+        let got: Vec<(&str, &str)> = els.iter().map(|e| (e.text.as_str(), e.evidence)).collect();
+        assert_eq!(got, printed);
+        assert_eq!(els.last().unwrap().id, "elem-00005");
+    }
+
+    /// The elements of `bytes`, its comments read.
+    fn with_comments(bytes: &[u8]) -> Result<Vec<Element>, DocxError> {
+        parse_with_media_options(bytes, &Options { comments: true }).map(|(els, ..)| els)
     }
 
     #[test]
@@ -3124,15 +3239,16 @@ mod tests {
                 ("word/comments.xml".into(), comments),
             ])
         };
-        let els = parse(&docx(comments.into_bytes())).unwrap();
+        let els = with_comments(&docx(comments.into_bytes())).unwrap();
         let got: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(got, ["Body", "First", "Unanchored"]);
         // Past the bound by a byte, deflated to a few kilobytes: refused as
-        // it inflates, not read whole.
+        // it inflates, not read whole; not asked for, not read at all.
         let mut big = b"<w:comments>".to_vec();
         big.resize(fluree_doc_ooxml::MAX_XML_BYTES as usize + 1, b' ');
-        let err = parse(&docx(big)).unwrap_err().to_string();
+        let err = with_comments(&docx(big.clone())).unwrap_err().to_string();
         assert!(err.contains("word/comments.xml"), "{err}");
+        assert!(parse(&docx(big)).is_ok());
     }
 
     #[test]
@@ -3658,6 +3774,44 @@ mod tests {
     }
 
     #[test]
+    fn titles_and_subtitles_repeated_are_read_in_linear_time() {
+        // A paragraph in the Subtitle style after a title looked for a
+        // subtitle among everything read before it, past `n` paragraphs
+        // to the one found after them.
+        let body = |n: usize| {
+            let pair = format!(
+                "{}{}",
+                para(Some("Title"), "Annual Report"),
+                para(Some("Subtitle"), "Fiscal year 2026")
+            );
+            doc(&format!(
+                "{}{}",
+                para(None, "Text").repeat(n),
+                pair.repeat(n)
+            ))
+        };
+        let kinds: Vec<String> = parse_document_xml(&body(2))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "doco:Paragraph",
+                "doco:Paragraph",
+                "doco:Title",
+                "doco:Subtitle",
+                "doco:Title",
+                "doco:Paragraph"
+            ]
+        );
+        fluree_doc_model::scaling::assert_linear("titles and subtitles", 5_000, body, |x| {
+            assert!(parse_document_xml(x).is_ok())
+        });
+    }
+
+    #[test]
     fn the_subtitle_style_is_the_titles_subtitle() {
         let x = doc(&format!(
             "{}{}{}",
@@ -4156,9 +4310,10 @@ mod tests {
                 &mut budget,
             )
         };
-        // Its grid, the table, and its three cells that hold text, each
-        // written once in its row.
-        let need = 4 * CELL_BYTES + FLAT_ELEMENT_BYTES + 3 * FLAT_CELL_BYTES + 4 * TEXT_BYTES;
+        // Its four cells and two rows as they are read, which its grid of
+        // four is made within, the table, and its three cells that hold
+        // text, each written once in its row.
+        let need = 6 * CELL_BYTES + FLAT_ELEMENT_BYTES + 3 * FLAT_CELL_BYTES + 4 * TEXT_BYTES;
         assert_eq!(read(need).unwrap()[0].kind, "doco:Table");
         assert!(matches!(read(need - 1), Err(DocxError::TooLarge(_))));
     }

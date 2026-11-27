@@ -58,6 +58,10 @@ pub const MAX_CELLS: u64 = fluree_doc_model::budget::scaled(1 << 22);
 /// for the fuzz targets, as [`MAX_CELLS`]).
 pub const MAX_TEXT_CHARS: u64 = fluree_doc_model::budget::scaled(64 << 20);
 
+/// The most sheet records a workbook's globals may list: each is a sheet
+/// calamine reads, and a page laid out, however many name one sheet.
+pub const MAX_SHEETS: usize = 1 << 16;
+
 #[derive(Debug)]
 pub enum XlsError {
     /// Not a compound file, or one whose structure is broken.
