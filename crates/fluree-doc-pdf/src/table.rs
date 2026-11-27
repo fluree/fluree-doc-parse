@@ -1468,6 +1468,25 @@ impl Grid {
         if run >= 2 && self.stripes_from(fills, run - 1) && figures_row(&rows[run - 1]) {
             run -= 1;
         }
+        // The run's last row is the table's first band where it holds a
+        // label in its first cell alone, as a row further down does under a
+        // fill of its own: a funding table's `Months 1 – 12`, shaded as its
+        // header is, over the CLINs it groups, and `Months 13-24` over the
+        // next. A band labels the rows under it; it names no column.
+        let band = |r: usize| {
+            rows[r].first().is_some_and(|t| !t.trim().is_empty())
+                && rows[r].iter().skip(1).all(|t| t.trim().is_empty())
+        };
+        // Beside other columns only, and in a run that leaves rows bare: a
+        // one-column listing shaded throughout holds nothing but such rows.
+        if run >= 2
+            && run < rows.len()
+            && self.cols() >= 2
+            && band(run - 1)
+            && (run..rows.len()).any(|r| band(r) && self.band_has_fill(fills, r))
+        {
+            run -= 1;
+        }
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
             return run;
         }
@@ -1752,6 +1771,13 @@ impl Grid {
     ///   it. In most of the columns both fill, that would mean one type
     ///   (quantities or words) and one weight, as a field list's rows are,
     ///   whose values are figures in some fields and words in others.
+    ///
+    /// The row it is set apart from is the first under it filling two
+    /// cells or more, and more than half as many as the header names. A
+    /// section's band under the header (`MAS Contract Year 4 …`, its words
+    /// dealt into two cells by the cuts), bold or shaded as a header is,
+    /// or the header's own second line (`run` of `Longer run`) is no row of
+    /// the table's values to tell it from.
     pub(crate) fn heads_its_rows(
         &self,
         header: usize,
@@ -1761,19 +1787,22 @@ impl Grid {
         fills: &[crate::rule::Fill],
     ) -> bool {
         let n = rows.len().min(self.rows());
-        if header == 0 || header >= n {
+        let h = header;
+        if header == 0 || h >= n {
             return false;
         }
         let cols = self.cols();
         let text = |r: usize, c: usize| rows[r].get(c).map_or("", |t| t.trim());
-        let bold = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, header);
+        let filled = |r: usize| (0..cols).filter(|&c| !text(r, c).is_empty()).count();
+        let first = (h..n)
+            .find(|&r| filled(r) >= 2 && filled(r) * 2 > filled(0))
+            .unwrap_or(h);
+        let bold = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, first);
         let shaded = self.band_has_fill(fills, 0)
-            && !self.band_has_fill(fills, header)
-            && !(header + 1 < n && self.band_has_fill(fills, header + 1));
-        let under = self.rule_between(rules, header);
-        let below: Vec<Option<f64>> = (header + 1..n)
-            .map(|r| self.rule_between(rules, r))
-            .collect();
+            && !self.band_has_fill(fills, first)
+            && !(first + 1 < n && self.band_has_fill(fills, first + 1));
+        let under = self.rule_between(rules, h);
+        let below: Vec<Option<f64>> = (h + 1..n).map(|r| self.rule_between(rules, r)).collect();
         let others = below.iter().flatten().copied().fold(0.0, f64::max);
         let ruled = under.is_some_and(|u| {
             (others > 0.0 && u > others * HEAVIER_RULE)
@@ -1782,7 +1811,7 @@ impl Grid {
         let stacked = header > 1;
         let (mut typed, mut named) = (0usize, 0usize);
         for c in 0..cols {
-            let cells: Vec<&str> = (header..n)
+            let cells: Vec<&str> = (h..n)
                 .map(|r| text(r, c))
                 .filter(|t| !t.is_empty())
                 .collect();
@@ -1799,11 +1828,11 @@ impl Grid {
         }
         let contrast = typed > 0 && named * 2 > typed;
         let weights0 = self.cell_weights(glyphs, 0);
-        let weights1 = self.cell_weights(glyphs, header);
+        let weights1 = self.cell_weights(glyphs, first);
         let heavy = |(w, h): (usize, usize)| w > 0 && h * 2 > w;
         let (mut compared, mut alike) = (0usize, 0usize);
         for c in 0..cols {
-            let (a, b) = (text(0, c), text(header, c));
+            let (a, b) = (text(0, c), text(first, c));
             if a.is_empty() || b.is_empty() {
                 continue;
             }
@@ -10523,6 +10552,41 @@ mod header_tests {
     }
 
     #[test]
+    fn a_shaded_first_band_is_no_header_row() {
+        // A funding table: its header shaded, its first period band shaded
+        // under it, and the next period's band shaded further down. The
+        // shaded run is the header and the first band, not a two-row header.
+        let g = grid_with_bands();
+        let row = |r: usize| fill(0.0, 100.0 + 20.0 * r as f64, 400.0, 120.0 + 20.0 * r as f64);
+        let rows: Vec<Vec<String>> = [
+            ["CLIN", "Funding Amount", "Estimated Date", "Note"],
+            ["Months 1 – 12", "", "", ""],
+            ["0001 – Storage", "TBD", "TBD", "a"],
+            ["Months 13-24", "", "", ""],
+            ["0006 – Storage", "$2,947,920.24", "December 3, 2021", "b"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1), row(3)]), 1);
+        // With no band of the kind further down, a shaded second row under
+        // the header is the header's own.
+        assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1)]), 2);
+        // A one-column listing holds such rows alone: its shading, broken
+        // once, is no band's. Its run is deeper than a header is, and it
+        // keeps the single header row it falls back to; shortened by one
+        // as though it ended on a band, it read as four header rows.
+        let one = Grid {
+            xs: vec![0.0, 400.0],
+            ys: (0..10).map(|r| 100.0 + 20.0 * r as f64).collect(),
+            ..grid_with_bands()
+        };
+        let lines: Vec<Vec<String>> = (0..9).map(|r| vec![format!("line {r}")]).collect();
+        let shaded: Vec<_> = (0..9).filter(|&r| r != 5).map(row).collect();
+        assert_eq!(one.header_rows(&lines, &[], &[], &shaded), 1);
+    }
+
+    #[test]
     fn full_shading_gives_no_contrast_and_falls_back() {
         let g = grid_with_bands();
         let fills: Vec<_> = (0..5)
@@ -14272,6 +14336,49 @@ mod tests {
             1,
             "a spanning rule corroborates it"
         );
+    }
+
+    #[test]
+    fn a_header_is_set_apart_from_its_rows_past_a_band() {
+        // A labour table's labels, bold, over a contract year's band, bold
+        // too and its words in two cells, over plain rows of figures: the
+        // labels head the rows, set apart from the first row of figures.
+        let g = grid(
+            &[0.0, 100.0, 200.0, 300.0, 400.0],
+            &[0.0, 20.0, 40.0, 60.0, 80.0],
+        );
+        let rows: Vec<Vec<String>> = [
+            ["Labor Category", "Hours", "Rate", "Amount"],
+            ["MAS Contract Year 4", "(Base period)", "", ""],
+            ["Expert 8", "0", "$407.51", "$0.00"],
+            ["Expert 7", "14", "$378.34", "$5,297.00"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        let mut gl = Vec::new();
+        for (r, row) in rows.iter().enumerate() {
+            let weight = Some(if r < 2 { 700 } else { 400 });
+            for (c, t) in row.iter().enumerate() {
+                if !t.is_empty() {
+                    gl.push(word(c as f64 * 100.0 + 5.0, r, t, weight));
+                }
+            }
+        }
+        assert!(g.heads_its_rows(1, &rows, &gl, &[], &[]));
+        // A first row set as the rows under it are, words over words in
+        // one weight, earns nothing past the band either: a list's first
+        // entry is no header.
+        let names: Vec<Vec<String>> = [
+            ["Alder", "Birch", "Cedar", "Dogwood"],
+            ["Group one", "(native)", "", ""],
+            ["Elm", "Fir", "Ginkgo", "Hazel"],
+            ["Ironwood", "Juniper", "Larch", "Maple"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert!(!g.heads_its_rows(1, &names, &[], &[], &[]));
     }
 
     /// A word as one glyph run at `x`, 5pt a character, on row `r`.
