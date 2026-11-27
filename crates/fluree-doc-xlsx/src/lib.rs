@@ -156,8 +156,8 @@ pub fn parse_with_ocr(
     bytes: &[u8],
     engine: &dyn fluree_doc_vision::OcrEngine,
 ) -> Result<OcrParse, XlsxError> {
-    let (mut elements, info, media) = parse_with_media(bytes)?;
     let mut pkg = Package::open(bytes).map_err(XlsxError::Zip)?;
+    let (mut elements, info, media) = parse_package(&mut pkg)?;
     let r = fluree_doc_image::read_placed(media, &mut |part| read_media(&mut pkg, part), engine);
     fluree_doc_image::place_after_figures(&mut elements, r.read);
     Ok(OcrParse {
@@ -178,7 +178,15 @@ pub fn parse_with_ocr(
 pub fn parse_with_media(
     bytes: &[u8],
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), XlsxError> {
-    let mut pkg = Package::open(bytes).map_err(XlsxError::Zip)?;
+    parse_package(&mut Package::open(bytes).map_err(XlsxError::Zip)?)
+}
+
+/// [`parse_with_media`] from a package already opened, for a caller that
+/// goes on to read the images' bytes from it ([`read_media`]): opening it
+/// reads the archive's whole directory, once.
+pub fn parse_package(
+    pkg: &mut Package<'_>,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), XlsxError> {
     let main = pkg.main_part("xl/workbook.xml");
     // The parts the workbook is read from, each inflated whole, are spent
     // from its budget before what it makes.
@@ -186,7 +194,7 @@ pub fn parse_with_media(
     let workbook = pkg
         .read_within(&main, &mut budget)?
         .ok_or(XlsxError::NoWorkbook)?;
-    let rels = pkg.relationships(&main);
+    let rels = pkg.relationships(&main).map_err(XlsxError::Zip)?;
     let part = |name: &str, fallback: &str| {
         rels.iter()
             .find(|r| r.is(name) && !r.external)
@@ -205,7 +213,7 @@ pub fn parse_with_media(
         None => Styles::default(),
     };
     let (sheets, date1904) = parse_workbook_xml(&workbook, &mut budget)?;
-    let names = PartNames::new(&pkg);
+    let names = PartNames::new(pkg);
     // Each sheet's part by its relationship id, the first internal one
     // that has it: found in one lookup per sheet listed, where a scan of
     // every relationship for each made the listing's cost its square.
@@ -240,6 +248,7 @@ pub fn parse_with_media(
         if let Some(rid) = &sheet.drawing {
             let drawing = pkg
                 .relationships(target)
+                .map_err(XlsxError::Zip)?
                 .into_iter()
                 .find(|r| r.id == *rid && !r.external)
                 .map(|r| r.target);
@@ -248,7 +257,7 @@ pub fn parse_with_media(
                 None => None,
             };
             if let Some((xml, part)) = xml.zip(drawing) {
-                let drawing_rels = pkg.relationships(&part);
+                let drawing_rels = pkg.relationships(&part).map_err(XlsxError::Zip)?;
                 let drawing_rels = Relations::new(&drawing_rels);
                 for pic in pictures(&xml, &mut budget)? {
                     budget.spend_elements(1)?;
@@ -2130,6 +2139,8 @@ fn island_elements(
     let width = cols.len();
     // The grid, its values and flags, and its rows, the table, and the
     // cells that hold text, each a cell of the output: before any is made.
+    // A cell is a node of its own in DoCO, written once in its row in the
+    // others, and costs what its output makes of it.
     budget.spend_cells((n_rows * width) as u64)?;
     let filled = isl.members.iter().filter(|p| cells.contains_key(p)).count();
     budget.spend_elements(1)?;
@@ -2622,8 +2633,10 @@ mod tests {
         };
         assert!(grid_elements(sheets(), "xls", &mut cells(30_002)).is_ok());
         assert!(grid_elements(sheets(), "xls", &mut cells(25_000)).is_err());
-        // Markdown writes each of the table's cells once, in its row, and
-        // copies no label: the title and the table, each an element.
+        // Markdown writes each of the table's cells once, in its row: the
+        // title and the table, each an element, and its cells, each a cell
+        // of a row. Counted as DoCO's nodes, an ordinary export of 50,000
+        // rows by 12 columns was refused in every format.
         let flat = |n: u64| {
             Budget::new(
                 2 * ELEMENT_BYTES + 10_000 * FLAT_CELL_BYTES + TEXT_BYTES + n * CELL_BYTES,
@@ -4211,6 +4224,7 @@ mod tests {
                 words: 1,
                 mean_confidence: Some(0.9),
                 min_confidence: Some(0.9),
+                set_aside: None,
             }]
         );
         // The second picture's part is not in the package: named, it fails

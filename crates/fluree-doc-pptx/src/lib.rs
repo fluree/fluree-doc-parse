@@ -106,7 +106,7 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
             // Charts live in their own parts; the slide only names a
             // relationship id, so resolve those before walking it.
             let mut by_id: HashMap<String, String> = HashMap::new();
-            for r in pkg.relationships(name) {
+            for r in pkg.relationships(name).map_err(PptxError::Zip)? {
                 if !r.is("chart") || r.external || by_id.contains_key(&r.id) {
                     continue;
                 }
@@ -142,9 +142,9 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
 /// A package without that list, or whose list names no part it holds, is
 /// read in the numeric order of its slide parts' names, where `slide10`
 /// comes after `slide2`.
-fn slide_parts(pkg: &mut Package<'_>, budget: &mut Budget) -> Result<Vec<String>, TooLarge> {
+fn slide_parts(pkg: &mut Package<'_>, budget: &mut Budget) -> Result<Vec<String>, PptxError> {
     let presentation = pkg.main_part("ppt/presentation.xml");
-    let rels = pkg.relationships(&presentation);
+    let rels = pkg.relationships(&presentation).map_err(PptxError::Zip)?;
     let names = pkg.part_names();
     // Each slide listed found in one lookup among the relationships, and
     // its part in one among the package's: a scan of each for every
@@ -508,6 +508,13 @@ fn parse_slide<'c>(
     let mut row: Vec<Cell> = Vec::new();
     let mut cell = Cell::default();
     let mut in_cell = false;
+    // The cell slots the table's cells and rows were spent at as they were
+    // read, which its grid's spending counts as its own.
+    let mut held = 0u64;
+    // Whether the deck's subtitle is read, kept rather than looked for in
+    // `out` at each paragraph of its shape: a subtitle of many paragraphs
+    // made that a scan of the slide for each.
+    let mut subtitled = false;
 
     loop {
         match r.read_event_into(&mut buf) {
@@ -581,26 +588,43 @@ fn parse_slide<'c>(
                                 shape,
                                 (para_bullet || para_level > 0).then_some(para_level),
                             ),
+                            &mut subtitled,
                             budget,
                         )?;
                         para_bullet = false;
                         para_level = 0;
                     }
                 }
+                // Each cell and row is spent as it is kept, not when the
+                // table ends: a megabyte zipped of `<a:tc></a:tc>` held
+                // gigabytes of cells before its grid was spent.
                 "tc" => {
                     in_cell = false;
+                    budget.spend_cells(1)?;
+                    held += 1;
                     row.push(std::mem::take(&mut cell));
                 }
-                "tr" => rows.push(std::mem::take(&mut row)),
+                "tr" => {
+                    budget.spend_cells(1)?;
+                    held += 1;
+                    rows.push(std::mem::take(&mut row));
+                }
                 "tbl" => {
                     in_table = in_table.saturating_sub(1);
                     if in_table == 0 {
-                        emit_table(&mut out, std::mem::take(&mut rows), page, budget)?;
+                        let rows = std::mem::take(&mut rows);
+                        emit_table(&mut out, rows, page, std::mem::take(&mut held), budget)?;
                     }
                 }
                 "sp" => {
                     // A shape's title-ness does not leak into the next shape.
-                    flush(&mut out, &mut text, (page, shape, None), budget)?;
+                    flush(
+                        &mut out,
+                        &mut text,
+                        (page, shape, None),
+                        &mut subtitled,
+                        budget,
+                    )?;
                     shape = Shape::Body;
                 }
                 _ => {}
@@ -609,7 +633,13 @@ fn parse_slide<'c>(
         }
         buf.clear();
     }
-    flush(&mut out, &mut text, (page, Shape::Body, None), budget)?;
+    flush(
+        &mut out,
+        &mut text,
+        (page, Shape::Body, None),
+        &mut subtitled,
+        budget,
+    )?;
     // A subtitle follows its title, whichever shape the slide lists first:
     // the subtitle and what the slide lists after it, up to the title, go
     // after the title. With no title it subtitles nothing, and is text.
@@ -681,6 +711,7 @@ fn flush(
     out: &mut Vec<Element>,
     buf: &mut String,
     (page, shape, item): (usize, Shape, Option<usize>),
+    subtitled: &mut bool,
     budget: &mut Budget,
 ) -> Result<(), TooLarge> {
     let t = std::mem::take(buf)
@@ -692,7 +723,8 @@ fn flush(
     }
     let e = if shape == Shape::DeckTitle {
         element("doco:Title", t, None, page)
-    } else if shape == Shape::DeckSubtitle && !out.iter().any(|e| e.kind == "doco:Subtitle") {
+    } else if shape == Shape::DeckSubtitle && !*subtitled {
+        *subtitled = true;
         element("doco:Subtitle", t, None, page)
     } else if shape == Shape::SlideTitle {
         element("doco:SectionTitle", t, Some(1), page)
@@ -708,11 +740,13 @@ fn flush(
 }
 
 /// A table's rows as a `doco:Table`, its grid (its rows padded to its
-/// widest) spent from `budget` before it is made.
+/// widest) spent from `budget` before it is made, but for the cells and
+/// rows `held` as they were read, spent already.
 fn emit_table(
     out: &mut Vec<Element>,
     rows: Vec<Vec<Cell>>,
     page: usize,
+    held: u64,
     budget: &mut Budget,
 ) -> Result<(), TooLarge> {
     let rows: Vec<Vec<Cell>> = rows.into_iter().filter(|r| !r.is_empty()).collect();
@@ -724,7 +758,7 @@ fn emit_table(
         return Ok(());
     }
     let n = rows.len();
-    budget.spend_cells((n as u64).saturating_mul(width as u64))?;
+    budget.spend_cells((n as u64).saturating_mul(width as u64).saturating_sub(held))?;
     let mut grid = vec![String::new(); n * width];
     let mut m_left = vec![false; n * width];
     let mut m_down = vec![false; n * width];
@@ -783,6 +817,24 @@ mod tests {
 
     fn para(text: &str) -> String {
         format!("<a:p><a:r><a:t>{text}</a:t></a:r></a:p>")
+    }
+
+    #[test]
+    fn a_subtitle_of_many_paragraphs_is_read_in_linear_time() {
+        // Each paragraph after the first looked for a subtitle among the
+        // slide's elements so far, past a title of `n` paragraphs.
+        fluree_doc_model::scaling::assert_linear(
+            "a subtitle's paragraphs",
+            5_000,
+            |n| {
+                slide(&format!(
+                    "{}{}",
+                    shape(Some("ctrTitle"), &para("Quarterly Review").repeat(n)),
+                    shape(Some("subTitle"), &para("Q3 2026").repeat(n))
+                ))
+            },
+            |x| assert!(parse_slide_xml(x, 0).is_ok()),
+        );
     }
 
     #[test]
@@ -1340,5 +1392,29 @@ mod tests {
         let mut small = Budget::new(1 << 30, 0);
         let err = parse_slide(&x, 0, &|_| None, &mut small).unwrap_err();
         assert!(matches!(err, PptxError::TooLarge(_)), "{err}");
+    }
+
+    #[test]
+    fn a_tables_cells_are_spent_as_they_are_read() {
+        // 100,000 empty cells in a table that never ends: held until it did,
+        // and never spent, they are refused by a budget of 10,000 as they
+        // are read. A megabyte zipped of them held gigabytes.
+        let cells = "<a:tc></a:tc>".repeat(100_000);
+        let open = slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl><a:tr>{cells}"
+        ));
+        let cell = fluree_doc_model::budget::CELL_BYTES;
+        let mut small = Budget::new(10_000 * cell, 0);
+        let err = parse_slide(&open, 0, &|_| None, &mut small).unwrap_err();
+        assert!(matches!(err, PptxError::TooLarge(_)), "{err}");
+        // A table that ends is spent at its grid, what it was spent at as
+        // it was read part of it, not on top: 3,000 cells and 1,000 rows
+        // read, a grid of 3,000, and the table's element.
+        let rows = "<a:tr><a:tc></a:tc><a:tc></a:tc><a:tc></a:tc></a:tr>".repeat(1_000);
+        let x = slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl>{rows}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
+        ));
+        let mut fits = Budget::new(4_100 * cell, 0);
+        parse_slide(&x, 0, &|_| None, &mut fits).unwrap();
     }
 }

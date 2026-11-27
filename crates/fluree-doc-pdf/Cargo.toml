@@ -23,6 +23,9 @@ memchr = "2"
 hayro = { version = "0.7", optional = true }
 png = { version = "0.17", optional = true }
 
+[dev-dependencies]
+fluree-doc-model = { workspace = true, features = ["test-util"] }
+
 [features]
 # Rasterising a page. Off by default so a consumer that only parses does not
 # build a renderer; on for anything drawing highlights, which must get its

@@ -184,7 +184,9 @@ fn a_region_nothing_read_is_reported_with_its_box() {
 #[test]
 fn a_plain_run_reports_an_image_it_did_not_examine() {
     // No reader and no probe: the capture is not decoded, so nothing says
-    // whether it holds text. It is listed, and said once, by page.
+    // whether it holds text. It is listed in the graph only: a plain run
+    // examines no image, and warns about none, nor comments on it in the
+    // Markdown.
     let dir = scratch("plain", &page(true));
     let (doc, stderr, _) = convert_plain(&dir, &[]);
     assert_eq!(
@@ -192,13 +194,25 @@ fn a_plain_run_reports_an_image_it_did_not_examine() {
         serde_json::json!([{ "pageIndex": 0, "bbox": REGION, "reason": "Unprobed" }]),
         "{doc}"
     );
-    assert!(
-        stderr.contains(
-            "warning: memo: fluree-doc-parse: 1 image on page 1 was not examined: a parse \
-             that probes images (--probe-images, or OCR) can tell whether it holds text."
-        ),
-        "{stderr}"
-    );
+    assert!(!stderr.contains("warning"), "{stderr}");
+    let md = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .arg("convert")
+        .arg(dir.join("memo.pdf"))
+        .args(["-f", "md", "--no-escalate"])
+        .env("HOME", dir.join("home"))
+        .env("XDG_CONFIG_HOME", dir.join("home"))
+        .env("FDOC_HOME", dir.join("home"))
+        .env_remove("FDOC_OCR_WORDS")
+        .env_remove("FDOC_TIER_RESULTS")
+        .env_remove("FDOC_OCR_MODELS")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&md.stderr);
+    assert!(md.status.success(), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let md = String::from_utf8_lossy(&md.stdout);
+    assert!(md.contains("This memo summarises"), "{md}");
+    assert!(!md.contains("<!--"), "{md}");
     let _ = std::fs::remove_dir_all(dir);
 }
 

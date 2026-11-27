@@ -13,21 +13,26 @@
 //!   is a heading at that level, numbered or not; a paragraph in the style
 //!   named `Title` is the document's title.
 //! * **Lists**: a paragraph in a list (`\lsN`) that is no heading is a list
-//!   item; the numbers and bullets a list draws (`\listtext`, `\pntext`)
-//!   are not text.
+//!   item, its level (`\ilvlN`) its depth; the number a list draws
+//!   (`\listtext`, `\pntext`) opens it, as a Word file's computed number
+//!   does, and a bullet adds nothing.
 //! * **Tables**: paragraphs in a table (`\intbl`) fill its cells, `\cell`
 //!   ends a cell and `\row` a row; nested tables are read flat. Where each
 //!   row states its cells' right edges (`\cellxN`), the columns are the
 //!   edges all rows state, so a cell as wide as two is one cell and the
 //!   column it covers a continuation (`merged_left`), as is a cell merged
 //!   into the one before it (`\clmrg`) or the one above (`\clvmrg`,
-//!   `merged_down`).
+//!   `merged_down`). The rows a table opens with that repeat as its header
+//!   (`\trhdr`) are its header rows.
 //! * **Footnotes and endnotes** (`\footnote`, `\ftnalt`) are read after the
 //!   body, each opening with its number, marked `evidence` `footnote` or
 //!   `endnote`; **comments** (`\annotation`) last, opening with their
 //!   author; the **page header and footer** (`\header`, `\footer` and their
 //!   first-page and left/right variants) once each, before and after the
-//!   body, marked `header` and `footer`.
+//!   body, marked `header` and `footer`. One the file ends inside of is
+//!   read as far as it goes.
+//! * **Text boxes** (`\shptxt`) are read after the paragraph they are
+//!   anchored in.
 //! * **Encodings**: `\ansicpg` names the code page bytes and `\'hh` escapes
 //!   are in (Windows-1252 by default), and a font's character set
 //!   (`\fcharsetN` in the font table) the code page of text set in it;
@@ -36,16 +41,15 @@
 //! * **Pictures** (`\pict`) are each an empty `doco:Figure` where they
 //!   stand; fields show their result (`\fldrslt`), not their code.
 //! * **Skipped**: the colour, list and revision tables, the font table's
-//!   and the style sheet's own text, document variables, shapes (their
-//!   drawing data, and the text of a text box, `\shptxt`), embedded objects,
-//!   and any destination marked ignorable (`\*`) that is not one of the
-//!   above.
+//!   and the style sheet's own text, document variables, shapes' drawing
+//!   data, embedded objects, and any destination marked ignorable (`\*`)
+//!   that is not one of the above.
 //!
 //! **Bounds**: groups nest at most [`MAX_DEPTH`] deep; at most [`MAX_FLOWS`]
 //! notes, comments, headers and footers are read; a row definition states
 //! at most [`MAX_TABLE_CELLS`] cells; and what the document makes is spent
-//! from one [`Budget`] before it is made: each paragraph, with its text, and
-//! each table's cells, a row and the copy of its definitions at its `\row`,
+//! from one [`Budget`] before it is made: each paragraph, with its text, each
+//! picture's figure, and each table's cells, a row and the copy of its definitions at its `\row`,
 //! a short row's padding to its table's width as the table is laid out. A
 //! file past any of them fails as too large. `\binN` data is skipped, never past the end. What is read
 //! is otherwise bounded by the file's own size.
@@ -120,6 +124,9 @@ enum Dest {
     Style,
     /// The font table: each font's character set.
     Fonts,
+    /// The label a list draws for its next paragraph (`\listtext`,
+    /// `\pntext`): its number, or its bullet.
+    ListText,
 }
 
 /// A group's state.
@@ -153,6 +160,12 @@ struct Flow {
     level: Option<usize>,
     style: Option<i32>,
     list: bool,
+    /// A list item's level (`\ilvlN`), its `depth`.
+    depth: usize,
+    /// The row being defined is a header row (`\trhdr`); the table's rows
+    /// read so far that all are.
+    header_row: bool,
+    header_rows: usize,
     cell: Vec<String>,
     row: Vec<String>,
     /// Each row read, with its cells' definitions as of its `\row`.
@@ -162,6 +175,9 @@ struct Flow {
     defs: Vec<CellDef>,
     def: CellDef,
     out: Vec<Element>,
+    /// The elements of the text boxes anchored in the paragraph being
+    /// read, put after it.
+    after: Vec<Element>,
 }
 
 /// What a style in the style sheet makes a paragraph.
@@ -190,6 +206,8 @@ struct Reader<'a> {
     title: String,
     author: String,
     atn_author: String,
+    /// The label the list draws for the next paragraph (`\listtext`).
+    list_label: String,
     /// Notes read so far, by kind, for their numbers.
     footnotes: u32,
     endnotes: u32,
@@ -257,6 +275,7 @@ impl<'a> Reader<'a> {
             Dest::Title => self.title.push_str(s),
             Dest::Author => self.author.push_str(s),
             Dest::AtnAuthor => self.atn_author.push_str(s),
+            Dest::ListText => self.list_label.push_str(s),
             Dest::Style => {
                 if let Some((_, st)) = self.defining.as_mut() {
                     st.name.push_str(s);
@@ -326,11 +345,11 @@ impl<'a> Reader<'a> {
             "colortbl" | "listtable" | "listoverridetable" | "revtbl" | "rsidtbl" | "generator"
             | "xmlnstbl" | "themedata" | "colorschememapping" | "datastore" | "latentstyles"
             | "filetbl" | "pgdsctbl" | "docvar" | "object" | "objdata" | "shpinst" | "sp"
-            | "fldinst" | "listtext" | "pntext" | "pntxta" | "pntxtb" | "bkmkstart" | "bkmkend"
-            | "atnid" | "atndate" | "atnref" | "mmathPr" | "userprops" | "operator" | "comment"
-            | "doccomm" | "subject" | "keywords" | "company" | "category" | "manager"
-            | "hlinkbase" | "template" | "nonshppict" | "wgrffmtfilter" | "printim" | "revtim"
-            | "buptim" | "passwordhash" | "xform" => {
+            | "fldinst" | "pntxta" | "pntxtb" | "bkmkstart" | "bkmkend" | "atnid" | "atndate"
+            | "atnref" | "mmathPr" | "userprops" | "operator" | "comment" | "doccomm"
+            | "subject" | "keywords" | "company" | "category" | "manager" | "hlinkbase"
+            | "template" | "nonshppict" | "wgrffmtfilter" | "printim" | "revtim" | "buptim"
+            | "passwordhash" | "xform" => {
                 self.set_dest(Dest::Skip);
                 return;
             }
@@ -363,10 +382,34 @@ impl<'a> Reader<'a> {
                 self.set_dest(Dest::AtnAuthor);
                 return;
             }
+            // The label a list draws: a number is the item's (`2.`), as a
+            // Word file's computed number is; a bullet adds nothing.
+            "listtext" | "pntext" => {
+                self.list_label.clear();
+                self.set_dest(Dest::ListText);
+                return;
+            }
+            // A text box's text, read after the paragraph it is anchored
+            // in, as a flow of its own until its group closes.
+            "shptxt" => {
+                self.open_flow("textbox", String::new());
+                return;
+            }
             "pict" => {
                 self.flush_bytes();
-                if let Some(f) = self.flow() {
-                    f.out.push(Element::new("doco:Figure", "", "rtf", "rtf"));
+                // A figure is an element, spent before it is made: `{\pict}`
+                // is seven bytes.
+                if self.flow().is_some() {
+                    match spend_element(&mut self.budget, "") {
+                        Ok(()) => {
+                            if let Some(f) = self.flow() {
+                                f.out.push(Element::new("doco:Figure", "", "rtf", "rtf"));
+                            }
+                        }
+                        Err(e) => {
+                            self.over.get_or_insert(e);
+                        }
+                    }
                 }
                 self.set_dest(Dest::Skip);
                 return;
@@ -500,12 +543,19 @@ impl<'a> Reader<'a> {
                     f.level = None;
                     f.style = None;
                     f.list = false;
+                    f.depth = 0;
                 }
             }
             "trowd" => {
                 if let Some(f) = self.flow() {
                     f.defs.clear();
                     f.def = CellDef::default();
+                    f.header_row = false;
+                }
+            }
+            "trhdr" => {
+                if let Some(f) = self.flow() {
+                    f.header_row = true;
                 }
             }
             "clmrg" => {
@@ -545,9 +595,15 @@ impl<'a> Reader<'a> {
                     f.style = param;
                 }
             }
-            "ls" | "ilvl" => {
+            "ls" => {
                 if let Some(f) = self.flow() {
                     f.list = true;
+                }
+            }
+            "ilvl" => {
+                if let Some(f) = self.flow() {
+                    f.list = true;
+                    f.depth = param.unwrap_or(0).clamp(0, 8) as usize;
                 }
             }
             "cell" | "nestcell" => {
@@ -576,8 +632,18 @@ impl<'a> Reader<'a> {
     }
 
     /// End the paragraph being read: into its table's cell, or out as an
-    /// element.
+    /// element; then the text boxes anchored in it.
     fn end_paragraph(&mut self) {
+        self.paragraph();
+        if let Dest::Flow(i) = self.group().dest {
+            if let Some(f) = self.flows.get_mut(i) {
+                let after = std::mem::take(&mut f.after);
+                f.out.extend(after);
+            }
+        }
+    }
+
+    fn paragraph(&mut self) {
         self.flush_bytes();
         let styles = &self.styles;
         let Dest::Flow(i) = self.group().dest else {
@@ -586,7 +652,12 @@ impl<'a> Reader<'a> {
         let Some(f) = self.flows.get_mut(i) else {
             return;
         };
-        let text = tidy(&std::mem::take(&mut f.para));
+        let mut text = tidy(&std::mem::take(&mut f.para));
+        // The number its list draws, before it; a bullet, no.
+        let label = tidy(&std::mem::take(&mut self.list_label));
+        if !text.is_empty() && label.chars().any(char::is_alphanumeric) {
+            text = format!("{label} {text}");
+        }
         if f.in_table {
             if !text.is_empty() {
                 f.cell.push(text);
@@ -620,8 +691,10 @@ impl<'a> Reader<'a> {
             self.over.get_or_insert(e);
             return;
         }
+        let depth = if kind == "doc:ListItem" { f.depth } else { 0 };
         f.out.push(Element {
             level,
+            depth,
             ..Element::new(kind, text, "rtf", "rtf")
         });
     }
@@ -649,6 +722,21 @@ impl<'a> Reader<'a> {
                     flush_table(f, &mut self.budget, &mut self.over);
                 }
                 self.groups.pop();
+                // A text box's elements go after the paragraph it is
+                // anchored in, in the flow around it.
+                if self.flows.get(i).is_some_and(|f| f.evidence == "textbox") {
+                    let around = self
+                        .groups
+                        .iter()
+                        .rev()
+                        .find_map(|g| match g.dest {
+                            Dest::Flow(j) if j != i => Some(j),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+                    let els = std::mem::take(&mut self.flows[i].out);
+                    self.flows[around].after.extend(els);
+                }
             }
             _ => {}
         }
@@ -775,6 +863,10 @@ fn end_row(f: &mut Flow, budget: &mut Budget, over: &mut Option<TooLarge>) {
         over.get_or_insert(e);
         return;
     }
+    // A header row (`\trhdr`) heads the table only among the first rows.
+    if f.header_row && f.header_rows == f.rows.len() {
+        f.header_rows += 1;
+    }
     f.rows.push((row, f.defs.clone()));
 }
 
@@ -787,6 +879,7 @@ fn flush_table(f: &mut Flow, budget: &mut Budget, over: &mut Option<TooLarge>) {
         return;
     }
     let rows = std::mem::take(&mut f.rows);
+    let header_rows = std::mem::take(&mut f.header_rows);
     if over.is_some() {
         return;
     }
@@ -837,6 +930,8 @@ fn flush_table(f: &mut Flow, budget: &mut Budget, over: &mut Option<TooLarge>) {
         .join("\n");
     let mut e = Element::new("doco:Table", text, "rtf", "rtf");
     e.cells = Some(rows);
+    // Header rows the file declares; where it declares none, undetected.
+    e.header_rows = (header_rows > 0).then_some(header_rows);
     e.merged_left = left.iter().any(|x| *x).then_some(left);
     e.merged_down = down.iter().any(|x| *x).then_some(down);
     // What DoCO copies of it: a merged value in each cell it covers.
@@ -991,6 +1086,7 @@ fn parse_within(bytes: &[u8], budget: Budget) -> Result<(Vec<Element>, DocumentI
         title: String::new(),
         author: String::new(),
         atn_author: String::new(),
+        list_label: String::new(),
         footnotes: 0,
         endnotes: 0,
         fonts: HashMap::new(),
@@ -1001,10 +1097,27 @@ fn parse_within(bytes: &[u8], budget: Budget) -> Result<(Vec<Element>, DocumentI
         over: None,
     };
     r.run()?;
-    // What is left of the body: a last paragraph with no `\par`, a table.
+    // What is left of each flow a file ends inside of (a note whose group
+    // never closes), then of the body: a last paragraph with no `\par`, a
+    // table.
+    for i in 1..r.flows.len() {
+        r.groups = vec![Group {
+            dest: Dest::Flow(i),
+            uc: 1,
+            font: None,
+        }];
+        r.end_paragraph();
+        flush_table(&mut r.flows[i], &mut r.budget, &mut r.over);
+        if r.flows[i].evidence == "textbox" {
+            let els = std::mem::take(&mut r.flows[i].out);
+            r.flows[0].after.extend(els);
+        }
+    }
     r.groups.clear();
     r.end_paragraph();
     flush_table(&mut r.flows[0], &mut r.budget, &mut r.over);
+    let after = std::mem::take(&mut r.flows[0].after);
+    r.flows[0].out.extend(after);
     if let Some(why) = r.over.take() {
         return Err(RtfError::TooLarge(why));
     }

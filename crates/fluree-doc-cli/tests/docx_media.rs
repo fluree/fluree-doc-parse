@@ -827,13 +827,23 @@ fn a_pictures_reading_that_is_noise_leaves_it_unread() {
         assert!(!err.contains("were not read"), "{err}");
         let warned = "report_m1.json: 1 of 1 word score(s) outside 0-1";
         assert_eq!(err.contains(warned), hundred, "{err}");
-        // Its reading is listed, as one that took no word.
+        // Its reading is listed, set aside as noise, with the words it held
+        // and the engine's confidence in them (none, scored 0-100).
         let listed = &document(&doco)["doc:ocrReadings"]["@value"][0];
+        let words = read.as_array().unwrap().len();
         assert_eq!(
-            (&listed["image"], &listed["words"]),
-            (&"m1".into(), &0.into()),
+            (&listed["image"], &listed["words"], &listed["setAside"]),
+            (&"m1".into(), &words.into(), &"noise".into()),
             "{doco}"
         );
+        let mean = (!hundred).then(|| {
+            let confs: Vec<f64> = (read.as_array().unwrap().iter())
+                .map(|w| w["conf"].as_f64().unwrap())
+                .collect();
+            // To four decimals, as listed.
+            (confs.iter().sum::<f64>() / confs.len() as f64 * 1e4).round() / 1e4
+        });
+        assert_eq!(listed["meanConfidence"].as_f64(), mean, "{doco}");
         let (text, _) = run(&input, &dir.join("home"), "text", &ocr_words);
         assert_eq!(
             text.trim(),
@@ -998,5 +1008,149 @@ fn a_documents_pictures_go_to_the_model_through_one_reader() {
     let (doco, err) = run(&input, &home, "doco", &[]);
     assert_eq!(err.matches("the configured model").count(), 1, "{err}");
     assert_eq!(doco.matches("\"Failed\"").count(), 3, "{doco}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_reading_supplied_is_taken_whatever_the_probe_makes_of_the_picture() {
+    // A photograph the pixel probe does not take for text, with a model
+    // configured: it is not sent. A reading of it supplied, by a model
+    // (`--tier-results`) or by OCR (`--ocr-words`), costs no call and is
+    // taken all the same: the probe is asked only before a billed call.
+    let dir = scratch("supplied");
+    let input = dir.join("report.docx");
+    std::fs::write(&input, docx_with(1, "media/image1.jpeg", photo(600, 800))).unwrap();
+    let home = model_home(&dir, 0);
+    let (doco, err) = run(&input, &home, "doco", &[]);
+    assert!(!err.contains("configured model"), "{err}");
+    assert_eq!(reasons(&doco), ["NotTexty"]);
+    let tiers = dir.join("tiers");
+    std::fs::create_dir_all(&tiers).unwrap();
+    tier_reading(&tiers, "report_m1", "Badge 4417-0093-21");
+    let (text, _) = run(
+        &input,
+        &home,
+        "text",
+        &["--tier-results".as_ref(), tiers.as_os_str()],
+    );
+    assert!(text.contains("Badge 4417-0093-21"), "{text}");
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = serde_json::json!({
+        "width": 600, "height": 800,
+        "words": [{ "text": "Badge 4417-0093-21", "box": [40, 60, 400, 100] }]
+    });
+    std::fs::write(words.join("report_m1.json"), reading.to_string()).unwrap();
+    let (text, err) = run(
+        &input,
+        &home,
+        "text",
+        &["--ocr-words".as_ref(), words.as_os_str()],
+    );
+    assert!(text.contains("4417-0093-21"), "{text}");
+    assert!(!err.contains("configured model"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn with_no_escalate_no_picture_is_sent_to_the_configured_model() {
+    // A model configured and a picture it would be sent: `--no-escalate`
+    // keeps it on the machine. Nothing is sent, so nothing fails to be.
+    let dir = scratch("no-escalate");
+    let input = dir.join("report.docx");
+    std::fs::write(&input, docx()).unwrap();
+    let home = model_home(&dir, 0);
+    let (doco, err) = run(&input, &home, "doco", &[]);
+    assert!(err.contains("the configured model"), "{err}");
+    let (doco_kept, err) = run(&input, &home, "doco", &["--no-escalate".as_ref()]);
+    assert!(!err.contains("the configured model"), "{err}");
+    assert_eq!(reasons(&doco), ["Failed"]);
+    assert_eq!(reasons(&doco_kept), ["NotRead"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A DOCX of `parts` pictures, each its own part holding `image`.
+fn docx_of_parts(parts: usize, image: &[u8]) -> Vec<u8> {
+    let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let picture = |i: usize| {
+        format!(
+            "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"{i}\" name=\"Picture {i}\"/><a:graphic><a:graphicData>\
+             <pic:pic><pic:blipFill><a:blip r:embed=\"rId{i}\"/></pic:blipFill></pic:pic></a:graphicData></a:graphic>\
+             </wp:inline></w:drawing></w:r></w:p>"
+        )
+    };
+    let body = format!(
+        "<w:document xmlns:w=\"w\" xmlns:a=\"a\" xmlns:r=\"r\" xmlns:wp=\"wp\" xmlns:pic=\"pic\"><w:body>\
+         <w:p><w:r><w:t>Pictures.</w:t></w:r></w:p>{}</w:body></w:document>",
+        (1..=parts).map(picture).collect::<String>()
+    );
+    let rels: String = (1..=parts)
+        .map(|i| {
+            format!(
+                "<Relationship Id=\"rId{i}\" Type=\"{rel}/image\" Target=\"media/image{i}.png\"/>"
+            )
+        })
+        .collect();
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    let opts = zip::write::SimpleFileOptions::default();
+    z.start_file("word/document.xml", opts).unwrap();
+    z.write_all(body.as_bytes()).unwrap();
+    z.start_file("word/_rels/document.xml.rels", opts).unwrap();
+    z.write_all(format!("<Relationships>{rels}</Relationships>").as_bytes())
+        .unwrap();
+    for i in 1..=parts {
+        z.start_file(format!("word/media/image{i}.png"), opts)
+            .unwrap();
+        z.write_all(image).unwrap();
+    }
+    z.finish().unwrap();
+    buf.into_inner()
+}
+
+#[test]
+fn a_part_that_only_opens_like_an_image_is_never_sent() {
+    // Forty parts, each a PNG's signature and then zeros: they open like an
+    // image, but no header says what they hold. With a model configured,
+    // none is sent (no request fails, none is made) and none is held to
+    // be: each is listed as failed, its header named on stderr.
+    let dir = scratch("hostile");
+    let input = dir.join("report.docx");
+    let fake = [&b"\x89PNG\r\n\x1a\n"[..], &[0u8; 4096]].concat();
+    std::fs::write(&input, docx_of_parts(40, &fake)).unwrap();
+    let (doco, err) = run(&input, &model_home(&dir, 0), "doco", &[]);
+    assert!(!err.contains("configured model"), "{err}");
+    assert_eq!(
+        err.matches("its header does not parse").count(),
+        40,
+        "{err}"
+    );
+    assert_eq!(reasons(&doco), vec!["Failed"; 40]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_part_that_cannot_be_read_failed_with_nothing_to_read_it() {
+    // A relationship naming a part the package does not hold: it failed,
+    // whether or not anything was there to read it, and is said to have.
+    let dir = scratch("absent-part");
+    let input = dir.join("report.docx");
+    // The package written again without the image's part.
+    let full = docx();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&full)).unwrap();
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    for i in 0..zip.len() {
+        let file = zip.by_index_raw(i).unwrap();
+        if file.name().unwrap() != "word/media/image1.png" {
+            z.raw_copy_file(file).unwrap();
+        }
+    }
+    z.finish().unwrap();
+    let docx = buf.into_inner();
+    std::fs::write(&input, docx).unwrap();
+    let (doco, err) = run(&input, &dir.join("home"), "doco", &[]);
+    assert_eq!(reasons(&doco), ["Failed"], "{err}");
+    assert!(err.contains("warning: report_m1:"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }

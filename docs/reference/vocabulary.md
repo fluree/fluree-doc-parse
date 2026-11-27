@@ -90,7 +90,7 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:unreadRegions` | `foaf:Document` | JSON literal: `[{pageIndex, bbox, reason}]` — raster regions of otherwise read pages nothing transcribed; `bbox` as `doc:bbox`; `reason` `Region` (routed), `Small` or `NotTexty` (declined by the router), `Unprobed` (not examined: the run decoded no image, or none that small) |
 | `doc:parseWarnings` | `foaf:Document` | JSON literal: `[{pageIndex, kind, count}]` — what the PDF interpreter reported, once per page and kind: `ImageDecodeFailure` |
 | `doc:unreadImages` | `foaf:Document` | JSON literal: `[{figure, image, part, reason}]` — images placed in the flow whose text nothing read |
-| `doc:ocrReadings` | `foaf:Document` | JSON literal: `[{pageIndex or image, crop, engine?, words, meanConfidence?, minConfidence?}]` — the [OCR readings taken](../formats/doco.md#ocr-readings), with the engine's own confidence: information, not a routing signal |
+| `doc:ocrReadings` | `foaf:Document` | JSON literal: `[{pageIndex or image, crop, engine?, words, meanConfidence?, minConfidence?, setAside?}]` — the [OCR readings taken](../formats/doco.md#ocr-readings), with the engine's own confidence: information, not a routing signal |
 | `doc:runningText` | `foaf:Document` | JSON literal: the header/footer text stripped from the body |
 | `doc:attachments` | `foaf:Document` | JSON literal: `[{filename?, contentType, size, sha256, inline?}]`, the files the document carries |
 | `dcterms:title` | `foaf:Document` | the title the file declares: a PDF's `/Title`, an Office file's `dc:title`, an HTML `<title>`, an email's subject |
@@ -102,8 +102,8 @@ The `reason` of an image in `doc:unreadImages` is one of those
 `NotRead`, `Missing`, `UnsupportedFormat`, `Failed`, `PastAllowance` for
 one past what one document may have read (256 images, 512 million pixels),
 `Small` for one the model was not sent, under its floor of pixels, or
-`NotTexty` for one the pixel probe does not take for text, or whose OCR
-reading was noise. `Small`
+`NotTexty` for one the model was not sent as the pixel probe does not take
+it for text, or whose OCR reading was noise. `Small`
 and `NotTexty` are listed, and not counted on stderr, as the regions of
 `doc:unreadRegions` that carry them are not.
 
@@ -116,12 +116,15 @@ its longer side or 48 on its shorter, wherever it is placed, since an
 e-mail has no page to measure it against (a PNG logo is under the floor on
 nearly every signed message; `--verbose` names each). So the same capture
 can be `Small` in a DOCX and not in a PDF, or the other way round.
-`NotTexty` says in both that the pixel probe does not take its pixels for
-text, so that nothing read it. In `doc:unreadRegions` that is all it says:
-a region of a tenth of the page or more, which no reader is offered (an
-OCR reading of a routed or small region that is noise leaves it listed
-under its own reason). In `doc:unreadImages` it is also a picture the
-probe took for text in which OCR read only noise.
+`NotTexty` says in both that nothing read it and that no model was sent
+it, as the pixel probe does not take its pixels for text. In
+`doc:unreadRegions` that is all it says: a region of a tenth of the page or
+more, which no reader is offered (an OCR reading of a routed or small
+region that is noise leaves it listed under its own reason). In
+`doc:unreadImages` the probe gates the model alone: an OCR engine
+(`--ocr`) reads a placed picture whatever the probe makes of it, and a
+reading supplied for it is taken, so `NotTexty` is also a picture in which
+OCR read only noise.
 
 A reading that found no text does not clear the three lists alike, and one
 rule says which. `doc:unreadPages` and `doc:unreadRegions` list what the

@@ -69,119 +69,12 @@ impl Format {
 /// Extensions that name a raster image, for a caller routing by filename.
 pub const EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff"];
 
-/// The image's pixel size as stored, read from its header by hand: a phone
-/// photo's EXIF orientation is not applied, nor a BigTIFF's size read.
+/// The image's pixel size as stored, read from its header by hand
+/// ([`fluree_doc_model::stored_size`]), for the formats this recognises: a
+/// phone photo's EXIF orientation is not applied, nor a BigTIFF's size read.
 pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    match Format::sniff(bytes)? {
-        Format::Png => png_size(bytes),
-        Format::Jpeg => jpeg_size(bytes),
-        Format::Tiff => tiff_size(bytes),
-    }
-}
-
-/// IHDR is required to be the first chunk, so its position is fixed.
-fn png_size(b: &[u8]) -> Option<(u32, u32)> {
-    if b.get(12..16)? != b"IHDR" {
-        return None;
-    }
-    Some((be32(b.get(16..20)?), be32(b.get(20..24)?)))
-}
-
-/// Walk the marker segments to the frame header.
-///
-/// The size lives in whichever SOF marker the encoder used, and which one that
-/// is says how the image is coded rather than how big it is — baseline,
-/// progressive and the arithmetic-coded variants all carry the same four
-/// numbers in the same place.
-fn jpeg_size(b: &[u8]) -> Option<(u32, u32)> {
-    let mut i = 2usize;
-    // Bounded: a truncated or hostile file must not walk forever.
-    for _ in 0..MAX_JPEG_SEGMENTS {
-        // Markers may be padded with any number of 0xFF bytes.
-        while *b.get(i)? == 0xFF {
-            i += 1;
-        }
-        let marker = *b.get(i)?;
-        i += 1;
-        // Standalone markers carry no length.
-        if matches!(marker, 0xD8 | 0xD9 | 0x01) || (0xD0..=0xD7).contains(&marker) {
-            continue;
-        }
-        let len = be16(b.get(i..i + 2)?) as usize;
-        let is_frame = (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
-        if is_frame {
-            // length(2) precision(1) height(2) width(2)
-            let h = be16(b.get(i + 3..i + 5)?);
-            let w = be16(b.get(i + 5..i + 7)?);
-            return Some((w as u32, h as u32));
-        }
-        // Entropy-coded data follows the scan header and is not a segment.
-        if marker == 0xDA {
-            return None;
-        }
-        i += len.max(2);
-    }
-    None
-}
-
-const MAX_JPEG_SEGMENTS: usize = 512;
-const MAX_TIFF_ENTRIES: usize = 512;
-
-/// Read `ImageWidth` (256) and `ImageLength` (257) from the first IFD of a
-/// classic TIFF. A BigTIFF's layout is another (8-byte offsets): none.
-fn tiff_size(b: &[u8]) -> Option<(u32, u32)> {
-    if b.get(2..4)
-        .is_some_and(|v| v == [0x2B, 0x00] || v == [0x00, 0x2B])
-    {
-        return None;
-    }
-    let little = b.starts_with(b"II*\0");
-    let u16at = |o: usize| -> Option<u16> {
-        let s = b.get(o..o + 2)?;
-        Some(if little {
-            u16::from_le_bytes([s[0], s[1]])
-        } else {
-            u16::from_be_bytes([s[0], s[1]])
-        })
-    };
-    let u32at = |o: usize| -> Option<u32> {
-        let s = b.get(o..o + 4)?;
-        Some(if little {
-            u32::from_le_bytes([s[0], s[1], s[2], s[3]])
-        } else {
-            u32::from_be_bytes([s[0], s[1], s[2], s[3]])
-        })
-    };
-    let ifd = u32at(4)? as usize;
-    let count = u16at(ifd)? as usize;
-    let (mut w, mut h) = (None, None);
-    for e in 0..count.min(MAX_TIFF_ENTRIES) {
-        let at = ifd + 2 + e * 12;
-        let tag = u16at(at)?;
-        // A SHORT sits in the low half of the value field; a LONG fills it.
-        let value = match u16at(at + 2)? {
-            3 => u16at(at + 8)? as u32,
-            4 => u32at(at + 8)?,
-            _ => continue,
-        };
-        match tag {
-            256 => w = Some(value),
-            257 => h = Some(value),
-            _ => {}
-        }
-        if let (Some(w), Some(h)) = (w, h) {
-            return Some((w, h));
-        }
-    }
-    None
-}
-
-fn be16(b: &[u8]) -> u16 {
-    u16::from_be_bytes([b[0], b[1]])
-}
-
-fn be32(b: &[u8]) -> u32 {
-    u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+    Format::sniff(bytes)?;
+    fluree_doc_model::stored_size(bytes)
 }
 
 /// The one-page document an image `width` × `height` pixels stands for.
@@ -317,7 +210,7 @@ mod tests {
         // Nothing but padding: the marker walk must terminate.
         let mut pad = vec![0xFF, 0xD8];
         pad.extend(std::iter::repeat_n(0xFFu8, 4096));
-        assert_eq!(jpeg_size(&pad), None);
+        assert_eq!(dimensions(&pad), None);
         assert_eq!(dimensions(b"II*\0"), None);
         // A BigTIFF's first directory is laid out otherwise: no size read.
         let mut big = b"II+\0".to_vec();
@@ -332,7 +225,7 @@ mod tests {
     fn a_scan_marker_stops_the_walk_rather_than_reading_pixels_as_a_header() {
         let mut v = vec![0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x02];
         v.extend(std::iter::repeat_n(0u8, 64));
-        assert_eq!(jpeg_size(&v), None);
+        assert_eq!(dimensions(&v), None);
     }
 
     #[test]

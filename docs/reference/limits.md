@@ -53,7 +53,8 @@ A library caller sets them for the readers it calls with
 resolves them once per command, each `--max-*` flag over its `FDOC_MAX_*`
 variable over the `[limits]` table of `.fdoc/config.toml`, and sets them
 for every document it reads, a batch's workers included; `-j` is sized
-from the memory limit in effect ([Batches](#batches)). Under the fuzz
+from the memory limit in effect, or from `--job-memory` where it is set
+([Batches](#batches)). Under the fuzz
 targets the defaults are the fuzz build's ([Under the fuzz
 targets](#under-the-fuzz-targets)).
 
@@ -83,7 +84,7 @@ Three kinds of spending share one estimate of memory, 2.5 GiB a document:
 | Unit | Cost | What it is |
 | --- | --- | --- |
 | element | 2 KiB | an element made; a table's cell that holds text costs 512 B, whatever the format and the output, its slot and text counted apart, and a `.csv` record's less ([A CSV's records](#a-csvs-records)) |
-| cell | 128 B | a cell slot allocated: read, each copy of a repeated one, each a merge covers, each a table is padded with, and each copy a layout keeps |
+| cell | 128 B | a cell slot allocated: read (a `.docx` or `.pptx` table's cells and rows as each is read, its grid within them), each copy of a repeated one, each a merge covers, each a table is padded with, and each copy a layout keeps |
 | byte of text | 12 B | each byte the text may take in the worst output: a control character counts six (`\u0001` in JSON), `"` and `&` six, `<` and `>` four, a character Markdown escapes two |
 | link | four cells (512 B), with its target's text | a hyperlink kept on an element (Markdown, HTML): DoCO writes each as a node of its own, a link at a time |
 
@@ -385,7 +386,11 @@ counted at 512. Counted at two slots a node and two an attribute, an `.odt`
 of 40 tables of 2,500 rows by 10 columns (a million cells, 3 MB), each cell
 with the three attributes LibreOffice writes, was refused as Markdown; it
 takes 1.03 GB, now counted at 1.98 GB, and converts. A 1.2 MB `.odt` whose
-one paragraph is 1.2 GB of text is refused at 1.25 GB, the part alone. And
+one paragraph is 1.2 GB of text is refused at 1.25 GB, the part alone. A
+part that is not UTF-8 is read with each byte that is not replaced by
+U+FFFD, three bytes, in a copy beside the part, spent at its length
+before it is made: 1.2 GiB of `0xFF`, a megabyte zipped, peaked near 5
+GB. And
 a 202 KB `.ods` whose content inflates to 65 MB, two million cells, made a
 tree of about 600 MB the budget did not see, and peaked at 1.7 GB before
 its cells were refused, at 800 MB under the fuzz targets' budget of 160
@@ -397,6 +402,9 @@ it, and what it claims past what the part holds is let go once the part is
 read: a 9 KB `.docx` whose three main parts each declared 1.3 GB for 1 MB
 was refused under a 3 GB address space as though it were that large. The parts read beside the document (relationships, core
 properties, settings, notes, comments) have a bound of their own, 64 MiB.
+A document whose relationships pass it is refused, naming the part: read
+as none, its headers, notes and pictures were left out without a word.
+The core properties past it are read as saying nothing.
 
 What an `.xlsx` keeps of its parts while its sheets are read is spent as
 it is kept: each shared string, each cell style and each sheet the
@@ -425,8 +433,15 @@ not compressed, so it is about the file's own size.
 
 ## An e-mail's own layer
 
-An e-mail's HTML body is read within the budget, as a page is. The rest
-of the message is not spent from it, and is bounded by the message's
+An e-mail's HTML body is read within the budget, as a page is, and so is
+every other HTML version of the message, one budget for them all: an
+alternative read to tell whether the plain text was rendered from it, and
+one set aside, read for the images it shows. Twenty alternatives of 150 KB,
+each read on a budget of its own, took 12 s. An alternative too large to
+read gives way to the plain text, rather than the message being refused;
+where one set aside is, each image the message names by a Content-ID is
+taken for one it shows, and is not converted as a file. The rest of the
+message is not spent from the budget, and is bounded by the message's
 size and by bounds of its own:
 
 - an `.eml`'s MIME tree is followed 16 levels deep, each part decoded
@@ -460,7 +475,8 @@ holding all 14 outputs; it now converts all 14, peaking at 0.9 GB.
 A message attached is converted within that share like any file, and the
 walk then opens it again for its own files, within the same share, and
 without making its body: only its MIME tree or compound file is read, to
-take the files out. An e-mail whose HTML body peaks at 0.9 GB, carrying
+take the files out, and its HTML parsed for the images it shows, which are
+not files to convert. An e-mail whose HTML body peaks at 0.9 GB, carrying
 one whose body peaks at 1.3 GB on its own, was refused converting the
 attached one, and then made its body again on a whole budget of its own
 to follow its files, holding both at once: 1.73 GB. It now peaks at 1.4
@@ -486,6 +502,17 @@ by default. A document that needs more than there is runs alone. The
 input and the 1.25 GiB do not shrink with `--max-memory`. A page limit
 past 250,000 adds what the PDF parser keeps for the pages past that, 1.5
 KiB each ([A PDF's page tree](#a-pdfs-page-tree)).
+
+`--job-memory <MiB>` (or `FDOC_JOB_MEMORY`) says what a document takes in
+place of that estimate, its budget and the 1.25 GiB, where the caller has
+measured what its documents take on its machine: each document is then
+admitted at that and its input, and read within two thirds of it
+(`fluree_doc_model::budget::within`), as the default's 2.5 GiB budget is
+two thirds of its 3.75 GiB; `--max-memory`, where it is lower, still bounds
+it. An 8 GB container that runs one document at a time runs four small
+ones with `--job-memory 1536`, each refused past 1 GiB. Where the memory
+free is not known, setting it lifts the one-per-core bound below: a batch
+that waits on the network, not the processor, runs as many as `-j` asks.
 
 `-j` is lowered, with a note on stderr, to as many documents as the
 memory free holds at the batch's smallest input, and at least one (`note:

@@ -272,14 +272,15 @@ impl<'a> Package<'a> {
     }
 
     /// A part's relationships, each internal target resolved to a part name.
-    /// Empty where the part has none, or its relationships part holds more
-    /// than [`MAX_XML_BYTES`].
-    pub fn relationships(&mut self, part: &str) -> Vec<Relationship> {
-        self.read_capped(&rels_part(part), MAX_XML_BYTES)
-            .ok()
-            .flatten()
+    /// Empty where the part has none; refused, naming its relationships
+    /// part, where that holds more than [`MAX_XML_BYTES`]. Read as none, a
+    /// document past it lost its headers, notes and pictures without a
+    /// word.
+    pub fn relationships(&mut self, part: &str) -> Result<Vec<Relationship>, String> {
+        Ok(self
+            .read_capped(&rels_part(part), MAX_XML_BYTES)?
             .map(|xml| relationships(&xml, part))
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     /// The package's own relationship of type `name` (`officeDocument`,
@@ -305,13 +306,15 @@ impl<'a> Package<'a> {
             .unwrap_or_else(|| fallback.to_string())
     }
 
-    /// The part `source` relates to by type `name`, or `fallback`.
-    pub fn related(&mut self, source: &str, name: &str, fallback: &str) -> String {
-        self.relationships(source)
+    /// The part `source` relates to by type `name`, or `fallback`; refused
+    /// as [`Package::relationships`] is.
+    pub fn related(&mut self, source: &str, name: &str, fallback: &str) -> Result<String, String> {
+        Ok(self
+            .relationships(source)?
             .into_iter()
             .find(|r| r.is(name) && !r.external)
             .map(|r| r.target)
-            .unwrap_or_else(|| fallback.to_string())
+            .unwrap_or_else(|| fallback.to_string()))
     }
 
     /// What the file declares about itself in its core properties: title,
@@ -754,7 +757,8 @@ mod tests {
         ]);
         let mut p = Package::open(&bytes).unwrap();
         assert!(p.read_capped("docProps/core.xml", MAX_XML_BYTES).is_err());
-        assert!(p.relationships("word/document.xml").is_empty());
+        assert!(p.relationships("word/document.xml").is_err());
+        assert!(p.related("word/document.xml", "styles", "x").is_err());
         assert!(p.info().is_empty());
         // Its size declared as a few bytes: no more than those are read.
         let mut bytes = deflated(&[("big.xml", &past("<a/>", 1 << 20))]);

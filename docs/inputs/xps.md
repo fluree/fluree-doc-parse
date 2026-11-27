@@ -47,9 +47,11 @@ reads it). Both are read the same ways as a PDF's:
    takes the words an engine already wrote, as `<stem>_p<N>_full.json` or
    `<stem>_p<N>_r<i>.json`, of those same pixels (its `width` and `height`
    theirs), and lays them out the same way. The pictures are decoded a
-   page at a time, each read as it is cut, and at most 512 million pixels
-   of them for a document, each picture's size checked before it is
-   decoded; past that, the rest are named in a warning and left unread.
+   page at a time, each read as it is cut: at most 512 million pixels of
+   them for a page (a picture past it is named in a warning and left
+   unread) and 8 billion for the document, about 950 pages scanned at
+   300 dpi, each picture's size checked before it is decoded; past that,
+   the rest are named in a warning and left unread.
 2. **A reading someone already has**: `--tier-results`, `<stem>_p<N>_full.json`
    for a page.
 3. **The configured model**, sent the picture's bytes as they are (PNG, JPEG
@@ -79,7 +81,11 @@ whole, though each of its pages is within bounds. Pages past the page
 limit (10,000, `--max-pages`) are not read, and listed unread,
 `PastPageLimit` ([Limits](../reference/limits.md#pages)); a document
 listing more than 250,000 pages, read or not, as a PDF's page tree may, is
-refused, unless the page limit is set higher, which raises it.
+refused, unless the page limit is set higher, which raises it. A page
+whose part the package does not hold, or that does not read, is read as
+an empty page, so the pages after it keep their numbers, and is named in
+`doc:parseWarnings` and on stderr (`MissingPagePart`) rather than passing
+for a blank page.
 
 In a library, `fluree_doc_xps::parse` returns the pages as the PDF engine's
 `Document`, for `fluree_doc_pdf::document::analyze_with`, with the pictures

@@ -589,3 +589,57 @@ fn a_summary_whose_chain_loops_is_left_out() {
     assert!(els.iter().any(|e| e.text == "3"));
     assert_eq!(info, DocumentInfo::default());
 }
+
+#[test]
+fn sheets_laid_inside_each_other_are_walked_no_more_than_twice_the_stream() {
+    // A hundred sheet records, each at the next of a hundred BOFs: each
+    // sheet's walk skips the BOFs after its own as nested substreams, to
+    // the end, a hundred walks of the stream. Refused past twice it.
+    let n = 100;
+    let mut g = vec![bof(5)];
+    let records_at = g.concat().len();
+    for i in 0..n {
+        g.push(sheet_record(0, &format!("S{i}")));
+    }
+    g.push(eof());
+    let mut s = g.concat();
+    let first = s.len();
+    let one_bof = bof(0x10).len();
+    s.extend(bof(0x10).repeat(n));
+    s.extend(number(0, 0, PLAIN, 1.0));
+    s.extend(eof().repeat(n));
+    // Point each sheet record at its BOF.
+    let mut at = records_at;
+    for i in 0..n {
+        let pos = (first + i * one_bof) as u32;
+        s[at + 4..at + 8].copy_from_slice(&pos.to_le_bytes());
+        at += sheet_record(0, &format!("S{i}")).len();
+    }
+    let r = parse(&compound(&[("/Workbook", &s)]));
+    assert!(
+        matches!(r, Err(XlsError::TooLarge(ref m)) if m.to_string().contains("walked")),
+        "{r:?}"
+    );
+    // The innermost alone reads.
+    let mut one = s.clone();
+    let inner = (first + (n - 1) * one_bof) as u32;
+    let mut at = records_at;
+    for i in 0..n {
+        one[at + 4..at + 8].copy_from_slice(&inner.to_le_bytes());
+        at += sheet_record(0, &format!("S{i}")).len();
+    }
+    let r = parse(&compound(&[("/Workbook", &one)]));
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn sheet_records_past_their_bound_are_refused() {
+    // One empty sheet, named by more sheet records than are read.
+    let names: Vec<usize> = vec![0; MAX_SHEETS + 1];
+    let s = raw_stream(&[], &names, &[vec![]]);
+    let r = parse(&compound(&[("/Workbook", &s)]));
+    assert!(
+        matches!(r, Err(XlsError::TooLarge(ref m)) if m.to_string().contains("sheet records")),
+        "{r:?}"
+    );
+}

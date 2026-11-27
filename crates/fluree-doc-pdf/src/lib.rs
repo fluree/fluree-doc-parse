@@ -197,9 +197,8 @@ pub fn past_limit(doc: &Document) -> impl Iterator<Item = fluree_doc_model::Unre
 /// `Unprobed`, an image extraction did not decode
 /// ([`ExtractOptions::probe_images`] off), half an inch or more on its
 /// longer side, which nothing reads and is always listed. Only `Region` is
-/// worth a warning of its own: the declined ones are logos, photographs and
-/// charts as often as content, and the unprobed ones are said once, by
-/// page.
+/// worth a warning ([`fluree_doc_model::Notes::summary`]): the declined and
+/// the unprobed ones are logos, photographs and charts as often as content.
 pub fn unread_regions(
     doc: &Document,
     elements: &[fluree_doc_model::Element],
@@ -281,6 +280,11 @@ pub fn unread_regions(
 /// context, which reads whatever it reads (a reference is not followed, a
 /// string is decrypted or not but read either way), and the array's own
 /// iterator is taken no further than those that read.
+///
+/// Each entry is read as it is asked for, not the whole array first: a
+/// link or an outline item asks for its destination's first entry, and
+/// 20,000 links sharing one destination of 100,000 entries read it whole
+/// each time, 48 s.
 pub(crate) fn array_entries<'a>(
     array: &hayro_syntax::object::Array<'a>,
 ) -> impl Iterator<Item = hayro_syntax::object::MaybeRef<hayro_syntax::object::Object<'a>>> {
@@ -288,15 +292,15 @@ pub(crate) fn array_entries<'a>(
     use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
     let ctx = ReaderContext::dummy();
     let mut r = Reader::new(array.data());
-    let mut readable = 0;
-    loop {
+    let mut raw = array.raw_iter();
+    std::iter::from_fn(move || {
         r.skip_white_spaces_and_comments();
         if r.at_end() || r.read_with_context::<MaybeRef<Object<'_>>>(&ctx).is_none() {
-            break;
+            return None;
         }
-        readable += 1;
-    }
-    array.raw_iter().take(readable)
+        raw.next()
+    })
+    .fuse()
 }
 
 /// What the PDF interpreter reported on each page ([`Page::warnings`]),
@@ -304,8 +308,12 @@ pub(crate) fn array_entries<'a>(
 pub fn parse_warnings(doc: &Document) -> Vec<fluree_doc_model::ParseWarning> {
     let mut out: Vec<fluree_doc_model::ParseWarning> = Vec::new();
     for p in &doc.pages {
+        // Only this page's entries are searched, a kind or two: searched
+        // from the first page's, a document of a warning on each of many
+        // pages took a time quadratic in its pages.
+        let start = out.len();
         for &kind in &p.warnings {
-            match out.iter_mut().find(|w| w.page == p.index && w.kind == kind) {
+            match out[start..].iter_mut().find(|w| w.kind == kind) {
                 Some(w) => w.count += 1,
                 None => out.push(fluree_doc_model::ParseWarning {
                     page: p.index,
@@ -379,6 +387,29 @@ mod tests {
         assert!(matches!(entries[0], MaybeRef::Ref(_)));
         assert_eq!(array_entries(&read(b"[+ ]")).count(), 0);
         assert_eq!(array_entries(&read(b"[1 2 (x)]")).count(), 3);
+    }
+
+    #[test]
+    fn an_arrays_first_entry_is_read_alone() {
+        use hayro_syntax::object::Array;
+        use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
+        // A destination of n entries, its first asked for n times, as n
+        // links sharing it ask: the array was read whole each time.
+        let ctx = ReaderContext::dummy();
+        fluree_doc_model::scaling::assert_linear(
+            "a shared destination's first entry",
+            2_000,
+            |n| format!("[3 0 R{}]", " 1".repeat(n)).into_bytes(),
+            |src| {
+                let array = Reader::new(src)
+                    .read_with_context::<Array<'_>>(&ctx)
+                    .unwrap();
+                let n = src.len() / 2;
+                for _ in 0..n {
+                    assert!(array_entries(&array).next().is_some());
+                }
+            },
+        );
     }
     use crate::extract::{ImagePlacement, OcrRead};
     use fluree_doc_model::Element;
@@ -824,6 +855,27 @@ mod tests {
                 (1, "ImageDecodeFailure", 1)
             ]
         );
+        // A warning on each of many pages: one entry a page, each counted
+        // on its own page, found among that page's entries alone.
+        let pages: Vec<Page> = (0..5000)
+            .map(|i| {
+                let mut p = page(&[]);
+                p.index = i;
+                p.warnings = vec!["ImageDecodeFailure"; 1 + i % 3];
+                p
+            })
+            .collect();
+        let got = parse_warnings(&Document {
+            pages,
+            title: None,
+            pages_past_limit: 0,
+            cut_short: None,
+        });
+        assert_eq!(got.len(), 5000);
+        assert!(got
+            .iter()
+            .enumerate()
+            .all(|(i, w)| w.page == i && w.count == 1 + i % 3));
     }
 
     #[test]

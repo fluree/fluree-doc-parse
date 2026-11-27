@@ -268,6 +268,7 @@ fn nesting_past_the_bound_is_not_followed() {
         &r,
         0,
         (&mut 4, false),
+        &[],
         &mut Budget::default(),
         &mut out,
     )
@@ -317,6 +318,7 @@ fn a_title_placeholder_is_the_title_whatever_its_text_header_says() {
         &r,
         0,
         (&mut 4, false),
+        &[],
         &mut Budget::default(),
         &mut out,
     )
@@ -364,10 +366,11 @@ fn bullets_and_indent_levels_make_list_items() {
     };
     assert_eq!(
         paragraphs(&t, &mut Budget::default()).unwrap(),
+        // An indent level past the first is the item's depth.
         [
-            ("Orders up".to_string(), true),
-            ("West region".to_string(), true),
-            ("Costs down".to_string(), true)
+            ("Orders up".to_string(), true, 0),
+            ("West region".to_string(), true, 1),
+            ("Costs down".to_string(), true, 0)
         ]
     );
     // A body placeholder's paragraph that says it has no bullet is prose;
@@ -390,9 +393,9 @@ fn bullets_and_indent_levels_make_list_items() {
     assert_eq!(
         paragraphs(&body, &mut Budget::default()).unwrap(),
         [
-            ("Intro".to_string(), false),
-            ("Point".to_string(), true),
-            ("Sub".to_string(), true)
+            ("Intro".to_string(), false, 0),
+            ("Point".to_string(), true, 0),
+            ("Sub".to_string(), true, 2)
         ]
     );
     let other = Text {
@@ -402,7 +405,7 @@ fn bullets_and_indent_levels_make_list_items() {
     };
     assert_eq!(
         paragraphs(&other, &mut Budget::default()).unwrap(),
-        [("Caption".to_string(), false)]
+        [("Caption".to_string(), false, 0)]
     );
 }
 
@@ -473,6 +476,7 @@ fn a_group_drawn_as_a_table_is_a_table() {
         &r,
         0,
         (&mut 4, false),
+        &[],
         &mut Budget::default(),
         &mut out,
     )
@@ -503,6 +507,7 @@ fn a_group_drawn_as_a_table_is_a_table() {
         &r,
         0,
         (&mut 4, false),
+        &[],
         &mut Budget::default(),
         &mut out,
     )
@@ -800,7 +805,7 @@ fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
     let slide = textbox(&[header(4), bytes(&"a\r".repeat(1_000))]);
     let bytes = deck_of(&[], &slide, None);
     // The text, its marks counted at six bytes each, then the elements.
-    let budget = |n: u64| Budget::new(n * ELEMENT_BYTES + 7_000 * TEXT_BYTES, 0);
+    let budget = |n: u64| Budget::new(n * ELEMENT_BYTES + 7_000 * TEXT_BYTES, u64::MAX);
     assert_eq!(
         parse_within(&bytes, &mut budget(1_000)).unwrap().0.len(),
         1_000
@@ -904,7 +909,7 @@ fn a_tables_cell_costs_what_a_sheets_does() {
             &group,
             &r,
             0,
-            &mut Budget::new(memory, 0).for_output(output),
+            &mut Budget::new(memory, u64::MAX).for_output(output),
         )
     };
     for output in [Output::Flat, Output::Doco] {
@@ -936,7 +941,7 @@ fn an_empty_cell_costs_its_slot_only() {
         &group,
         &r,
         0,
-        &mut Budget::new(memory, 0).for_output(Output::Flat),
+        &mut Budget::new(memory, u64::MAX).for_output(Output::Flat),
     )
     .unwrap()
     .unwrap();
@@ -983,6 +988,7 @@ fn a_group_that_is_no_table_is_read_once_however_deep() {
         &r,
         0,
         (&mut 4, false),
+        &[],
         &mut Budget::default(),
         &mut out,
     )
@@ -1008,4 +1014,102 @@ fn what_doco_copies_of_a_table_is_spent_before_it_is_kept() {
     assert!(err.to_string().contains("copies"), "{err}");
     let (els, _) = parse_within(&bytes, &mut Budget::default()).unwrap();
     assert!(els.iter().any(|e| e.kind == "doco:Table"));
+}
+
+/// A placeholder shape naming the slide list's text `index`, as PowerPoint
+/// writes a title or a body placeholder.
+fn outline_ref(index: u32) -> Vec<u8> {
+    textbox(&[rec(false, 0, OUTLINE_TEXT_REF, &index.to_le_bytes())])
+}
+
+#[test]
+fn placeholders_kept_in_the_slide_list_are_read_where_they_stand() {
+    // As PowerPoint writes a slide: its title and body in the slide list,
+    // the placeholders naming them, beside a picture and a text box of its
+    // own. The slide shows something, so the list's text used to be left
+    // out, and with it the title and the body.
+    let list = [
+        slide_persist(2),
+        header(0),
+        chars("Quarterly review"),
+        // An empty placeholder: a header and no text, still counted.
+        header(4),
+        header(1),
+        chars("Orders up\rCosts down"),
+    ]
+    .concat();
+    let slide = rec(
+        true,
+        0,
+        0x040C,
+        &[
+            outline_ref(0),
+            picture_shape(1, Some("Chart")),
+            outline_ref(2),
+            textbox(&[header(4), chars("Source: finance")]),
+            // An index past the list's texts names nothing.
+            outline_ref(9),
+        ]
+        .concat(),
+    );
+    let els = parse(&deck_listing(&list, &[slide], &[(2, 0)])).unwrap();
+    let got: Vec<(&str, &str)> = els
+        .iter()
+        .map(|e| (e.kind.as_str(), e.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("doco:SectionTitle", "Quarterly review"),
+            ("doco:Figure", "Chart"),
+            ("doc:ListItem", "Orders up"),
+            ("doc:ListItem", "Costs down"),
+            ("doco:Paragraph", "Source: finance"),
+        ]
+    );
+}
+
+#[test]
+fn a_placeholder_named_again_is_a_copy_spent_each_time() {
+    // A thousand placeholders naming one text of the list: each copy is
+    // spent, so the deck is refused within its budget rather than making
+    // a thousand copies of a large text for free.
+    let big = "x".repeat(10_000);
+    let list = [slide_persist(2), header(4), bytes(&big)].concat();
+    let slide = outline_ref(0).repeat(1_000);
+    let deck = deck_listing(&list, &[slide], &[(2, 0)]);
+    assert!(parse(&deck).is_ok());
+    let need = 1_001 * 10_000 * fluree_doc_model::budget::TEXT_BYTES;
+    let refused = parse_within(&deck, &mut Budget::new(need / 2, u64::MAX));
+    assert!(matches!(refused, Err(PptError::TooLarge(_))));
+}
+
+#[test]
+fn slides_laid_inside_each_other_are_walked_within_the_budgets_work() {
+    // A hundred slides, each the first record of the one before: walking
+    // each walks all those inside it, the square of their number in all.
+    // Each record visited is a step of work, so the walks stop at it.
+    let mut slide = textbox(&[header(1), bytes("Inner")]);
+    for _ in 0..100 {
+        slide = rec(true, 0, SLIDE, &slide);
+    }
+    // The outermost is slide 0; each next one starts 8 bytes further in.
+    let list: Vec<u8> = (2..102).flat_map(slide_persist).collect();
+    let document = rec(true, 0, DOCUMENT, &rec(true, 0, SLIDE_LIST, &list));
+    let mut s = document;
+    let first = s.len() as u32;
+    s.extend(&slide);
+    let mut entries = vec![(1, 0)];
+    entries.extend((0..100u32).map(|k| (k + 2, first + 8 * k)));
+    let dir = s.len() as u32;
+    s.extend(persist_dir(&entries));
+    let edit = s.len() as u32;
+    s.extend(user_edit(0, dir, 1));
+    let mut user = vec![0u8; 16];
+    user.extend(edit.to_le_bytes());
+    let deck = compound(&[("/PowerPoint Document", &s), ("/Current User", &user)]);
+    assert!(parse(&deck).is_ok());
+    // Each walk visits the slides inside it: about 100 * 101 / 2 records.
+    let e = parse_within(&deck, &mut Budget::new(u64::MAX, 2_000)).unwrap_err();
+    assert!(e.to_string().contains("steps of work"), "{e}");
 }

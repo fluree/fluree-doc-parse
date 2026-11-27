@@ -31,8 +31,8 @@ pub use emit::{
 };
 pub use geom::{BBox, PageSize};
 pub use media::{
-    pictures, read_pictures, Allowance, Media, MediaSource, Picture, PictureReader, PictureReads,
-    Unread,
+    pictures, read_pictures, stored_size, under_model_floor, Allowance, Media, MediaSource,
+    Picture, PictureReader, PictureReads, Unread, MIN_LONG_SIDE_PX, MIN_SHORT_SIDE_PX,
 };
 pub use merges::{denormalize, Merges};
 pub use message::{Mailbox, Message};
