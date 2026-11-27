@@ -2550,6 +2550,11 @@ const SYNTH_WIDTH: f64 = 0.60;
 /// width leaves that space to be read.
 const MAX_SYNTH_ADVANCE: f64 = 1.25;
 
+/// How much wider than the narrowest measure of itself a boxless glyph's
+/// measured advance may be before the rest is read as a gap: a character's
+/// widths at one size vary only by the pen's rounding.
+const WIDER_THAN_ITSELF: f64 = 1.6;
+
 /// Give outline-less TEXT glyphs a geometric extent.
 ///
 /// Type3 fonts are drawing programs whose glyph procedures we do not
@@ -2594,21 +2599,57 @@ fn synthesize_missing_boxes(glyphs: &mut [Glyph]) {
         .filter(|&i| glyphs[i].rotation_bucket().rem_euclid(180) == 0)
         .collect();
     by_y.sort_by(|&a, &b| glyphs[a].origin.1.total_cmp(&glyphs[b].origin.1));
-    for i in candidates {
+    // Each glyph's measured pen delta, `None` where nothing follows it.
+    let measured: Vec<Option<f64>> = candidates
+        .iter()
+        .map(|&i| {
+            let (x, y) = glyphs[i].origin;
+            let font = glyphs[i].font_size.max(1.0) as f64;
+            // The nearest pen position to the right on the same baseline
+            // (within the tolerance assembly uses): the pen delta is the
+            // advance, whatever is drawn there.
+            let tol = font * 0.25;
+            let from = by_y.partition_point(|&j| glyphs[j].origin.1 < y - tol);
+            by_y[from..]
+                .iter()
+                .take_while(|&&j| glyphs[j].origin.1 <= y + tol)
+                .map(|&j| glyphs[j].origin.0 - x)
+                .filter(|&d| d > 0.01 && d < font * MAX_SYNTH_ADVANCE)
+                .min_by(f64::total_cmp)
+        })
+        .collect();
+    // A character's own width, at its size: the narrowest delta measured
+    // for it on the page. Measured once more widely, the pen crossed a gap
+    // no space glyph was drawn for: a spreadsheet sets each cell's text in
+    // one string, an amount right against its cell's edge and the next
+    // cell's word moved on by the string's own offset (`9,672.95` and
+    // `WIRE`), and the `5`'s width took in the gap, its box the border.
+    let keys: Vec<(String, i64)> = candidates
+        .iter()
+        .map(|&i| {
+            (
+                glyphs[i].text.clone(),
+                (glyphs[i].font_size * 100.0).round() as i64,
+            )
+        })
+        .collect();
+    let mut narrowest: std::collections::HashMap<&(String, i64), f64> = Default::default();
+    for (k, m) in keys.iter().zip(&measured) {
+        if let Some(d) = *m {
+            let w = narrowest.entry(k).or_insert(d);
+            *w = w.min(d);
+        }
+    }
+    for ((&i, m), k) in candidates.iter().zip(&measured).zip(&keys) {
         let (x, y) = glyphs[i].origin;
         let font = glyphs[i].font_size.max(1.0) as f64;
-        // The nearest pen position to the right on the same baseline
-        // (within the tolerance assembly uses): the pen delta is the
-        // advance, whatever is drawn there.
-        let tol = font * 0.25;
-        let from = by_y.partition_point(|&j| glyphs[j].origin.1 < y - tol);
-        let width = by_y[from..]
-            .iter()
-            .take_while(|&&j| glyphs[j].origin.1 <= y + tol)
-            .map(|&j| glyphs[j].origin.0 - x)
-            .filter(|&d| d > 0.01 && d < font * MAX_SYNTH_ADVANCE)
-            .min_by(f64::total_cmp)
-            .unwrap_or(font * SYNTH_WIDTH);
+        let width = match *m {
+            Some(d) => match narrowest.get(k) {
+                Some(&own) if d > own * WIDER_THAN_ITSELF && d - own > font * 0.2 => own,
+                _ => d,
+            },
+            None => font * SYNTH_WIDTH,
+        };
         glyphs[i].bbox = Some(BBox {
             x0: x,
             y0: y - font * SYNTH_ASCENT,
@@ -2748,6 +2789,45 @@ mod tests {
         assert!((g[1].advance.unwrap() - 11.78).abs() < 0.01);
         // Nothing follows on the line: the fallback.
         assert!((g[3].advance.unwrap() - 12.0 * SYNTH_WIDTH).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_type3_glyph_measured_across_a_gap_takes_its_own_width() {
+        // A spreadsheet's two cells, each in one Type3 string: `95` right
+        // against its cell's edge, `WIRE` moved on by the string's offset.
+        // Measured to `W`, the `5` took the gap; its own width is what it
+        // measures before another digit.
+        let glyph = |text: &str, x: f64, y: f64| Glyph {
+            text: text.into(),
+            bbox: None,
+            page: 0,
+            origin: (x, y),
+            rotation_deg: 0.0,
+            font_size: 9.45,
+            weight: None,
+            italic: false,
+            advance: None,
+            draw_index: 0,
+            ocr: None,
+        };
+        let mut g = vec![
+            glyph("5", 100.0, 20.0),
+            glyph("2", 105.25, 20.0),
+            glyph("9", 464.0, 116.25),
+            glyph("5", 469.26, 116.25),
+            glyph("W", 479.77, 116.25),
+            glyph("I", 488.68, 116.25),
+        ];
+        synthesize_missing_boxes(&mut g);
+        assert!(
+            (g[3].advance.unwrap() - 5.25).abs() < 0.01,
+            "{:?}",
+            g[3].advance
+        );
+        assert!(g[3].bbox.unwrap().x1 < 475.0);
+        // `W` measures wider than a digit, but no narrower `W` says it took
+        // a gap: it keeps the pen's delta.
+        assert!((g[4].advance.unwrap() - 8.91).abs() < 0.01);
     }
 
     fn page(n: usize) -> Page {
