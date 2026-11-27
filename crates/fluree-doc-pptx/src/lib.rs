@@ -500,6 +500,9 @@ fn parse_slide<'c>(
     let mut row: Vec<Cell> = Vec::new();
     let mut cell = Cell::default();
     let mut in_cell = false;
+    // The cell slots the table's cells and rows were spent at as they were
+    // read, which its grid's spending counts as its own.
+    let mut held = 0u64;
 
     loop {
         match r.read_event_into(&mut buf) {
@@ -579,15 +582,25 @@ fn parse_slide<'c>(
                         para_level = 0;
                     }
                 }
+                // Each cell and row is spent as it is kept, not when the
+                // table ends: a megabyte zipped of `<a:tc></a:tc>` held
+                // gigabytes of cells before its grid was spent.
                 "tc" => {
                     in_cell = false;
+                    budget.spend_cells(1)?;
+                    held += 1;
                     row.push(std::mem::take(&mut cell));
                 }
-                "tr" => rows.push(std::mem::take(&mut row)),
+                "tr" => {
+                    budget.spend_cells(1)?;
+                    held += 1;
+                    rows.push(std::mem::take(&mut row));
+                }
                 "tbl" => {
                     in_table = in_table.saturating_sub(1);
                     if in_table == 0 {
-                        emit_table(&mut out, std::mem::take(&mut rows), page, budget)?;
+                        let rows = std::mem::take(&mut rows);
+                        emit_table(&mut out, rows, page, std::mem::take(&mut held), budget)?;
                     }
                 }
                 "sp" => {
@@ -700,11 +713,13 @@ fn flush(
 }
 
 /// A table's rows as a `doco:Table`, its grid (its rows padded to its
-/// widest) spent from `budget` before it is made.
+/// widest) spent from `budget` before it is made, but for the cells and
+/// rows `held` as they were read, spent already.
 fn emit_table(
     out: &mut Vec<Element>,
     rows: Vec<Vec<Cell>>,
     page: usize,
+    held: u64,
     budget: &mut Budget,
 ) -> Result<(), TooLarge> {
     let rows: Vec<Vec<Cell>> = rows.into_iter().filter(|r| !r.is_empty()).collect();
@@ -716,7 +731,7 @@ fn emit_table(
         return Ok(());
     }
     let n = rows.len();
-    budget.spend_cells((n as u64).saturating_mul(width as u64))?;
+    budget.spend_cells((n as u64).saturating_mul(width as u64).saturating_sub(held))?;
     let mut grid = vec![String::new(); n * width];
     let mut m_left = vec![false; n * width];
     let mut m_down = vec![false; n * width];
@@ -1334,5 +1349,29 @@ mod tests {
         let mut small = Budget::new(1 << 30, 0);
         let err = parse_slide(&x, 0, &|_| None, &mut small).unwrap_err();
         assert!(matches!(err, PptxError::TooLarge(_)), "{err}");
+    }
+
+    #[test]
+    fn a_tables_cells_are_spent_as_they_are_read() {
+        // 100,000 empty cells in a table that never ends: held until it did,
+        // and never spent, they are refused by a budget of 10,000 as they
+        // are read. A megabyte zipped of them held gigabytes.
+        let cells = "<a:tc></a:tc>".repeat(100_000);
+        let open = slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl><a:tr>{cells}"
+        ));
+        let cell = fluree_doc_model::budget::CELL_BYTES;
+        let mut small = Budget::new(10_000 * cell, 0);
+        let err = parse_slide(&open, 0, &|_| None, &mut small).unwrap_err();
+        assert!(matches!(err, PptxError::TooLarge(_)), "{err}");
+        // A table that ends is spent at its grid, what it was spent at as
+        // it was read part of it, not on top: 3,000 cells and 1,000 rows
+        // read, a grid of 3,000, and the table's element.
+        let rows = "<a:tr><a:tc></a:tc><a:tc></a:tc><a:tc></a:tc></a:tr>".repeat(1_000);
+        let x = slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl>{rows}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
+        ));
+        let mut fits = Budget::new(4_100 * cell, 0);
+        parse_slide(&x, 0, &|_| None, &mut fits).unwrap();
     }
 }

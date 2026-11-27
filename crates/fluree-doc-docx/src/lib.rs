@@ -915,6 +915,9 @@ fn parse_body(
     let mut row = Row::default();
     let mut cell = Cell::default();
     let mut in_cell = false;
+    // The cell slots the table's cells and rows were spent at as they were
+    // read, which its grid's spending counts as its own.
+    let mut held = 0u64;
     let mut look = TableLook::default();
     // Run formatting: whether the run being read is bold. Only a run's own
     // `w:rPr` counts; the one inside `w:pPr` formats the paragraph mark.
@@ -1295,11 +1298,20 @@ fn parse_body(
                             }
                         }
                     }
+                    // Each cell and row is spent as it is kept, not when
+                    // the table ends: a megabyte zipped of `<w:tc></w:tc>`
+                    // held gigabytes of cells before its grid was spent.
                     "tc" => {
                         in_cell = false;
+                        budget.spend_cells(1)?;
+                        held += 1;
                         row.cells.push(std::mem::take(&mut cell));
                     }
-                    "tr" => rows.push(std::mem::take(&mut row)),
+                    "tr" => {
+                        budget.spend_cells(1)?;
+                        held += 1;
+                        rows.push(std::mem::take(&mut row));
+                    }
                     "tbl" => {
                         table_depth = table_depth.saturating_sub(1);
                         if table_depth == 0 {
@@ -1308,7 +1320,8 @@ fn parse_body(
                                     .style
                                     .as_ref()
                                     .is_some_and(|s| header_styles.contains(s));
-                            emit_table(&mut out, std::mem::take(&mut rows), styled, budget)?;
+                            let rows = std::mem::take(&mut rows);
+                            emit_table(&mut out, rows, styled, std::mem::take(&mut held), budget)?;
                             // A picture in a cell has no place in a grid of
                             // text; it follows the table.
                             out.append(&mut figures);
@@ -1577,11 +1590,13 @@ fn flush_para(
 /// convention the PDF engine derives from ruling. `w:vMerge` without
 /// `val="restart"` continues the cell above.
 ///
-/// `styled` says the table's style draws its first row as a header.
+/// `styled` says the table's style draws its first row as a header. The
+/// cells and rows `held` as they were read are spent already.
 fn emit_table(
     out: &mut Vec<Element>,
     rows: Vec<Row>,
     styled: bool,
+    held: u64,
     budget: &mut Budget,
 ) -> Result<(), TooLarge> {
     let rows: Vec<Row> = rows.into_iter().filter(|r| !r.cells.is_empty()).collect();
@@ -1602,8 +1617,13 @@ fn emit_table(
     }
     let n_rows = rows.len();
     // The grid, as wide as the widest row's spans make it, before it is
-    // made: one cell spanning a billion columns asks for a billion.
-    budget.spend_cells((n_rows as u64).saturating_mul(width as u64))?;
+    // made: one cell spanning a billion columns asks for a billion. The
+    // cells and rows `held` as they were read are spent already.
+    budget.spend_cells(
+        (n_rows as u64)
+            .saturating_mul(width as u64)
+            .saturating_sub(held),
+    )?;
     let mut grid = vec![String::new(); n_rows * width];
     let mut m_left = vec![false; n_rows * width];
     let mut m_down = vec![false; n_rows * width];
@@ -3011,6 +3031,32 @@ mod tests {
     }
 
     #[test]
+    fn a_tables_cells_are_spent_as_they_are_read() {
+        let cell = fluree_doc_model::budget::CELL_BYTES;
+        let read = |body: &str, budget: &mut Budget| {
+            parse_body(
+                &doc(body),
+                &HashSet::new(),
+                &TitleStyles::new(),
+                Numbering::default(),
+                budget,
+            )
+        };
+        // 100,000 empty cells in a table that never ends: held until it
+        // did, and never spent, they are refused by a budget of 10,000 as
+        // they are read. A megabyte zipped of them held gigabytes.
+        let open = format!("<w:tbl><w:tr>{}", "<w:tc></w:tc>".repeat(100_000));
+        let err = read(&open, &mut Budget::new(10_000 * cell, 0)).unwrap_err();
+        assert!(matches!(err, DocxError::TooLarge(_)), "{err}");
+        // A table that ends is spent at its grid, what it was spent at as
+        // it was read part of it, not on top: 3,000 cells and 1,000 rows
+        // read, a grid of 3,000, and the table's element.
+        let rows = "<w:tr><w:tc></w:tc><w:tc></w:tc><w:tc></w:tc></w:tr>".repeat(1_000);
+        let closed = format!("<w:tbl>{rows}</w:tbl>");
+        read(&closed, &mut Budget::new(4_100 * cell, 0)).unwrap();
+    }
+
+    #[test]
     fn notes_and_comments_follow_the_body_as_what_they_are() {
         use std::io::Write;
         let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -4146,9 +4192,10 @@ mod tests {
                 &mut budget,
             )
         };
-        // Its grid, the table, and its three cells that hold text, each
-        // written once in its row.
-        let need = 4 * CELL_BYTES + FLAT_ELEMENT_BYTES + 3 * FLAT_CELL_BYTES + 4 * TEXT_BYTES;
+        // Its four cells and two rows as they are read, which its grid of
+        // four is made within, the table, and its three cells that hold
+        // text, each written once in its row.
+        let need = 6 * CELL_BYTES + FLAT_ELEMENT_BYTES + 3 * FLAT_CELL_BYTES + 4 * TEXT_BYTES;
         assert_eq!(read(need).unwrap()[0].kind, "doco:Table");
         assert!(matches!(read(need - 1), Err(DocxError::TooLarge(_))));
     }
