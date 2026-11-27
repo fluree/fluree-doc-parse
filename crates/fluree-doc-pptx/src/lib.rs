@@ -170,32 +170,19 @@ struct Chart {
 /// A cached number as the chart shows it, and what it stores, through the
 /// cache's format code, as a workbook's cell is read: `0.062432` for
 /// `6.2432000000000015E-2` under `General`, `2000-01-01` for the serial
-/// `36526` under `mmm-yy`. General shows fifteen significant figures at
-/// most, as the spreadsheet that computed the value does; a computed
-/// value's last binary digits are not on screen.
+/// `36526` under `mmm-yy` (see `fluree_doc_xlsx::format_general` for the
+/// fifteen figures General shows).
 fn cached_number(raw: &str, code: Option<&str>, date1904: bool) -> (String, Option<Datum>) {
     use fluree_doc_xlsx::{cell_datum, custom_fmt, format_number, CellStyle, NumFmt};
-    let format = code.map_or(NumFmt::General, custom_fmt);
-    let shown = match (&format, raw.trim().parse::<f64>()) {
-        (NumFmt::General, Ok(v)) if v.is_finite() => {
-            let v: f64 = format!("{v:.14e}").parse().unwrap_or(v);
-            fluree_doc_xlsx::format_general(v)
-        }
-        _ => {
-            let style = CellStyle {
-                format: format.clone(),
-                bold: false,
-                size: 11.0,
-            };
-            format_number(raw, &style, date1904)
-        }
-    };
     let style = CellStyle {
-        format,
+        format: code.map_or(NumFmt::General, custom_fmt),
         bold: false,
         size: 11.0,
     };
-    (shown, cell_datum("n", raw, &style, date1904))
+    (
+        format_number(raw, &style, date1904),
+        cell_datum("n", raw, &style, date1904),
+    )
 }
 
 /// What the file declares about itself in its core properties: title,
