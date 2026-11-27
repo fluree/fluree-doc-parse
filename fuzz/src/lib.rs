@@ -9,7 +9,7 @@ use fluree_doc_model::budget::{
     converting_to, filled_cell_bytes, filled_csv_cell_bytes, output, text_cost, Output, CELL_BYTES,
     ELEMENT_BYTES, MAX_MEMORY, TEXT_BYTES,
 };
-use fluree_doc_model::doco::table_copies;
+use fluree_doc_model::doco::TableCopies;
 use fluree_doc_model::{DocoOptions, Element, Notes};
 
 /// The output `data` is read for, as `fdoc convert -f` names it: DoCO, the
@@ -44,14 +44,16 @@ pub fn reading<R>(data: &[u8], read: impl FnOnce() -> R) -> R {
 /// output. A table's text is its cells' (the cost of a byte covers the
 /// copies made of it), so it is counted once, through its cells, and then
 /// the copies the output writes of them
-/// (`fluree_doc_model::doco::table_copies`): for DoCO, a merged value in
-/// each cell it covers, each cell's labels; for the text, a value merged
+/// (`fluree_doc_model::doco::TableCopies`): for DoCO, a merged value in
+/// each cell it covers, each cell's labels, and what a part a page break
+/// carries on takes from the part before; for the text, a value merged
 /// down on each row; for the others, none.
 pub fn estimated_memory(elements: &[Element], output: Output) -> u64 {
     let element = output.element_bytes();
     let mut cost = 0u64;
+    let mut tables = TableCopies::default();
     for e in elements {
-        let copies = table_copies(e);
+        let copies = tables.count(e);
         let copied = match output {
             Output::Doco => copies
                 .cells

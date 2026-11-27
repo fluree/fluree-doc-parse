@@ -323,6 +323,9 @@ pub struct Budget {
     max_memory: u64,
     work: Meter,
     output: Output,
+    /// The copies of the document's tables counted so far, each part's
+    /// end kept for the part a page break carries on from it.
+    tables: crate::doco::TableCopies,
 }
 
 impl Default for Budget {
@@ -374,6 +377,7 @@ impl Budget {
             max_memory: memory,
             work: Meter::new(work, "steps of layout"),
             output: Output::Doco,
+            tables: crate::doco::TableCopies::default(),
         }
     }
 
@@ -476,15 +480,18 @@ impl Budget {
     /// cell a merged value fills, a node of its own, and the text copied, a
     /// merged value into each cell it covers and each cell's labels; for
     /// the text projection, a value merged down on each row; for the
-    /// others, nothing. A reader calls it on every table it makes, before
-    /// keeping it: a merge or a label the file states once is written once
-    /// per cell.
+    /// others, nothing. A reader calls it on every table it makes, in the
+    /// order it keeps them, before keeping it: a merge or a label the file
+    /// states once is written once per cell. A part a page break carries
+    /// on (`continues`) is counted with the header, the band and the cut
+    /// value it takes from the part before
+    /// ([`TableCopies`](crate::doco::TableCopies)).
     pub fn spend_copies(&mut self, e: &crate::Element) -> Result<(), TooLarge> {
         const WHAT: &str = "copies of table cells";
         if self.output == Output::Flat {
             return Ok(());
         }
-        let copies = crate::doco::table_copies(e);
+        let copies = self.tables.count(e);
         if self.output == Output::Text {
             return self.spend_memory(WHAT, copies.merged, TEXT_BYTES);
         }
