@@ -1984,6 +1984,66 @@ impl Grid {
             .collect()
     }
 
+    /// Rows that open a section of a list of fields by weight alone: a bold
+    /// label with nothing beside it, over a field whose label is set plain
+    /// (`Chromatographic Conditions` over `Carrier Gas | Helium`).
+    ///
+    /// Set plain, a label with an empty value is a field left blank. A bold
+    /// label beside a value is a field too (`Headspace Parameters |
+    /// <sampler>` over its settings), and so is one over another bold label
+    /// (a list whose labels are all bold). Right under a header that leaves
+    /// its stub empty, it is that header's stub head.
+    pub fn bold_section_rows(
+        &self,
+        rows: &[Vec<String>],
+        glyphs: &[crate::glyph::Glyph],
+        header_rows: usize,
+    ) -> Vec<usize> {
+        let n = rows.len().min(self.rows());
+        // A list of fields: a label and its value. A wider table's bands over
+        // its rows are `group_label`'s, read from full rows beneath them.
+        if self.cols() != 2 {
+            return Vec::new();
+        }
+        let bold = |(weighted, heavy): (usize, usize)| weighted > 0 && heavy * 2 > weighted;
+        let label = |r: usize| rows[r].first().map_or("", |t| t.trim());
+        let valued = |r: usize| rows[r].iter().skip(1).any(|t| !t.trim().is_empty());
+        let blank = |r: usize| rows[r].iter().all(|t| t.trim().is_empty());
+        let bold_label = |r: usize| {
+            self.cell_weights(glyphs, r)
+                .first()
+                .is_some_and(|w| bold(*w))
+        };
+        (header_rows..n)
+            .filter(|&r| {
+                let l = label(r);
+                if l.is_empty() || !l.chars().any(char::is_alphabetic) || is_numeric_cell(l) {
+                    return false;
+                }
+                // A heading's few words, not a sentence: a note set bold over
+                // the rows (`Steps 7 to 9 are only necessary …`) is no section.
+                let sentence = l
+                    .strip_suffix('.')
+                    .and_then(|w| w.split_whitespace().last())
+                    .is_some_and(|w| w.chars().count() >= 3 && w.chars().all(char::is_lowercase));
+                if l.split_whitespace().count() > SECTION_LABEL_WORDS || sentence {
+                    return false;
+                }
+                if valued(r) || !bold_label(r) {
+                    return false;
+                }
+                // Under a header whose stub is empty, it is the stub's head
+                // (`Conference Name` beside `Organizer(s)` over the rows).
+                if r == header_rows && r > 0 && label(r - 1).is_empty() {
+                    return false;
+                }
+                (r + 1..n)
+                    .find(|&k| !blank(k))
+                    .is_some_and(|k| valued(k) && !label(k).is_empty() && !bold_label(k))
+            })
+            .collect()
+    }
+
     /// Where the band `y0..y1` of the table holds values stacked one per
     /// line, a line of each beside a line of the others: the cuts between
     /// those lines, and the columns stacked so, every line of theirs on one
@@ -2424,6 +2484,11 @@ const HEAVIER_RULE: f64 = 1.5;
 
 /// Relative difference within which two cells are set in one size.
 const SAME_SIZE: f32 = 0.05;
+
+/// Most words in a section's label over a list of fields: a heading
+/// (`Chromatographic Conditions`, `Federal estimated tax payments you've
+/// already made`), not a note or a line run on across the cells.
+const SECTION_LABEL_WORDS: usize = 8;
 
 /// Deepest stacked header the fill-run signal may claim. Real matrices run
 /// two banners plus the column-name row; anything deeper is a fully shaded
@@ -11525,6 +11590,57 @@ mod header_tests {
 
     fn weights_of(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> Vec<Vec<(usize, usize)>> {
         (0..g.rows()).map(|r| g.cell_weights(glyphs, r)).collect()
+    }
+
+    #[test]
+    fn a_bold_label_alone_over_plain_fields_opens_a_section() {
+        let fields: &[&[(&str, Option<u32>)]] = &[
+            &[("Instrument", BOLD), ("GC 2010 Plus", PLAIN)],
+            &[("Conditions", BOLD), ("", None)],
+            &[("Carrier Gas", PLAIN), ("Helium", PLAIN)],
+            &[("Flow Rate", PLAIN), ("1.0 mL/min", PLAIN)],
+        ];
+        let (g, t, glyphs, _) = weighted_grid(&[0.0, 150.0, 400.0], fields, Vec::new());
+        assert_eq!(g.bold_section_rows(&t, &glyphs, 0), vec![1]);
+        // A bold label beside a value is a field: `Instrument` opens none.
+        // Set plain, a label with no value is a field left blank.
+        let plain: &[&[(&str, Option<u32>)]] = &[
+            &[("Conditions", PLAIN), ("", None)],
+            &[("Carrier Gas", PLAIN), ("Helium", PLAIN)],
+            &[("Flow Rate", PLAIN), ("1.0 mL/min", PLAIN)],
+        ];
+        let (g, t, glyphs, _) = weighted_grid(&[0.0, 150.0, 400.0], plain, Vec::new());
+        assert!(g.bold_section_rows(&t, &glyphs, 0).is_empty());
+        // In a list whose labels are all bold, a blank value opens nothing.
+        let all_bold: &[&[(&str, Option<u32>)]] = &[
+            &[("Conditions", BOLD), ("", None)],
+            &[("Carrier Gas", BOLD), ("Helium", PLAIN)],
+            &[("Flow Rate", BOLD), ("1.0 mL/min", PLAIN)],
+        ];
+        let (g, t, glyphs, _) = weighted_grid(&[0.0, 150.0, 400.0], all_bold, Vec::new());
+        assert!(g.bold_section_rows(&t, &glyphs, 0).is_empty());
+        // A note set bold is a sentence, and a line run on across the cells
+        // runs long: no heading.
+        for note in [
+            "Steps 7 to 9 are only needed for a coil.",
+            "Accuracy technique atomic absorption flame analyte lead ashing acid",
+        ] {
+            let rows: &[&[(&str, Option<u32>)]] = &[
+                &[(note, BOLD), ("", None)],
+                &[("Carrier Gas", PLAIN), ("Helium", PLAIN)],
+            ];
+            let (g, t, glyphs, _) = weighted_grid(&[0.0, 150.0, 400.0], rows, Vec::new());
+            assert!(g.bold_section_rows(&t, &glyphs, 0).is_empty(), "{note}");
+        }
+        // Under a header that leaves its stub empty, the label is its head.
+        let headed: &[&[(&str, Option<u32>)]] = &[
+            &[("", None), ("Organizer", BOLD)],
+            &[("Conference", BOLD), ("", None)],
+            &[("Annual Meeting", PLAIN), ("A society", PLAIN)],
+        ];
+        let (g, t, glyphs, _) = weighted_grid(&[0.0, 150.0, 400.0], headed, Vec::new());
+        assert!(g.bold_section_rows(&t, &glyphs, 1).is_empty());
+        assert_eq!(g.bold_section_rows(&t, &glyphs, 0), vec![1]);
     }
 
     #[test]

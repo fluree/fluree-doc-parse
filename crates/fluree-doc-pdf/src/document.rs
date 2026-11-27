@@ -271,8 +271,11 @@ fn opens_first_section(
     }
     let mut merges = trimmed.merges(&page.rules, &page.fills);
     trimmed.text_merges(&page.glyphs, &page.rules, &mut merges);
+    // A list's bold label alone over its fields is a band too
+    // ([`table::Grid::bold_section_rows`]).
+    let by_weight = trimmed.bold_section_rows(&rows, &page.glyphs, 0);
     (1..rows.len()).any(|r| {
-        section_band(&rows, &merges, r)
+        (section_band(&rows, &merges, r) || by_weight.contains(&r))
             && g.rows_set_alike(&page.glyphs, &page.rules, &page.fills, 0, r + 1)
     })
 }
@@ -3236,6 +3239,16 @@ fn drop_blank_rows(e: &mut Element) {
     };
     indexes(&mut e.sub_headers);
     indexes(&mut e.restated_headers);
+    // In a list whose sections a bold label opens (the table asks for its
+    // breaks), each blank row ends the group over it: the section stops at
+    // the row that follows. A band across a wider table runs on past a
+    // blank row set between its lines, as a statement sets one before a
+    // summary line of the same section.
+    if e.section_breaks.is_some() {
+        let mut breaks: Vec<usize> = blank.iter().map(|&b| up(b + 1)).collect();
+        breaks.dedup();
+        e.section_breaks = Some(breaks);
+    }
     if let Some(h) = e.header_rows.as_mut() {
         *h = up(*h);
     }
@@ -7234,7 +7247,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 merges.continues_above[k] = false;
             }
             // Banner bands below the header block are sub-headers: they label
-            // the rows beneath them rather than the columns.
+            // the rows beneath them rather than the columns. So are a list's
+            // bold labels with nothing beside them, over fields set plain.
+            let by_weight = match explicit {
+                Some(_) => Vec::new(),
+                None => g.bold_section_rows(&rows, &raw.pages[pi].glyphs, header_rows),
+            };
             let sub_headers: Vec<usize> = match explicit {
                 Some(lay) => lay.sub_headers.clone(),
                 // Not a row the ruling leaves open but whose values stand
@@ -7246,7 +7264,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .enumerate()
                     .filter(|(r, _)| {
                         (first_band && *r == 0)
-                            || section_band(&rows, &merges, *r) && *r >= header_rows
+                            || (section_band(&rows, &merges, *r) || by_weight.contains(r))
+                                && *r >= header_rows
                     })
                     .map(|(r, _)| r)
                     .collect(),
@@ -7294,6 +7313,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 spread_left: spread.iter().any(|x| *x).then_some(spread),
                 cells: Some(rows),
                 header_rows: Some(header_rows),
+                // A list's sections by weight end at its blank rows, which
+                // `drop_blank_rows` records here.
+                section_breaks: sub_headers
+                    .iter()
+                    .any(|r| by_weight.contains(r))
+                    .then(Vec::new),
                 sub_headers: (!sub_headers.is_empty()).then_some(sub_headers),
                 restated_headers: (!restated_headers.is_empty()).then_some(restated_headers),
                 merged_down: merges
@@ -7337,6 +7362,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 tables += 1;
             }
             drop_blank_rows(&mut table_elements[this_table]);
+            let t = &mut table_elements[this_table];
+            if t.section_breaks.as_ref().is_some_and(Vec::is_empty) {
+                t.section_breaks = None;
+            }
         }
         // Table-confidence anchors: a table whose reading is in doubt
         // ([`table_in_doubt`]) anchors for a model's reading of its crop. The
@@ -9176,6 +9205,7 @@ mod tests {
             ])),
             header_rows: Some(0),
             sub_headers: Some(vec![2]),
+            section_breaks: Some(Vec::new()),
             // The second blank row is the merged cell's, set over two rows.
             merged_down: Some(vec![
                 false, false, false, false, false, false, false, false, false, false, true, false,
@@ -9198,6 +9228,9 @@ mod tests {
             )
         );
         assert_eq!(t.sub_headers, Some(vec![1]));
+        // The section over the first blank row's group ends there; the
+        // merged cell's row is no break.
+        assert_eq!(t.section_breaks, Some(vec![1]));
         assert_eq!(t.merged_down.as_ref().map(Vec::len), Some(12));
         assert_eq!(t.merged_down.as_ref().map(|m| m[8]), Some(true));
         assert!(t.text.starts_with("Mode | Constant flow\nHeadspace | "));
