@@ -615,6 +615,13 @@ it at its left, such as a product's name beside a row of its ratings, is
 read first. A table's cells drawn one box each touch across the row or down
 the column, and are left as rows.
 
+Bulleted lists set side by side, each under its own head with their items
+level, are read the same way, as undrawn boxes: each list whole, left to
+right. Where the page's text runs on below the lists in one column across
+their gutter, nothing else parts them, and their items took turns. A list
+is two items or more opening on a bullet, its other lines its head or an
+item's wrapped lines.
+
 **Tables and boxes in the reading order.** A table is read where it stands
 in its column, under the heading it sits under: one above it in its column,
 or one beside it at the left, either just above its top or level with its
