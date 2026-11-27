@@ -3606,6 +3606,116 @@ fn lists_its_rows(g: &Grid, glyphs: &[Glyph]) -> bool {
     bulleted(&cells) || (g.rows() >= 3 && bulleted(&cells[2..]))
 }
 
+/// How far left of its column a bullet may hang, in its own font size: a
+/// bullet stands about an em before its item's text, and the rest leaves
+/// room for a wider indent.
+const HANGING_BULLET_EMS: f64 = 2.0;
+
+/// A grid read from alignment that is bulleted lists set side by side, a
+/// list to a column. Where the lists' lines fall level, their items line up
+/// into rows, the gap between the lists reading as a gutter. Each column's
+/// cells open on a bullet, or carry on the item above in lower case, and
+/// each column holds two bullets or more. Read as prose, the page's columns
+/// part the lists, each item whole under its own heading.
+///
+/// A bullet may hang just left of its column, its centre outside the grid's
+/// edge, so no cell reads it; it is looked for beside the cell, on the
+/// cell's row, within [`HANGING_BULLET_EMS`].
+///
+/// Bullets only, as in [`lists_its_rows`]. A row of other text, a head over
+/// a column of points, keeps the grid a table; so do rules across it above
+/// and below ([`in_a_ruled_row`]): it is a ruled table's row whose cells
+/// hold points, read in part.
+fn lists_side_by_side(g: &Grid, glyphs: &[Glyph], rules: &[crate::rule::Rule]) -> bool {
+    if in_a_ruled_row(g, rules) {
+        return false;
+    }
+    let cols = g.cols();
+    let cells = g.cell_texts(glyphs);
+    let hangs = |r: usize, c: usize| {
+        let (edge, top, foot) = (g.xs[c], g.ys[r], g.ys[r + 1]);
+        glyphs.iter().any(|gl| {
+            let mut chars = gl.text.chars();
+            let bullet = chars.next().is_some_and(block::is_bullet) && chars.next().is_none();
+            bullet
+                && gl.bbox.is_some_and(|b| {
+                    let (x, y) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                    x < edge
+                        && x > edge - HANGING_BULLET_EMS * f64::from(gl.font_size)
+                        && (top..foot).contains(&y)
+                })
+        })
+    };
+    (0..cols).all(|c| {
+        let mut bullets = 0;
+        let mut in_item = false;
+        for r in 0..g.rows() {
+            let t = cells[r * cols + c].trim();
+            let first = t.chars().next();
+            if t.is_empty() {
+                in_item = false;
+            } else if first.is_some_and(block::is_bullet) || hangs(r, c) {
+                bullets += 1;
+                in_item = true;
+            } else if !(in_item && first.is_some_and(char::is_lowercase)) {
+                return false;
+            }
+        }
+        bullets >= 2
+    })
+}
+
+/// Share of a grid's width a rule must draw across to rule it: a table's
+/// rules are often drawn a cell at a time, meeting at the column edges.
+const RULED_ROW_SHARE: f64 = 0.9;
+
+/// Whether `g` lies in a ruled row: a rule across it above and another
+/// below, each within the grid's own height of it. The rules that close a
+/// table's row lie by its lines; one further off bounds something else.
+/// Rules drawn a cell at a time count together when they stand within a
+/// quarter of the grid's shortest row of one another.
+fn in_a_ruled_row(g: &Grid, rules: &[crate::rule::Rule]) -> bool {
+    use crate::rule::Orientation;
+    let b = g.bbox;
+    let (width, height) = (b.x1 - b.x0, b.y1 - b.y0);
+    if width <= 0.0 || height <= 0.0 {
+        return false;
+    }
+    let row = (0..g.rows())
+        .map(|r| g.ys[r + 1] - g.ys[r])
+        .fold(f64::INFINITY, f64::min);
+    let level = 0.25 * row;
+    let flat: Vec<&crate::rule::Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    let across = |at: f64| {
+        let mut spans: Vec<(f64, f64)> = flat
+            .iter()
+            .filter(|r| (r.axis_pos() - at).abs() <= level)
+            .map(|r| (r.bbox.x0.max(b.x0), r.bbox.x1.min(b.x1)))
+            .filter(|(x0, x1)| x1 > x0)
+            .collect();
+        spans.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let (mut got, mut reach) = (0.0, b.x0);
+        for (x0, x1) in spans {
+            let x0 = x0.max(reach);
+            if x1 > x0 {
+                got += x1 - x0;
+                reach = x1;
+            }
+        }
+        got >= RULED_ROW_SHARE * width
+    };
+    let ruled = |near: &dyn Fn(f64) -> bool| {
+        flat.iter()
+            .map(|r| r.axis_pos())
+            .any(|y| near(y) && across(y))
+    };
+    ruled(&|y| y <= b.y0 + level && y >= b.y0 - height)
+        && ruled(&|y| y >= b.y1 - level && y <= b.y1 + height)
+}
+
 /// Run the pipeline over an already-extracted document.
 /// Configuration for [`analyze`]. The library API: no environment variables.
 /// (The `fdoc` CLI maps its `FDOC_*` variables onto this struct.)
@@ -5825,6 +5935,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 && !table::reads_as_prose(g, &prose)
                 && !table::walled_in(&g.bbox, &walls)
                 && !lists_its_rows(g, &prose)
+                && !lists_side_by_side(g, &prose, &p.rules)
         });
         // Field lists set without rules, found between the page's gutters
         // where a row across the page holds more than a label and its
@@ -9705,6 +9816,68 @@ mod tests {
             ys,
         };
         (grid, glyphs)
+    }
+
+    #[test]
+    fn bulleted_lists_side_by_side_are_no_table() {
+        // A list to a column, an item carried on to a second line.
+        let (g, glyphs) = aligned_grid(&[
+            &["• Insulate", "• Clean"],
+            &["• Seal", "and tune"],
+            &["• Glaze", "• Repair"],
+        ]);
+        assert!(lists_side_by_side(&g, &glyphs, &[]));
+        // Between rules across it, drawn a cell at a time, it is a ruled
+        // table's row whose cells hold points.
+        let rule = |x0: f64, x1: f64, y: f64| crate::rule::Rule {
+            bbox: BBox {
+                x0,
+                y0: y - 0.25,
+                x1,
+                y1: y + 0.25,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let ruled = [
+            rule(-50.0, 100.0, -2.0),
+            rule(100.0, 200.0, -2.0),
+            rule(-50.0, 100.0, 66.0),
+            rule(100.0, 200.0, 66.0),
+        ];
+        assert!(!lists_side_by_side(&g, &glyphs, &ruled));
+        // A rule above alone is a heading's.
+        assert!(lists_side_by_side(&g, &glyphs, &ruled[..2]));
+        // The first list's bullets hang left of the grid's edge: no cell
+        // reads them, and they are found beside it.
+        let (g, mut glyphs) = aligned_grid(&[&["Insulate", "• Clean"], &["Seal", "• Repair"]]);
+        assert!(!lists_side_by_side(&g, &glyphs, &[]));
+        for r in 0..2 {
+            let y = r as f64 * 20.0 + 12.0;
+            let mut bullet = glyphs[0].clone();
+            bullet.text = "•".into();
+            bullet.bbox = Some(BBox {
+                x0: -4.0,
+                y0: y - 3.0,
+                x1: -1.0,
+                y1: y,
+            });
+            glyphs.push(bullet);
+        }
+        assert!(lists_side_by_side(&g, &glyphs, &[]));
+        // A head over each column's points keeps the table.
+        let (g, glyphs) = aligned_grid(&[
+            &["Pros", "Cons"],
+            &["• Cheap", "• Slow"],
+            &["• Light", "• Loud"],
+        ]);
+        assert!(!lists_side_by_side(&g, &glyphs, &[]));
+        // A line that opens in capitals without a bullet is no item's.
+        let (g, glyphs) = aligned_grid(&[&["• Insulate", "• Clean"], &["Seal", "• Repair"]]);
+        assert!(!lists_side_by_side(&g, &glyphs, &[]));
+        // Labels down one column, points beside them: a table.
+        let (g, glyphs) = aligned_grid(&[&["Width", "• 40"], &["Depth", "• 25"]]);
+        assert!(!lists_side_by_side(&g, &glyphs, &[]));
     }
 
     #[test]

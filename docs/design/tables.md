@@ -447,6 +447,18 @@ body text, a box laid out around paragraphs, a drawing's labels.
   numbered section, as a contract's `(b) "Board" means …` did. Those stay
   as they are read until heading detection can tell a list's numbering
   from a section's (#451).
+- **Bulleted lists side by side.** A fact sheet sets two lists of points
+  side by side, each under its own heading. Where their lines fall level,
+  alignment reads their items as rows of a table of two columns,
+  `Clean, tune, repair… | • Install insulation…`. A grid read from
+  alignment whose every column is a list is read as lists: each of its
+  non-empty cells opens on a bullet or carries on the item above in lower
+  case, with at least two bullets in each column. A bullet may hang left of
+  its column, outside the grid, where no cell reads it; one standing on the
+  cell's row within two of its ems of the edge counts. A row of other text,
+  a head over each column of points, keeps the grid a table. So do rules
+  across it, one above and one below within the grid's own height: there
+  the grid is part of one row of a ruled table whose cells hold points.
 - **A box round paragraphs.** A ruled box whose one row under its labels
   holds a paragraph (sixty words or more in a cell) is a page laid out in
   columns, not a table.
