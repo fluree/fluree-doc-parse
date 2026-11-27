@@ -541,28 +541,7 @@ fn convert_email(
         ocr: media.ocr,
         ..email.notes()
     };
-    // A signature's icons carry alternative text (`LinkedIn`, `Logo`) that
-    // would read into nearly every corporate message as words of its body.
-    // An image under the floor a model is sent is such an icon as often as
-    // not, and its figure keeps its place without them.
-    let icons: std::collections::HashSet<String> = email
-        .media
-        .iter()
-        .filter(|m| {
-            (m.source.part())
-                .and_then(|part| email.media_bytes(part))
-                .and_then(pixel_size)
-                .is_some_and(|(w, h)| under_model_floor(w, h))
-        })
-        .map(|m| m.figure.clone())
-        .collect();
     let mut elements = email.elements;
-    for e in &mut elements {
-        if e.kind == "doco:Figure" && e.figure.as_ref().is_some_and(|f| icons.contains(f)) {
-            e.text.clear();
-            e.links = None;
-        }
-    }
     fluree_doc_image::place_after_figures(&mut elements, media.read);
     Ok(render(&elements, src, args, Vec::new(), &notes))
 }
@@ -1237,27 +1216,13 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
     }
 }
 
-/// The shortest side, in pixels, of an image a document places that a
-/// model is sent: a small signature logo, a social icon or a rule is
-/// shorter, a screenshot of one line of a form is not. Measured on
-/// synthetic e-mails and documents, whose captures were 60 pixels high and
-/// more.
-const MIN_SHORT_SIDE_PX: u32 = 48;
-
-/// The longest side, in pixels, of such an image that a model is sent: a
-/// small logo is narrower, and a phone's screenshot is taller. The
-/// screenshots measured were 547 pixels wide and more, but a small dialog
-/// box can be narrower (380 pixels): it is not sent, and is listed as not
-/// read (`Small`), for OCR to read it, without being counted on stderr.
-const MIN_LONG_SIDE_PX: u32 = 400;
-
 /// Why an image a document places is not sent to the configured model, and
 /// what went wrong where something did; `None` where it is sent.
 ///
 /// - `Failed`: its header does not parse. Nothing says what it is or how
 ///   large, and a part that only opens like an image (a PNG's signature,
 ///   then zeros) would otherwise cost a billed request each.
-/// - `Small`: under [`MIN_SHORT_SIDE_PX`] or [`MIN_LONG_SIDE_PX`] in its own
+/// - `Small`: under the floor ([`fluree_doc_model::under_model_floor`]) in its own
 ///   pixels, whatever holds it: an e-mail's image has no page to measure it
 ///   against, and a DOCX's or an XLSX's is held to the same floor, so one
 ///   picture is sent or not wherever it is pasted.
@@ -1275,42 +1240,10 @@ fn declined_by_model(
         Ok(h) => h,
         Err(e) => return Some(("Failed", format!("its header does not parse: {e}"))),
     };
-    if under_model_floor(h.width, h.height) {
+    if fluree_doc_model::under_model_floor(h.width, h.height) {
         return Some(("Small", String::new()));
     }
     (texty() == Some(false)).then(|| ("NotTexty", String::new()))
-}
-
-/// An image's size in pixels, from its header: a PNG's, a JPEG's or a
-/// TIFF's upright, as it is read; a GIF's or a BMP's, which no engine reads
-/// but a message's icons are often kept as, as stored. `None` where no
-/// header says.
-fn pixel_size(bytes: &[u8]) -> Option<(u32, u32)> {
-    if let Ok(h) = fluree_doc_image::header(bytes) {
-        return Some((h.width, h.height));
-    }
-    let le16 = |at: usize| {
-        Some(u32::from(u16::from_le_bytes(
-            bytes.get(at..at + 2)?.try_into().ok()?,
-        )))
-    };
-    let le32 = |at: usize| Some(i32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
-    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        return Some((le16(6)?, le16(8)?));
-    }
-    // A BMP's height is negative where its rows run top down.
-    if bytes.starts_with(b"BM") {
-        return Some((le32(18)?.unsigned_abs(), le32(22)?.unsigned_abs()));
-    }
-    None
-}
-
-/// Whether an image a document places, of `width` × `height` pixels, is
-/// under the floor a model is sent ([`MIN_SHORT_SIDE_PX`],
-/// [`MIN_LONG_SIDE_PX`]): one OCR reads, and `render-routed` crops as
-/// `small_image`.
-pub(crate) fn under_model_floor(width: u32, height: u32) -> bool {
-    width.min(height) < MIN_SHORT_SIDE_PX || width.max(height) < MIN_LONG_SIDE_PX
 }
 
 /// [`read_media_with`] for a source that holds its images' bytes in memory
