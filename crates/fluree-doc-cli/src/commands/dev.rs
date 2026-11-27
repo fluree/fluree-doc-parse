@@ -2034,3 +2034,82 @@ mod tests {
         );
     }
 }
+
+/// `fdoc dev conform`: each file's projections read back and held to the
+/// element model. Prints each violation, then the counts by format and
+/// class; with `json`, one line per file. Exits 1 where any file has a
+/// violation, 2 where one could not be read.
+pub fn conform(inputs: &[PathBuf], json: bool) -> i32 {
+    let mut files = Vec::new();
+    for input in inputs {
+        if input.is_dir() {
+            files.extend(sources_in(input));
+        } else {
+            files.push(input.clone());
+        }
+    }
+    let mut totals: std::collections::BTreeMap<(String, String), usize> = Default::default();
+    let (mut failed, mut violating) = (false, false);
+    for f in &files {
+        let name = f.display().to_string();
+        let report = crate::commands::convert::conform_report(f).and_then(|r| {
+            serde_json::from_str::<Vec<serde_json::Value>>(&r).map_err(|e| e.to_string())
+        });
+        let vs = match report {
+            Ok(vs) => vs,
+            Err(e) => {
+                failed = true;
+                if json {
+                    println!("{}", serde_json::json!({ "file": name, "error": e }));
+                } else {
+                    eprintln!("{name}: error: {e}");
+                }
+                continue;
+            }
+        };
+        violating |= !vs.is_empty();
+        let field = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or("").to_string();
+        for v in &vs {
+            *totals
+                .entry((field(v, "format"), field(v, "class")))
+                .or_default() += 1;
+        }
+        if json {
+            println!("{}", serde_json::json!({ "file": name, "violations": vs }));
+            continue;
+        }
+        if vs.is_empty() {
+            continue;
+        }
+        println!("{name}");
+        for v in &vs {
+            let at = v["element"]
+                .as_u64()
+                .map_or_else(|| "-".to_string(), |n| format!("#{n}"));
+            println!(
+                "  {:5} {:24} {:>7}  {}",
+                field(v, "format"),
+                field(v, "class"),
+                at,
+                field(v, "detail")
+            );
+        }
+    }
+    if !json {
+        if totals.is_empty() {
+            println!("{} files conform", files.len());
+        } else {
+            println!("\nby format and class ({} files):", files.len());
+            for ((format, class), n) in &totals {
+                println!("  {format:5} {class:24} {n:>7}");
+            }
+        }
+    }
+    if failed {
+        2
+    } else if violating {
+        1
+    } else {
+        0
+    }
+}

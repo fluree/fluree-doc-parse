@@ -12,7 +12,7 @@
 //! carries no evidence; furniture is only identifiable in aggregate.
 
 use crate::line::Line;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Fraction of page height from the top/bottom edge within which a line is
 /// eligible to be furniture. Wide enough for multi-line headers and for a
@@ -337,10 +337,15 @@ fn detect_all(
         pages_seen.dedup();
 
         // Position must be stable. Use the median as the reference so a single
-        // outlier occurrence does not disqualify the group.
-        let mut ys: Vec<f64> = occ.iter().map(|o| o.2).collect();
-        ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let median = ys[ys.len() / 2];
+        // outlier occurrence does not disqualify the group; a group of
+        // numbers stands where most of its pages set it (see [`place_of`]).
+        let median = if sig.contains('#') {
+            place_of(&occ)
+        } else {
+            let mut ys: Vec<f64> = occ.iter().map(|o| o.2).collect();
+            ys.sort_by(|a, b| a.total_cmp(b));
+            ys[ys.len() / 2]
+        };
 
         let stable = occ
             .iter()
@@ -518,18 +523,20 @@ fn detect_all(
                 continue;
             }
         }
-        for (pi, li, rel, _) in &occ {
-            if (rel - median).abs() < POSITION_TOLERANCE {
-                out[*pi].insert(*li, kind);
-            }
+        let mut at_place: Vec<&(usize, usize, f64, String)> = occ
+            .iter()
+            .filter(|o| (o.2 - median).abs() < POSITION_TOLERANCE)
+            .collect();
+        if kind == Furniture::PageNumber {
+            let keep = counting(&at_place);
+            at_place.retain(|o| keep.contains(&(o.0, o.1)));
+        }
+        for (pi, li, ..) in &at_place {
+            out[*pi].insert(*li, kind);
         }
 
         if kind == Furniture::PageNumber {
-            let stable: Vec<(usize, &str)> = occ
-                .iter()
-                .filter(|o| (o.2 - median).abs() < POSITION_TOLERANCE)
-                .map(|o| (o.0, o.3.as_str()))
-                .collect();
+            let stable: Vec<(usize, &str)> = at_place.iter().map(|o| (o.0, o.3.as_str())).collect();
             offer_folios(&mut folio_sources, pages_seen.len(), &stable);
         }
     }
@@ -1637,6 +1644,112 @@ fn bare_number(sig: &str) -> bool {
 /// unnumbered insert skips one.
 ///
 /// The number is the line's digit run that varies most.
+/// Where a group of repeated lines stands on its pages, as a share of the
+/// page's height: the place most of its pages set it, where that is more
+/// than half of them, else the middle of every copy.
+///
+/// Every bare number in the bands shares one pattern, and a chart's years
+/// along the foot of a few pages, a dozen to a page, outnumbered the page
+/// numbers set a little lower on every page. Counted copy by copy, the
+/// middle was the chart's: the page numbers went unread, or the years near
+/// them were taken for page numbers and left the chart.
+fn place_of(occ: &[(usize, usize, f64, String)]) -> f64 {
+    let mut ys: Vec<(f64, usize)> = occ.iter().map(|o| (o.2, o.0)).collect();
+    ys.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let median = ys[ys.len() / 2].0;
+    let mut pages: Vec<usize> = occ.iter().map(|o| o.0).collect();
+    pages.sort_unstable();
+    pages.dedup();
+    // Copies within the tolerance of each copy, by page, in one pass.
+    let mut held: HashMap<usize, usize> = HashMap::new();
+    let (mut lo, mut hi) = (0, 0);
+    let mut best: Option<(usize, f64)> = None;
+    for &(c, _) in &ys {
+        while hi < ys.len() && ys[hi].0 < c + POSITION_TOLERANCE {
+            *held.entry(ys[hi].1).or_default() += 1;
+            hi += 1;
+        }
+        while ys[lo].0 <= c - POSITION_TOLERANCE {
+            if let Some(n) = held.get_mut(&ys[lo].1) {
+                *n -= 1;
+                if *n == 0 {
+                    held.remove(&ys[lo].1);
+                }
+            }
+            lo += 1;
+        }
+        let n = held.len();
+        let better =
+            best.is_none_or(|(m, b)| n > m || (n == m && (c - median).abs() < (b - median).abs()));
+        if better {
+            best = Some((n, c));
+        }
+    }
+    match best {
+        Some((n, c)) if n * 2 > pages.len() => c,
+        _ => median,
+    }
+}
+
+/// Of the page-number lines at their place, the ones that number their
+/// page: on a page that sets several numbers there, the one that steps
+/// with the pages around it, its value less its page's index the same as
+/// on the nearest page before or after that sets one number there. A
+/// chart's years along the foot, at the page number's height, are the
+/// chart's. A page with one number there keeps it, and so does every page
+/// where no page around it is plain to measure by.
+fn counting(at_place: &[&(usize, usize, f64, String)]) -> HashSet<(usize, usize)> {
+    let texts: Vec<(usize, &str)> = at_place.iter().map(|o| (o.0, o.3.as_str())).collect();
+    let all = || at_place.iter().map(|o| (o.0, o.1)).collect();
+    let runs: Vec<Vec<String>> = texts.iter().map(|(_, t)| digit_runs(t)).collect();
+    let Some(n_runs) = runs.iter().map(Vec::len).min() else {
+        return all();
+    };
+    let Some(j) = (0..n_runs).max_by_key(|&j| {
+        let mut v: Vec<&str> = runs.iter().map(|r| r[j].as_str()).collect();
+        v.sort_unstable();
+        v.dedup();
+        v.len()
+    }) else {
+        return all();
+    };
+    let mut by_page: std::collections::BTreeMap<usize, Vec<(usize, Option<i64>)>> =
+        Default::default();
+    for (o, r) in at_place.iter().zip(&runs) {
+        by_page
+            .entry(o.0)
+            .or_default()
+            .push((o.1, r[j].parse::<i64>().ok()));
+    }
+    // The offset of each page that sets one number at the place.
+    let plain: Vec<(usize, i64)> = by_page
+        .iter()
+        .filter_map(|(&pi, v)| match v[..] {
+            [(_, Some(n))] => Some((pi, n - pi as i64)),
+            _ => None,
+        })
+        .collect();
+    let mut keep = HashSet::new();
+    for (&pi, v) in &by_page {
+        if v.len() == 1 {
+            keep.insert((pi, v[0].0));
+            continue;
+        }
+        let before = plain.iter().rev().find(|(q, _)| *q < pi).map(|p| p.1);
+        let after = plain.iter().find(|(q, _)| *q > pi).map(|p| p.1);
+        if before.is_none() && after.is_none() {
+            keep.extend(v.iter().map(|(li, _)| (pi, *li)));
+            continue;
+        }
+        for (li, n) in v {
+            if n.is_some_and(|n| [before, after].contains(&Some(n - pi as i64))) {
+                keep.insert((pi, *li));
+            }
+        }
+    }
+    keep
+}
+
 fn advances(occ: &[(usize, &str)]) -> bool {
     let runs: Vec<Vec<String>> = occ.iter().map(|(_, t)| digit_runs(t)).collect();
     let Some(n_runs) = runs.iter().map(Vec::len).min() else {
@@ -2657,6 +2770,63 @@ mod tests {
         let got: Vec<Option<String>> = folios;
         assert_eq!(got[0].as_deref(), Some("1"));
         assert_eq!(got[9].as_deref(), Some("10"));
+    }
+
+    /// A page of body text with its number at the foot (`969` of 1000),
+    /// and on `charts` pages a chart's years along the foot at `years_y`.
+    fn charted(n: usize, charts: &[usize], years_y: f64) -> Vec<(Vec<Line>, f64)> {
+        doc(n, |i| {
+            let mut ls = vec![
+                line(&format!("Body text of page {i}"), 400.0),
+                line_at(&format!("{}", i + 1), 969.0, 900.0, 912.0),
+            ];
+            if charts.contains(&i) {
+                for (k, year) in (2011..=2023).enumerate() {
+                    let x = 80.0 + 48.0 * k as f64;
+                    ls.push(line_at(&year.to_string(), years_y, x, x + 14.0));
+                }
+            }
+            ls
+        })
+    }
+
+    #[test]
+    fn a_charts_years_beside_the_page_number_are_the_charts() {
+        // The years stand within reach of the page number's place: of the
+        // numbers there, the page's is the one that steps with the pages.
+        let pages = charted(20, &[5, 13], 950.0);
+        let (marks, folios) = detect_with_folios(&pages);
+        for &pi in &[5, 13] {
+            assert_eq!(marks[pi].get(&1), Some(&Furniture::PageNumber), "page {pi}");
+            for li in 2..15 {
+                assert_eq!(marks[pi].get(&li), None, "page {pi} line {li}");
+            }
+        }
+        assert_eq!(folios[13].as_deref(), Some("14"));
+    }
+
+    #[test]
+    fn a_charts_years_do_not_move_the_page_numbers_place() {
+        // A dozen years to a page on a few pages, and the bars' values
+        // over them leading up to the page number, outnumber the page
+        // numbers: their middle was the chart's, out of the page numbers'
+        // reach, and the page numbers went unread.
+        let mut pages = charted(20, &[3, 9, 15], 944.0);
+        for &pi in &[3, 9, 15] {
+            for (k, y) in [952.0, 952.0, 960.0, 960.0].into_iter().enumerate() {
+                let x = 100.0 + 96.0 * k as f64;
+                pages[pi]
+                    .0
+                    .push(line_at(&format!("{}", 40 + k), y, x, x + 12.0));
+            }
+        }
+        let (marks, folios) = detect_with_folios(&pages);
+        assert_eq!(marks[0].get(&1), Some(&Furniture::PageNumber));
+        assert_eq!(marks[9].get(&1), Some(&Furniture::PageNumber));
+        for li in 2..15 {
+            assert_eq!(marks[9].get(&li), None, "line {li}");
+        }
+        assert_eq!(folios[9].as_deref(), Some("10"));
     }
 
     #[test]
