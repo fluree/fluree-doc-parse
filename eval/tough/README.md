@@ -8,6 +8,7 @@ eval/tough/check.py --fetch     # first run: download the public documents
 eval/tough/check.py             # every case, tracked and private
 eval/tough/check.py nist-sec    # one case
 eval/tough/check.py --fdoc PATH # another binary, e.g. the one before a fix
+eval/tough/check.py --conform-update  # write the known conformance counts
 ```
 
 It runs `fdoc convert --no-escalate` to DoCO and to text for each document and
@@ -72,7 +73,18 @@ made (`fdoc dev render-routed`, then `fdoc ocr`).
 
 Every document is held to the offset contract: each element's `nif:isString`
 (a cell's `doc:cellValue`) is exactly what its `nif:beginIndex` and
-`nif:endIndex` cut from the text projection. The checks a case adds:
+`nif:endIndex` cut from the text projection.
+
+Every document is held to the projection contract too
+([conformance](../../docs/design/conformance.md)): its Markdown and XHTML,
+read back with our own readers, say what its elements say. Until each class of
+violation is fixed, a case may fail a class no more often than its known list
+records: `conform-known.json` here for the tracked cases, `conform/known.json`
+beside the case files of any other directory (`private/` among them). A count
+above the list fails the run; one below it is reported, and
+`--conform-update` writes the counts, so a change to the list is in the diff.
+
+The checks a case adds:
 
 | kind | passes when |
 |---|---|
