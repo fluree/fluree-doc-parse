@@ -8048,9 +8048,13 @@ fn fit_right_aligned_heads(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
     // them: most body rows name themselves in words in the first column.
     let cells = g.cell_texts(glyphs);
     let named = (1..g.rows())
-        .filter(|&r| cells[r * cols].chars().any(char::is_alphabetic))
+        .filter(|&r| {
+            cells[r * cols]
+                .trim_start()
+                .starts_with(char::is_alphabetic)
+        })
         .count();
-    if named * 2 < g.rows() - 1 {
+    if named < 2 || named * 2 < g.rows() - 1 {
         return;
     }
     let (y1, bottom) = (g.ys[1], g.ys[g.rows()]);
