@@ -528,7 +528,8 @@ pub fn is_noise(page: &Page, reading: &WordReading) -> bool {
         return false;
     };
     let words: Vec<&Placed> = placed.iter().flatten().collect();
-    noise(&words, page.width * page.height)
+    // Held to the small regions' rule, fragments judged: no router sent it.
+    noise(&words, page.width * page.height, true)
 }
 
 /// The words of `reading`, by their index among its words, that land in a
