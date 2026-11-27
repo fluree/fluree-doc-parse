@@ -204,7 +204,8 @@ fn by_signature(data: &[u8]) -> Option<SourceKind> {
 /// document, or an Office package by the part its root relationship names
 /// as the document (`word/`, `ppt/`, `xl/`); a web page; and, where
 /// `delimited` (a file named as an Office 97-2003 one, which spreadsheet
-/// exports are), comma-, semicolon- or tab-separated text.
+/// exports are, or named as nothing), comma-, semicolon- or tab-separated
+/// text.
 fn by_content(data: &[u8], delimited: bool) -> Option<SourceKind> {
     // Excel 2003's XML workbook holds `<Table>`, which is no web page.
     if is_spreadsheet_xml(data) {
@@ -334,8 +335,12 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
         kind,
         Some(SourceKind::Xls | SourceKind::Doc | SourceKind::Ppt)
     );
+    // Delimited text is told by its content where the name is an Office
+    // 97-2003 one, which spreadsheet exports are, or says nothing (stdin, a
+    // file with no extension): read as a PDF, it would fail as a corrupt
+    // one.
     if (office_97 || kind.is_none()) && !data.starts_with(&COMPOUND_MAGIC) {
-        if let Some(k) = by_content(data, office_97) {
+        if let Some(k) = by_content(data, true) {
             return k;
         }
     }
@@ -1596,6 +1601,14 @@ mod tests {
                 assert_eq!(input_kind(Path::new(name), late), SourceKind::Pdf, "{name}");
             }
         }
+        // Delimited text from stdin, or a file named as nothing, is a table.
+        for name in ["-", "export"] {
+            assert_eq!(
+                input_kind(Path::new(name), b"Customer;Amount\nAlex;12,50\nSam;7\n"),
+                SourceKind::Csv,
+                "{name}"
+            );
+        }
         let quoting = b"Header,Note\nfile 1,starts with %PDF-1.7\nfile 2,ok\n";
         assert_eq!(input_kind(Path::new("list.csv"), quoting), SourceKind::Csv);
         // A header alone is no PDF: a list of signatures, one column, one
@@ -1708,9 +1721,11 @@ mod tests {
             input_kind(Path::new("ragged.xls"), b"a\tb\nc d e\n"),
             SourceKind::Xls
         );
+        // Named as nothing, delimited text is a table too: read as a PDF,
+        // it failed as a corrupt one.
         assert_eq!(
             input_kind(Path::new("stdin"), b"a\tb\n1\t2\n"),
-            SourceKind::Pdf
+            SourceKind::Csv
         );
     }
 
