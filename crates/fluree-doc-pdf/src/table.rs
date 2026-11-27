@@ -14030,6 +14030,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_header_is_set_apart_from_its_rows_past_a_band() {
+        // A labour table's labels, bold, over a contract year's band, bold
+        // too and its words in two cells, over plain rows of figures: the
+        // labels head the rows, set apart from the first row of figures.
+        let g = grid(
+            &[0.0, 100.0, 200.0, 300.0, 400.0],
+            &[0.0, 20.0, 40.0, 60.0, 80.0],
+        );
+        let rows: Vec<Vec<String>> = [
+            ["Labor Category", "Hours", "Rate", "Amount"],
+            ["MAS Contract Year 4", "(Base period)", "", ""],
+            ["Expert 8", "0", "$407.51", "$0.00"],
+            ["Expert 7", "14", "$378.34", "$5,297.00"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        let mut gl = Vec::new();
+        for (r, row) in rows.iter().enumerate() {
+            let weight = Some(if r < 2 { 700 } else { 400 });
+            for (c, t) in row.iter().enumerate() {
+                if !t.is_empty() {
+                    gl.push(word(c as f64 * 100.0 + 5.0, r, t, weight));
+                }
+            }
+        }
+        assert!(g.heads_its_rows(1, &rows, &gl, &[], &[]));
+        // A first row set as the rows under it are, words over words in
+        // one weight, earns nothing past the band either: a list's first
+        // entry is no header.
+        let names: Vec<Vec<String>> = [
+            ["Alder", "Birch", "Cedar", "Dogwood"],
+            ["Group one", "(native)", "", ""],
+            ["Elm", "Fir", "Ginkgo", "Hazel"],
+            ["Ironwood", "Juniper", "Larch", "Maple"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert!(!g.heads_its_rows(1, &names, &[], &[], &[]));
+    }
+
     /// A word as one glyph run at `x`, 5pt a character, on row `r`.
     fn word(x: f64, r: usize, text: &str, weight: Option<u32>) -> crate::glyph::Glyph {
         let y = r as f64 * 20.0;
