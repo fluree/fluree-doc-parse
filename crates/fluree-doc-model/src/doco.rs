@@ -591,15 +591,18 @@ struct Emitter<'a> {
 /// What a table's continuation takes from it: the node it links to, the
 /// names of its columns, its header rows with which of their cells continue
 /// the one to the left, its last row read whole, and how many data rows it
-/// and the parts before it hold.
+/// and the parts before it hold. And what names its last rows, for the rows
+/// the page break carried on: the columns' names in force there (a header
+/// restated partway down, where one is), and the band open over them.
 struct TablePart {
     iri: String,
-    header: Vec<String>,
     head: Vec<Vec<String>>,
     head_left: Vec<bool>,
     header_only: bool,
     last: Vec<String>,
     rows: usize,
+    names_at_end: Vec<String>,
+    band_at_end: Option<String>,
 }
 
 impl<'a> Emitter<'a> {
@@ -1161,19 +1164,21 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     .as_ref()
                     .and_then(|id| em.tables.get(id))
                     .filter(|p| Some(p.last.len()) == ncols);
-                let (header_before, last_before, rows_before, head_before) = match earlier {
-                    Some(p) => {
-                        em.nodes[table]
-                            .insert("doc:continues".into(), Value::String(p.iri.clone()));
-                        (
-                            Some(p.header.clone()),
-                            Some(p.last.clone()),
-                            p.rows,
-                            Some((p.head.clone(), p.head_left.clone(), p.header_only)),
-                        )
-                    }
-                    None => (None, None, 0, None),
-                };
+                let (header_before, last_before, rows_before, head_before, band_before) =
+                    match earlier {
+                        Some(p) => {
+                            em.nodes[table]
+                                .insert("doc:continues".into(), Value::String(p.iri.clone()));
+                            (
+                                Some(p.names_at_end.clone()),
+                                Some(p.last.clone()),
+                                p.rows,
+                                Some((p.head.clone(), p.head_left.clone(), p.header_only)),
+                                p.band_at_end.clone(),
+                            )
+                        }
+                        None => (None, None, 0, None, None),
+                    };
 
                 // Cell entities: data rows index from 0 below the measured
                 // header (`header_rows` — absent means undetected, treated
@@ -1329,6 +1334,42 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     // A band labels the rows beneath it: no data row follows
                     // the last band, or the band is a row of its own.
                     let data_after = |s: usize| (s + 1..rows.len()).any(|r| !subs.contains(&r));
+                    // The band over row `r` (any index up to `rows.len()`):
+                    // the nearest above it in the body, with each band set
+                    // directly over that one, unless a break the table set
+                    // between its groups (a blank row) ends it first.
+                    let breaks = e.section_breaks.as_deref().unwrap_or(&[]);
+                    let band_over = |r: usize| -> Option<String> {
+                        subs.iter()
+                            .filter(|s| **s < r && **s >= n_header)
+                            .max()
+                            .filter(|&&s| !breaks.iter().any(|&b| b > s && b <= r))
+                            .map(|&s| {
+                                let mut top = s;
+                                while top > n_header && subs.contains(&(top - 1)) {
+                                    top -= 1;
+                                }
+                                (top..=s)
+                                    .filter_map(|b| rows[b].first())
+                                    .map(|t| t.trim())
+                                    .filter(|t| !t.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join(" / ")
+                            })
+                            .filter(|t| !t.is_empty())
+                    };
+                    // Rows a page break carried on from the part before are
+                    // under the band open at its end, until a band or a break
+                    // of this part's own.
+                    let carried_band = |r: usize| -> Option<String> {
+                        let own = subs.iter().any(|s| *s < r && *s >= n_header)
+                            || subs.contains(&r)
+                            || breaks.iter().any(|&b| b <= r);
+                        if own {
+                            return None;
+                        }
+                        band_before.clone()
+                    };
                     for (r, row) in rows.iter().enumerate().skip(n_header) {
                         // A sub-header band labels the rows beneath it; it is
                         // not itself data. Its text rides on those rows as
@@ -1355,24 +1396,10 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         // A section runs on to the next band, or to a break the
                         // table set between its groups (a blank row), where
                         // the rows go on with no section over them.
-                        let breaks = e.section_breaks.as_deref().unwrap_or(&[]);
                         let section = (!subs.contains(&r))
-                            .then(|| subs.iter().filter(|s| **s < r && **s >= n_header).max())
+                            .then(|| band_over(r))
                             .flatten()
-                            .filter(|&&s| !breaks.iter().any(|&b| b > s && b <= r))
-                            .map(|&s| {
-                                let mut top = s;
-                                while top > n_header && subs.contains(&(top - 1)) {
-                                    top -= 1;
-                                }
-                                (top..=s)
-                                    .filter_map(|b| rows[b].first())
-                                    .map(|t| t.trim())
-                                    .filter(|t| !t.is_empty())
-                                    .collect::<Vec<_>>()
-                                    .join(" / ")
-                            })
-                            .filter(|t| !t.is_empty());
+                            .or_else(|| carried_band(r));
                         let section = section.as_deref();
                         // A group label set down the first column, a span
                         // over the rows it groups, beside each row's own
@@ -1552,16 +1579,30 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             .as_str()
                             .unwrap_or_default()
                             .to_string();
+                        // What names the rows the break carries on: a header
+                        // restated down to the last row (or on it), else the
+                        // part's own; the band open over them.
+                        let end = rows.len() - 1;
+                        let names_at_end = restated_headers
+                            .iter()
+                            .rev()
+                            .find(|(s, _)| {
+                                *s <= end && stub_span_end(*s).is_none_or(|span| end <= span)
+                            })
+                            .map_or_else(|| header.clone(), |(_, h)| h.clone());
+                        let band_at_end =
+                            band_over(rows.len()).or_else(|| carried_band(rows.len()));
                         em.tables.insert(
                             e.id.clone(),
                             TablePart {
                                 iri,
-                                header,
                                 head,
                                 head_left,
                                 header_only: e.header_only(),
                                 last: last.clone(),
                                 rows: rows_before + rows.len() - n_header,
+                                names_at_end,
+                                band_at_end,
                             },
                         );
                     }
@@ -2450,6 +2491,81 @@ mod tests {
             .find(|n| n["doc:cellValue"] == "Old column")
             .unwrap();
         assert_eq!(old["doc:rowHeader"], "Broadening");
+    }
+
+    #[test]
+    fn rows_the_break_carries_on_keep_their_columns_and_band() {
+        // A price table whose head part opens on a band over its header,
+        // the header set as a restated row (no header rows of its own),
+        // and a second band over its first rows. The next page carries the
+        // rows on with no header and no band of its own until its second.
+        let r = |a: &str, b: &str, c: &str| vec![a.to_string(), b.into(), c.into()];
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.cells = Some(vec![
+            r("Base Period", "", ""),
+            r("Labor Category", "Hours", "Rate"),
+            r("Year 4", "", ""),
+            r("Expert 8", "0", "$407.51"),
+        ]);
+        a.header_rows = Some(0);
+        a.restated_headers = Some(vec![1]);
+        a.sub_headers = Some(vec![0, 2]);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.page = 1;
+        b.cells = Some(vec![
+            r("Expert 7", "14", "$378.34"),
+            r("Year 5", "", ""),
+            r("Expert 6", "3", "$297.83"),
+        ]);
+        b.header_rows = Some(0);
+        b.sub_headers = Some(vec![1]);
+        b.continues = Some("elem-00001".into());
+        let g = graph(&[a, b]);
+        let cell = |value: &str| g.iter().find(|n| n["doc:cellValue"] == value).unwrap();
+        assert_eq!(cell("14")["doc:columnHeader"], "Hours");
+        assert_eq!(cell("$378.34")["doc:columnHeader"], "Rate");
+        assert_eq!(cell("14")["doc:sectionLabel"], "Year 4");
+        // The part's own band takes over from the one carried.
+        assert_eq!(cell("3")["doc:sectionLabel"], "Year 5");
+        assert_eq!(cell("3")["doc:columnHeader"], "Hours");
+        // No text is added: the carried names are labels on the cells, and
+        // the cells are the data rows' alone (3 on the first page, 6 on the
+        // second).
+        let cells = g.iter().filter(|n| n["@type"] == "doc:TableCell").count();
+        assert_eq!(cells, 9);
+    }
+
+    #[test]
+    fn a_break_in_the_carried_rows_ends_their_band() {
+        // Rows carried on under a band until a blank row the table set
+        // between its groups: the rows after it have no band over them.
+        let r = |a: &str, b: &str| vec![a.to_string(), b.into()];
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.cells = Some(vec![
+            r("Name", "Value"),
+            r("Mass Spectrometer Conditions", ""),
+            r("Gas", "Nitrogen"),
+        ]);
+        a.header_rows = Some(1);
+        a.sub_headers = Some(vec![1]);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.page = 1;
+        b.cells = Some(vec![r("MRM 1", "74 amu"), r("Note", "See text")]);
+        b.header_rows = Some(0);
+        b.section_breaks = Some(vec![1]);
+        b.continues = Some("elem-00001".into());
+        let g = graph(&[a, b]);
+        let cell = |value: &str| g.iter().find(|n| n["doc:cellValue"] == value).unwrap();
+        assert_eq!(
+            cell("74 amu")["doc:sectionLabel"],
+            "Mass Spectrometer Conditions"
+        );
+        assert_eq!(cell("74 amu")["doc:columnHeader"], "Value");
+        assert!(cell("See text").get("doc:sectionLabel").is_none());
     }
 
     #[test]
