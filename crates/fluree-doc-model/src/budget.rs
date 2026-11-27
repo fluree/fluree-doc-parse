@@ -551,7 +551,7 @@ impl Budget {
         Self {
             memory: 0,
             max_memory: memory,
-            work: Meter::of(Limit::Work, work, "steps of layout"),
+            work: Meter::of(Limit::Work, work, "steps of work"),
             output: Output::Doco,
         }
     }
@@ -1043,7 +1043,7 @@ mod tests {
         b.spend_work(10).unwrap();
         assert_eq!(
             b.spend_work(1).unwrap_err().to_string(),
-            "more than 10 steps of layout"
+            "more than 10 steps of work"
         );
         // Memory is still whole.
         assert!(Budget::new(ELEMENT_BYTES, 0).spend_elements(1).is_ok());

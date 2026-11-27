@@ -471,6 +471,16 @@ struct Probes {
 }
 
 impl Probes {
+    /// Whether [`Probes::texty`] decodes `image`: it is probed, and not an
+    /// image found already in a document known to decode it alike. Only
+    /// then is its probe's work spent: a picture bullet drawn on every
+    /// line costs a step a draw, not a decode.
+    fn decodes(&self, image: &hayro_interpret::RasterImage<'_>) -> bool {
+        let found =
+            || (image.stream().dict().obj_id()).is_some_and(|id| self.found.contains_key(&id));
+        !self.off && !(self.plain == Some(true) && found())
+    }
+
     /// Whether the image's pixels look like text, decoding it unless the
     /// document has drawn it before.
     fn texty(&mut self, image: &hayro_interpret::RasterImage<'_>) -> Option<bool> {
@@ -911,8 +921,9 @@ fn outline_bytes(path: &kurbo::BezPath) -> u64 {
     (std::mem::size_of_val(path.elements()) as u64).saturating_add(64)
 }
 
-/// Steps of work for one image's probe: decoded at most
-/// [`PROBE_DIM`] pixels square, a step for each sixteen.
+/// Steps of work for one image's probe, where it decodes
+/// ([`Probes::decodes`]): decoded at most [`PROBE_DIM`] pixels square, a
+/// step for each sixteen.
 const PROBE_STEPS: u64 = (PROBE_DIM as u64 * PROBE_DIM as u64) / 16;
 
 /// A drawn shape's paint: its colour, or the kind of pattern it is painted
@@ -1098,8 +1109,9 @@ impl<'a> Device<'a> for Collector<'a, '_> {
     ) {
     }
     fn draw_image(&mut self, i: hayro_interpret::Image<'a, '_>, t: Affine) {
-        // Its probe, and its placement kept.
-        if !self.spend(|b| b.spend_work(PROBE_STEPS).and_then(|()| b.spend_cells(1))) {
+        // A step for the call, and its placement kept; its probe apart,
+        // where it decodes (below).
+        if !self.spend(|b| b.spend_work(1).and_then(|()| b.spend_cells(1))) {
             return;
         }
         // The transform maps the image's *pixel* space onto the page.
@@ -1152,6 +1164,8 @@ impl<'a> Device<'a> for Collector<'a, '_> {
                 if !self.probes.small && area < 0.99 * crate::route::MIN_REGION_FRACTION * page_area
                 {
                     None
+                } else if self.probes.decodes(ri) && !self.spend(|b| b.spend_work(PROBE_STEPS)) {
+                    return;
                 } else {
                     self.probes.texty(ri)
                 }
@@ -3954,6 +3968,85 @@ mod budget_tests {
         let doc = within(1 << 30, 1 << 30, letters_on(6)).unwrap();
         assert_eq!((doc.pages.len(), doc.cut_short), (6, None));
         assert!(past(&doc).is_empty());
+    }
+
+    /// A PDF whose pages each draw one picture, a 500 pt square, as often
+    /// as `draws` says.
+    fn pictures(draws: &[usize]) -> Vec<u8> {
+        let n = draws.len();
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+        let pixels = [0x80u8; 16];
+        let mut objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" ")).into_bytes(),
+            [
+                b"<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray                   /BitsPerComponent 8 /Length 16 >>\nstream\n"
+                    .to_vec(),
+                pixels.to_vec(),
+                b"\nendstream".to_vec(),
+            ]
+            .concat(),
+        ];
+        for (i, d) in draws.iter().enumerate() {
+            let content = "q 500 0 0 500 50 50 cm /Im1 Do Q ".repeat(*d);
+            objects.push(
+                format!(
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {} 0 R \
+                     /Resources << /XObject << /Im1 3 0 R >> >> >>",
+                    5 + 2 * i
+                )
+                .into_bytes(),
+            );
+            objects.push(
+                format!(
+                    "<< /Length {} >>\nstream\n{content}\nendstream",
+                    content.len()
+                )
+                .into_bytes(),
+            );
+        }
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n", i + 1).bytes());
+            out.extend(o);
+            out.extend(b"\nendobj\n");
+        }
+        let xref = out.len();
+        let size = objects.len() + 1;
+        out.extend(format!("xref\n0 {size}\n0000000000 65535 f \n").bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").bytes());
+        }
+        out.extend(
+            format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").bytes(),
+        );
+        out
+    }
+
+    #[test]
+    fn a_picture_drawn_again_costs_its_probe_only_where_it_is_decoded() {
+        let read = |work: u64, draws: &[usize], probe: bool| {
+            let mut l = Limits::default();
+            l.work = work;
+            let mut o = ExtractOptions::default();
+            o.probe_images = probe;
+            let pdf = pictures(draws);
+            limited_to(l, || extract_bytes_with(pdf, &o)).map(|d| d.pages.len())
+        };
+        // Not probed: a step a draw. A thousand draws of a picture bullet
+        // were four million steps, as many as 65,536 draws past the
+        // shipped work.
+        assert_eq!(read(1000, &[1000], false).unwrap(), 1);
+        assert!(read(999, &[1000], false).is_err());
+        // Probed: decoded on the first page, drawn twice there, so the
+        // document is asked whether it decodes alike; on the second, a
+        // thousand times, decoded no more.
+        let probes = 2 * PROBE_STEPS;
+        assert_eq!(read(probes + 1002, &[2, 1000], true).unwrap(), 2);
+        // A step short, the second page is not read.
+        assert_eq!(read(probes + 1001, &[2, 1000], true).unwrap(), 1);
     }
 
     #[test]
