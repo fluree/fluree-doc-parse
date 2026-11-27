@@ -3390,6 +3390,13 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             return None;
         }
     }
+    // Cells set across rows, centred on them: a line of its own, no label
+    // in it, between two rows a pitch apart, its cells in columns those
+    // rows leave empty (`≥ 10 | Pass` between `Inj. #2` and `Inj. #3`, the
+    // criterion and verdict of every injection). It is no row. Its cells
+    // span the rows it stands centred on, as far up and down alike as its
+    // columns stay empty, and are read into the first of them.
+    let carried = carry_centred_lines(&mut body_rows, &mut restated_rows, &cols, pitch);
     // Boundaries.
     let all_rows: Vec<Vec<&Line>> = head_rows
         .iter()
@@ -3807,9 +3814,37 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             }
         }
     }
+    // The lines carried into the first row of the rows they span.
+    let mut carried_downs: Vec<(usize, usize, usize)> = Vec::new();
+    for &(a, l, b) in &carried {
+        let (r, end) = (header_rows + a, header_rows + b);
+        let mut prev: Option<(usize, &Chunk)> = None;
+        for c in &l.chunks {
+            let k = column_of(&cols, c).unwrap_or(0);
+            if let Some((pk, p)) = prev {
+                if pk == k {
+                    cells[r * ncols + k].extend(&p.trailing);
+                }
+            }
+            cells[r * ncols + k].extend(&c.glyphs);
+            prev = Some((k, c));
+            if !carried_downs.contains(&(r, k, end)) {
+                carried_downs.push((r, k, end));
+            }
+        }
+    }
     let downs = [
         downs,
-        body_downs(&all_rows, &cells, rules, &xs, header_rows, &sub_headers),
+        body_downs(
+            &all_rows,
+            &mut cells,
+            &carried_downs,
+            rules,
+            &xs,
+            header_rows,
+            &sub_headers,
+        ),
+        carried_downs,
     ]
     .concat();
     Some(Grid {
@@ -3834,6 +3869,118 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     })
 }
 
+/// The lines set across rows, centred on them, taken out of the body's
+/// rows ([`build`]): `(first row, line, end row)` for each, in the rows as
+/// they stand once those lines are out, `restated` renumbered alike.
+///
+/// Such a line was read as a row of its own:
+/// - no label in it, nothing in the label column, and no section;
+/// - between two rows at most a pitch and a half apart, where a row
+///   between them would need two pitches;
+/// - its cells in columns both of those rows leave empty.
+///
+/// Its cells span the rows it stands centred on (within half a pitch), as
+/// far up and down alike as their columns stay empty, two rows each side
+/// or more: `95 – 105% | Pass`
+/// between `Prep 2` and `Prep 3` holds for `Prep 1` to `Average`, the
+/// group's `%RSD` row giving a criterion of its own. Lines whose spans
+/// meet are left as rows: two tables side by side, read as one, their
+/// lines staggered.
+fn carry_centred_lines<'a>(
+    body_rows: &mut Vec<(Vec<&'a Line>, bool)>,
+    restated: &mut [usize],
+    cols: &[(f64, f64)],
+    pitch: f64,
+) -> Vec<(usize, &'a Line, usize)> {
+    let n = body_rows.len();
+    let ks_of = |ls: &[&Line]| -> Vec<usize> {
+        ls.iter()
+            .flat_map(|l| l.chunks.iter())
+            .filter_map(|c| column_of(cols, c))
+            .collect()
+    };
+    let mid = |ls: &[&Line]| {
+        let lo = ls.iter().map(|l| l.base).fold(f64::MAX, f64::min);
+        let hi = ls.iter().map(|l| l.base).fold(f64::MIN, f64::max);
+        (lo + hi) / 2.0
+    };
+    // (row, reach): the line's row, and how many rows up and down it spans.
+    let mut found: Vec<(usize, usize)> = Vec::new();
+    for r in 1..n.saturating_sub(1) {
+        let (ls, section) = &body_rows[r];
+        if *section || ls.len() != 1 || restated.contains(&r) {
+            continue;
+        }
+        let l = ls[0];
+        let ks = ks_of(ls);
+        if ks.is_empty() || ks.contains(&0) {
+            continue;
+        }
+        let clear = |i: usize| {
+            let (rls, sec) = &body_rows[i];
+            !sec && !restated.contains(&i) && ks_of(rls).iter().all(|k| !ks.contains(k))
+        };
+        let (above, below) = (mid(&body_rows[r - 1].0), mid(&body_rows[r + 1].0));
+        if !(l.base > above && l.base < below && below - above <= pitch * 1.5) {
+            continue;
+        }
+        let mut reach = 0;
+        let mut e = 1;
+        while e <= r && r + e < n && clear(r - e) && clear(r + e) {
+            let centre = (mid(&body_rows[r - e].0) + mid(&body_rows[r + e].0)) / 2.0;
+            if (l.base - centre).abs() <= pitch * 0.5 {
+                reach = e;
+            }
+            e += 1;
+        }
+        // Two rows or more each side: a line between two rows only is as
+        // much a staggered line of a table beside this one, or a chart's
+        // label among its ticks, as a cell set across the two.
+        if reach >= 2 {
+            found.push((r, reach));
+        }
+    }
+    // Spans that meet or overlap are no cells across rows but rows of two
+    // tables set side by side, their lines staggered: each line of one
+    // falls between two of the other's.
+    let reach_of = |&(r, reach): &(usize, usize)| (r - reach, r + reach);
+    let found: Vec<(usize, usize)> = found
+        .iter()
+        .filter(|f| {
+            let (a, b) = reach_of(f);
+            !found.iter().any(|o| {
+                let (c, d) = reach_of(o);
+                o.0 != f.0 && c <= b && a <= d
+            })
+        })
+        .copied()
+        .collect();
+    if found.is_empty() {
+        return Vec::new();
+    }
+    let gone: Vec<usize> = found.iter().map(|&(r, _)| r).collect();
+    let renumber = |i: usize| i - gone.iter().filter(|&&g| g < i).count();
+    let carried: Vec<(usize, &'a Line, usize)> = found
+        .iter()
+        .map(|&(r, reach)| {
+            (
+                renumber(r - reach),
+                body_rows[r].0[0],
+                renumber(r + reach) + 1,
+            )
+        })
+        .collect();
+    for i in restated.iter_mut() {
+        *i = renumber(*i);
+    }
+    let mut i = 0;
+    body_rows.retain(|_| {
+        i += 1;
+        !gone.contains(&(i - 1))
+    });
+    carried
+}
+
 /// Body cells that span rows, read from the groups the ruling draws:
 /// `(first row, column, end row)`.
 ///
@@ -3851,7 +3998,8 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
 /// values missing from some rows, not a span.
 fn body_downs(
     rows: &[Vec<&Line>],
-    cells: &[Vec<usize>],
+    cells: &mut [Vec<usize>],
+    carried: &[(usize, usize, usize)],
     rules: &[Rule],
     xs: &[f64],
     header_rows: usize,
@@ -3893,7 +4041,23 @@ fn body_downs(
         .filter(|&r| sections.contains(&r) || across(r))
         .collect();
     let empty = |r: usize, k: usize| cells[r * ncols + k].is_empty();
+    // Filled, or under a cell carried across rows ([`carry_centred_lines`]).
+    let filled = |r: usize, k: usize| {
+        !empty(r, k)
+            || carried
+                .iter()
+                .any(|&(r0, c, r1)| c == k && r > r0 && r < r1)
+    };
+    // The group's middle row, or either of its two middle rows: a value set
+    // centred down a group of three rows or more stands on it.
+    let centred = |a: usize, b: usize, m: usize| {
+        let len = b - a;
+        len >= 3 && (m == a + len / 2 || (len % 2 == 0 && m + 1 == a + len / 2))
+    };
     let mut downs = Vec::new();
+    // Values set centred, (row, first row, column): read into the group's
+    // first row, as a value spanning rows is.
+    let mut moves: Vec<(usize, usize, usize)> = Vec::new();
     let mut groups = 0;
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
@@ -3901,16 +4065,56 @@ fn body_downs(
             continue;
         }
         let full = (0..ncols).any(|k| (a..b).all(|r| !empty(r, k)));
-        let once: Vec<usize> = (0..ncols)
-            .filter(|&k| !empty(a, k) && (a + 1..b).all(|r| empty(r, k)))
+        // A label set centred names the group (a person over their
+        // grants). A figure set centred speaks for it only where each other
+        // column of the group is full or holds one value: a table of
+        // figures that leaves cells empty sets a row's figure on its row,
+        // middle or not.
+        let dense = (0..ncols).all(|k| {
+            let n = (a..b).filter(|&r| filled(r, k)).count();
+            n <= 1 || n == b - a
+        });
+        let text_at = |r: usize, k: usize| {
+            rows[r]
+                .iter()
+                .flat_map(|l| l.chunks.iter())
+                .filter(|c| {
+                    let m = (c.x0 + c.x1) / 2.0;
+                    m >= xs[k] && m < xs[k + 1]
+                })
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let once: Vec<(usize, usize)> = (0..ncols)
+            .filter_map(|k| {
+                let held: Vec<usize> = (a..b).filter(|&r| !empty(r, k)).collect();
+                match held[..] {
+                    [m] if m == a
+                        || (centred(a, b, m) && (dense || !is_figure(&text_at(m, k)))) =>
+                    {
+                        Some((k, m))
+                    }
+                    _ => None,
+                }
+            })
             .collect();
         if full && !once.is_empty() {
             groups += 1;
-            downs.extend(once.into_iter().map(|k| (a, k, b)));
+            for (k, m) in once {
+                downs.push((a, k, b));
+                if m != a {
+                    moves.push((m, a, k));
+                }
+            }
         }
     }
     if groups < 2 {
         return Vec::new();
+    }
+    for (m, a, k) in moves {
+        let held = std::mem::take(&mut cells[m * ncols + k]);
+        cells[a * ncols + k] = held;
     }
     downs
 }
@@ -4512,6 +4716,128 @@ mod tests {
             orientation: Orientation::Horizontal,
             page: 0,
         }
+    }
+
+    /// Two groups of a recovery table, each ruled off: the level set down
+    /// the group's middle row, the criterion and verdict for the first four
+    /// rows set centred on them, between `Prep 2` and `Prep 3`, and the
+    /// `%RSD` row's own. `floating` sets those a row's place apart instead.
+    fn recovery(floating: bool) -> (Vec<Glyph>, Vec<Rule>, BBox) {
+        let xs = [20.0, 70.0, 140.0, 200.0, 260.0, 330.0];
+        let mut gl = Vec::new();
+        for (t, x) in [("Oxy.", 2), ("Octo.", 3), ("Criteria", 4), ("Result", 5)] {
+            gl.extend(set(t, xs[x], 40.0));
+        }
+        let mut rules = vec![across(10.0, 400.0, 48.0)];
+        let mut y = 60.0;
+        for level in ["80%", "100%"] {
+            let top = y;
+            for (i, (label, a, b)) in [
+                ("Prep 1", "100.4", "100.8"),
+                ("Prep 2", "99.7", "99.2"),
+                ("Prep 3", "100.1", "100.1"),
+                ("Average", "100.1", "100.1"),
+            ]
+            .iter()
+            .enumerate()
+            {
+                if i == 2 {
+                    gl.extend(set(level, xs[0], y));
+                }
+                gl.extend(set(label, xs[1], y));
+                gl.extend(set(a, xs[2], y));
+                gl.extend(set(b, xs[3], y));
+                y += 14.0;
+                if i == 1 && !floating {
+                    gl.extend(set("95 - 105%", xs[4], y));
+                    gl.extend(set("Pass", xs[5], y));
+                    y += 14.0;
+                }
+            }
+            if floating {
+                gl.extend(set("95 - 105%", xs[4], top + 21.0));
+                gl.extend(set("Pass", xs[5], top + 21.0));
+            }
+            for (t, x) in [
+                ("%RSD", 1),
+                ("0.33", 2),
+                ("0.78", 3),
+                ("<= 3.0%", 4),
+                ("Pass", 5),
+            ] {
+                gl.extend(set(t, xs[x], y));
+            }
+            rules.push(across(10.0, 400.0, y + 5.0));
+            y += 14.0;
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 30.0,
+            x1: 400.0,
+            y1: y,
+        };
+        (gl, rules, region)
+    }
+
+    #[test]
+    fn cells_centred_across_rows_span_them() {
+        let (gl, rules, region) = recovery(true);
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let g = &grids[0];
+        let lay = g.layout.as_deref().expect("read from its text");
+        let cols = g.cols();
+        let texts = lay.texts(&gl, cols);
+        assert_eq!(cols, 6, "{texts:?}");
+        let rows: Vec<&[String]> = texts.chunks(cols).collect();
+        // Five rows a group, the criterion's line no row of its own.
+        assert_eq!(rows.len(), lay.header_rows + 10, "{rows:?}");
+        let prep1 = rows.iter().position(|r| r[1] == "Prep 1").expect("Prep 1");
+        // Each read into the first row of the rows it spans.
+        assert_eq!(rows[prep1][0], "80%", "{rows:?}");
+        assert_eq!(rows[prep1][4], "95 - 105%", "{rows:?}");
+        assert_eq!(rows[prep1][5], "Pass", "{rows:?}");
+        assert!(rows[prep1 + 2][0].is_empty(), "{rows:?}");
+        // The level spans its group, the criterion `Prep 1` to `Average`.
+        assert!(
+            lay.downs.contains(&(prep1, 0, prep1 + 5)),
+            "{:?}",
+            lay.downs
+        );
+        assert!(
+            lay.downs.contains(&(prep1, 4, prep1 + 4)),
+            "{:?}",
+            lay.downs
+        );
+        assert!(
+            lay.downs.contains(&(prep1, 5, prep1 + 4)),
+            "{:?}",
+            lay.downs
+        );
+        // The %RSD row keeps its own.
+        assert_eq!(rows[prep1 + 4][4], "<= 3.0%", "{rows:?}");
+    }
+
+    #[test]
+    fn a_row_a_pitch_apart_spans_nothing() {
+        // The same values set on a row's place of their own: a row.
+        let (gl, rules, region) = recovery(false);
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let g = &grids[0];
+        let lay = g.layout.as_deref().expect("read from its text");
+        let texts = lay.texts(&gl, g.cols());
+        let rows: Vec<&[String]> = texts.chunks(g.cols()).collect();
+        let own = rows
+            .iter()
+            .position(|r| r[4] == "95 - 105%")
+            .expect("its row");
+        assert!(rows[own][1].is_empty(), "{rows:?}");
+        assert!(
+            !lay.downs.iter().any(|&(_, k, _)| k == 4),
+            "{:?}",
+            lay.downs
+        );
     }
 
     #[test]
