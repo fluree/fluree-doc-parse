@@ -44,8 +44,8 @@
 //! **Bounds**: groups nest at most [`MAX_DEPTH`] deep; at most [`MAX_FLOWS`]
 //! notes, comments, headers and footers are read; a row definition states
 //! at most [`MAX_TABLE_CELLS`] cells; and what the document makes is spent
-//! from one [`Budget`] before it is made: each paragraph, with its text, and
-//! each table's cells, a row and the copy of its definitions at its `\row`,
+//! from one [`Budget`] before it is made: each paragraph, with its text, each
+//! picture's figure, and each table's cells, a row and the copy of its definitions at its `\row`,
 //! a short row's padding to its table's width as the table is laid out. A
 //! file past any of them fails as too large. `\binN` data is skipped, never past the end. What is read
 //! is otherwise bounded by the file's own size.
@@ -355,8 +355,19 @@ impl<'a> Reader<'a> {
             }
             "pict" => {
                 self.flush_bytes();
-                if let Some(f) = self.flow() {
-                    f.out.push(Element::new("doco:Figure", "", "rtf", "rtf"));
+                // A figure is an element, spent before it is made: `{\pict}`
+                // is seven bytes.
+                if self.flow().is_some() {
+                    match spend_element(&mut self.budget, "") {
+                        Ok(()) => {
+                            if let Some(f) = self.flow() {
+                                f.out.push(Element::new("doco:Figure", "", "rtf", "rtf"));
+                            }
+                        }
+                        Err(e) => {
+                            self.over.get_or_insert(e.to_string());
+                        }
+                    }
                 }
                 self.set_dest(Dest::Skip);
                 return;

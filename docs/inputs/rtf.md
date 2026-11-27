@@ -58,7 +58,7 @@ Outlook save RTF as `.doc` often enough. Groups nest at most 1,024 deep;
 at most 100,000 notes, comments, headers and footers are read, each made
 as it opens; a row definition states at most about four million cells.
 What the document makes is counted against the memory one document may
-take before it is made: each paragraph with its text, each row with the
+take before it is made: each paragraph with its text, each picture, each row with the
 copy of its definitions it keeps, and each table's cells, a short row's
 padding to its table's width counted too. A file past any of these fails
 as too large. `\binN` data is skipped, never past

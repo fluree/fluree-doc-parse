@@ -234,3 +234,14 @@ impl<'a, I: Iterator<Item = &'a bool>> Positions for I {
             .collect()
     }
 }
+
+#[test]
+fn pictures_spend_the_budget_before_they_are_made() {
+    use fluree_doc_model::budget::ELEMENT_BYTES;
+    // A thousand pictures of seven bytes each: a figure each.
+    let doc = format!("{{\\rtf1 {}}}", "{\\pict}".repeat(1_000));
+    let (els, _) = parse_within(doc.as_bytes(), Budget::new(1_000 * ELEMENT_BYTES, 0)).unwrap();
+    assert_eq!(els.len(), 1_000);
+    assert!(els.iter().all(|e| e.kind == "doco:Figure"));
+    assert!(parse_within(doc.as_bytes(), Budget::new(999 * ELEMENT_BYTES, 0)).is_err());
+}
