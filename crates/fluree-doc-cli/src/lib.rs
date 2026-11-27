@@ -53,7 +53,8 @@ pub fn convert_attachments(
     };
     let cfg = commands::common::TierConfig::default();
     let mut read = |f: &fluree_doc_email::AttachedFile, _depth: usize| {
-        let out = commands::convert::convert_carried(f, &cfg, &args, Some(&[1, 2, 3, 4]), true)?;
+        let out = commands::convert::convert_carried(f, &cfg, &args, Some(&[1, 2, 3, 4]), true)?
+            .map(commands::convert::Rendered::into_string);
         let kept = out.as_ref().map(|_| ()).map_err(Clone::clone);
         each(out);
         Some(kept)
