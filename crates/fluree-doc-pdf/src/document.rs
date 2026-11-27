@@ -7317,7 +7317,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             };
             let flat: Vec<String> = match g.layout.as_deref() {
                 Some(lay) => lay.texts(&raw.pages[pi].glyphs, g.cols()),
-                None => g.cell_texts(cell_glyphs),
+                None => g.cell_texts_parted(cell_glyphs, &raw.pages[pi].rules),
             }
             .into_iter()
             .enumerate()
@@ -7656,11 +7656,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         .collect();
                     let text =
                         match g.region_text(&raw.pages[pi].glyphs, &merges, r..r_end, c..c_end) {
-                            Some(t) => unfolio(
-                                furniture::scrub_cell(&t, &cell_scrub(g, r..r_end, c..c_end)),
-                                r,
-                                r_end,
-                            ),
+                            Some(t) => {
+                                // A rule drawn down through the block parts
+                                // its text into the boxes either side.
+                                let t = g
+                                    .region_parted(
+                                        &raw.pages[pi].glyphs,
+                                        &raw.pages[pi].rules,
+                                        r..r_end,
+                                        c..c_end,
+                                    )
+                                    .unwrap_or(t);
+                                unfolio(
+                                    furniture::scrub_cell(&t, &cell_scrub(g, r..r_end, c..c_end)),
+                                    r,
+                                    r_end,
+                                )
+                            }
                             None if held.len() == 1 => rows[held[0].0][held[0].1].clone(),
                             None => {
                                 // A block across rows and columns that reads

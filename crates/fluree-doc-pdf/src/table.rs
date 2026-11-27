@@ -58,6 +58,22 @@ const SIGN_SPACE: f64 = 0.6;
 /// this are a border rule adjacent to a cell edge, not two cells.
 const MIN_CELL_EXTENT: f64 = 8.0;
 
+/// Least distance, in points, from a cell's edge for a rule drawn down
+/// through the cell to part its text ([`Grid::cell_texts_parted`]). A
+/// column's own rule stands on its edge, within a stroke's width of it.
+const PARTING_RULE_MARGIN: f64 = 3.0;
+
+/// Fewest lines, and fewest words in one of them, each side of a rule
+/// parting a cell holds ([`Grid::cell_texts_parted`]): a box of text runs
+/// over its lines in phrases, where a small table's column holds a value or
+/// a word a row.
+const PARTED_SIDE_LINES: usize = 2;
+const PARTED_LINE_WORDS: usize = 3;
+
+/// How far, in points, a glyph's ink may reach over a parting rule: the
+/// rule's stroke and the glyph's side bearing.
+const RULE_CLEARANCE: f64 = 0.5;
+
 /// Fraction of the grid's span a clustered line must cover to count. A short
 /// rule under a heading is not a table row boundary.
 const MIN_LINE_COVERAGE: f64 = 0.30;
@@ -174,6 +190,53 @@ impl Grid {
     /// constraint as column segmentation: segment first, assemble second.
     pub fn cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
         crate::cells::texts(glyphs, &self.xs, &self.ys, || self.read_cell_texts(glyphs))
+    }
+
+    /// Each cell's text as [`Self::cell_texts`] reads it, but a cell a drawn
+    /// rule parts is read a side at a time.
+    ///
+    /// A rule drawn down through a cell, with text on both sides of it
+    /// within its height, parts two boxes the grid's columns do not: a form
+    /// sizes each row's boxes on its own, so a rule drawn in one row only is
+    /// no column of the grid. Read as one, the boxes' lines were joined
+    /// across the rule, one line of each by turns (`Ordered on behalf of the
+    /// Secretary of LONDON 102 PETTY FRANCE (MOJ), Ministry of … State for
+    /// Justice:`). Read a side at a time: the lines over the rule, each
+    /// side's, left to right, then the lines under it.
+    pub fn cell_texts_parted(&self, glyphs: &[crate::glyph::Glyph], rules: &[Rule]) -> Vec<String> {
+        let mut texts = self.cell_texts(glyphs);
+        let cols = self.cols();
+        let homes = self.glyph_cells(glyphs);
+        for (cell, text) in texts.iter_mut().enumerate() {
+            let ids: Vec<usize> = (0..glyphs.len())
+                .filter(|&i| homes[i] == Some(cell))
+                .collect();
+            let (x0, x1) = (self.xs[cell % cols], self.xs[cell % cols + 1]);
+            if let Some(t) = parted_text(glyphs, &ids, rules, x0, x1) {
+                *text = t;
+            }
+        }
+        texts
+    }
+
+    /// The text of a merged block of cells, rows `rows` by columns `cols`,
+    /// read a side at a time where a rule drawn down through it parts it, as
+    /// [`Self::cell_texts_parted`] reads a cell. `None` where no rule does.
+    pub fn region_parted(
+        &self,
+        glyphs: &[crate::glyph::Glyph],
+        rules: &[Rule],
+        rows: std::ops::Range<usize>,
+        cols: std::ops::Range<usize>,
+    ) -> Option<String> {
+        let n = self.cols();
+        let homes = self.glyph_cells(glyphs);
+        let ids: Vec<usize> = (0..glyphs.len())
+            .filter(|&i| {
+                homes[i].is_some_and(|h| rows.contains(&(h / n)) && cols.contains(&(h % n)))
+            })
+            .collect();
+        parted_text(glyphs, &ids, rules, self.xs[cols.start], self.xs[cols.end])
     }
 
     fn read_cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
@@ -2447,6 +2510,100 @@ const SHARED_BASELINE: f64 = 0.1;
 /// (`long-` over `term`) more often than prose does, and only the rest of
 /// the document says which of the two this is. See
 /// `document::settle_cell_breaks`.
+/// The text of glyphs `ids`, set between `x0` and `x1`, read a side at a
+/// time where a rule drawn down between those edges parts them: the lines
+/// over the rules, each side's lines left to right, then the lines under
+/// them. `None` where no rule stands there with ink on both sides of it
+/// within its height. See [`Grid::cell_texts_parted`].
+fn parted_text(
+    glyphs: &[crate::glyph::Glyph],
+    ids: &[usize],
+    rules: &[Rule],
+    x0: f64,
+    x1: f64,
+) -> Option<String> {
+    let centre = |g: &crate::glyph::Glyph| {
+        g.bbox
+            .map_or(g.origin, |b| ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5))
+    };
+    let within = |r: &Rule, i: usize| {
+        let y = centre(&glyphs[i]).1;
+        y > r.bbox.y0 && y < r.bbox.y1
+    };
+    // A side of the rule reads as text set in a box of its own: two lines
+    // or more, one of them three words or more. The rule between two boxes
+    // of text parts them; the rules of a small table set in the cell part
+    // its columns of values, which read across its rows.
+    let boxed = |r: &Rule, left: bool| {
+        let side: Vec<crate::glyph::Glyph> = ids
+            .iter()
+            .filter(|&&i| within(r, i) && (centre(&glyphs[i]).0 < r.axis_pos()) == left)
+            .map(|&i| glyphs[i].clone())
+            .collect();
+        let lines = crate::line::assemble(&side);
+        lines.len() >= PARTED_SIDE_LINES
+            && lines
+                .iter()
+                .any(|l| l.text.split_whitespace().count() >= PARTED_LINE_WORDS)
+    };
+    // The rule runs between the two: through no glyph's ink. A stroke
+    // drawn through a word is no box's edge.
+    let clear = |r: &Rule| {
+        let x = r.axis_pos();
+        !ids.iter().any(|&i| {
+            within(r, i)
+                && glyphs[i]
+                    .bbox
+                    .is_some_and(|b| b.x0 < x - RULE_CLEARANCE && b.x1 > x + RULE_CLEARANCE)
+        })
+    };
+    let parting: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| {
+            let x = r.axis_pos();
+            r.orientation == Orientation::Vertical
+                && x > x0 + PARTING_RULE_MARGIN
+                && x < x1 - PARTING_RULE_MARGIN
+                && clear(r)
+                && boxed(r, true)
+                && boxed(r, false)
+        })
+        .collect();
+    if parting.is_empty() {
+        return None;
+    }
+    let top = parting.iter().map(|r| r.bbox.y0).fold(f64::MAX, f64::min);
+    let foot = parting.iter().map(|r| r.bbox.y1).fold(f64::MIN, f64::max);
+    // Each glyph's place: over the rules, between them on the side it stands,
+    // or under them.
+    let mut groups: std::collections::BTreeMap<(u8, usize), Vec<crate::glyph::Glyph>> =
+        Default::default();
+    for &i in ids {
+        let (x, y) = centre(&glyphs[i]);
+        let key = if y <= top {
+            (0, 0)
+        } else if y >= foot {
+            (2, 0)
+        } else {
+            let side = parting
+                .iter()
+                .filter(|r| r.axis_pos() < x && y > r.bbox.y0 && y < r.bbox.y1)
+                .count();
+            (1, side)
+        };
+        groups.entry(key).or_default().push(glyphs[i].clone());
+    }
+    let lines: Vec<String> = groups
+        .values()
+        .flat_map(|gs| {
+            turned_in_order(crate::line::assemble(gs))
+                .into_iter()
+                .map(|l| l.text)
+        })
+        .collect();
+    Some(join_cell_lines(lines.iter().map(String::as_str)))
+}
+
 fn join_cell_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     use crate::block::HyphenJoin;
     let mut out = String::new();
@@ -14164,6 +14321,94 @@ mod tests {
         };
         let gl = word_at(5.0, "Dimensions");
         assert_eq!(grid.cell_texts(&gl), ["", "Dimensions", ""]);
+    }
+
+    #[test]
+    fn a_rule_drawn_down_through_a_cell_parts_its_text() {
+        // Two boxes side by side in one cell of a form, a rule between them
+        // for their height, a line under both.
+        let mut gl = vec![
+            word(5.0, 0, "Ordered", None),
+            word(45.0, 0, "on", None),
+            word(60.0, 0, "behalf", None),
+            word(160.0, 0, "LONDON", None),
+            word(195.0, 0, "102", None),
+            word(215.0, 0, "PETTY", None),
+            word(5.0, 1, "State", None),
+            word(35.0, 1, "for", None),
+            word(55.0, 1, "Justice:", None),
+            word(160.0, 1, "Petty", None),
+            word(190.0, 1, "France", None),
+            word(5.0, 2, "Tel:", None),
+            word(30.0, 2, "Fax:", None),
+            word(160.0, 2, "Email", None),
+        ];
+        for (i, g) in gl.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: crate::geom::BBox {
+                x0: 0.0,
+                y0: -1.0,
+                x1: 300.0,
+                y1: 55.0,
+            },
+            xs: vec![0.0, 300.0],
+            ys: vec![-1.0, 55.0],
+        };
+        let rule = |x: f64, y0: f64, y1: f64| Rule {
+            bbox: crate::geom::BBox {
+                x0: x,
+                y0,
+                x1: x + 0.5,
+                y1,
+            },
+            orientation: Orientation::Vertical,
+            page: 0,
+        };
+        // Read as one, the boxes' lines take turns.
+        let whole = grid.cell_texts(&gl)[0].clone();
+        assert!(
+            whole.starts_with("Ordered on behalf LONDON 102 PETTY"),
+            "{whole}"
+        );
+        // Parted: each box whole, the left first, then the line under them.
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(150.0, -1.0, 32.0)])[0],
+            "Ordered on behalf State for Justice: LONDON 102 PETTY Petty France Tel: Fax: Email"
+        );
+        // Nor does a stroke drawn through a word: `behalf` runs 60 to 90.
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(75.0, -1.0, 32.0)])[0],
+            whole
+        );
+        // A small table set in the cell, its columns of values parted by a
+        // rule, reads across its rows.
+        let mut small = vec![
+            word(5.0, 0, "DI1", None),
+            word(160.0, 0, "Stop", None),
+            word(5.0, 1, "0", None),
+            word(160.0, 1, "Start", None),
+        ];
+        for (i, g) in small.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        assert_eq!(
+            grid.cell_texts_parted(&small, &[rule(150.0, -1.0, 32.0)]),
+            grid.cell_texts(&small)
+        );
+        // A rule on the cell's edge is its column's, and one with text on
+        // one side of it only parts nothing.
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(1.0, -1.0, 55.0)])[0],
+            whole
+        );
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(250.0, -1.0, 55.0)])[0],
+            whole
+        );
     }
 
     #[test]
