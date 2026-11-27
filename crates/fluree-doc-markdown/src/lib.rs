@@ -9,6 +9,10 @@
 //! What is missing is geometry. Markdown has no pages and no coordinates, so
 //! every element's `bbox` is `None` rather than a zeroed box that would read
 //! as a real position to a consumer.
+//!
+//! A block of raw HTML is read with the HTML reader: it is content, and it
+//! is how a table that spans cells, or has bands or a header of several
+//! rows, is written in Markdown, ours included.
 
 use fluree_doc_model::{Element, Link};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
