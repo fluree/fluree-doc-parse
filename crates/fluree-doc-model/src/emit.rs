@@ -6,6 +6,11 @@ use crate::message::Message;
 mod md_escape;
 use md_escape::{Context, Mark};
 
+/// The class of the XHTML block holding one fragment of a drawing's text,
+/// inside the drawing's `<figure>`: a block, so each fragment reads back as
+/// one, and marked, so it reads back as a drawing's text and not prose.
+pub const FIGURE_TEXT_CLASS: &str = "doco-figure-text";
+
 /// Split an element's text at its located link anchors.
 ///
 /// Yields `(text, link)` pairs in order, covering the string exactly once —
@@ -719,7 +724,9 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
             // the page sets them, which `<figure>` marks as a grouping
             // rather than a sentence. Nothing here says which label goes
             // with which value: that pairing lives in the drawing, and only
-            // a reader that can see it may assert it.
+            // a reader that can see it may assert it. Each fragment is a
+            // block of its own, marked as a drawing's text rather than
+            // prose: inline `<span>`s read back as one run of text.
             "doco:Figure" => {
                 if open_figure.as_deref() != e.figure.as_deref() {
                     if open_figure.is_some() {
@@ -741,7 +748,10 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                     }
                     open_figure = e.figure.clone();
                 }
-                out.push_str(&format!("<span>{}</span>\n", html_linked(e)));
+                out.push_str(&format!(
+                    "<div class=\"{FIGURE_TEXT_CLASS}\">{}</div>\n",
+                    html_linked(e)
+                ));
             }
             _ => match (&e.turn, &e.message) {
                 (Some(t), _) => out.push_str(&html_turn(e, t)),
@@ -1101,6 +1111,31 @@ mod tests {
             };
             assert_eq!(md(&plain), format!("{plain}\n\n"), "{plain}");
         }
+    }
+
+    #[test]
+    fn a_drawings_fragments_are_blocks_of_its_figure() {
+        // Each fragment a block of its own, marked as a drawing's text: as
+        // inline spans they read back as one run of text.
+        let frag = |t: &str, fig: &str| Element {
+            figure: Some(fig.into()),
+            ..Element::new("doco:Figure", t, "rust", "layout")
+        };
+        let html = to_xhtml(&[
+            frag("FISHERY AND PROTECTED", "figure-0-0"),
+            frag("ECOSYSTEM MODELING", "figure-0-0"),
+            frag("Source: NOAA", "figure-0-1"),
+        ]);
+        assert!(html.contains(
+            "<figure data-figure=\"figure-0-0\">\n\
+             <div class=\"doco-figure-text\">FISHERY AND PROTECTED</div>\n\
+             <div class=\"doco-figure-text\">ECOSYSTEM MODELING</div>\n\
+             </figure>\n\
+             <figure data-figure=\"figure-0-1\">\n\
+             <div class=\"doco-figure-text\">Source: NOAA</div>\n\
+             </figure>\n"
+        ));
+        assert!(!html.contains("<span>"));
     }
 
     #[test]

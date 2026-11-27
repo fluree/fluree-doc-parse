@@ -151,10 +151,12 @@ Markdown:
 
 XHTML:
 
-- **Figure fragments run together.** A drawing's fragments are written as
+- **Figure fragments run together.** A drawing's fragments were written as
   `<span>`s in a `<figure>`, which HTML reads as one run of text:
   `block.merged`, and the `text.lost`, `text.extra` and `order` that follow
-  from it.
+  from it. The writer sets each fragment as a block of its own, `<div
+  class="doco-figure-text">`, and the HTML reader reads each back as one
+  fragment of the drawing its `<figure data-figure>` names.
 - **Bands read as header rows.** A band row under the header, or a table
   without one, is written as a `<th>` row, and with no `<thead>` to end it
   the header runs on into it: `table.header_rows`, `table.sub_headers`.

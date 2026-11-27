@@ -1,28 +1,18 @@
 {
- "acl-2024-stub-head-down-the-header": {
-  "xhtml block.merged": 9
- },
- "acl-bart-columns-over-page-number": {
-  "xhtml block.merged": 1
- },
  "apple-env-callout-beside-column": {
   "md table.header_rows": 1,
   "md table.restated_headers": 1,
   "md table.shape": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 14,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 1,
-  "xhtml text.extra": 3,
-  "xhtml text.lost": 14
+  "xhtml table.sub_headers": 1
  },
  "asian-paints-stub-head-down-the-header": {
   "md table.header_rows": 26,
   "md table.restated_headers": 5,
   "md table.sub_headers": 40,
-  "xhtml block.merged": 12,
   "xhtml table.header_rows": 26,
   "xhtml table.restated_headers": 5,
   "xhtml table.sub_headers": 40
@@ -31,7 +21,6 @@
   "md table.header_rows": 4,
   "md table.shape": 1,
   "md table.sub_headers": 4,
-  "xhtml block.merged": 13,
   "xhtml table.header_rows": 4,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 4
@@ -39,111 +28,72 @@
  "brother-dialog-picture-no-table": {
   "md table.shape": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 75,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 1,
-  "xhtml text.extra": 2,
-  "xhtml text.lost": 9
+  "xhtml table.sub_headers": 1
  },
  "census-p60-covered-continued": {
   "md table.header_rows": 15,
   "md table.sub_headers": 15,
-  "xhtml block.merged": 7,
   "xhtml table.header_rows": 15,
   "xhtml table.sub_headers": 15
  },
  "census-p60-glyph-names": {
   "md table.header_rows": 15,
   "md table.sub_headers": 15,
-  "xhtml block.merged": 7,
   "xhtml table.header_rows": 15,
   "xhtml table.sub_headers": 15
  },
  "cree-cr4t-beam-angle": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-cu-header": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-degree": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-field-lines": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-figure-panels": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-hanging-bullets": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-polar-labels": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-running-lines": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-side-by-side-tables": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-stacked-boxes": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-table-regions": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-table-title-rows": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
- },
- "cree-furniture-in-cells": {
-  "xhtml block.merged": 9
- },
- "cree-noctura-fcc-heading": {
-  "xhtml block.merged": 9
- },
- "cree-noctura-lettered-steps": {
-  "xhtml block.merged": 9
- },
- "cree-noctura-ligature-space": {
-  "xhtml block.merged": 9
- },
- "cree-noctura-numbered-safety": {
-  "xhtml block.merged": 9
- },
- "cree-noctura-step-columns": {
-  "xhtml block.merged": 9
- },
- "cree-noctura-subtitle": {
-  "xhtml block.merged": 9
  },
  "ecb-diagram-picture-no-table": {
   "md table.header_rows": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 8,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
@@ -151,7 +101,6 @@
   "md table.header_rows": 3,
   "md table.shape": 1,
   "md table.sub_headers": 3,
-  "xhtml block.merged": 229,
   "xhtml table.header_rows": 9,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 3
@@ -168,7 +117,6 @@
   "md table.header_rows": 8,
   "md table.shape": 2,
   "md table.sub_headers": 8,
-  "xhtml block.merged": 62,
   "xhtml table.header_rows": 8,
   "xhtml table.shape": 2,
   "xhtml table.sub_headers": 8
@@ -177,7 +125,6 @@
   "md table.header_rows": 8,
   "md table.shape": 2,
   "md table.sub_headers": 8,
-  "xhtml block.merged": 62,
   "xhtml table.header_rows": 8,
   "xhtml table.shape": 2,
   "xhtml table.sub_headers": 8
@@ -186,7 +133,6 @@
   "md table.header_rows": 8,
   "md table.shape": 2,
   "md table.sub_headers": 8,
-  "xhtml block.merged": 62,
   "xhtml table.header_rows": 8,
   "xhtml table.shape": 2,
   "xhtml table.sub_headers": 8
@@ -197,7 +143,6 @@
  },
  "fda-175551-logo-read-by-ocr": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "fda-ndma-wingdings-arrows": {
@@ -207,15 +152,6 @@
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 1,
   "xhtml table.sub_headers": 1
- },
- "fed-beigebook-2023-file-bookmarks": {
-  "xhtml block.merged": 2
- },
- "fed-beigebook-district-topics": {
-  "xhtml block.merged": 2
- },
- "fed-beigebook-subtitle": {
-  "xhtml block.merged": 2
  },
  "fed-combined-soma-group-head": {
   "md table.grid": 4,
@@ -255,262 +191,137 @@
  },
  "fed-fsr-2024-04-scales-beside-prose": {
   "md table.shape": 1,
-  "xhtml block.merged": 89,
-  "xhtml table.shape": 1,
-  "xhtml text.changed": 1,
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 14
+  "xhtml table.shape": 1
  },
  "fed-fsr-body-from-prose": {
   "md table.shape": 2,
-  "xhtml block.merged": 89,
-  "xhtml table.shape": 2,
-  "xhtml text.changed": 1,
-  "xhtml text.lost": 1
+  "xhtml table.shape": 2
  },
  "fed-fsr-case-folded-map": {
   "md table.shape": 2,
-  "xhtml block.merged": 89,
-  "xhtml table.shape": 2,
-  "xhtml text.changed": 1,
-  "xhtml text.lost": 1
+  "xhtml table.shape": 2
  },
  "fed-fsr-header-band": {
   "md table.shape": 2,
-  "xhtml block.merged": 89,
-  "xhtml table.shape": 2,
-  "xhtml text.changed": 1,
-  "xhtml text.lost": 1
+  "xhtml table.shape": 2
  },
  "fed-fsr-item-column-head": {
   "md table.shape": 2,
-  "xhtml block.merged": 89,
-  "xhtml table.shape": 2,
-  "xhtml text.changed": 1,
-  "xhtml text.lost": 1
+  "xhtml table.shape": 2
  },
  "fed-mpr-2023-03-scales-beside-prose": {
   "md table.header_rows": 2,
   "md table.shape": 1,
   "md table.sub_headers": 2,
-  "xhtml block.merged": 128,
-  "xhtml order": 67,
   "xhtml table.header_rows": 2,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 2,
-  "xhtml text.changed": 3,
-  "xhtml text.extra": 24,
-  "xhtml text.lost": 201
+  "xhtml table.sub_headers": 2
  },
  "fed-mpr-2023-06-stacked-projection-rows": {
   "md table.header_rows": 5,
   "md table.sub_headers": 5,
-  "xhtml block.merged": 98,
-  "xhtml order": 22,
   "xhtml table.header_rows": 5,
-  "xhtml table.sub_headers": 5,
-  "xhtml text.changed": 2,
-  "xhtml text.extra": 15,
-  "xhtml text.lost": 133
+  "xhtml table.sub_headers": 5
  },
  "fed-mpr-chart-titles-side-by-side": {
   "md table.header_rows": 1,
   "md table.shape": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 107,
-  "xhtml order": 38,
   "xhtml table.header_rows": 1,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 1,
-  "xhtml text.changed": 2,
-  "xhtml text.extra": 14,
-  "xhtml text.lost": 103
+  "xhtml table.sub_headers": 1
  },
  "fed-mpr-continued-box-title": {
   "md table.header_rows": 2,
   "md table.shape": 1,
   "md table.sub_headers": 2,
-  "xhtml block.merged": 105,
-  "xhtml order": 14,
   "xhtml table.header_rows": 2,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 2,
-  "xhtml text.changed": 2,
-  "xhtml text.extra": 12,
-  "xhtml text.lost": 103
+  "xhtml table.sub_headers": 2
  },
  "fed-mpr-continued-boxes": {
   "md table.header_rows": 1,
   "md table.shape": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 107,
-  "xhtml order": 38,
   "xhtml table.header_rows": 1,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 1,
-  "xhtml text.changed": 2,
-  "xhtml text.extra": 14,
-  "xhtml text.lost": 103
+  "xhtml table.sub_headers": 1
  },
  "fed-mpr-finding-heads": {
   "md table.header_rows": 1,
   "md table.shape": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 107,
-  "xhtml order": 38,
   "xhtml table.header_rows": 1,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 1,
-  "xhtml text.changed": 2,
-  "xhtml text.extra": 14,
-  "xhtml text.lost": 103
+  "xhtml table.sub_headers": 1
  },
  "fed-mpr-header-band": {
   "md table.header_rows": 1,
   "md table.shape": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 107,
-  "xhtml order": 38,
   "xhtml table.header_rows": 1,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 1,
-  "xhtml text.changed": 2,
-  "xhtml text.extra": 14,
-  "xhtml text.lost": 103
+  "xhtml table.sub_headers": 1
  },
  "fed-mpr-line-charts": {
   "md table.header_rows": 2,
   "md table.shape": 1,
   "md table.sub_headers": 2,
-  "xhtml block.merged": 105,
-  "xhtml order": 14,
   "xhtml table.header_rows": 2,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 2,
-  "xhtml text.changed": 2,
-  "xhtml text.extra": 12,
-  "xhtml text.lost": 103
+  "xhtml table.sub_headers": 2
  },
  "fed-mpr-prose-beside-chart-notes": {
   "md table.header_rows": 2,
   "md table.shape": 1,
   "md table.sub_headers": 2,
-  "xhtml block.merged": 105,
-  "xhtml order": 14,
   "xhtml table.header_rows": 2,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 2,
-  "xhtml text.changed": 2,
-  "xhtml text.extra": 12,
-  "xhtml text.lost": 103
+  "xhtml table.sub_headers": 2
  },
  "fed-mpr-scale-beside-prose": {
   "md table.header_rows": 2,
   "md table.shape": 1,
   "md table.sub_headers": 2,
-  "xhtml block.merged": 105,
-  "xhtml order": 14,
   "xhtml table.header_rows": 2,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 2,
-  "xhtml text.changed": 2,
-  "xhtml text.extra": 12,
-  "xhtml text.lost": 103
+  "xhtml table.sub_headers": 2
  },
  "fed-sep-tables": {
   "md table.header_rows": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 53,
-  "xhtml order": 17,
   "xhtml table.header_rows": 1,
-  "xhtml table.sub_headers": 1,
-  "xhtml text.extra": 8,
-  "xhtml text.lost": 73
- },
- "fomc-sep-histograms": {
-  "xhtml block.merged": 21,
-  "xhtml order": 23,
-  "xhtml text.extra": 5,
-  "xhtml text.lost": 43
- },
- "fomc-sep-line-charts": {
-  "xhtml block.merged": 21,
-  "xhtml order": 23,
-  "xhtml text.extra": 5,
-  "xhtml text.lost": 43
- },
- "fomc-sep-paired-scales": {
-  "xhtml block.merged": 21,
-  "xhtml order": 23,
-  "xhtml text.extra": 5,
-  "xhtml text.lost": 43
+  "xhtml table.sub_headers": 1
  },
  "google-axis-years-at-the-foot": {
   "md table.restated_headers": 1,
   "md table.shape": 1,
-  "xhtml block.merged": 26,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 1
  },
  "google-chart-over-picture": {
   "md table.restated_headers": 1,
   "md table.shape": 1,
-  "xhtml block.merged": 26,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 1
  },
  "google-map-labels": {
   "md table.restated_headers": 1,
   "md table.shape": 1,
-  "xhtml block.merged": 26,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 1
  },
  "google-text-columns": {
   "md table.restated_headers": 1,
   "md table.shape": 1,
-  "xhtml block.merged": 26,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 1
- },
- "hermanmiller-aeron-field-lists": {
-  "xhtml block.merged": 3
- },
- "hermanmiller-aeron-one-list": {
-  "xhtml block.merged": 3
- },
- "hermanmiller-aeron-semibold-heads": {
-  "xhtml block.merged": 3
- },
- "hermanmiller-arrow-items": {
-  "xhtml block.merged": 3
- },
- "hermanmiller-field-rows": {
-  "xhtml block.merged": 3
- },
- "hermanmiller-figure-reach": {
-  "xhtml block.merged": 3
- },
- "hermanmiller-numbered-features": {
-  "xhtml block.merged": 3
- },
- "hermanmiller-side-heads": {
-  "xhtml block.merged": 3
  },
  "hess-full-width-table": {
   "md table.header_rows": 1,
   "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
- },
- "hmrc-sa100-clipped-notes": {
-  "xhtml block.merged": 13
- },
- "hmrc-sa100-pound-before-box": {
-  "xhtml block.merged": 13
- },
- "hoshizaki-mixed-numbers": {
-  "xhtml block.merged": 7
  },
  "hpe-hdd-band-titles": {
   "md table.header_rows": 1,
@@ -590,14 +401,6 @@
   "md table.restated_headers": 1,
   "xhtml table.restated_headers": 1
  },
- "hse-l153-bold-display-heads": {
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 2
- },
- "hse-l153-numbered-lead-ins": {
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 2
- },
  "html-list-in-a-table-under-bold-heads": {
   "md table.header_rows": 3,
   "md table.sub_headers": 3,
@@ -612,65 +415,24 @@
  },
  "ibge-chart-picture-no-table": {
   "md table.sub_headers": 1,
-  "xhtml block.merged": 21,
   "xhtml table.sub_headers": 1
- },
- "icon-grid-labels-read-whole": {
-  "xhtml block.merged": 6
- },
- "icon-labels-read-row-by-row": {
-  "xhtml block.merged": 1
- },
- "icon-row-in-a-panel-labels-whole": {
-  "xhtml block.merged": 5
- },
- "icon-row-labels-read-whole": {
-  "xhtml block.merged": 5
- },
- "ilcor-prisma-diagram": {
-  "xhtml block.merged": 1
  },
  "ilo-columns-under-wrapped-title": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 22,
-  "xhtml order": 1,
-  "xhtml table.restated_headers": 1,
-  "xhtml text.extra": 2,
-  "xhtml text.lost": 35
+  "xhtml table.restated_headers": 1
  },
  "ilo-word-across-table-edge-read-once": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 22,
-  "xhtml order": 1,
-  "xhtml table.restated_headers": 1,
-  "xhtml text.extra": 2,
-  "xhtml text.lost": 35
+  "xhtml table.restated_headers": 1
  },
  "infineon-dimensions-table-set-as-picture": {
   "md table.restated_headers": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 2,
   "xhtml table.restated_headers": 1,
   "xhtml table.sub_headers": 1
  },
- "insee-chart-titles-in-sections": {
-  "xhtml block.merged": 3
- },
- "insee-header-spaces": {
-  "xhtml block.merged": 8
- },
- "insee-ligatures": {
-  "xhtml block.merged": 3
- },
- "insee-long-section-heads": {
-  "xhtml block.merged": 8
- },
- "insee-stray-spaces": {
-  "xhtml block.merged": 1
- },
  "irs-f1040-answer-heads": {
   "md table.shape": 2,
-  "xhtml block.merged": 1,
   "xhtml table.shape": 2
  },
  "irs-f1040s1-bold-labels": {
@@ -683,37 +445,11 @@
   "xhtml table.shape": 5,
   "xhtml table.sub_headers": 1
  },
- "jmlr-dropout-italic-before-bracket": {
-  "xhtml block.merged": 10,
-  "xhtml text.changed": 1,
-  "xhtml text.lost": 2
- },
  "kao-katakana-dot-bullets": {
   "md table.header_rows": 4,
   "md table.sub_headers": 6,
   "xhtml table.header_rows": 4,
   "xhtml table.sub_headers": 6
- },
- "kohler-colour-codes": {
-  "xhtml block.merged": 1
- },
- "kohler-drawn-bullets": {
-  "xhtml block.merged": 1
- },
- "kohler-figure-labels": {
-  "xhtml block.merged": 1
- },
- "kohler-k-r33912-clipped-rules": {
-  "xhtml block.merged": 1
- },
- "kohler-lone-drawn-bullet": {
-  "xhtml block.merged": 1
- },
- "kohler-one-per-line": {
-  "xhtml block.merged": 1
- },
- "kohler-running-head": {
-  "xhtml block.merged": 1
  },
  "lapp-box-columns": {
   "md table.header_rows": 1,
@@ -739,127 +475,13 @@
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
- "lutron-369613a-list-or": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-hanging-bullets": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-369-116-folio": {
-  "xhtml block.merged": 7,
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 7
- },
- "lutron-maestro-369-116-wordmark": {
-  "xhtml block.merged": 7,
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 7
- },
- "lutron-maestro-369613a-continued": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-369613a-diagram-titles": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-369613a-footer-code": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-369613a-frame": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-369613a-gutter-stops": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-369613a-nested-loads": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-369613a-note-marks": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-cell-hyphens": {
-  "xhtml block.merged": 7,
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 7
- },
- "lutron-maestro-dash-items": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-figure-labels": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-medium-headings": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-notes-label": {
-  "xhtml block.merged": 8,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 27
- },
- "lutron-maestro-title": {
-  "xhtml block.merged": 7,
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 7
- },
  "mahle-band-titles": {
   "md table.sub_headers": 1,
-  "xhtml block.merged": 4,
   "xhtml table.sub_headers": 1
  },
  "mahle-wrapped-interchange": {
   "md table.sub_headers": 1,
-  "xhtml block.merged": 4,
   "xhtml table.sub_headers": 1
- },
- "malaria-j-table-heads": {
-  "xhtml block.merged": 1
- },
- "multiplastics-7500-gloss-angle": {
-  "xhtml block.merged": 1
- },
- "multiplastics-7500-gutter": {
-  "xhtml block.merged": 1
- },
- "multiplastics-7500-picture-labels": {
-  "xhtml block.merged": 1
- },
- "multiplastics-7500-subtitle": {
-  "xhtml block.merged": 1
- },
- "multiplastics-figure-reach": {
-  "xhtml block.merged": 1
- },
- "multiplastics-letterhead": {
-  "xhtml block.merged": 1
- },
- "multiplastics-symbol-bullets": {
-  "xhtml block.merged": 1
- },
- "niosh-7400-graticule-labels-read-by-ocr": {
-  "xhtml block.merged": 1
  },
  "omb-dot-leaders": {
   "md table.header_rows": 2,
@@ -870,64 +492,50 @@
  "panasonic-fp-digest": {
   "md table.grid": 1,
   "md table.spans": 2,
-  "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "panasonic-fp-drawings": {
   "md table.grid": 1,
   "md table.spans": 2,
-  "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "panasonic-fp-gutter": {
   "md table.grid": 1,
   "md table.spans": 2,
-  "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "panasonic-fp-long-titles": {
   "md table.grid": 1,
   "md table.spans": 2,
-  "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "panasonic-fp-numbered-features": {
   "md table.grid": 1,
   "md table.spans": 2,
-  "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "panasonic-fp-table-regions": {
   "md table.grid": 1,
   "md table.spans": 2,
-  "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "pmc1343572-section-bands": {
   "md table.header_rows": 2,
   "md table.sub_headers": 3,
-  "xhtml block.merged": 2,
   "xhtml table.header_rows": 2,
   "xhtml table.sub_headers": 3
  },
  "pmc1866754-centred-group-labels": {
   "md table.header_rows": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 2,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
- },
- "pmc2045680-wrapped-qualifier": {
-  "xhtml block.merged": 6
- },
- "pmc2754493-tables-side-by-side": {
-  "xhtml block.merged": 1
  },
  "pmc2961758-crystal-data-beside-title": {
   "md table.shape": 1,
@@ -950,17 +558,6 @@
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1
  },
- "pmc3138022-caption-above-next-figure": {
-  "xhtml block.merged": 7,
-  "xhtml order": 1,
-  "xhtml text.extra": 2,
-  "xhtml text.lost": 15
- },
- "pmc3280740-captions-above-plots": {
-  "xhtml block.merged": 14,
-  "xhtml text.changed": 2,
-  "xhtml text.lost": 24
- },
  "pmc3359190-age-over-its-rule": {
   "md table.sub_headers": 1,
   "xhtml table.sub_headers": 1
@@ -979,26 +576,15 @@
   "xhtml table.header_rows": 3,
   "xhtml table.sub_headers": 3
  },
- "pmc4967591-compound-hyphen": {
-  "xhtml block.merged": 2
- },
- "pmc4967591-prose-in-figure-region": {
-  "xhtml block.merged": 2
- },
  "pmc5007710-booktabs-groups": {
   "md table.header_rows": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 3,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
- },
- "pmc5847320-captions-under-plots": {
-  "xhtml block.merged": 4
  },
  "pmc5859216-trial-profile": {
   "md table.header_rows": 1,
   "md table.sub_headers": 5,
-  "xhtml block.merged": 4,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 5
  },
@@ -1016,28 +602,14 @@
   "xhtml table.restated_headers": 2,
   "xhtml table.sub_headers": 2
  },
- "pmc6116456-participant-flow": {
-  "xhtml block.merged": 3
- },
- "pmc6166639-label-wrapped-over-a-rule": {
-  "xhtml block.merged": 8
- },
  "pmc6227383-table-beside-prose": {
   "md table.header_rows": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 4,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
- "pmc6238812-scale-beside-prose": {
-  "xhtml block.merged": 2
- },
- "pmc6241217-flowchart": {
-  "xhtml block.merged": 4
- },
  "pmlr-clip-columns-under-figure": {
   "md table.restated_headers": 1,
-  "xhtml block.merged": 9,
   "xhtml table.restated_headers": 1
  },
  "rockwool-comfortboard-80": {
@@ -1054,11 +626,7 @@
  },
  "rohm-katakana-dot-bullets": {
   "md table.sub_headers": 1,
-  "xhtml block.merged": 52,
-  "xhtml table.sub_headers": 1,
-  "xhtml text.changed": 1,
-  "xhtml text.extra": 2,
-  "xhtml text.lost": 6
+  "xhtml table.sub_headers": 1
  },
  "sherwin-williams-eds-columns": {
   "md table.restated_headers": 6,
@@ -1090,16 +658,11 @@
   "md table.restated_headers": 2,
   "md table.spans": 1,
   "md table.sub_headers": 3,
-  "xhtml block.merged": 160,
-  "xhtml order": 6,
   "xhtml table.grid": 1,
   "xhtml table.header_rows": 3,
   "xhtml table.restated_headers": 2,
   "xhtml table.spans": 1,
-  "xhtml table.sub_headers": 3,
-  "xhtml text.changed": 1,
-  "xhtml text.extra": 9,
-  "xhtml text.lost": 91
+  "xhtml table.sub_headers": 3
  },
  "shimadzu-katakana-dot-bullets": {
   "md table.grid": 1,
@@ -1107,21 +670,15 @@
   "md table.restated_headers": 2,
   "md table.spans": 1,
   "md table.sub_headers": 3,
-  "xhtml block.merged": 160,
-  "xhtml order": 6,
   "xhtml table.grid": 1,
   "xhtml table.header_rows": 3,
   "xhtml table.restated_headers": 2,
   "xhtml table.spans": 1,
-  "xhtml table.sub_headers": 3,
-  "xhtml text.changed": 1,
-  "xhtml text.extra": 9,
-  "xhtml text.lost": 91
+  "xhtml table.sub_headers": 3
  },
  "stat-japan-katakana-dot-bullets": {
   "md table.grid": 1,
   "md table.shape": 1,
-  "xhtml block.merged": 19,
   "xhtml table.grid": 1,
   "xhtml table.shape": 1
  },
@@ -1130,238 +687,108 @@
   "md table.restated_headers": 1,
   "md table.shape": 4,
   "md table.sub_headers": 35,
-  "xhtml block.merged": 35,
   "xhtml table.header_rows": 34,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 4,
   "xhtml table.sub_headers": 35
  },
- "thermo-m-series-badge-lettering": {
-  "xhtml block.merged": 2
- },
- "thermo-m-series-callout-line": {
-  "xhtml block.merged": 2
- },
- "thermo-m-series-flyer": {
-  "xhtml block.merged": 2
- },
- "thermo-m-series-gutter": {
-  "xhtml block.merged": 2
- },
- "thermo-m-series-ligature-space": {
-  "xhtml block.merged": 2
- },
- "thermo-m-series-note-marks": {
-  "xhtml block.merged": 2
- },
- "thermo-m-series-spread-values": {
-  "xhtml block.merged": 2
- },
- "thermo-m-series-table-caption": {
-  "xhtml block.merged": 2
- },
  "ti-lm358-body-from-prose": {
   "md table.header_rows": 9,
   "md table.shape": 1,
   "md table.sub_headers": 9,
-  "xhtml block.merged": 38,
-  "xhtml order": 17,
   "xhtml table.header_rows": 9,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 9,
-  "xhtml text.extra": 5,
-  "xhtml text.lost": 29
+  "xhtml table.sub_headers": 9
  },
  "ti-lm358-continued-heads": {
   "md table.header_rows": 9,
   "md table.shape": 1,
   "md table.sub_headers": 9,
-  "xhtml block.merged": 38,
-  "xhtml order": 17,
   "xhtml table.header_rows": 9,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 9,
-  "xhtml text.extra": 5,
-  "xhtml text.lost": 29
+  "xhtml table.sub_headers": 9
  },
  "ti-lm358-note-numbers": {
   "md table.header_rows": 9,
   "md table.shape": 1,
   "md table.sub_headers": 9,
-  "xhtml block.merged": 38,
-  "xhtml order": 17,
   "xhtml table.header_rows": 9,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 9,
-  "xhtml text.extra": 5,
-  "xhtml text.lost": 29
+  "xhtml table.sub_headers": 9
  },
  "ti-lm358-revision-bullets": {
   "md table.header_rows": 9,
   "md table.shape": 1,
   "md table.sub_headers": 9,
-  "xhtml block.merged": 38,
-  "xhtml order": 17,
   "xhtml table.header_rows": 9,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 9,
-  "xhtml text.extra": 5,
-  "xhtml text.lost": 29
+  "xhtml table.sub_headers": 9
  },
  "ti-ne555-captions": {
   "md table.grid": 2,
   "md table.shape": 1,
   "md table.spans": 2,
-  "xhtml block.merged": 35,
-  "xhtml order": 4,
   "xhtml table.grid": 2,
   "xhtml table.shape": 1,
-  "xhtml table.spans": 2,
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 2
+  "xhtml table.spans": 2
  },
  "ti-ne555-package-drawing": {
   "md table.grid": 2,
   "md table.shape": 1,
   "md table.spans": 2,
-  "xhtml block.merged": 35,
-  "xhtml order": 4,
   "xhtml table.grid": 2,
   "xhtml table.shape": 1,
-  "xhtml table.spans": 2,
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 2
+  "xhtml table.spans": 2
  },
  "ti-ne555-plot-grids": {
   "md table.grid": 2,
   "md table.shape": 1,
   "md table.spans": 2,
-  "xhtml block.merged": 35,
-  "xhtml order": 4,
   "xhtml table.grid": 2,
   "xhtml table.shape": 1,
-  "xhtml table.spans": 2,
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 2
+  "xhtml table.spans": 2
  },
  "ti-ne555-same-every-run": {
   "md table.grid": 2,
   "md table.shape": 1,
   "md table.spans": 2,
-  "xhtml block.merged": 35,
-  "xhtml order": 4,
   "xhtml table.grid": 2,
   "xhtml table.shape": 1,
-  "xhtml table.spans": 2,
-  "xhtml text.extra": 1,
-  "xhtml text.lost": 2
+  "xhtml table.spans": 2
  },
  "ti-tps5430-axis-titles": {
   "md table.header_rows": 1,
   "md table.shape": 4,
   "md table.spans": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 29,
-  "xhtml order": 2,
   "xhtml table.header_rows": 1,
   "xhtml table.shape": 4,
   "xhtml table.spans": 1,
-  "xhtml table.sub_headers": 1,
-  "xhtml text.changed": 1,
-  "xhtml text.extra": 4,
-  "xhtml text.lost": 106
- },
- "true-field-labels": {
-  "xhtml block.merged": 2
- },
- "true-form-labels-letterhead": {
-  "xhtml block.merged": 2
- },
- "true-mixed-numbers": {
-  "xhtml block.merged": 2
- },
- "true-t23-address": {
-  "xhtml block.merged": 2
- },
- "true-t23-blank-box-label": {
-  "xhtml block.merged": 2
- },
- "true-t23-bold-headings": {
-  "xhtml block.merged": 2
- },
- "true-t23-control-bullets": {
-  "xhtml block.merged": 2
- },
- "true-t23-dimension-drawing": {
-  "xhtml block.merged": 2
- },
- "true-t23-footer-box": {
-  "xhtml block.merged": 2
- },
- "true-t23-letterhead-rule": {
-  "xhtml block.merged": 2
- },
- "true-t23-list-ends": {
-  "xhtml block.merged": 2
- },
- "true-t49-broken-item": {
-  "xhtml block.merged": 2
- },
- "true-t49-control-bullets": {
-  "xhtml block.merged": 2
- },
- "true-t49-feature-columns": {
-  "xhtml block.merged": 2
- },
- "true-t49-footer-box": {
-  "xhtml block.merged": 2
- },
- "true-t49-form-labels": {
-  "xhtml block.merged": 2
- },
- "true-t49-heads-over-items": {
-  "xhtml block.merged": 2
- },
- "true-t49-small-bold-labels": {
-  "xhtml block.merged": 2
+  "xhtml table.sub_headers": 1
  },
  "undesa-wesp-header-over-figures": {
   "md table.header_rows": 1,
   "md table.shape": 1,
   "md table.sub_headers": 1,
-  "xhtml block.merged": 117,
-  "xhtml order": 7,
   "xhtml table.header_rows": 1,
   "xhtml table.shape": 1,
-  "xhtml table.sub_headers": 1,
-  "xhtml text.extra": 3,
-  "xhtml text.lost": 10
- },
- "usgs-tm5b12-axis-scales": {
-  "xhtml block.merged": 40,
-  "xhtml order": 33,
-  "xhtml text.changed": 19,
-  "xhtml text.extra": 106,
-  "xhtml text.lost": 704
+  "xhtml table.sub_headers": 1
  },
  "usgs-tm5b13-axis-titles": {
   "md table.header_rows": 1,
   "md table.sub_headers": 2,
-  "xhtml block.merged": 77,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 2
  },
  "usgs-tm5b13-plot-legends": {
   "md table.header_rows": 1,
   "md table.sub_headers": 2,
-  "xhtml block.merged": 77,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 2
  },
  "usgs-tm5b13-running-heads": {
   "md table.header_rows": 1,
   "md table.sub_headers": 2,
-  "xhtml block.merged": 77,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 2
  },
@@ -1385,13 +812,9 @@
   "md table.sub_headers": 3,
   "xhtml table.sub_headers": 3
  },
- "worldbank-line-sample-legend": {
-  "xhtml block.merged": 9
- },
  "worldbank-pad-template-markers": {
   "md table.header_rows": 2,
   "md table.sub_headers": 5,
-  "xhtml block.merged": 1,
   "xhtml table.header_rows": 2,
   "xhtml table.sub_headers": 5
  },
@@ -1401,15 +824,10 @@
   "md table.shape": 42,
   "md table.spans": 7,
   "md table.sub_headers": 50,
-  "xhtml block.merged": 1162,
-  "xhtml order": 10,
   "xhtml table.grid": 7,
   "xhtml table.header_rows": 48,
   "xhtml table.shape": 42,
   "xhtml table.spans": 7,
-  "xhtml table.sub_headers": 50,
-  "xhtml text.changed": 5,
-  "xhtml text.extra": 10,
-  "xhtml text.lost": 102
+  "xhtml table.sub_headers": 50
  }
 }
