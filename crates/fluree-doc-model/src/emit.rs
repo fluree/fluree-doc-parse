@@ -828,10 +828,19 @@ pub fn to_markdown_with_options(
                         out.push('\n');
                         0
                     };
+                    // A pipe table's first row is its header. A table
+                    // measured to have none gets an empty header row, so
+                    // every row of it is a body row.
+                    let ncols = rows.first().map_or(0, Vec::len);
+                    let headerless = !carried && e.header_rows == Some(0) && ncols > 0;
+                    if headerless {
+                        out.push_str(&format!("|{}|\n", vec![" "; ncols].join("|")));
+                        out.push_str(&format!("|{}|\n", vec!["---"; ncols].join("|")));
+                    }
                     for (ri, r) in rows.iter().enumerate().skip(skip) {
                         let cells: Vec<String> = r.iter().map(|c| md_cell(c)).collect();
                         out.push_str(&format!("|{}|\n", cells.join("|")));
-                        if ri == 0 && !carried {
+                        if ri == 0 && !carried && !headerless {
                             out.push_str(&format!("|{}|\n", vec!["---"; r.len()].join("|")));
                         }
                     }
@@ -1028,6 +1037,28 @@ mod tests {
         // Not carried on: two tables.
         let c = table("t3", &[&["X", "Y"], &["1", "2"]], 1);
         assert_eq!(to_markdown(&[a, c]).matches("|---|---|").count(), 2);
+    }
+
+    #[test]
+    fn a_table_without_a_header_has_an_empty_header_row() {
+        // Measured to have no header: every row is a body row, under an
+        // empty header row, since a pipe table must open with one.
+        let a = table("t1", &[&["Speed", "60"], &["Load", "40"]], 0);
+        assert_eq!(
+            to_markdown(std::slice::from_ref(&a)),
+            "\n| | |\n|---|---|\n|Speed|60|\n|Load|40|\n\n"
+        );
+        // Carried on, it goes on under the same empty header.
+        let mut b = table("t2", &[&["Heat", "20"]], 0);
+        b.continues = Some("t1".into());
+        assert_eq!(
+            to_markdown(&[a, b]),
+            "\n| | |\n|---|---|\n|Speed|60|\n|Load|40|\n|Heat|20|\n\n"
+        );
+        // No claim either way: the first row heads it, as before.
+        let mut c = table("t3", &[&["Speed", "60"]], 0);
+        c.header_rows = None;
+        assert_eq!(to_markdown(&[c]), "\n|Speed|60|\n|---|---|\n\n");
     }
 
     #[test]

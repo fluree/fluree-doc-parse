@@ -70,10 +70,14 @@ fn each_class_is_caught() {
     // A heading read back at another level.
     let a = classes(&[heading("Deep", 7), heading("Results", 2)], Format::Md);
     assert_eq!(a, Vec::<&str>::new(), "levels past six are written as six");
-    // A table with no header row: a pipe table's first row is its header.
+    // A table with no header row is written under an empty one, and read
+    // back without a header.
     let t = [table("t", &[&["a", "1"], &["b", "2"]], 0)];
-    assert_eq!(classes(&t, Format::Md), ["table.header_rows"]);
+    assert_eq!(classes(&t, Format::Md), Vec::<&str>::new());
     assert_eq!(classes(&t, Format::Xhtml), Vec::<&str>::new());
+    // So a header row with nothing in it reads back as no row at all.
+    let t = [table("t", &[&["", ""], &["b", "2"]], 1)];
+    assert_eq!(classes(&t, Format::Md), ["table.shape"]);
     // Restated header rows have no markup of their own yet.
     let mut r = table(
         "t",

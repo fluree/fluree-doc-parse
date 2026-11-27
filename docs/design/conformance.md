@@ -49,13 +49,19 @@ no partner is extra.
 | **heading** — a heading stays a heading, at its level | must survive (levels 1–6) | must survive |
 | **list** — a list item stays an item, at its depth | must survive | must survive |
 | **table.grid** — the cell grid's shape and every cell's text | must survive | must survive |
-| **table.header_rows** — the count, 0 included | must survive | must survive |
+| **table.header_rows** — the count, 0 included | must survive (0: an empty header row) | must survive |
 | **table.spans** — `merged_down` / `merged_left` | must survive (as HTML) | must survive |
 | **table.sub_headers** — section band rows | must survive (as HTML) | must survive |
 | **table.restated_headers** — a header row set again inside the body (a gradient's `Time (min) \| A% \| B%` under its own rows) | must survive (as HTML: a `<th>` row mid-table) | must survive |
 
 Text is compared after the normalisation every format imposes: whitespace runs
 are one space, and a cell's line breaks are spaces.
+
+A table with no header has an empty header row in Markdown. A pipe table must
+open with a header row, so the writer sets an empty one (`| | |` over
+`|---|---|`) above a table measured to have none, and every row of the table is
+a body row; the reader reads a header row with nothing in it as no header. HTML
+says the same without help: a table with no `<th>` row.
 
 ## Allowed losses
 
@@ -120,7 +126,8 @@ Markdown:
 
 - **Headerless tables.** A table with no header row (`header_rows` 0) is
   written as a pipe table, and GFM makes its first row the header:
-  `table.header_rows`.
+  `table.header_rows`. The writer sets an empty header row over it instead
+  (above, under *What is compared*).
 - **HTML tables unread.** The Markdown reader does not read the raw HTML
   tables the Markdown writer emits for span and band tables, so each is lost:
   `table.lost`. The reader reads each raw HTML block with the HTML reader,

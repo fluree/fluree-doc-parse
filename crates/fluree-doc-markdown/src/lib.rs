@@ -186,9 +186,17 @@ impl Reader {
                 Event::End(TagEnd::TableHead) => {
                     self.in_table_head = false;
                     // Markdown states where the header ends, so this is known
-                    // rather than measured.
-                    self.header_rows = 1;
-                    self.rows.push(std::mem::take(&mut self.row));
+                    // rather than measured. A pipe table must open with a
+                    // header row, so an empty one is how a table says it has
+                    // no header: every row is a body row.
+                    let row = std::mem::take(&mut self.row);
+                    if row.iter().all(|c| c.is_empty()) {
+                        self.header_rows = 0;
+                        self.first_bold.clear();
+                    } else {
+                        self.header_rows = 1;
+                        self.rows.push(row);
+                    }
                 }
                 Event::End(TagEnd::TableRow) => {
                     self.rows.push(std::mem::take(&mut self.row));
@@ -491,5 +499,29 @@ mod tests {
         );
         // The ids run on through it.
         assert_eq!(els[2].id, "elem-00003");
+    }
+
+    #[test]
+    fn an_empty_header_row_says_the_table_has_no_header() {
+        let src = "| | |\n|---|---|\n| **Speed** | |\n| Load | 40 |\n| Heat | 20 |\n";
+        let els = parse(src);
+        assert_eq!(kinds(&els), ["doco:Table"]);
+        let t = &els[0];
+        assert_eq!(
+            t.cells.as_deref().unwrap(),
+            [["Speed", ""], ["Load", "40"], ["Heat", "20"]]
+        );
+        assert_eq!(t.header_rows, Some(0));
+        // Its rows are counted from the first body row.
+        assert_eq!(t.sub_headers.as_deref(), Some(&[0][..]));
+        // A header row with any text in it heads the table.
+        let t = &parse("| | Q1 |\n|---|---|\n| North | 4 |\n")[0];
+        assert_eq!(t.header_rows, Some(1));
+        assert_eq!(t.cells.as_deref().unwrap(), [["", "Q1"], ["North", "4"]]);
+        // What the writer makes of a headerless table reads back the same.
+        let plain = parse("| | |\n|---|---|\n| Load | 40 |\n| Heat | 20 |\n");
+        let again = parse(&fluree_doc_model::emit::to_markdown(&plain));
+        assert_eq!(again[0].header_rows, Some(0));
+        assert_eq!(again[0].cells, plain[0].cells);
     }
 }
