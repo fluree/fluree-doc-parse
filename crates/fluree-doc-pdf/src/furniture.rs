@@ -2780,6 +2780,33 @@ mod tests {
     }
 
     #[test]
+    fn a_folio_printed_outside_a_table_is_none_of_its_cells() {
+        // A table from 640 to 712 on a 792 pt page.
+        let table = crate::geom::BBox {
+            x0: 100.0,
+            y0: 640.0,
+            x1: 380.0,
+            y1: 712.0,
+        };
+        let at = |top: f64| Some(top / 792.0);
+        // `Page 4 of 6` under the table's foot: its last row's `4` is its own.
+        assert!(folio_outside(at(735.5), 792.0, &table));
+        // A table at the head, the page number in the foot.
+        let head = crate::geom::BBox {
+            y0: 72.0,
+            y1: 172.0,
+            ..table
+        };
+        assert!(folio_outside(at(735.5), 792.0, &head));
+        // A number over the table at the head of the page.
+        assert!(folio_outside(at(40.0), 792.0, &head));
+        // A page number the table took into its last row stands inside it.
+        assert!(!folio_outside(at(700.0), 792.0, &table));
+        // Where the folio's line was not found, the cell is read as before.
+        assert!(!folio_outside(None, 792.0, &table));
+    }
+
+    #[test]
     fn a_page_number_on_its_page_alone_is_the_folio() {
         // A data sheet numbers the one page after its unnumbered cover, and
         // a one-page sheet says `Page 1`.
@@ -3457,6 +3484,19 @@ pub fn scrub_block(text: &str, furniture: &[(String, bool)]) -> String {
 pub fn is_folio_cell(cell: &str, folio: Option<&str>, rel_y: f64) -> bool {
     let t = cell.trim();
     !t.is_empty() && folio == Some(t) && !(EDGE_BAND..=1.0 - EDGE_BAND).contains(&rel_y)
+}
+
+/// Whether the page's number is printed outside a table's box `b`: its
+/// line's top (`place`, a share of the page's `height`, as
+/// [`detect_folio_places`] gives it) above the box's top or at or under its
+/// foot. Then no cell of the table is the page's number, though a cell's
+/// figure matches it (`4` in the last row over `Page 4 of 6`). A folio the
+/// table took in stands inside its box. `false` where the place is unknown.
+pub fn folio_outside(place: Option<f64>, height: f64, b: &crate::geom::BBox) -> bool {
+    place.is_some_and(|p| {
+        let top = p * height;
+        top < b.y0 - 1.0 || top >= b.y1
+    })
 }
 
 /// Longest furniture string, in characters other than spaces, that is

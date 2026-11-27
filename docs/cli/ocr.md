@@ -7,7 +7,9 @@ fdoc ocr <DIR|IMAGE>... --models <DIR> --out <DIR> [options]
 ```
 
 Writes one [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words)
-file per image, `<image stem>.json`, which `fdoc convert --ocr-words` reads. It
+file per image, `<image stem>.json`, which `fdoc convert --ocr-words` reads. A
+region's crop (`<doc>_p{N}_r{i}`) also gets the rules its picture draws, by
+which a table set as a picture is read as a table. It
 is the middle step of the three-step path, for when the crops, the reading and
 the conversion run in different places or at different times:
 

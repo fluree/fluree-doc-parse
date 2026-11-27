@@ -1,0 +1,16 @@
+{
+  "document": {
+    "file": "acl-2024-acl-long-1.pdf",
+    "url": "https://aclanthology.org/2024.acl-long.1.pdf",
+    "sha256": "94cd077715e7b13a75841b89d3bc46713fdaa9fd80842822524b7811b034a89d",
+    "about": "ACL 2024 long paper (17 pages): tables ruled with horizontals only, a stub's head set down a header of two lines."
+  },
+  "checks": [
+    {
+      "id": "flops-table-header-whole",
+      "found": "2026-11-27",
+      "issue": "The FLOPS table on page 7 sets `Method` down its two header lines, beside `FLOPS per token` over the model sizes. The upward walk stopped at it: the stub had no head and the sizes lost their group.",
+      "row": {"Method": "QLoRA", "FLOPS per token (10⁻⁵) / LLaMA-2-7B": "11.7"}
+    }
+  ]
+}

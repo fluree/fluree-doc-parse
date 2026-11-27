@@ -157,6 +157,26 @@ page does, and every character keeps a position for
 | `words[].box` | yes | `[x0, y0, x1, y1]`, y down: the word's own extent |
 | `words[].angle` | no | baseline direction, degrees counter-clockwise; the word is `box` turned about its center. Absent means level, unless the box is much taller than wide and holds three characters or more: that is text set sideways |
 | `words[].conf` | no | the engine's confidence, 0-1 |
+| `rules` | no | the straight rules the image draws, in the same frame as the words. Absent means none |
+| `rules[].box` | with `rules` | `[x0, y0, x1, y1]`, y down: the rule's extent, a thin band |
+| `rules[].axis` | with `rules` | `horizontal` or `vertical` |
+
+**Rules.** A table pasted into a document as a picture keeps its ruling only
+as pixels, so the words alone do not say where its rows and columns are.
+`rules` says it. `fdoc ocr`, and `convert --ocr`, write the rules each `r{i}`
+crop draws: thin straight bands of ink darker than the image's ground, long
+against the image and its text. Where a picture's own rules grid most of its
+words into mostly filled cells across its text, the picture is read as a
+table ruled by them; any other picture's rules are not used. A `full`
+reading's rules are not used. A sidecar without `rules` reads as it always
+has, and an engine that supplies its own may draw them by any method.
+
+```json
+"rules": [
+  { "box": [35, 61, 903, 64], "axis": "horizontal" },
+  { "box": [35, 61, 38, 249], "axis": "vertical" }
+]
+```
 
 The format is stable: `--ocr-words` (`FDOC_OCR_WORDS`), the file names, the
 fields above and their units. A release changes or removes one only as a

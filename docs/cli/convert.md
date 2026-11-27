@@ -137,6 +137,25 @@ on the page it would be text the page never printed. A whole page's reading,
 or the regions of a page with no text layer, are kept however unsure: they are
 all the text there is.
 
+On a page with text of its own, each picture's reading is read apart from the
+page's text. Images that touch or overlap make one picture, and a word whose
+last letters run past a picture's edge stays with that picture.
+- **Lettering** (a chart's labels, a diagram's names) is the figure's text. It
+  no longer breaks the page's columns, and is no longer gridded into a table
+  with the prose beside it.
+- **Text set as an image** reads as paragraphs where the picture stands. Such
+  a picture has most of its lines running across it, or text covering a fifth
+  of it or more. Its paragraphs follow the text over the picture in its lane,
+  and any table over it there. A picture at the top of a page, over all its
+  text, comes first, as a page's logo does.
+- **The page's own text, set as an image**, stays the page's text. That is a
+  letter drawn as an image of its own, or a word set as an image in a line of
+  the page's text, such as a wordmark among a chart's labels.
+
+The text read in a picture does not count toward a page's doubt about its
+figures, which can send the page to a model: it lies inside its picture
+whatever the page's layout.
+
 `fdoc` built without the `ocr` feature has no engine and still reads
 `--ocr-words`.
 
