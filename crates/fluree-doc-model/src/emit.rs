@@ -3,6 +3,9 @@
 use crate::element::{Element, Link, Notes, Turn};
 use crate::message::Message;
 
+mod md_escape;
+use md_escape::{Context, Mark};
+
 /// Split an element's text at its located link anchors.
 ///
 /// Yields `(text, link)` pairs in order, covering the string exactly once —
@@ -10,26 +13,34 @@ use crate::message::Message;
 /// walk this rather than each slicing the string themselves, so they cannot
 /// disagree about where an anchor starts.
 fn link_segments(e: &Element) -> Vec<(String, Option<&Link>)> {
-    let Some(links) = &e.links else {
-        return vec![(e.text.clone(), None)];
-    };
     let chars: Vec<char> = e.text.chars().collect();
-    let mut out: Vec<(String, Option<&Link>)> = Vec::new();
+    link_ranges(e, chars.len())
+        .into_iter()
+        .map(|(r, l)| (chars[r].iter().collect(), l))
+        .collect()
+}
+
+/// [`link_segments`] as char ranges of the element's text.
+fn link_ranges(e: &Element, len: usize) -> Vec<(std::ops::Range<usize>, Option<&Link>)> {
+    let Some(links) = &e.links else {
+        return vec![(0..len, None)];
+    };
+    let mut out = Vec::new();
     let mut at = 0usize;
     for l in links {
         // `link::attach` sorts and de-overlaps, so a span failing these is one
         // built by hand; skipping it beats panicking on a slice.
-        let Some((b, end)) = l.span().filter(|(b, e)| *b >= at && *e <= chars.len()) else {
+        let Some((b, end)) = l.span().filter(|(b, e)| *b >= at && *e <= len) else {
             continue;
         };
         if b > at {
-            out.push((chars[at..b].iter().collect(), None));
+            out.push((at..b, None));
         }
-        out.push((chars[b..end].iter().collect(), Some(l)));
+        out.push((b..end, Some(l)));
         at = end;
     }
-    if at < chars.len() {
-        out.push((chars[at..].iter().collect(), None));
+    if at < len {
+        out.push((at..len, None));
     }
     out
 }
@@ -53,16 +64,41 @@ pub struct MarkdownOptions {
     pub links: MdLinks,
 }
 
-/// An element's text with its links marked up as Markdown.
-fn md_linked(e: &Element, opts: &MarkdownOptions) -> String {
+/// An element's text with its links marked up as Markdown, escaped where
+/// it is set (`ctx`) so that it reads back as its text; see [`md_escape`].
+fn md_linked(e: &Element, opts: &MarkdownOptions, ctx: Context) -> String {
+    md_linked_from(e, opts, ctx, 0)
+}
+
+/// As [`md_linked`], the block's text opening at char `start`: what is
+/// before it is a list item's own number, its marker.
+fn md_linked_from(e: &Element, opts: &MarkdownOptions, ctx: Context, start: usize) -> String {
+    let chars: Vec<char> = e.text.chars().collect();
+    let mut m = md_escape::marks(&chars, ctx, start);
     if e.links.is_none() || opts.links == MdLinks::Text {
-        return md_text(&e.text, true);
+        return md_escape::apply(&chars, &m, 0..chars.len());
     }
-    let mut out = String::new();
-    for (i, (text, link)) in link_segments(e).into_iter().enumerate() {
+    // The item's own number is its marker, outside any link: one inside a
+    // link's text is no marker, and the item reads as a paragraph.
+    let mut out: String = chars[..start].iter().collect();
+    for (r, link) in link_ranges(e, chars.len()) {
+        let r = r.start.max(start)..r.end;
+        if r.is_empty() {
+            continue;
+        }
         match link {
-            None => out.push_str(&md_text(&text, i == 0)),
-            Some(l) => out.push_str(&md_link(&text, &l.href())),
+            None => out.push_str(&md_escape::apply(&chars, &m, r)),
+            Some(l) => {
+                // A bracket would end the link's text early.
+                for k in r.clone() {
+                    if matches!(chars[k], '[' | ']') && m[k] == Mark::Keep {
+                        m[k] = Mark::Escape;
+                    }
+                }
+                let text: String = chars[r.clone()].iter().collect();
+                let label = md_escape::apply(&chars, &m, r);
+                out.push_str(&md_link(&text, &label, &l.href()));
+            }
         }
     }
     out
@@ -81,7 +117,7 @@ fn md_linked(e: &Element, opts: &MarkdownOptions) -> String {
 /// not one: a renderer shows it as literal text, angle brackets included,
 /// and links nothing, so a target written without a scheme keeps the
 /// `[…](…)` form.
-fn md_link(text: &str, href: &str) -> String {
+fn md_link(text: &str, label: &str, href: &str) -> String {
     if is_absolute_uri(href) {
         if let Some(rest) = text.strip_prefix(href) {
             if rest.chars().all(|c| ".,:;!?)".contains(c)) {
@@ -89,10 +125,13 @@ fn md_link(text: &str, href: &str) -> String {
             }
         }
     }
-    // `]` would close the label early; a destination with a space or a
-    // paren needs the angle-bracket form.
-    let label = text.replace('[', "\\[").replace(']', "\\]");
+    // No destination holds a line break: a target wrapped over two lines in
+    // its source keeps the break percent-encoded.
+    let href = href.replace('\n', "%0A").replace('\r', "%0D");
+    // A destination with a space or a paren needs the angle-bracket form,
+    // inside which an angle bracket is escaped.
     if href.contains(['(', ')', ' ', '<', '>']) {
+        let href = href.replace('<', "\\<").replace('>', "\\>");
         format!("[{label}](<{href}>)")
     } else {
         format!("[{label}]({href})")
@@ -116,37 +155,12 @@ fn is_absolute_uri(s: &str) -> bool {
             .any(|c| c.is_ascii_control() || matches!(c, ' ' | '<' | '>'))
 }
 
-/// Text that is not a link, kept from reading as one.
-///
-/// `]` directly before `(` makes an inline link of whatever bracket opened
-/// it: mathematics such as `Γ[w](t)` renders as a link to `t` whose text
-/// is `w`, and the brackets and the parenthesis are gone. An image,
-/// `![…](…)`, is the same construct. A backslash before that `]` is all the
-/// link needs to fail, and it renders as nothing.
-///
-/// A block that opens with `[label]:` is worse: it is a link reference
-/// definition, which a renderer does not show at all. Where `opens_block`,
-/// such a bracket is escaped as well. Nothing else is: every other bracket
-/// pairing needs a definition to become a link, and this writer emits none.
-fn md_text(text: &str, opens_block: bool) -> String {
+/// Text set after other text on its line, escaped where Markdown would read
+/// it as a span.
+fn md_inline(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
-    // A definition may be indented up to three spaces, and its label holds no
-    // unescaped bracket.
-    let lead = chars.iter().take_while(|c| **c == ' ').count();
-    let defines = opens_block && lead <= 3 && chars.get(lead) == Some(&'[') && {
-        let label = chars[lead + 1..]
-            .iter()
-            .position(|c| matches!(c, '[' | ']'));
-        label.is_some_and(|n| chars[lead + 1 + n] == ']' && chars.get(lead + 2 + n) == Some(&':'))
-    };
-    let mut out = String::with_capacity(text.len());
-    for (i, &c) in chars.iter().enumerate() {
-        if (c == ']' && chars.get(i + 1) == Some(&'(')) || (defines && i == lead) {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
+    let m = md_escape::marks(&chars, Context::Inline, 0);
+    md_escape::apply(&chars, &m, 0..chars.len())
 }
 
 /// Text that opens with an ordered list's marker as Markdown reads one: up
@@ -191,24 +205,25 @@ fn md_turn(e: &Element, t: &Turn) -> String {
         Some((s, words)) => format!(
             "**{}** ({at}): {}",
             s.replace('*', "\\*").replace('_', "\\_"),
-            md_text(words, false)
+            md_inline(words)
         ),
-        None => format!("({at}) {}", md_text(&e.text, false)),
+        None => format!("({at}) {}", md_inline(&e.text)),
     }
 }
 
 /// A message's header for a person to read: one header line to a line, and
 /// a rule above a quoted message so a thread reads as its messages.
 fn md_message(e: &Element, m: &Message) -> String {
-    let lines = e
+    let text = e
         .text
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .enumerate()
-        .map(|(i, l)| md_text(l, i == 0))
         .collect::<Vec<_>>()
-        .join("  \n");
+        .join("\n");
+    let chars: Vec<char> = text.chars().collect();
+    let marks = md_escape::marks(&chars, Context::Block, 0);
+    let lines = md_escape::apply(&chars, &marks, 0..chars.len()).replace('\n', "  \n");
     if m.quoted {
         format!("---\n\n{lines}")
     } else {
@@ -740,16 +755,25 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
 /// A `]` before `(` is escaped as it is in running text (see [`md_text`]), so
 /// a cell of mathematics does not render as a link.
 fn md_cell(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let m = md_escape::marks(&chars, Context::Cell, 0);
     let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
+    for (i, &ch) in chars.iter().enumerate() {
+        if m[i] == Mark::Escape {
+            out.push('\\');
+        }
         match ch {
             '\\' => out.push_str("\\\\"),
             '|' => out.push_str("\\|"),
             '\n' | '\r' => out.push(' '),
-            ']' if chars.peek() == Some(&'(') => out.push_str("\\]"),
             c => out.push(c),
         }
+    }
+    // A backslash ending the cell, escaped or not, is taken with the pipe
+    // after it for an escaped pipe, and the cell runs on into the next: a
+    // space after it ends the cell first, and a cell's spaces are trimmed.
+    if out.ends_with('\\') {
+        out.push(' ');
     }
     out
 }
@@ -794,10 +818,18 @@ pub fn to_markdown_with_options(
             lists.clear();
         }
         match e.kind.as_str() {
-            "doco:Title" => out.push_str(&format!("\n# {}\n\n", md_linked(e, opts))),
+            // A heading is one line: a break in its text is a space.
+            "doco:Title" => out.push_str(&format!(
+                "\n# {}\n\n",
+                md_linked(e, opts, Context::Heading).replace('\n', " ")
+            )),
             "doco:SectionTitle" => {
                 let l = e.level.unwrap_or(1).clamp(1, 6);
-                out.push_str(&format!("\n{} {}\n\n", "#".repeat(l), md_linked(e, opts)));
+                out.push_str(&format!(
+                    "\n{} {}\n\n",
+                    "#".repeat(l),
+                    md_linked(e, opts, Context::Heading).replace('\n', " ")
+                ));
             }
             "doco:Table" => {
                 if let Some(rows) = &e.cells {
@@ -828,10 +860,19 @@ pub fn to_markdown_with_options(
                         out.push('\n');
                         0
                     };
+                    // A pipe table's first row is its header. A table
+                    // measured to have none gets an empty header row, so
+                    // every row of it is a body row.
+                    let ncols = rows.first().map_or(0, Vec::len);
+                    let headerless = !carried && e.header_rows == Some(0) && ncols > 0;
+                    if headerless {
+                        out.push_str(&format!("|{}|\n", vec![" "; ncols].join("|")));
+                        out.push_str(&format!("|{}|\n", vec!["---"; ncols].join("|")));
+                    }
                     for (ri, r) in rows.iter().enumerate().skip(skip) {
                         let cells: Vec<String> = r.iter().map(|c| md_cell(c)).collect();
                         out.push_str(&format!("|{}|\n", cells.join("|")));
-                        if ri == 0 && !carried {
+                        if ri == 0 && !carried && !headerless {
                             out.push_str(&format!("|{}|\n", vec!["---"; r.len()].join("|")));
                         }
                     }
@@ -857,7 +898,6 @@ pub fn to_markdown_with_options(
                 }
                 let open = lists.last_mut().unwrap();
                 let indent = " ".repeat(open.1);
-                let text = md_linked(e, opts);
                 if opens_with_ordinal(&e.text) {
                     // An ordered list's item that carries its own number,
                     // `3. FAQ`: the number is the item's Markdown marker,
@@ -865,9 +905,11 @@ pub fn to_markdown_with_options(
                     // inside a bulleted item.
                     let marker = e.text.find(' ').unwrap_or(0) + 1;
                     open.2 = open.1 + marker;
+                    let text = md_linked_from(e, opts, Context::Block, marker);
                     out.push_str(&format!("{indent}{text}\n"));
                 } else {
                     open.2 = open.1 + 2;
+                    let text = md_linked(e, opts, Context::Block);
                     out.push_str(&format!("{indent}- {text}\n"));
                 }
             }
@@ -885,9 +927,10 @@ pub fn to_markdown_with_options(
                     // A paragraph whose lines were stacked by hand keeps their
                     // breaks, as CommonMark hard breaks: a plain line end reads
                     // as a space.
-                    (None, None) => {
-                        out.push_str(&format!("{}\n\n", md_linked(e, opts).replace('\n', "  \n")))
-                    }
+                    (None, None) => out.push_str(&format!(
+                        "{}\n\n",
+                        md_linked(e, opts, Context::Block).replace('\n', "  \n")
+                    )),
                 }
             }
         }
@@ -927,6 +970,36 @@ mod tests {
         Element {
             depth,
             ..Element::new("doc:ListItem", text, "rust", "layout")
+        }
+    }
+
+    #[test]
+    fn text_is_escaped_only_where_markdown_reads_markup() {
+        let md = |t: &str| to_markdown(&[para(t, vec![])]);
+        // Markup: escaped.
+        assert_eq!(md("1. The purpose"), "1\\. The purpose\n\n");
+        assert_eq!(
+            md("From: Ann <ann@example.org>"),
+            "From: Ann \\<ann@example.org>\n\n"
+        );
+        assert_eq!(md("as FROM <iri> would"), "as FROM \\<iri> would\n\n");
+        assert_eq!(md("classes[*].refs[*]"), "classes[\\*].refs[\\*]\n\n");
+        assert_eq!(md("Exclusive\n---"), "Exclusive  \n\\---\n\n");
+        // Not markup: as it is. No tag has a digit for an attribute or an
+        // underscore in its name, and a lone star opens nothing.
+        for t in [
+            "<MultinomialLikelihood 9>.",
+            "<TwoAFC_rawdata>.",
+            "laminar flow (Re<2000 )",
+            "p < 0.05* and snake_case, C#",
+            "2. after other text",
+        ] {
+            let plain = if t.starts_with("2.") {
+                format!("x {t}")
+            } else {
+                t.to_string()
+            };
+            assert_eq!(md(&plain), format!("{plain}\n\n"), "{plain}");
         }
     }
 
@@ -1028,6 +1101,28 @@ mod tests {
         // Not carried on: two tables.
         let c = table("t3", &[&["X", "Y"], &["1", "2"]], 1);
         assert_eq!(to_markdown(&[a, c]).matches("|---|---|").count(), 2);
+    }
+
+    #[test]
+    fn a_table_without_a_header_has_an_empty_header_row() {
+        // Measured to have no header: every row is a body row, under an
+        // empty header row, since a pipe table must open with one.
+        let a = table("t1", &[&["Speed", "60"], &["Load", "40"]], 0);
+        assert_eq!(
+            to_markdown(std::slice::from_ref(&a)),
+            "\n| | |\n|---|---|\n|Speed|60|\n|Load|40|\n\n"
+        );
+        // Carried on, it goes on under the same empty header.
+        let mut b = table("t2", &[&["Heat", "20"]], 0);
+        b.continues = Some("t1".into());
+        assert_eq!(
+            to_markdown(&[a, b]),
+            "\n| | |\n|---|---|\n|Speed|60|\n|Load|40|\n|Heat|20|\n\n"
+        );
+        // No claim either way: the first row heads it, as before.
+        let mut c = table("t3", &[&["Speed", "60"]], 0);
+        c.header_rows = None;
+        assert_eq!(to_markdown(&[c]), "\n|Speed|60|\n|---|---|\n\n");
     }
 
     #[test]

@@ -6,12 +6,15 @@ Each case file names one document and the facts about it that a fix made
 true: a row of a table read whole, under the right column names, or a column
 name that must not appear. Every document is also held to the offset
 contract: each element's string is exactly what its offsets cut from the
-text projection.
+text projection, and to the projection contract: each format, read back with
+our own reader, says what the element model says (docs/design/conformance.md),
+or fails no more ways than the known list for it records.
 
     eval/tough/check.py                  # every case
     eval/tough/check.py --fetch          # download the public documents first
     eval/tough/check.py nist-sec         # one case, every failure shown
     eval/tough/check.py --fdoc PATH      # another binary
+    eval/tough/check.py --conform-update # write the known conformance counts
 
 Public cases live in eval/tough/cases/ and fetch their document from its
 publisher, checking it against the SHA-256 the checks were written on.
@@ -33,6 +36,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 DOCS = HERE / "docs"
+# Conformance violations known per case, by format and class, until each
+# class is fixed: the tracked cases' here, other directories' in a `conform/`
+# of their own, out of the way of their case files.
+KNOWN = HERE / "conform-known.json"
+
+
+def known_path(case):
+    d = case["_dir"]
+    return KNOWN if d == HERE / "cases" else d / "conform" / "known.json"
 
 
 def norm(s):
@@ -92,6 +104,33 @@ def convert_args(case):
     machine, with no engine or models."""
     words = case["document"].get("ocr_words")
     return ("--ocr-words", str(case["_dir"] / words)) if words else ()
+
+
+def conform_counts(fdoc, path, extra):
+    """The document's conformance violations counted by `format class`, and
+    the first of each; None where the binary has no conformance check."""
+    try:
+        vs = json.loads(convert(fdoc, path, "conform", extra))
+    except subprocess.CalledProcessError as e:
+        if b"conform" in e.stderr and b"invalid value" in e.stderr:
+            return None
+        raise
+    counts, first = defaultdict(int), {}
+    for v in vs:
+        k = f"{v['format']} {v['class']}"
+        counts[k] += 1
+        first.setdefault(k, v.get("detail", ""))
+    return dict(counts), first
+
+
+def conform_check(got, known):
+    """Hold a document's conformance counts to its known list: a class may
+    fail no more often than it is known to. Returns (ok, detail, fewer)."""
+    counts, first = got
+    over = {k: (n, known.get(k, 0)) for k, n in counts.items() if n > known.get(k, 0)}
+    fewer = {k: (counts.get(k, 0), n) for k, n in known.items() if counts.get(k, 0) < n}
+    detail = "; ".join(f"{k}: {n} (known {m}), e.g. {first[k][:80]}" for k, (n, m) in sorted(over.items()))
+    return not over, detail or None, fewer
 
 
 class Reading:
@@ -347,6 +386,11 @@ def main():
     ap.add_argument("--fdoc", default=str(ROOT / "target" / "release" / "fdoc"))
     ap.add_argument("--fetch", action="store_true", help="download missing public documents")
     ap.add_argument("--dir", action="append", default=[], help="another directory of case files")
+    ap.add_argument(
+        "--conform-update",
+        action="store_true",
+        help="write each case's conformance counts to its known list",
+    )
     args = ap.parse_args()
 
     dirs = [HERE / "cases"]
@@ -356,6 +400,14 @@ def main():
     cases = load_cases(dirs, set(args.cases))
     if not cases:
         raise SystemExit("no cases found")
+
+    known_files = {}
+
+    def known_for(case):
+        f = known_path(case)
+        if f not in known_files:
+            known_files[f] = json.loads(f.read_text()) if f.is_file() else {}
+        return known_files[f]
 
     failed = missing = opened = fixed = passed = 0
     for case in cases:
@@ -390,6 +442,20 @@ def main():
         for check in case["checks"]:
             ok, detail = run_check(check, reading)
             results.append((check, ok, detail))
+        got = conform_counts(args.fdoc, path, extra)
+        shrunk = None
+        if got is not None:
+            known = known_for(case)
+            if args.conform_update:
+                if got[0]:
+                    known[case["_id"]] = dict(sorted(got[0].items()))
+                else:
+                    known.pop(case["_id"], None)
+            ok, detail, fewer = conform_check(got, known.get(case["_id"], {}))
+            conform = {"id": "conform", "issue": "a projection, read back, says other than the element model"}
+            results.append((conform, ok, detail))
+            if fewer and not args.conform_update:
+                shrunk = ", ".join(f"{k} {n} (known {m})" for k, (n, m) in sorted(fewer.items()))
 
         lines = []
         for check, ok, detail in results:
@@ -407,11 +473,18 @@ def main():
                 lines.append(f"  FAIL       {check['id']}: {check.get('issue', '')}")
                 if detail:
                     lines.append(f"             {detail}")
+        if shrunk:
+            lines.append(f"  conform    fewer than known: {shrunk}; run --conform-update")
         status = "FAIL" if any(l.startswith("  FAIL") for l in lines) else "ok"
         print(f"{status:7} {case['_id']} ({len(results)} checks)")
         for l in lines:
             print(l)
 
+    if args.conform_update:
+        for f, known in known_files.items():
+            f.parent.mkdir(exist_ok=True)
+            f.write_text(json.dumps(dict(sorted(known.items())), indent=1, ensure_ascii=False) + "\n")
+            print(f"wrote {f}")
     print(
         f"\n{passed} passed, {failed} failed, {opened} open, {fixed} open now passing, "
         f"{missing} documents missing"
