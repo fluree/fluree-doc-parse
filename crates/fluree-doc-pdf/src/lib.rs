@@ -244,8 +244,12 @@ pub fn unread_regions(
 pub fn parse_warnings(doc: &Document) -> Vec<fluree_doc_model::ParseWarning> {
     let mut out: Vec<fluree_doc_model::ParseWarning> = Vec::new();
     for p in &doc.pages {
+        // Only this page's entries are searched, a kind or two: searched
+        // from the first page's, a document of a warning on each of many
+        // pages took a time quadratic in its pages.
+        let start = out.len();
         for &kind in &p.warnings {
-            match out.iter_mut().find(|w| w.page == p.index && w.kind == kind) {
+            match out[start..].iter_mut().find(|w| w.kind == kind) {
                 Some(w) => w.count += 1,
                 None => out.push(fluree_doc_model::ParseWarning {
                     page: p.index,
@@ -702,6 +706,22 @@ mod tests {
                 (1, "ImageDecodeFailure", 1)
             ]
         );
+        // A warning on each of many pages: one entry a page, each counted
+        // on its own page, found among that page's entries alone.
+        let pages: Vec<Page> = (0..5000)
+            .map(|i| {
+                let mut p = page(&[]);
+                p.index = i;
+                p.warnings = vec!["ImageDecodeFailure"; 1 + i % 3];
+                p
+            })
+            .collect();
+        let got = parse_warnings(&Document { pages, title: None });
+        assert_eq!(got.len(), 5000);
+        assert!(got
+            .iter()
+            .enumerate()
+            .all(|(i, w)| w.page == i && w.count == 1 + i % 3));
     }
 
     #[test]
