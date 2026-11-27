@@ -719,10 +719,7 @@ fn assemble_walled(glyphs: &[Glyph], walls: &[BBox]) -> Vec<Line> {
         let (mut clusters, caps) = drop_caps(clusters, glyphs, adv);
         attach_scripts(&mut clusters, glyphs, vertical, adv);
         for c in &mut clusters {
-            c.sort_by(|&a, &b| {
-                let (oa, ob) = (glyphs[a].origin, glyphs[b].origin);
-                cmp(adv.at(oa), adv.at(ob))
-            });
+            reading_order(c, glyphs, adv);
         }
         // Each glyph's cluster, and each cluster's reach along the line.
         let mut cluster_of: rustc_hash::FxHashMap<usize, usize> = Default::default();
@@ -1090,6 +1087,66 @@ const DISPLAY_RATIO: f64 = 2.5;
 fn joins_line(a: &Glyph, b: &Glyph, vertical: bool, adv: Advance) -> bool {
     shares_baseline(a, b, vertical)
         || (script_attached(a, b, vertical) && script_adjacent(a, b, adv))
+}
+
+/// How far into the run drawn before it a run may start and still be read
+/// after it, in its ems: a label's last word and its colon, a value set a
+/// little too far left.
+const OVERLAP_EMS: f64 = 1.5;
+
+/// A line's glyphs in reading order: along the line, except where a run the
+/// page drew whole starts over the end of the run drawn just before it and
+/// goes on past it. Read by position, the two interleave a letter at a time:
+/// an invoice's `Montant du prélèvement :` with its `29.99 €` set a few
+/// points into it read `prélèvemen2t 9:.99 €`. The later run is read after
+/// the earlier one, whole. A run is glyphs drawn one after another, the pen
+/// never going back; a run starting inside the other (an accent drawn after
+/// its letter) or with it (a copy drawn twice for weight) is no such case,
+/// and runs apart are where position puts them anyway.
+fn reading_order(c: &mut Vec<usize>, glyphs: &[Glyph], adv: Advance) {
+    c.sort_by(|&a, &b| cmp(adv.at(glyphs[a].origin), adv.at(glyphs[b].origin)));
+    if c.len() < 5 {
+        return;
+    }
+    let mut drawn = c.clone();
+    drawn.sort_unstable();
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut lo = 0;
+    for k in 1..drawn.len() {
+        let (p, q) = (&glyphs[drawn[k - 1]], &glyphs[drawn[k]]);
+        if drawn[k] != drawn[k - 1] + 1 || adv.at(q.origin) < adv.at(p.origin) {
+            runs.push((lo, k));
+            lo = k;
+        }
+    }
+    runs.push((lo, drawn.len()));
+    if runs.len() < 2 {
+        return;
+    }
+    let inked = |r: &[usize]| r.iter().filter(|&&i| glyphs[i].bbox.is_some()).count();
+    let pen_end = |i: usize| adv.at(glyphs[i].origin) + glyphs[i].advance.unwrap_or(0.0);
+    for w in runs.windows(2) {
+        let (a, b) = (&drawn[w[0].0..w[0].1], &drawn[w[1].0..w[1].1]);
+        if inked(a) < 3 || inked(b) < 2 {
+            continue;
+        }
+        let (a_start, a_end) = (adv.at(glyphs[a[0]].origin), pen_end(a[a.len() - 1]));
+        let (b_start, b_end) = (adv.at(glyphs[b[0]].origin), pen_end(b[b.len() - 1]));
+        let size = glyphs[b[0]].font_size.max(1.0) as f64;
+        if !(b_start > a_start
+            && b_start < a_end
+            && a_end - b_start <= OVERLAP_EMS * size
+            && b_end > a_end)
+        {
+            continue;
+        }
+        c.retain(|i| !b.contains(i));
+        let at = c
+            .iter()
+            .position(|&i| i == a[a.len() - 1])
+            .map_or(c.len(), |p| p + 1);
+        c.splice(at..at, b.iter().copied());
+    }
 }
 
 /// Gap along the advance axis from the end of `a` to the start of `b`, in
@@ -2588,6 +2645,8 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     let mut bbox: Option<BBox> = None;
     let mut text = String::new();
     let mut prev_end: Option<f64> = None;
+    // Where the last inked glyph's pen stood along the line.
+    let mut prev_at: Option<f64> = None;
     let mut sizes: Vec<f32> = Vec::new();
     // A power being read: its size and baseline, and whether it is set in
     // superior figures, at the text's own size and baseline.
@@ -2671,9 +2730,14 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                         }
                     };
                     let after_cap = cap_head && text.chars().count() == 1;
+                    // The pen gone back more than half an em: a run read
+                    // after the one it was set over (see `reading_order`),
+                    // a word of its own.
+                    let back = prev_at
+                        .is_some_and(|p: f64| p - adv.at(g.origin) > g.font_size as f64 * 0.5);
                     if !both_cjk
                         && !after_cap
-                        && start - pe > g.font_size as f64 * ratio
+                        && (start - pe > g.font_size as f64 * ratio || back)
                         && !text.ends_with(' ')
                     {
                         text.push(' ');
@@ -2765,6 +2829,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     Some(a) => adv.at(g.origin) + a,
                     None => adv.end(&b),
                 });
+                prev_at = Some(adv.at(g.origin));
                 prev_size = Some(g.font_size);
                 prev_italic = g.italic;
                 bbox = Some(match bbox {
