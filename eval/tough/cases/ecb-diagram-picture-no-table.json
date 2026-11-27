@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "ecb-op398-monetary-policy-instruments-2024-25.pdf",
+    "url": "https://www.ecb.europa.eu/pub/pdf/scpops/ecb.op398.en.pdf",
+    "sha256": "d4f087fea09e0cab69fa37519193c4155f0e449aff65e32ced4b87ca6f4dd743",
+    "ocr_words": "../fixtures/ocr-words/ecb-op398-monetary-policy-instruments-2024-25",
+    "about": "ECB Occasional Paper 398. Page 40 shows the collateral system's architecture as a picture: boxes and bars of labels joined by arrows, drawn with long straight rules."
+  },
+  "notes": [
+    "2026-11-26: a guard for the tables read from pictures' rules. The boxes grid three by three, but hold just over half of the picture's words, and the picture is no table. The stored reading is the built-in engine's (PP-OCRv6 small) of the picture's crop, with the rules drawn in its pixels: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`."
+  ],
+  "checks": [
+    {
+      "id": "diagram-no-table",
+      "found": "2026-11-26",
+      "issue": "A guard: a diagram's boxes are no table's ruling.",
+      "no_table": {
+        "page": 40
+      }
+    },
+    {
+      "id": "diagram-text-kept",
+      "found": "2026-11-26",
+      "issue": "A guard: the diagram's labels stay in the text, as the picture's.",
+      "text": "ECMS Service Desk"
+    }
+  ]
+}

@@ -28,7 +28,9 @@ level, `w:numPr` marks a list item, `w:tbl` bounds a real table, and
 `w:gridSpan` / `w:vMerge` state the cell merges the PDF engine has to read
 back out of ruling geometry. A paragraph in Word's built-in Title style is the
 document's `doco:Title`, found by the style's name, which a localised Word
-keeps in English while it renames the style's id.
+keeps in English while it renames the style's id. A paragraph in the Subtitle
+style directly after it is the title's `doco:Subtitle`; elsewhere the style
+sets a paragraph.
 
 List numbering is one thing Word does not store: a clause numbered `9.1.5.`
 holds no number in its text, and Word computes it when it lays the page out.
@@ -207,7 +209,9 @@ invite consumers to treat a deck like a scanned page.
 
 A shape whose placeholder type is `title` or `ctrTitle` becomes the slide
 heading, except the `ctrTitle` on the first slide — the title slide's title —
-which is the deck's `doco:Title`; `a:tbl` is a real table with `gridSpan` / `rowSpan` merges;
+which is the deck's `doco:Title`. The first paragraph of that slide's
+`subTitle` placeholder is the deck's `doco:Subtitle`, after the title whichever
+shape the slide lists first; `a:tbl` is a real table with `gridSpan` / `rowSpan` merges;
 paragraphs with a bullet character or a non-zero outline level are list items,
 nested by their outline level (`lvl`).
 
@@ -438,6 +442,17 @@ A data table's **header** is the rows at its top that label the columns:
   figure ruled beneath is the line before a subtotal, not a head.
 - A single bold label in the first column (`Revenues`) is a band, not a
   header row, and bold or a rule on every row is emphasis or a grid.
+- A list of fields has no header. A press release's letterhead set bold over
+  its fields (`FOR IMMEDIATE RELEASE` beside `EXHIBIT 99.1`, over `FOR:` and
+  `CONTACT:`) is a row. That is where every row that sets a label beside a
+  value ends the label on a colon, two rows or more. A header stated in
+  `<thead>` or `<th>` stands.
+
+A row holding nothing of its own is not a row: every cell in it is either a
+cell above it spanning down into it or an empty spacer. A page that lays each
+record over two rows (`rowspan="2"` on every column, the second row a lone
+spacer cell) reads one row per record, and the spans over the dropped rows
+close up. A row in which a span starts, even an empty one, stays.
 
 Under a header of several rows, a column's `doc:columnHeader` is its labels
 from the top down, joined with ` / ` (`Three months ended September 30, /
