@@ -357,8 +357,15 @@ not compressed, so it is about the file's own size.
 
 ## An e-mail's own layer
 
-An e-mail's HTML body is read within the budget, as a page is. The rest
-of the message is not spent from it, and is bounded by the message's
+An e-mail's HTML body is read within the budget, as a page is, and so is
+every other HTML version of the message, one budget for them all: an
+alternative read to tell whether the plain text was rendered from it, and
+one set aside, read for the images it shows. Twenty alternatives of 150 KB,
+each read on a budget of its own, took 12 s. An alternative too large to
+read gives way to the plain text, rather than the message being refused;
+where one set aside is, each image the message names by a Content-ID is
+taken for one it shows, and is not converted as a file. The rest of the
+message is not spent from the budget, and is bounded by the message's
 size and by bounds of its own:
 
 - an `.eml`'s MIME tree is followed 16 levels deep, each part decoded
@@ -392,7 +399,8 @@ holding all 14 outputs; it now converts all 14, peaking at 0.9 GB.
 A message attached is converted within that share like any file, and the
 walk then opens it again for its own files, within the same share, and
 without making its body: only its MIME tree or compound file is read, to
-take the files out. An e-mail whose HTML body peaks at 0.9 GB, carrying
+take the files out, and its HTML parsed for the images it shows, which are
+not files to convert. An e-mail whose HTML body peaks at 0.9 GB, carrying
 one whose body peaks at 1.3 GB on its own, was refused converting the
 attached one, and then made its body again on a whole budget of its own
 to follow its files, holding both at once: 1.73 GB. It now peaks at 1.4

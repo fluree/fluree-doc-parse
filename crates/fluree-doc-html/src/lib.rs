@@ -277,11 +277,41 @@ impl Hasher for ByAddress {
 /// read as section titles: see [`fluree_doc_model::outline`]. A mail body,
 /// read through [`parse_with_quote_depth`], is not.
 pub fn parse(src: &str) -> Result<Vec<Element>, TooLarge> {
-    let mut elements = read(src, false)?.0;
+    parse_within(src, &mut Budget::default())
+}
+
+/// [`parse`], spending `budget`, which is left with what the page leaves
+/// of it. The pages of one document share its budget this way, as the
+/// HTML versions of an e-mail do; a page refused spends all of it, since
+/// the parser did that much work before it stopped.
+pub fn parse_within(src: &str, budget: &mut Budget) -> Result<Vec<Element>, TooLarge> {
+    let mut elements = shared(budget, |b| read_within(src, false, b))?.0;
     if fluree_doc_model::outline::infer_headings(&mut elements) {
         number(&mut elements);
     }
     Ok(elements)
+}
+
+/// Run `read` on a copy of `budget`, then leave `budget` with what the
+/// copy has left; or, where `read` refuses, with nothing left to work: the
+/// parser and walk ran to where they stopped, and a document that asks
+/// for another read of the same size is refused at once, not after as
+/// long again.
+fn shared<T>(
+    budget: &mut Budget,
+    read: impl FnOnce(&mut Budget) -> Result<T, TooLarge>,
+) -> Result<T, TooLarge> {
+    let mut copy = budget.clone();
+    match read(&mut copy) {
+        Ok(t) => {
+            *budget = copy;
+            Ok(t)
+        }
+        Err(e) => {
+            let _ = budget.spend_work(u64::MAX);
+            Err(e)
+        }
+    }
 }
 
 fn number(elements: &mut [Element]) {
@@ -371,7 +401,17 @@ pub fn parse_with_quote_depth(src: &str) -> Result<(Vec<Element>, Vec<usize>), T
 /// draw left out. What tells which of a message's files its HTML shows. A
 /// page too large to read shows none: reading it is refused.
 pub fn cid_ids(src: &str) -> Vec<String> {
-    dom(src).map(|(dom, _)| ids_in(&dom)).unwrap_or_default()
+    cid_ids_within(src, &mut Budget::default()).unwrap_or_default()
+}
+
+/// [`cid_ids`], spending `budget` as [`parse_within`] does, and saying
+/// when the page is too large to read rather than showing none.
+pub fn cid_ids_within(src: &str, budget: &mut Budget) -> Result<Vec<String>, TooLarge> {
+    shared(budget, |b| {
+        let (dom, left) = build(src, b.clone())?;
+        *b = left;
+        Ok(ids_in(&dom))
+    })
 }
 
 /// What [`parse_message`] reads in a message's HTML body: its elements,
@@ -381,9 +421,17 @@ pub type MessageBody = (Vec<Element>, Vec<usize>, Vec<String>);
 /// [`parse_with_quote_depth`] and [`cid_ids`] from one parse of the page:
 /// what a message's HTML body is read for.
 pub fn parse_message(src: &str) -> Result<MessageBody, TooLarge> {
-    let (dom, budget) = dom(src)?;
-    let (elements, depths) = read_dom(&dom, budget, true)?;
-    Ok((elements, depths, ids_in(&dom)))
+    parse_message_within(src, &mut Budget::default())
+}
+
+/// [`parse_message`], spending `budget` as [`parse_within`] does.
+pub fn parse_message_within(src: &str, budget: &mut Budget) -> Result<MessageBody, TooLarge> {
+    shared(budget, |b| {
+        let (dom, left) = build(src, b.clone())?;
+        *b = left;
+        let (elements, depths) = read_dom(&dom, b, true)?;
+        Ok((elements, depths, ids_in(&dom)))
+    })
 }
 
 fn ids_in(dom: &RcDom) -> Vec<String> {
@@ -395,36 +443,33 @@ fn ids_in(dom: &RcDom) -> Vec<String> {
     found.into_iter().map(|(id, _)| id).collect()
 }
 
-/// The page's tree, and the budget what is read of it is spent from
-/// ([`build`]).
-fn dom(src: &str) -> Result<(RcDom, Budget), TooLarge> {
-    build(src, Budget::default())
-}
-
 /// The walk, with or without a message's own images.
 fn read(src: &str, cid_images: bool) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
-    read_within(src, cid_images, Budget::default())
+    read_within(src, cid_images, &mut Budget::default())
 }
 
-/// [`read`], against `budget`.
+/// [`read`], against `budget`, which is left with what the page leaves.
 fn read_within(
     src: &str,
     cid_images: bool,
-    budget: Budget,
+    budget: &mut Budget,
 ) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
-    let (dom, budget) = build(src, budget)?;
+    let (dom, left) = build(src, budget.clone())?;
+    *budget = left;
     read_dom(&dom, budget, cid_images)
 }
 
+/// The walk of a page's tree, spending `budget`, which is left with what
+/// the walk leaves.
 fn read_dom(
     dom: &RcDom,
-    budget: Budget,
+    budget: &mut Budget,
     cid_images: bool,
 ) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
     let facts = Facts::of(&dom.document);
     let mut out = Out {
         cid_images,
-        budget,
+        budget: budget.clone(),
         facts,
         ..Out::default()
     };
@@ -441,6 +486,7 @@ fn read_dom(
             walk(m, &mut out);
         }
     }
+    *budget = out.budget.clone();
     if let Some(e) = out.over {
         return Err(e);
     }
@@ -2621,6 +2667,20 @@ mod tests {
     }
 
     #[test]
+    fn pages_read_within_one_budget_share_it() {
+        let page = "<p>x</p>".repeat(1_000);
+        let mut probe = Budget::new(MAX_MEMORY, MAX_WORK);
+        super::parse_within(&page, &mut probe).unwrap();
+        let one = MAX_MEMORY - probe.memory_left();
+        let mut budget = Budget::new(one * 3 / 2, MAX_WORK);
+        assert!(super::parse_within(&page, &mut budget).is_ok());
+        assert!(super::parse_message_within(&page, &mut budget).is_err());
+        // A page refused spent the work it was read with: what follows is
+        // refused at once, not after as long again.
+        assert!(super::cid_ids_within("<p>x</p>", &mut budget).is_err());
+    }
+
+    #[test]
     fn a_short_page_is_read_past_the_charset_it_declares() {
         // All of it in the parser's first chunk: the tokenizer pauses at
         // each declared charset with the rest of the chunk still queued.
@@ -3590,8 +3650,8 @@ mod tests {
     /// [`read_within`] a budget of `memory`, its work unbounded, at the
     /// costs of the output converted to.
     fn within(src: &str, memory: u64) -> Result<Vec<Element>, TooLarge> {
-        let budget = Budget::new(memory, u64::MAX).for_output(output());
-        read_within(src, false, budget).map(|(e, _)| e)
+        let mut budget = Budget::new(memory, u64::MAX).for_output(output());
+        read_within(src, false, &mut budget).map(|(e, _)| e)
     }
 
     #[test]
@@ -3655,8 +3715,8 @@ mod tests {
         // Within a sixty-fourth of the steps, as a test is built
         // unoptimized: 5,000 deep is past them, as 23,000 are past all.
         let steps = |page: &str| {
-            let budget = Budget::new(MAX_MEMORY, MAX_WORK >> 6);
-            read_within(page, false, budget).map(|(e, _)| e)
+            let mut budget = Budget::new(MAX_MEMORY, MAX_WORK >> 6);
+            read_within(page, false, &mut budget).map(|(e, _)| e)
         };
         let nested = format!("{}x{}", "<div>".repeat(5_000), "</div>".repeat(5_000));
         let misnested: String = (0..5_000)
@@ -3681,7 +3741,7 @@ mod tests {
 
     /// [`read_within`] `work` steps, as [`nesting_the_parser_walks_is_spent_as_steps`].
     fn within_steps(page: &str, work: u64) -> Result<Vec<Element>, TooLarge> {
-        read_within(page, false, Budget::new(MAX_MEMORY, work)).map(|(e, _)| e)
+        read_within(page, false, &mut Budget::new(MAX_MEMORY, work)).map(|(e, _)| e)
     }
 
     /// The fewest steps `page` is read within.

@@ -42,6 +42,7 @@ mod text;
 mod thread;
 
 pub use children::{parse_attachments, AttachmentLimits, Child, Outcome, ReadAttachment};
+use fluree_doc_model::budget::Budget;
 use fluree_doc_model::{
     Attachment, DocumentInfo, Element, Mailbox, Media, MediaSource, Message, Notes,
 };
@@ -220,13 +221,22 @@ pub fn parse_msg(bytes: &[u8]) -> Result<Email, EmailError> {
 }
 
 /// The files a message carries, `.eml` or `.msg`, by its content: what
-/// [`parse`] would list, without making its body into elements.
+/// [`parse`] would list, without making its body into elements. An HTML
+/// body is read for the images it shows, and those are inline, as
+/// [`parse`] marks them: a logo the body draws is not a file to read.
 pub(crate) fn attachments_of(bytes: &[u8]) -> Result<Vec<AttachedFile>, EmailError> {
-    let read = if msg::is_compound(bytes) {
+    let mut read = if msg::is_compound(bytes) {
         msg::read(bytes)?
     } else {
         eml::read(bytes)?
     };
+    if let Body::Html(html) = &read.body {
+        match fluree_doc_html::cid_ids_within(html, &mut read.budget) {
+            Ok(ids) => read.shown.extend(ids),
+            Err(_) => read.shown_unread = true,
+        }
+    }
+    mark_shown(&mut read);
     Ok(read.attachments)
 }
 
@@ -240,6 +250,12 @@ pub(crate) struct Read {
     /// The content ids of the images the message's HTML versions other
     /// than its body show (`<img src="cid:…">`).
     pub shown: Vec<String>,
+    /// An HTML version other than the body was too large to read for the
+    /// images it shows.
+    pub shown_unread: bool,
+    /// The message's budget, which its HTML versions are read within, one
+    /// after the other: what the reading of the message has left of it.
+    pub budget: Budget,
     pub provenance: &'static str,
 }
 
@@ -268,7 +284,7 @@ fn assemble(mut read: Read) -> Result<Email, EmailError> {
     // Where the file's own message's body ends, at the end of its first
     // segment: an image it carries and does not mark is drawn there.
     let mut own_end: Option<usize> = None;
-    match read.body {
+    match std::mem::replace(&mut read.body, Body::None) {
         Body::Plain(body) => {
             for seg in thread::split(&body) {
                 let is_own = matches!(seg.open, thread::Open::Own);
@@ -302,7 +318,7 @@ fn assemble(mut read: Read) -> Result<Email, EmailError> {
             }
         }
         Body::Html(html) => {
-            let (els, depths, ids) = fluree_doc_html::parse_message(&html)
+            let (els, depths, ids) = fluree_doc_html::parse_message_within(&html, &mut read.budget)
                 .map_err(|e| EmailError::TooLarge(e.to_string()))?;
             read.shown.extend(ids);
             // A paragraph holding nothing but a zero-width character, as
@@ -358,21 +374,7 @@ fn assemble(mut read: Read) -> Result<Email, EmailError> {
         }
         Body::None => {}
     }
-    // An image an HTML version shows by its `cid:` is shown in the message,
-    // whatever its part's disposition says: a sender's library can mark a
-    // related image `attachment` for its file name, and the plain text, read
-    // in place of the HTML, does not mark where it is drawn. Decided over the
-    // whole message, as the image and the HTML citing it need not be in one
-    // multipart: `multipart/related` can hold the alternative or sit in it.
-    // Its ids read as the HTML reader reads them (RFC 2392: the scheme in
-    // any case, percent signs decoded), and match a part as a figure's do.
-    for id in &read.shown {
-        if let Some(i) = named(&read.attachments, id, true) {
-            if is_image(&read.attachments[i]) {
-                read.attachments[i].info.inline = true;
-            }
-        }
-    }
+    mark_shown(&mut read);
     let own_end = own_end.unwrap_or(elements.len());
     let (media, media_at) = place_images(
         &mut elements,
@@ -422,6 +424,36 @@ fn is_image(a: &AttachedFile) -> bool {
         || b.starts_with(b"MM\0*")
         || b.starts_with(b"GIF8")
         || b.starts_with(b"BM")
+}
+
+/// Mark inline each image an HTML version shows by its `cid:`: it is shown
+/// in the message, whatever its part's disposition says. A sender's library
+/// can mark a related image `attachment` for its file name, and the plain
+/// text, read in place of the HTML, does not mark where it is drawn.
+/// Decided over the whole message, as the image and the HTML citing it need
+/// not be in one multipart: `multipart/related` can hold the alternative or
+/// sit in it. Its ids read as the HTML reader reads them (RFC 2392: the
+/// scheme in any case, percent signs decoded), and match a part as a
+/// figure's do.
+///
+/// Where a version was too large to read, the images it shows are not
+/// known: every image with a Content-ID is taken for one, as that is what
+/// a Content-ID is for, rather than each sent on to be read as a file.
+fn mark_shown(read: &mut Read) {
+    if read.shown_unread {
+        for a in &mut read.attachments {
+            if a.content_id.is_some() && is_image(a) {
+                a.info.inline = true;
+            }
+        }
+    }
+    for id in &read.shown {
+        if let Some(i) = named(&read.attachments, id, true) {
+            if is_image(&read.attachments[i]) {
+                read.attachments[i].info.inline = true;
+            }
+        }
+    }
 }
 
 /// The file a mark names by `want`, its Content-ID (`by_cid`) or its file
@@ -885,6 +917,60 @@ Content-Type: text/html; charset=utf-8\r\n\
 <body><p>Tuesday works.</p></body></html>\r\n";
         let email = parse(src).unwrap();
         assert_eq!(texts(&email)[1..], ["Tuesday works."]);
+    }
+
+    /// A message of a plain text and an HTML alternative, then `parts`
+    /// (headers, body) related to them.
+    fn alternatives(plain: &str, htmls: &[String], parts: &[(&str, &str)]) -> String {
+        let mut m = String::from(
+            "From: Billing <billing@example.com>\r\nSubject: Invoice\r\nMIME-Version: 1.0\r\n\
+             Content-Type: multipart/related; boundary=\"rel\"\r\n\r\n\
+             --rel\r\nContent-Type: multipart/alternative; boundary=\"alt\"\r\n\r\n",
+        );
+        m.push_str(&format!(
+            "--alt\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{plain}\r\n"
+        ));
+        for h in htmls {
+            m.push_str(&format!(
+                "--alt\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{h}\r\n"
+            ));
+        }
+        m.push_str("--alt--\r\n");
+        for (headers, body) in parts {
+            m.push_str(&format!("--rel\r\n{headers}\r\n\r\n{body}\r\n"));
+        }
+        m.push_str("--rel--\r\n");
+        m
+    }
+
+    #[test]
+    fn an_html_alternative_too_large_to_read_gives_way_to_the_plain_text() {
+        // The plain text keeps a reference its converter left, so the HTML
+        // is read to tell; too large to read, the plain text is the body,
+        // rather than the message refused for a body it need not read.
+        let html = "<p>Invoice 03&#47;14</p>".repeat(4000);
+        let src = alternatives("Invoice 03&#47;14", &[html], &[]);
+        assert_eq!(texts(&parse(src.as_bytes()).unwrap())[1], "Invoice 03/14");
+        let email = fluree_doc_model::budget::within(64 << 10, || parse(src.as_bytes())).unwrap();
+        assert_eq!(texts(&email)[1], "Invoice 03&#47;14");
+    }
+
+    #[test]
+    fn a_messages_html_versions_share_its_budget() {
+        // Twenty HTML alternatives, each read within the share alone and
+        // not all of them together: once the message's budget is spent,
+        // the images they show are not known, and each image the message
+        // names by a Content-ID is taken for one, the one no version draws
+        // too. Each with a budget of its own, twenty took 12 s.
+        let html = "<p>Invoice</p>".repeat(800);
+        let image = "Content-Type: image/png\r\nContent-ID: <stray@example.org>\r\n\
+                     Content-Disposition: attachment; filename=\"stray.png\"";
+        let src = alternatives("Invoice", &vec![html; 20], &[(image, "pixels")]);
+        let inline = |email: &Email| email.attachments[0].info.inline;
+        assert!(!inline(&parse(src.as_bytes()).unwrap()));
+        let email = fluree_doc_model::budget::within(4 << 20, || parse(src.as_bytes())).unwrap();
+        assert_eq!(texts(&email)[1], "Invoice");
+        assert!(inline(&email));
     }
 
     #[test]
