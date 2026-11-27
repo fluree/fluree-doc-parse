@@ -106,7 +106,7 @@ pub struct Grid {
 impl TableLayout {
     /// Each cell's text, a span's read whole into its first cell.
     ///
-    /// Blank glyphs on a line the cell holds no ink on are left out: a
+    /// Blank glyphs off the cell's ink, above or under it, are left out: a
     /// line's spaces under the cell (a description's under a row of
     /// figures) are no line of it, and read with it they were a line of
     /// gaps that parted the cell's own line as a gutter would
@@ -121,16 +121,20 @@ impl TableLayout {
                     .map(|&i| &glyphs[i])
                     .filter(|g| !g.text.trim().is_empty())
                     .collect();
-                let on_inked_line = |g: &crate::glyph::Glyph| {
-                    inked.iter().any(|o| {
-                        (o.origin.1 - g.origin.1).abs()
-                            <= f64::from(o.font_size.max(g.font_size)) * 0.3
-                    })
-                };
+                // The cell's ink, top to foot: a space set between a
+                // subscript and the line it hangs from (`ŜrT (%)`) is in it.
+                let span = inked.iter().filter_map(|g| {
+                    let b = g.bbox?;
+                    let slack = f64::from(g.font_size.max(1.0)) * 0.3;
+                    Some((b.y0 - slack, b.y1 + slack))
+                });
+                let (top, foot) =
+                    span.fold((f64::MAX, f64::MIN), |(t, f), (a, b)| (t.min(a), f.max(b)));
+                let in_ink = |g: &crate::glyph::Glyph| g.origin.1 >= top && g.origin.1 <= foot;
                 let gs: Vec<crate::glyph::Glyph> = ids
                     .iter()
                     .map(|&i| &glyphs[i])
-                    .filter(|g| !g.text.trim().is_empty() || on_inked_line(g))
+                    .filter(|g| !g.text.trim().is_empty() || inked.is_empty() || in_ink(g))
                     .cloned()
                     .collect();
                 join_cell_lines(crate::line::assemble(&gs).iter().map(|l| l.text.as_str()))
@@ -14401,6 +14405,46 @@ mod tests {
         .map(|r| r.iter().map(|t| t.to_string()).collect())
         .collect();
         assert!(!g.heads_its_rows(1, &names, &[], &[], &[]));
+    }
+
+    #[test]
+    fn a_cells_text_leaves_out_blank_glyphs_under_it() {
+        // A date in a cell, glyph by glyph, and three spaces of the
+        // description line under it the cell took in: read with them, the
+        // spaces' gaps parted the date (`26.0 7.2012`).
+        let ch = |x: f64, y: f64, t: &str, inked: bool| crate::glyph::Glyph {
+            text: t.into(),
+            bbox: inked.then_some(crate::geom::BBox {
+                x0: x,
+                y0: y - 8.6,
+                x1: x + 6.0,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x, y),
+            rotation_deg: 0.0,
+            font_size: if inked { 12.0 } else { 8.0 },
+            weight: Some(400),
+            italic: false,
+            advance: Some(if t == "." { 3.33 } else { 6.67 }),
+            draw_index: 0,
+            ocr: None,
+        };
+        let mut glyphs = Vec::new();
+        let mut x = 126.75;
+        for c in "26.07.2012".chars() {
+            let t = c.to_string();
+            glyphs.push(ch(x, 579.5, &t, true));
+            x += if c == '.' { 3.33 } else { 6.67 };
+        }
+        for bx in [140.14, 145.06, 168.17] {
+            glyphs.push(ch(bx, 587.7, " ", false));
+        }
+        let layout = TableLayout {
+            cells: vec![(0..glyphs.len()).collect()],
+            ..TableLayout::default()
+        };
+        assert_eq!(layout.texts(&glyphs, 1), ["26.07.2012"]);
     }
 
     /// A word as one glyph run at `x`, 5pt a character, on row `r`.
