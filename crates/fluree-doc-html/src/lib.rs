@@ -3672,7 +3672,10 @@ mod tests {
         // and little more: refused for the text before it is copied out of
         // the tree, not once the table holding it is made.
         let long = "w".repeat(300_000);
-        let page = format!("<table><tr><td>{long}</td><td>{long}</td></tr></table>");
+        let page = format!(
+            "<table><tr><th>Name</th><th>Note</th></tr><tr><td>{long}</td><td>{long}</td></tr></table>"
+        );
+        assert_eq!(kinds(&parse(&page)), ["doco:Table"]);
         let (_, left) = build(
             &page,
             Budget::new(MAX_MEMORY, u64::MAX).for_output(output()),
