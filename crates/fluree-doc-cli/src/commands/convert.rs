@@ -333,20 +333,21 @@ fn convert_path(
             )
         }
         SourceKind::Docx => {
+            let mut pkg = fluree_doc_docx::Package::open(&data)
+                .map_err(|e| fluree_doc_docx::DocxError::Zip(e).to_string())?;
             let (mut elements, info, media) =
-                fluree_doc_docx::parse_with_media(&data).map_err(|e| e.to_string())?;
+                fluree_doc_docx::parse_package(&mut pkg).map_err(|e| e.to_string())?;
             // The images placed in the flow: a pasted screenshot's text
             // follows its figure, read by OCR. Their bytes are only read
-            // when something is there to read them.
-            // Each image's first bytes are read from a package of their own,
-            // so its format is told without decompressing the rest.
-            let mut pkg = fluree_doc_docx::Package::open(&data)?;
-            let mut heads = fluree_doc_docx::Package::open(&data)?;
+            // when something is there to read them, from the package opened
+            // once; each image's first bytes alone tell its format, without
+            // decompressing the rest.
+            let pkg = std::cell::RefCell::new(pkg);
             let media = read_media_with(
                 src.stem,
                 media,
-                &mut |part| fluree_doc_docx::read_media_head(&mut heads, part),
-                &mut |part| fluree_doc_docx::read_media(&mut pkg, part),
+                &mut |part| fluree_doc_docx::read_media_head(&mut pkg.borrow_mut(), part),
+                &mut |part| fluree_doc_docx::read_media(&mut pkg.borrow_mut(), part),
                 cfg,
                 quiet,
             );
@@ -384,17 +385,17 @@ fn convert_path(
         // A picture anchored to its cells is read as a DOCX's is, its text
         // placed after its figure.
         SourceKind::Xlsx => {
+            let mut pkg = fluree_doc_xlsx::Package::open(&data)
+                .map_err(|e| fluree_doc_xlsx::XlsxError::Zip(e).to_string())?;
             let (mut elements, info, media) =
-                fluree_doc_xlsx::parse_with_media(&data).map_err(|e| e.to_string())?;
-            // Each image's first bytes are read from a package of their own,
-            // so its format is told without decompressing the rest.
-            let mut pkg = fluree_doc_xlsx::Package::open(&data)?;
-            let mut heads = fluree_doc_xlsx::Package::open(&data)?;
+                fluree_doc_xlsx::parse_package(&mut pkg).map_err(|e| e.to_string())?;
+            // Read from the package opened once, as a DOCX's are.
+            let pkg = std::cell::RefCell::new(pkg);
             let media = read_media_with(
                 src.stem,
                 media,
-                &mut |part| fluree_doc_xlsx::read_media_head(&mut heads, part),
-                &mut |part| fluree_doc_xlsx::read_media(&mut pkg, part),
+                &mut |part| fluree_doc_xlsx::read_media_head(&mut pkg.borrow_mut(), part),
+                &mut |part| fluree_doc_xlsx::read_media(&mut pkg.borrow_mut(), part),
                 cfg,
                 quiet,
             );
@@ -459,7 +460,6 @@ fn convert_email(
         &|part| {
             email
                 .media_bytes(part)
-                .map(<[u8]>::to_vec)
                 .ok_or_else(|| format!("{part}: not in the message"))
         },
         cfg,
@@ -1153,19 +1153,21 @@ pub(crate) fn under_model_floor(width: u32, height: u32) -> bool {
 }
 
 /// [`read_media_with`] for a source that holds its images' bytes in memory
-/// (an e-mail's), whose first bytes are read with the rest.
-fn read_media(
+/// (an e-mail's): an image's first bytes are a slice of them, and only an
+/// image read is copied, one at a time.
+fn read_media<'a>(
     stem: &str,
     media: Vec<fluree_doc_model::Media>,
-    bytes: &dyn Fn(&str) -> Result<Vec<u8>, String>,
+    bytes: &dyn Fn(&str) -> Result<&'a [u8], String>,
     cfg: &TierConfig,
     quiet: bool,
 ) -> MediaRead {
+    let sniffed = fluree_doc_pdf::image::Format::SNIFFED;
     read_media_with(
         stem,
         media,
-        &mut |p| bytes(p),
-        &mut |p| bytes(p),
+        &mut |p| bytes(p).map(|b| b[..b.len().min(sniffed)].to_vec()),
+        &mut |p| bytes(p).map(<[u8]>::to_vec),
         cfg,
         quiet,
     )

@@ -103,8 +103,8 @@ pub fn parse_with_ocr(
     bytes: &[u8],
     engine: &dyn fluree_doc_vision::OcrEngine,
 ) -> Result<OcrParse, DocxError> {
-    let (mut elements, info, media) = parse_with_media(bytes)?;
     let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
+    let (mut elements, info, media) = parse_package(&mut pkg)?;
     let r = fluree_doc_image::read_placed(media, &mut |part| read_media(&mut pkg, part), engine);
     fluree_doc_image::place_after_figures(&mut elements, r.read);
     Ok(OcrParse {
@@ -124,7 +124,15 @@ pub fn parse_with_ocr(
 pub fn parse_with_media(
     bytes: &[u8],
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
-    let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
+    parse_package(&mut Package::open(bytes).map_err(DocxError::Zip)?)
+}
+
+/// [`parse_with_media`] from a package already opened, for a caller that
+/// goes on to read the images' bytes from it ([`read_media`]): opening it
+/// reads the archive's whole directory, once.
+pub fn parse_package(
+    pkg: &mut Package<'_>,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
     let main = pkg.main_part("word/document.xml");
     let xml = pkg.read(&main).ok_or(DocxError::NoDocument)?;
     // Styles refine what a table's first row is and which paragraphs are
@@ -202,7 +210,7 @@ pub fn parse_with_media(
     // file outside it, a relationship not defined) is still listed, so it
     // is counted among those not read; a part that is not there is listed
     // under the name it was given, and fails to read.
-    let names = fluree_doc_ooxml::PartNames::new(&pkg);
+    let names = fluree_doc_ooxml::PartNames::new(pkg);
     let by_id = fluree_doc_ooxml::by_id(&rels);
     let media = figure_rids
         .into_iter()

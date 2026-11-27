@@ -1581,8 +1581,9 @@ type MediaCrops = fn(&[u8], &str, &Path) -> Result<Vec<serde_json::Value>, Strin
 
 /// A DOCX's crops ([`media_crops`]), read from its package, opened once.
 fn docx_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
-    let (_, _, media) = fluree_doc_docx::parse_with_media(bytes).map_err(|e| e.to_string())?;
-    let mut pkg = fluree_doc_docx::Package::open(bytes)?;
+    let mut pkg = fluree_doc_docx::Package::open(bytes)
+        .map_err(|e| fluree_doc_docx::DocxError::Zip(e).to_string())?;
+    let (_, _, media) = fluree_doc_docx::parse_package(&mut pkg).map_err(|e| e.to_string())?;
     media_crops(
         media,
         &mut |part| fluree_doc_docx::read_media(&mut pkg, part),
@@ -1595,8 +1596,9 @@ fn docx_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json:
 /// cells, `<stem>_m<n>.png` for the figure `figure-<sheet>-<n>`, with its
 /// package part, read from its package, opened once.
 fn xlsx_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
-    let (_, _, media) = fluree_doc_xlsx::parse_with_media(bytes).map_err(|e| e.to_string())?;
-    let mut pkg = fluree_doc_xlsx::Package::open(bytes)?;
+    let mut pkg = fluree_doc_xlsx::Package::open(bytes)
+        .map_err(|e| fluree_doc_xlsx::XlsxError::Zip(e).to_string())?;
+    let (_, _, media) = fluree_doc_xlsx::parse_package(&mut pkg).map_err(|e| e.to_string())?;
     media_crops(
         media,
         &mut |part| fluree_doc_xlsx::read_media(&mut pkg, part),
