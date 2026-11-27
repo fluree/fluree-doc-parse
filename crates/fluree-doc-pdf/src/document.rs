@@ -5184,6 +5184,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             })
         })
         .collect();
+    // The ruled table ending the page before, its last row perhaps printed
+    // at the head of this one ([`table::continued_row`]).
+    let mut tail: Option<Grid> = None;
     for (p, route) in raw.pages.iter_mut().zip(routes) {
         // A picture's lettering is read apart from the page's text, before
         // any reader of the page's text sees it.
@@ -5292,6 +5295,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             });
             grids = fill_grids;
             grid_sources = vec![GridSource::FillBand; grids.len()];
+        }
+        // A table's last row printed over the page break, at the head of
+        // this page inside its ruling, is the table's row.
+        if let Some(t) = tail.take() {
+            if let Some(g) = table::continued_row(&t, &p.rules, &p.glyphs, &grids, p.index) {
+                grids.push(g);
+                grid_sources.push(GridSource::Ruled);
+            }
         }
 
         // The page's lines as the text reader reads them, read once for the
@@ -6039,6 +6050,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             }
         }
         suspect_tables.extend(table::suspect_tables(&grids, &p.glyphs));
+        tail = grids
+            .iter()
+            .zip(&grid_sources)
+            .filter(|(_, s)| **s == GridSource::Ruled)
+            .map(|(g, _)| g)
+            .max_by(|a, b| a.bbox.y1.total_cmp(&b.bbox.y1))
+            .filter(|g| table::ends_page(g, &p.glyphs))
+            .cloned();
         assert_eq!(grids.len(), grid_sources.len());
         assert_eq!(grids.len(), demoted.len());
         layouts.push(PageLayout {

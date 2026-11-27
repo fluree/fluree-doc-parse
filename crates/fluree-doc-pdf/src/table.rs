@@ -4729,6 +4729,138 @@ fn split_row_bands(
     out
 }
 
+/// Most lines of text that may stand past a table at the foot of its page,
+/// or over its row at the head of the next, for the table to run on across
+/// the break: the page's folio or running line.
+const BREAK_LINES: usize = 2;
+
+/// Most height a row continued past a page break may have, in the table's
+/// median row height: a row of the table's, wrapped onto a line or two.
+const CONTINUED_ROW_HEIGHT: f64 = 3.0;
+
+/// The lines of text, counted by baseline, among `glyphs` whose boxes
+/// `keep`.
+fn lines_where(glyphs: &[crate::glyph::Glyph], keep: impl Fn(&BBox) -> bool) -> usize {
+    let mut at: Vec<(f64, f64)> = glyphs
+        .iter()
+        .filter(|g| !g.text.trim().is_empty() && g.bbox.is_some_and(|b| keep(&b)))
+        .map(|g| (g.origin.1, g.font_size.max(1.0) as f64))
+        .collect();
+    at.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut lines = 0usize;
+    let mut last = f64::MIN;
+    for (y, fs) in at {
+        if y - last > 0.5 * fs {
+            lines += 1;
+            last = y;
+        }
+    }
+    lines
+}
+
+/// Does the ruled table end its page's text: [`BREAK_LINES`] lines or
+/// fewer stand under it, a folio or a running line?
+pub fn ends_page(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
+    lines_where(glyphs, |b| b.y0 >= g.bbox.y1) <= BREAK_LINES
+}
+
+/// A table's last row printed at the head of the next page, inside the
+/// table's ruling: `Needle Wash | Methanol` under the page break, its
+/// table's other rows on the page before. One ruled row stands alone as no
+/// table, and its label and value were read as a heading and a paragraph.
+///
+/// It is `tail`'s, the ruled table ending the page before ([`ends_page`]),
+/// when the page opens on it, [`BREAK_LINES`] lines or fewer over it, and
+/// it is ruled as the table is: rules over and under it across the table's
+/// width, its sides drawn at the table's, every column rule in it standing
+/// at one of the table's columns. A row of a table's height
+/// ([`CONTINUED_ROW_HEIGHT`]), with text in two cells or more, and no more
+/// rows ruled under it (those are a table of their own). It is read in the
+/// table's columns.
+pub fn continued_row(
+    tail: &Grid,
+    rules: &[Rule],
+    glyphs: &[crate::glyph::Glyph],
+    grids: &[Grid],
+    page: usize,
+) -> Option<Grid> {
+    let (x0, x1) = (*tail.xs.first()?, *tail.xs.last()?);
+    let width = x1 - x0;
+    let mut heights: Vec<f64> = tail.ys.windows(2).map(|w| w[1] - w[0]).collect();
+    heights.sort_by(f64::total_cmp);
+    let row = *heights.get(heights.len() / 2)?;
+    // The lines ruled across the table's width.
+    let mut across: Vec<f64> = Vec::new();
+    let hs: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    let mut ys: Vec<f64> = hs.iter().map(|r| r.axis_pos()).collect();
+    ys.sort_by(f64::total_cmp);
+    for y in coalesce(ys, EDGE_TOLERANCE) {
+        let spans = hs
+            .iter()
+            .filter(|r| (r.axis_pos() - y).abs() <= EDGE_TOLERANCE)
+            .map(|r| (r.bbox.x0, r.bbox.x1));
+        let ends = hs
+            .iter()
+            .filter(|r| (r.axis_pos() - y).abs() <= EDGE_TOLERANCE);
+        let lo = ends.clone().map(|r| r.bbox.x0).fold(f64::MAX, f64::min);
+        let hi = ends.map(|r| r.bbox.x1).fold(f64::MIN, f64::max);
+        if (lo - x0).abs() <= EDGE_TOLERANCE
+            && (hi - x1).abs() <= EDGE_TOLERANCE
+            && span_coverage(spans, x0, x1) >= 0.95 * width
+        {
+            across.push(y);
+        }
+    }
+    let (&top, &bottom) = (across.first()?, across.get(1)?);
+    if bottom - top > row * CONTINUED_ROW_HEIGHT
+        || across
+            .get(2)
+            .is_some_and(|&y| y - bottom <= row * CONTINUED_ROW_HEIGHT)
+        || lines_where(glyphs, |b| b.y1 <= top) > BREAK_LINES
+    {
+        return None;
+    }
+    let band = BBox {
+        x0,
+        y0: top,
+        x1,
+        y1: bottom,
+    };
+    if grids.iter().any(|g| g.bbox.intersects(&band)) {
+        return None;
+    }
+    let mid = (top + bottom) / 2.0;
+    let walls: Vec<f64> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Vertical && r.bbox.y0 <= mid && r.bbox.y1 >= mid)
+        .map(|r| r.axis_pos())
+        .filter(|&x| x >= x0 - EDGE_TOLERANCE && x <= x1 + EDGE_TOLERANCE)
+        .collect();
+    let at = |x: f64| walls.iter().any(|w| (w - x).abs() <= EDGE_TOLERANCE);
+    let aligned = walls
+        .iter()
+        .all(|w| tail.xs.iter().any(|x| (x - w).abs() <= EDGE_TOLERANCE));
+    if !(at(x0) && at(x1) && aligned) {
+        return None;
+    }
+    let g = Grid {
+        layout: None,
+        page,
+        bbox: band,
+        xs: tail.xs.clone(),
+        ys: vec![top, bottom],
+    };
+    let held = g
+        .cell_texts(glyphs)
+        .iter()
+        .filter(|c| !c.trim().is_empty())
+        .count();
+    (held >= 2).then_some(g)
+}
+
 /// Detect table grids on a page from its ruling lines.
 ///
 /// Try the page-wide hypothesis first for segmented grids, then connected
@@ -12231,6 +12363,59 @@ mod tests {
             g.rows() < rows_before,
             "empty trailing rows must be trimmed"
         );
+    }
+
+    #[test]
+    fn a_tables_last_row_over_the_page_break_is_its_row() {
+        let ruled = |ys: &[f64]| {
+            let mut r: Vec<Rule> = ys.iter().map(|&y| h(68.0, 297.0, y)).collect();
+            for w in ys.windows(2) {
+                for x in [68.0, 183.0, 297.0] {
+                    r.push(v(w[0], w[1], x));
+                }
+            }
+            r
+        };
+        let tail = detect(&ruled(&[600.0, 620.0, 640.0, 660.0]), 0).remove(0);
+        let mk = |x: f64, y: f64| crate::glyph::Glyph {
+            text: "x".into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: y,
+                x1: x + 6.0,
+                y1: y + 10.0,
+            }),
+            page: 1,
+            origin: (x, y + 10.0),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            italic: false,
+            advance: None,
+            draw_index: 0,
+            ocr: None,
+        };
+        // Only a folio under the table on its page.
+        assert!(ends_page(&tail, &[mk(150.0, 760.0)]));
+        assert!(!ends_page(
+            &tail,
+            &[mk(80.0, 680.0), mk(80.0, 700.0), mk(80.0, 720.0)]
+        ));
+        let row = vec![mk(80.0, 52.0), mk(200.0, 52.0)];
+        let g = continued_row(&tail, &ruled(&[50.0, 66.0]), &row, &[], 1).expect("the table's row");
+        assert_eq!(g.xs, tail.xs);
+        assert_eq!(g.rows(), 1);
+        // Two rows ruled are a table of their own.
+        assert!(continued_row(&tail, &ruled(&[50.0, 66.0, 82.0]), &row, &[], 1).is_none());
+        // A row whose column rule stands where the table has none is
+        // another table's.
+        let mut other = ruled(&[50.0, 66.0]);
+        other.push(v(50.0, 66.0, 240.0));
+        assert!(continued_row(&tail, &other, &row, &[], 1).is_none());
+        // Text over the row: the page does not open on it.
+        let mut over = row.clone();
+        over.extend([mk(80.0, 10.0), mk(80.0, 22.0), mk(80.0, 34.0)]);
+        assert!(continued_row(&tail, &ruled(&[50.0, 66.0]), &over, &[], 1).is_none());
     }
 
     #[test]

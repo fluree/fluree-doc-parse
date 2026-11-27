@@ -367,6 +367,17 @@ A data table's **header** is the rows at its top that label the columns:
   figure ruled beneath is the line before a subtotal, not a head.
 - A single bold label in the first column (`Revenues`) is a band, not a
   header row, and bold or a rule on every row is emphasis or a grid.
+- A list of fields has no header. A press release's letterhead set bold over
+  its fields (`FOR IMMEDIATE RELEASE` beside `EXHIBIT 99.1`, over `FOR:` and
+  `CONTACT:`) is a row. That is where every row that sets a label beside a
+  value ends the label on a colon, two rows or more. A header stated in
+  `<thead>` or `<th>` stands.
+
+A row holding nothing of its own is not a row: every cell in it is either a
+cell above it spanning down into it or an empty spacer. A page that lays each
+record over two rows (`rowspan="2"` on every column, the second row a lone
+spacer cell) reads one row per record, and the spans over the dropped rows
+close up. A row in which a span starts, even an empty one, stays.
 
 Under a header of several rows, a column's `doc:columnHeader` is its labels
 from the top down, joined with ` / ` (`Three months ended September 30, /
