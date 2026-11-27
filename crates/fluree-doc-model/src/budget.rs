@@ -743,6 +743,21 @@ impl Budget {
         self.work.spend(n)
     }
 
+    /// Run `spend` on this budget with the tables of a document of its own:
+    /// what it spends is this budget's, but a table it counts carries on
+    /// ([`Budget::spend_copies`], `continues`) only from a table counted in
+    /// it, and none it counts is carried on from after. For what is made
+    /// apart from the document and placed in it, whose ids are its own: an
+    /// OCR reading of a picture names its tables `elem-00001`… as the
+    /// document does, and one of them taken for the document's table of the
+    /// same id would be counted with that table's header.
+    pub fn apart<R>(&mut self, spend: impl FnOnce(&mut Budget) -> R) -> R {
+        let tables = std::mem::take(&mut self.tables);
+        let r = spend(self);
+        self.tables = tables;
+        r
+    }
+
     /// The estimated memory not spent yet.
     pub fn memory_left(&self) -> u64 {
         self.max_memory.saturating_sub(self.memory)
@@ -847,6 +862,40 @@ mod tests {
         let mut b = Budget::new(6 * TEXT_BYTES, 0);
         b.spend_chars("yyyyyy".chars()).unwrap();
         assert!(b.spend_chars(['y']).is_err());
+    }
+
+    #[test]
+    fn a_table_counted_apart_carries_on_none_of_the_documents() {
+        // The document's table, under a header of long names, and a part
+        // named as carrying it on: counted with the names it takes.
+        let mut head = crate::Element::new("doco:Table", String::new(), "test", "test");
+        head.id = "elem-00001".into();
+        head.cells = Some(vec![
+            vec!["a long column name".repeat(10), "another".repeat(20)],
+            vec!["1".into(), "2".into()],
+        ]);
+        head.header_rows = Some(1);
+        let mut part = crate::Element::new("doco:Table", String::new(), "test", "test");
+        part.id = "elem-00002".into();
+        part.cells = Some(vec![vec!["3".into(), "4".into()]; 5]);
+        part.header_rows = Some(0);
+        part.continues = Some("elem-00001".into());
+        let spent = |b: &mut Budget, e: &crate::Element| {
+            let before = b.memory;
+            b.spend_copies(e).unwrap();
+            b.memory - before
+        };
+        let mut b = Budget::new(MAX_MEMORY, 0);
+        spent(&mut b, &head);
+        let carried = spent(&mut b.clone(), &part);
+        // Apart (a picture's reading, whose `elem-00001` is its own), the
+        // part takes no header of the document's, and is spent all the same.
+        let before = b.memory;
+        let alone = b.apart(|b| spent(b, &part));
+        assert!(alone < carried, "{alone} < {carried}");
+        assert_eq!(b.memory, before + alone);
+        // The document's tables are its own again after.
+        assert_eq!(spent(&mut b, &part), carried);
     }
 
     /// A two-column table whose first row's value, `len` bytes, is merged

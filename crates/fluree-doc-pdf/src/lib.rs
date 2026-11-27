@@ -1091,6 +1091,20 @@ mod copies_tests {
     use fluree_doc_model::budget::TooLarge;
 
     #[test]
+    fn what_is_spent_whole_is_kept_whole_or_given_back() {
+        let mut budget = PageBudget::new(Budget::new(10 * TEXT_BYTES, 0));
+        budget.spend_whole(|b| b.spend_text("abcd")).unwrap();
+        assert_eq!(budget.budget().memory_left(), 6 * TEXT_BYTES);
+        // Past what is left, partly spent on the way: none of it kept.
+        let past = budget.spend_whole(|b| {
+            b.spend_text("abcd")?;
+            b.spend_text("abcd")
+        });
+        assert!(past.is_err());
+        assert_eq!(budget.budget().memory_left(), 6 * TEXT_BYTES);
+    }
+
+    #[test]
     fn a_pdf_whose_tables_copies_are_past_the_budget_is_read_short_or_refused() {
         let pdf = || ruled_tables(3, 8);
         let (_, elements) = analysed(pdf());

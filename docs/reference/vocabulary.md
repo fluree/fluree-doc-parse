@@ -101,6 +101,8 @@ The `reason` of an image in `doc:unreadImages` is one of those
 [the document node describes](../formats/doco.md#images-nothing-read):
 `NotRead`, `Missing`, `UnsupportedFormat`, `Failed`, `PastAllowance` for
 one past what one document may have read (256 images, 512 million pixels),
+`PastMemoryLimit` for one whose reading is past what the document left of
+the memory it may take (`--max-memory`),
 `Small` for one the model was not sent, under its floor of pixels, or
 `NotTexty` for one the model was not sent as the pixel probe does not take
 it for text, or whose OCR reading was noise. `Small`

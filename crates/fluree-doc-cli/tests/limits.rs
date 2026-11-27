@@ -357,6 +357,12 @@ fn pages_pdf_with(n: usize, lines: usize, extra: impl Fn(usize) -> String) -> Ve
 /// DoCO writes each name again on every cell under it (`doc:columnHeader`),
 /// some 5,500 bytes of copies a page, which Markdown and the text do not.
 fn ruled_tables_pdf(pages: usize) -> Vec<u8> {
+    ruled_tables_pdf_with(pages, |_| String::new())
+}
+
+/// [`ruled_tables_pdf`], with `extra(i)` written in the dictionary of page
+/// `i`.
+fn ruled_tables_pdf_with(pages: usize, extra: impl Fn(usize) -> String) -> Vec<u8> {
     let (rows, top, h) = (40, 720, 18);
     let x = [72, 222, 372, 522];
     let mut page = vec!["0.5 w".to_string()];
@@ -385,7 +391,7 @@ fn ruled_tables_pdf(pages: usize) -> Vec<u8> {
         }
     }
     page.push("ET".into());
-    pdf_of(&vec![page.join("\n"); pages], |_| String::new())
+    pdf_of(&vec![page.join("\n"); pages], extra)
 }
 
 /// A PDF of a page drawing each of `contents` in Helvetica (`/F1`), with
@@ -777,4 +783,90 @@ fn a_note_on_a_page_past_the_page_limit_is_not_read() {
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(out.contains("A note on page 2"), "{out}");
     assert!(!out.contains("A note on page 3"), "{out}");
+}
+
+#[test]
+fn a_pdfs_notes_are_read_within_its_budget_or_left_out() {
+    // Two pages of forty lines, which fit in 1 MiB, and two notes of 20,000
+    // letters on the first, which fit in 1 MiB too, but not beside the
+    // pages. Read from a budget of their own, they were kept; read from the
+    // document's, they are left out, said once, and the pages converted
+    // whole.
+    let dir = scratch("long-notes");
+    let pdf = dir.join("noted.pdf");
+    let note = |n: usize| {
+        format!(
+            "<< /Type /Annot /Subtype /Text /Rect [100 700 120 720] \
+             /Contents (Note {n} {}) >>",
+            "y".repeat(20_000)
+        )
+    };
+    let notes = format!("/Annots [{} {}]", note(1), note(2));
+    std::fs::write(
+        &pdf,
+        pages_pdf_with(
+            2,
+            40,
+            |i| if i == 0 { notes.clone() } else { String::new() },
+        ),
+    )
+    .unwrap();
+    let pdf = pdf.to_str().unwrap();
+    let convert = |memory: &[&str]| {
+        let args = ["convert", pdf, "--no-escalate", "--comments"];
+        fdoc(&dir, &[&args[..], memory].concat(), &[])
+    };
+    let o = convert(&["--max-memory", "1"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("Line 39 of page 2,"), "{out}");
+    assert!(!out.contains("Note 1") && !out.contains("Note 2"), "{out}");
+    assert_eq!(
+        stderr(&o),
+        "warning: noted: notes left out: text past the 1 MiB of memory a document may take \
+         (raise it with --max-memory)\n"
+    );
+    // Within its budget, the notes are read.
+    let o = convert(&[]);
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("Note 1") && out.contains("Note 2"), "{out}");
+}
+
+#[test]
+fn a_pdfs_notes_are_spent_after_its_tables_and_never_cut_its_pages() {
+    // Twelve pages of tables whose DoCO copies fit in 2 MiB, and a note of
+    // 60,000 letters on the first that does not fit beside them. The notes
+    // are spent from what the pages and their tables left: left out, the
+    // pages kept whole. Spent before the tables' copies, the note would fit
+    // beside the glyphs, and the tables would read the document short.
+    let dir = scratch("notes-after-tables");
+    let pdf = dir.join("tables.pdf");
+    let note = format!(
+        "/Annots [<< /Type /Annot /Subtype /Text /Rect [100 700 120 720] \
+         /Contents (A long note {}) >>]",
+        "y".repeat(60_000)
+    );
+    let extra = |i: usize| if i == 0 { note.clone() } else { String::new() };
+    std::fs::write(&pdf, ruled_tables_pdf_with(12, extra)).unwrap();
+    let pdf = pdf.to_str().unwrap();
+    let convert = |memory: &[&str]| {
+        let args = ["convert", pdf, "--no-escalate", "-f", "doco", "--comments"];
+        fdoc(&dir, &[&args[..], memory].concat(), &[])
+    };
+    let o = convert(&["--max-memory", "2"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let e = stderr(&o);
+    assert!(e.contains("warning: tables: notes left out"), "{e}");
+    assert!(!e.contains("past the memory limit, not read"), "{e}");
+    let graph = String::from_utf8_lossy(&o.stdout);
+    assert!(!graph.contains("PastMemoryLimit"), "{graph}");
+    assert!(!graph.contains("A long note"));
+    // Within its budget, the note is read beside them.
+    let o = convert(&[]);
+    assert!(
+        o.status.success() && stderr(&o).is_empty(),
+        "{}",
+        stderr(&o)
+    );
+    assert!(String::from_utf8_lossy(&o.stdout).contains("A long note"));
 }

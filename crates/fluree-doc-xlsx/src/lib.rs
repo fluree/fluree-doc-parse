@@ -134,7 +134,9 @@ pub struct OcrParse {
     /// The images not read, as `doc:unreadImages` lists them, once for each
     /// figure drawing them, with why: `Missing` (not in the package),
     /// `UnsupportedFormat` (a drawing kept as EMF or WMF, a GIF),
-    /// `PastAllowance` (past [`Allowance::DOCUMENT`]) or `Failed`. Each is
+    /// `PastAllowance` (past [`Allowance::DOCUMENT`]), `PastMemoryLimit`
+    /// (its reading past what the document left of its budget) or
+    /// `Failed`. Each is
     /// left as its figures.
     pub unread: Vec<fluree_doc_model::UnreadImage>,
     /// What went wrong with each image `UnsupportedFormat` or `Failed`, by
@@ -157,8 +159,16 @@ pub fn parse_with_ocr(
     engine: &dyn fluree_doc_vision::OcrEngine,
 ) -> Result<OcrParse, XlsxError> {
     let mut pkg = Package::open(bytes).map_err(XlsxError::Zip)?;
-    let (mut elements, info, media) = parse_package(&mut pkg)?;
-    let r = fluree_doc_image::read_placed(media, &mut |part| read_media(&mut pkg, part), engine);
+    // The pictures' readings are spent from what the document left of its
+    // budget: together, they take no more than one document may.
+    let mut budget = Budget::default();
+    let (mut elements, info, media) = parse_package_within(&mut pkg, &mut budget)?;
+    let r = fluree_doc_image::read_placed(
+        media,
+        &mut |part| read_media(&mut pkg, part),
+        engine,
+        &mut budget,
+    );
     fluree_doc_image::place_after_figures(&mut elements, r.read);
     Ok(OcrParse {
         elements,
@@ -187,12 +197,23 @@ pub fn parse_with_media(
 pub fn parse_package(
     pkg: &mut Package<'_>,
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), XlsxError> {
+    parse_package_within(pkg, &mut Budget::default())
+}
+
+/// [`parse_package`], spending from `budget`, the workbook's, and leaving
+/// it spent: a caller that goes on to read the workbook's pictures spends
+/// what their readings make from what the workbook left of it
+/// (`fluree_doc_image::read_placed`, as `parse_with_ocr` does), so a
+/// workbook and its pictures are bounded together.
+pub fn parse_package_within(
+    pkg: &mut Package<'_>,
+    budget: &mut Budget,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), XlsxError> {
     let main = pkg.main_part("xl/workbook.xml");
     // The parts the workbook is read from, each inflated whole, are spent
     // from its budget before what it makes.
-    let mut budget = Budget::default();
     let workbook = pkg
-        .read_within(&main, &mut budget)?
+        .read_within(&main, budget)?
         .ok_or(XlsxError::NoWorkbook)?;
     let rels = pkg.relationships(&main).map_err(XlsxError::Zip)?;
     let part = |name: &str, fallback: &str| {
@@ -204,15 +225,15 @@ pub fn parse_package(
         part("sharedStrings", "xl/sharedStrings.xml"),
         part("styles", "xl/styles.xml"),
     );
-    let shared = match pkg.read_within(&shared, &mut budget)? {
-        Some(x) => read_shared_strings(&x, &mut budget)?,
+    let shared = match pkg.read_within(&shared, budget)? {
+        Some(x) => read_shared_strings(&x, budget)?,
         None => Vec::new(),
     };
-    let styles = match pkg.read_within(&styles, &mut budget)? {
-        Some(x) => read_styles(&x, &mut budget)?,
+    let styles = match pkg.read_within(&styles, budget)? {
+        Some(x) => read_styles(&x, budget)?,
         None => Styles::default(),
     };
-    let (sheets, date1904) = parse_workbook_xml(&workbook, &mut budget)?;
+    let (sheets, date1904) = parse_workbook_xml(&workbook, budget)?;
     let names = PartNames::new(pkg);
     // Each sheet's part by its relationship id, the first internal one
     // that has it: found in one lookup per sheet listed, where a scan of
@@ -233,7 +254,7 @@ pub fn parse_package(
         if !read.insert(target) {
             continue;
         }
-        let Some(xml) = pkg.read_within(target, &mut budget)? else {
+        let Some(xml) = pkg.read_within(target, budget)? else {
             continue;
         };
         let ctx = Context {
@@ -241,7 +262,7 @@ pub fn parse_package(
             styles: &styles,
             date1904,
         };
-        let sheet = read_sheet(&xml, &ctx, &mut budget)?;
+        let sheet = read_sheet(&xml, &ctx, budget)?;
         // The sheet's drawing, by the relationship it names: the pictures
         // anchored to its cells, each a figure where it is anchored.
         let mut figures = Vec::new();
@@ -253,13 +274,13 @@ pub fn parse_package(
                 .find(|r| r.id == *rid && !r.external)
                 .map(|r| r.target);
             let xml = match &drawing {
-                Some(d) => pkg.read_within(d, &mut budget)?,
+                Some(d) => pkg.read_within(d, budget)?,
                 None => None,
             };
             if let Some((xml, part)) = xml.zip(drawing) {
                 let drawing_rels = pkg.relationships(&part).map_err(XlsxError::Zip)?;
                 let drawing_rels = Relations::new(&drawing_rels);
-                for pic in pictures(&xml, &mut budget)? {
+                for pic in pictures(&xml, budget)? {
                     budget.spend_elements(1)?;
                     budget.spend_text(&pic.alt)?;
                     figure_count += 1;
@@ -282,7 +303,7 @@ pub fn parse_package(
             &sheet,
             page,
             figures,
-            &mut budget,
+            budget,
         )?);
     }
     for (i, e) in out.iter_mut().enumerate() {

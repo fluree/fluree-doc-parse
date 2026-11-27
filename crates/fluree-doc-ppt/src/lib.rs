@@ -948,13 +948,19 @@ fn open(bytes: &[u8]) -> Result<Opened<'_>, PptError> {
 /// alternative text, and the store entry holding it (`Pictures#<n>`), for an
 /// OCR engine or a model to read; [`read_media`] reads one's bytes.
 pub fn parse_with_media(bytes: &[u8]) -> Result<(Vec<Element>, Vec<Media>), PptError> {
-    parse_within(bytes, &mut Budget::default())
+    parse_with_media_within(bytes, &mut Budget::default())
 }
 
-/// [`parse_with_media`], against `budget`: every text read, from the slide
-/// list, the slides, their notes and their tables, spent before it is
-/// decoded; every element and cell before it is made.
-fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<Media>), PptError> {
+/// [`parse_with_media`], against `budget`, the deck's, and leaving it
+/// spent: every text read, from the slide list, the slides, their notes and
+/// their tables, spent before it is decoded; every element and cell before
+/// it is made. A caller that goes on to read the deck's pictures spends what
+/// their readings make from what the deck left of it, so a deck and its
+/// pictures are bounded together.
+pub fn parse_with_media_within(
+    bytes: &[u8],
+    budget: &mut Budget,
+) -> Result<(Vec<Element>, Vec<Media>), PptError> {
     let Opened {
         doc, document, map, ..
     } = open(bytes)?;

@@ -364,7 +364,7 @@ where no Content-ID names that part alone, never its file name, which two
 images can share. An image several figures draw (a logo
 or a screenshot pasted more than once) is read once, under the name of the
 first figure drawing it, and listed unread once for each figure. `reason` is
-one of seven:
+one of eight:
 
 | `reason` | the image | counted on stderr |
 |---|---|---|
@@ -372,6 +372,7 @@ one of seven:
 | `Missing` | the file does not hold it: a link to an outside file, a relationship the file does not define | yes |
 | `UnsupportedFormat` | not a PNG, JPEG or TIFF: a vector drawing kept as EMF or WMF, a GIF | no |
 | `PastAllowance` | past what one document may have read: 256 images, 512 million pixels as their headers state them (an image whose header does not parse is charged a pixel per byte) | yes |
+| `PastMemoryLimit` | read, but what its reading makes (its elements, their text, a table's cells and the copies DoCO writes of them) is past what the document, and the images read before it, left of the memory one document may take (`--max-memory`); the configured model is not sent it ([limits](../reference/limits.md#copies-of-a-tables-cells)) | yes |
 | `Small` | nothing else read it, and the configured model is not sent it: under 400 pixels on its longer side or 48 on its shorter | no |
 | `NotTexty` | nothing else read it, and the configured model is not sent it, as the pixel probe does not take it for text (a photograph, a chart, a logo); or OCR read it, and what it read was noise, as a photograph or a gradient read for text gives: the rule a [`NotTexty` region](#regions-nothing-read)'s reading is held to, and the reading is listed with `setAside: "noise"` ([OCR readings](#ocr-readings)) | no |
 | `Failed` | its reading failed, or was set aside because its words could not be placed on it (told before the reading is judged noise), the part it names is not there or cannot be read, its part is empty or ends before its format can be told, or its header does not parse, so the configured model is not sent it; stderr says why | yes |

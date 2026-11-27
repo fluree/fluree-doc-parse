@@ -1074,8 +1074,10 @@ after its page's own text, with the annotation's rectangle as its `bbox`,
 transcript turn's speaker does: `Sam Example: Check this total`. An
 annotation is read once however many times or pages list it, a note keeps
 at most 65,536 characters, at most 20,000 notes are read, and each is
-counted, with its text, against the memory one document may take; past
-it, the notes are left out with a warning and the pages are still read.
+counted, with its text, against what the document's pages and their
+tables left of the memory one document may take; past it, the notes are
+all left out with a warning, and the pages are still read whole, never
+read short for them.
 What a highlight covers is the page's text already, and is not repeated: a
 text markup (highlight, underline, strike-out, squiggly) whose note is the
 text under it, as viewers often copy it there, is left out, while one that

@@ -2703,6 +2703,24 @@ impl PageBudget {
         &self.now
     }
 
+    /// Spend from the budget as it stands, all or nothing: `spend` is run on
+    /// a copy, kept where it returns `Ok` and dropped where it does not, so
+    /// what a caller leaves out past the budget (a PDF's notes, read with
+    /// `fdoc convert --comments`) gives back what it spent. For what is
+    /// made once the pages are those that will be written, after
+    /// [`crate::spend_table_copies`]: what is spent here is not counted
+    /// among what a page spent, so a document read short after it would
+    /// not give it back.
+    pub fn spend_whole<R, E>(
+        &mut self,
+        spend: impl FnOnce(&mut Budget) -> Result<R, E>,
+    ) -> Result<R, E> {
+        let mut b = self.now.clone();
+        let r = spend(&mut b)?;
+        self.now = b;
+        Ok(r)
+    }
+
     /// The budget as the first `n` pages read left it, should the pages
     /// after them be dropped: as it stands where the pages were not counted
     /// one by one (a document not read by [`extract_pdf_within`]).

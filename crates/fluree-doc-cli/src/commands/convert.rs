@@ -795,8 +795,11 @@ fn read_source(
             };
             let mut pkg = fluree_doc_docx::Package::open(&data)
                 .map_err(|e| fluree_doc_docx::DocxError::Zip(e).to_string())?;
+            // The document's budget: what its pictures' readings make is
+            // spent from what the document left of it.
+            let mut budget = fluree_doc_model::budget::Budget::default();
             let (mut elements, info, media) =
-                fluree_doc_docx::parse_package_options(&mut pkg, &options)
+                fluree_doc_docx::parse_package_within(&mut pkg, &options, &mut budget)
                     .map_err(|e| common::refused(&e))?;
             // The images placed in the flow: a pasted screenshot's text
             // follows its figure, read by OCR. Their bytes are only read
@@ -809,6 +812,7 @@ fn read_source(
                 media,
                 &mut |part| fluree_doc_docx::read_media_head(&mut pkg.borrow_mut(), part),
                 &mut |part| fluree_doc_docx::read_media(&mut pkg.borrow_mut(), part),
+                &mut budget,
                 cfg,
                 quiet,
             );
@@ -849,8 +853,10 @@ fn read_source(
         SourceKind::Xlsx => {
             let mut pkg = fluree_doc_xlsx::Package::open(&data)
                 .map_err(|e| fluree_doc_xlsx::XlsxError::Zip(e).to_string())?;
+            let mut budget = fluree_doc_model::budget::Budget::default();
             let (mut elements, info, media) =
-                fluree_doc_xlsx::parse_package(&mut pkg).map_err(|e| common::refused(&e))?;
+                fluree_doc_xlsx::parse_package_within(&mut pkg, &mut budget)
+                    .map_err(|e| common::refused(&e))?;
             // Read from the package opened once, as a DOCX's are.
             let pkg = std::cell::RefCell::new(pkg);
             let media = read_media_with(
@@ -858,6 +864,7 @@ fn read_source(
                 media,
                 &mut |part| fluree_doc_xlsx::read_media_head(&mut pkg.borrow_mut(), part),
                 &mut |part| fluree_doc_xlsx::read_media(&mut pkg.borrow_mut(), part),
+                &mut budget,
                 cfg,
                 quiet,
             );
@@ -903,8 +910,9 @@ fn read_source(
         // A PowerPoint 97-2003 deck, a slide a page. A picture on a slide is
         // read as a DOCX's is, its text placed after its figure.
         SourceKind::Ppt => {
-            let (mut elements, media) =
-                fluree_doc_ppt::parse_with_media(&data).map_err(|e| common::refused(&e))?;
+            let mut budget = fluree_doc_model::budget::Budget::default();
+            let (mut elements, media) = fluree_doc_ppt::parse_with_media_within(&data, &mut budget)
+                .map_err(|e| common::refused(&e))?;
             // The deck opened once, when the first picture is read. Each
             // picture's first bytes are copied alone to tell its format:
             // the entries of a deck's store may all point at one large
@@ -922,6 +930,7 @@ fn read_source(
                 media,
                 &mut |part| opened()?.head(part, fluree_doc_pdf::image::Format::SNIFFED),
                 &mut |part| opened()?.read(part),
+                &mut budget,
                 cfg,
                 quiet,
             );
@@ -1008,9 +1017,11 @@ fn convert_email(
     quiet: bool,
 ) -> Result<String, String> {
     let stem = src.stem;
-    let email = fluree_doc_email::parse(data).map_err(|e| common::refused(&e))?;
+    let mut email = fluree_doc_email::parse(data).map_err(|e| common::refused(&e))?;
     // The images the body shows: a pasted screenshot's text follows its
-    // figure, read as a DOCX picture's is.
+    // figure, read as a DOCX picture's is, within what the message left of
+    // its budget.
+    let mut budget = std::mem::take(&mut email.budget);
     let media = read_media(
         stem,
         email.media.clone(),
@@ -1019,6 +1030,7 @@ fn convert_email(
                 .media_bytes(part)
                 .ok_or_else(|| format!("{part}: not in the message"))
         },
+        &mut budget,
         cfg,
         quiet,
     );
@@ -1640,11 +1652,20 @@ struct MediaRead {
 /// each image the model is sent, as it is sent: no image's bytes are held
 /// past its reading. `head` reads its first bytes, which tell its format
 /// before anything else is read.
+///
+/// What each reading makes is spent from `budget`, what the document left
+/// of its own ([`fluree_doc_image::spend_reading`]): OCR's and one supplied
+/// as each image is read, in the order they are first drawn, the
+/// configured model's once it has read those sent to it. An image whose
+/// reading is past what is left is listed unread past the limit
+/// (`PastMemoryLimit`), and the model is not sent it; the document and the
+/// images read before it are kept.
 fn read_media_with(
     stem: &str,
     media: Vec<fluree_doc_model::Media>,
     head: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
     bytes: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    budget: &mut fluree_doc_model::budget::Budget,
     cfg: &TierConfig,
     quiet: bool,
 ) -> MediaRead {
@@ -1667,6 +1688,7 @@ fn read_media_with(
         asked: 0,
         over_budget: 0,
         verdicts: HashMap::new(),
+        budget: &mut *budget,
         quiet,
     };
     let reads = fluree_doc_model::read_pictures(
@@ -1713,8 +1735,10 @@ fn read_media_with(
     }
     placed.sort_by_key(|(picture, _)| order.get(&picture.tag()).copied());
     let over_budget = reader.over_budget;
-    read_by_model(stem, &mut placed, bytes, cfg, quiet);
+    read_by_model(stem, &mut placed, bytes, budget, cfg, quiet);
     let mut out = MediaRead::default();
+    // Images whose reading was past what the document had left.
+    let mut past_memory = 0usize;
     for (picture, p) in placed {
         // Of a reading listed only, taken or set aside as noise: one refused,
         // or one a model's replaced, says nothing in the output.
@@ -1733,6 +1757,9 @@ fn read_media_with(
                     None if p.unsupported => "UnsupportedFormat",
                     None => "NotRead",
                 };
+                if fluree_doc_model::is_past_limit(reason) {
+                    past_memory += 1;
+                }
                 for figure in picture.figures() {
                     out.unread.push(fluree_doc_model::UnreadImage {
                         figure: figure.to_string(),
@@ -1758,6 +1785,12 @@ fn read_media_with(
                  ({} images, {} million pixels)",
                 a.pictures,
                 a.pixels / 1_000_000
+            );
+        }
+        if past_memory > 0 {
+            eprintln!(
+                "note: {stem}: {past_memory} image(s) past the memory one document may take, \
+                 not read (raise it with --max-memory)"
             );
         }
     }
@@ -1813,6 +1846,8 @@ struct MediaReader<'a> {
     /// What became of each picture told apart before its bytes were read,
     /// by the name it goes by.
     verdicts: HashMap<String, Placed>,
+    /// What the document left of its budget, each reading spent from it.
+    budget: &'a mut fluree_doc_model::budget::Budget,
     quiet: bool,
 }
 
@@ -1898,6 +1933,13 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
         let mut ocr_read: Vec<fluree_doc_model::OcrReading> = Vec::new();
         // Its words' scores outside 0-1, of how many, where a sidecar gave them.
         let mut scores: Option<(usize, usize)> = None;
+        // The budget before OCR's reading is spent from it, should a reading
+        // supplied replace OCR's: its tables apart, which are not cloned.
+        let before = self
+            .given
+            .is_some()
+            .then(|| self.budget.apart(|b| b.clone()));
+        let budget = &mut *self.budget;
         if ocr {
             // The words an engine wrote, where they are what is read.
             let words = match &cfg.ocr {
@@ -1913,7 +1955,7 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
                 (Some(Some(text)), _) => Some(
                     fluree_doc_vision::WordReading::from_json(text).and_then(|reading| {
                         scores = Some((reading.scores_out_of_range(), reading.words_with_text()));
-                        fluree_doc_image::elements_from_words(b, reading)
+                        fluree_doc_image::elements_from_words(b, reading, budget)
                     }),
                 ),
                 // Read by the engine whatever the pixel probe makes of it,
@@ -1924,11 +1966,29 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
                     decoded
                         .take()
                         .expect("decoded for the engine")
-                        .and_then(|image| fluree_doc_image::read_texty(image, engine.0.as_ref())),
+                        .and_then(|image| {
+                            fluree_doc_image::read_texty(image, engine.0.as_ref(), budget)
+                        }),
                 ),
                 _ => unreachable!("words or an engine"),
             };
             match got {
+                // What it read is past what the document has left: not read,
+                // nothing of it spent, and no model is sent it, whose reading
+                // would be past it as well. Counted, with the flag that
+                // raises it.
+                Some(Ok(fluree_doc_image::ImageElements {
+                    past_budget: Some(e),
+                    ..
+                })) => {
+                    if cfg.verbose {
+                        eprintln!("ocr: {name}: past the memory limit, not read: {e}");
+                    }
+                    failure = Some((
+                        fluree_doc_model::past_limit_reason(e.limit()),
+                        e.to_string(),
+                    ));
+                }
                 // A reading that is noise (a photograph or a chart read for
                 // text it does not hold) is set aside: the image is not
                 // read, and a model may still be sent it.
@@ -1992,7 +2052,8 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
         // whatever the image looks like; else the configured model, for an
         // image OCR read no text in.
         let ocr_read_text = read.as_ref().is_some_and(|r| !r.is_empty());
-        let live = model && !ocr_read_text;
+        let past = (failure.as_ref()).is_some_and(|(why, _)| fluree_doc_model::is_past_limit(why));
+        let live = model && !ocr_read_text && !past;
         let mut p = Placed {
             read,
             failure,
@@ -2002,7 +2063,14 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
         };
         let max = cfg.config.escalation.max_crops;
         if let Some(given) = &self.given {
-            p.take(stem, given, cfg.verbose);
+            // A reading supplied replaces OCR's, and what OCR's spent is
+            // given back before it is spent in its place.
+            if p.take(stem, given, cfg.verbose) {
+                if let Some(before) = before {
+                    self.budget.apart(|b| *b = before);
+                }
+                p.spend(self.budget);
+            }
         } else if live {
             // Held to what a call is worth (see `declined_by_model`): its
             // header read, a floor of pixels, the pixel probe. OCR, which
@@ -2074,6 +2142,7 @@ fn read_media<'a>(
     stem: &str,
     media: Vec<fluree_doc_model::Media>,
     bytes: &dyn Fn(&str) -> Result<&'a [u8], String>,
+    budget: &mut fluree_doc_model::budget::Budget,
     cfg: &TierConfig,
     quiet: bool,
 ) -> MediaRead {
@@ -2083,6 +2152,7 @@ fn read_media<'a>(
         media,
         &mut |p| bytes(p).map(|b| b[..b.len().min(sniffed)].to_vec()),
         &mut |p| bytes(p).map(<[u8]>::to_vec),
+        budget,
         cfg,
         quiet,
     )
@@ -2127,15 +2197,15 @@ impl Placed {
     }
 
     /// Take a model's reading of it from `readings`, over what OCR read,
-    /// unless it lost most of that. A reading that holds nothing to place
-    /// (the model's sentence that the image has no text, the furniture of
-    /// a screen) read it all the same.
+    /// unless it lost most of that, and say whether it was taken. A reading
+    /// that holds nothing to place (the model's sentence that the image has
+    /// no text, the furniture of a screen) read it all the same.
     fn take(
         &mut self,
         stem: &str,
         readings: &dyn fluree_doc_pdf::arbiter::TierBackend,
         verbose: bool,
-    ) {
+    ) -> bool {
         if readings.read(stem, &self.tag).is_some() {
             self.read_empty();
         }
@@ -2152,6 +2222,23 @@ impl Placed {
             self.failure = None;
             // The model's reading replaced OCR's words.
             self.ocr_read.clear();
+            return true;
+        }
+        false
+    }
+
+    /// Spend what was read of it from `budget`, what the document left of
+    /// its own: past it, it is not read, and listed past the limit.
+    fn spend(&mut self, budget: &mut fluree_doc_model::budget::Budget) {
+        let Some(read) = &self.read else {
+            return;
+        };
+        if let Err(e) = fluree_doc_image::spend_reading(budget, read) {
+            self.read = None;
+            self.failure = Some((
+                fluree_doc_model::past_limit_reason(e.limit()),
+                e.to_string(),
+            ));
         }
     }
 
@@ -2179,6 +2266,7 @@ fn read_by_model(
     stem: &str,
     placed: &mut [(fluree_doc_model::Picture, Placed)],
     bytes: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    budget: &mut fluree_doc_model::budget::Budget,
     cfg: &TierConfig,
     quiet: bool,
 ) {
@@ -2204,16 +2292,20 @@ fn read_by_model(
         stem,
         placed.iter_mut().map(|(_, p)| p),
         &got,
+        budget,
         cfg.verbose,
         quiet,
     );
 }
 
-/// Take what the model made of each image of `placed` sent to it.
+/// Take what the model made of each image of `placed` sent to it, each
+/// reading taken spent from `budget`, what the document left of its own, in
+/// the order of `placed`.
 fn settle<'p>(
     stem: &str,
     placed: impl IntoIterator<Item = &'p mut Placed>,
     got: &Result<crate::escalate::ImagesRead, String>,
+    budget: &mut fluree_doc_model::budget::Budget,
     verbose: bool,
     quiet: bool,
 ) {
@@ -2231,7 +2323,11 @@ fn settle<'p>(
                 }
                 // Read, and found to hold no text: read all the same.
                 None if read.empty.contains(&p.tag) => p.read_empty(),
-                None => p.take(stem, &read.readings, verbose),
+                None => {
+                    if p.take(stem, &read.readings, verbose) {
+                        p.spend(budget);
+                    }
+                }
             },
             Err(e) => p.not_read_by_model(e.clone()),
         }
@@ -2829,27 +2925,6 @@ fn convert_bytes(
         &fluree_doc_pdf::link::extract(&raw),
         &doc.pages,
     );
-    // The notes a reader left on the pages read, when asked for
-    // (`--comments`), after each page's own text, within what one document
-    // may make: past it, the page's text is still read, and the notes are
-    // left out with a warning rather than failing the document. A markup
-    // quoting the text it marks would say that text twice, and is left out.
-    if args.comments {
-        let mut budget = fluree_doc_model::budget::Budget::default();
-        match fluree_doc_pdf::annot::annotations(&raw, doc.pages.len(), &mut budget) {
-            Ok(mut annotations) => {
-                fluree_doc_pdf::annot::drop_quoting_markups(&mut annotations, &doc.pages);
-                fluree_doc_pdf::annot::place(
-                    &mut a.elements,
-                    fluree_doc_pdf::annot::elements(&annotations),
-                );
-            }
-            Err(e) if !quiet => {
-                eprintln!("warning: {stem}: notes left out: {}", common::refused(&e))
-            }
-            Err(_) => {}
-        }
-    }
     // The files it embeds, described as an e-mail's attachments are, and
     // saved with them under `--attachments`.
     let (embedded, skipped) = fluree_doc_pdf::annot::embedded_files(&raw);
@@ -2870,12 +2945,38 @@ fn convert_bytes(
     if let Some(keep) = pages {
         a.elements.retain(|e: &Element| keep.contains(&e.page));
     }
-    // The elements are those written from here: their tables' copies are
-    // spent, the document read short to the most pages whose glyphs and
-    // copies fit, before the pages, the notes and the unread pages are told
-    // from `doc`.
+    // The elements are those written from here, but for the notes: their
+    // tables' copies are spent, the document read short to the most pages
+    // whose glyphs and copies fit, before the notes, the pages and the
+    // unread pages are told from `doc`.
     fluree_doc_pdf::spend_table_copies(&mut doc, &mut a.elements, &mut budget)
         .map_err(|e| common::refused(&fluree_doc_pdf::ExtractError::TooLarge(e)))?;
+    // The notes a reader left on the pages read, when asked for
+    // (`--comments`), after each page's own text, from what the document
+    // left of its budget once its pages and their tables are final: past
+    // it, the notes are left out with a warning, all of them, and give back
+    // what they spent; the pages are kept whole, not read short for notes
+    // nobody prints. A markup quoting the text it marks would say that text
+    // twice, and is left out. The notes on the pages read are spent, those
+    // `--pages` leaves out among them.
+    if args.comments {
+        let notes =
+            budget.spend_whole(|b| fluree_doc_pdf::annot::annotations(&raw, doc.pages.len(), b));
+        match notes {
+            Ok(mut annotations) => {
+                fluree_doc_pdf::annot::drop_quoting_markups(&mut annotations, &doc.pages);
+                annotations.retain(|n| pages.is_none_or(|keep| keep.contains(&n.page)));
+                fluree_doc_pdf::annot::place(
+                    &mut a.elements,
+                    fluree_doc_pdf::annot::elements(&annotations),
+                );
+            }
+            Err(e) if !quiet => {
+                eprintln!("warning: {stem}: notes left out: {}", common::refused(&e))
+            }
+            Err(_) => {}
+        }
+    }
     // Page geometry travels with the graph: a bbox cannot be placed on a
     // rendered page without the size of the page it came from.
     let sizes = doc
@@ -3917,7 +4018,14 @@ mod tests {
             failures: vec![("m2".into(), "refused".into())],
             ..Default::default()
         });
-        settle("report", placed.iter_mut(), &got, false, true);
+        settle(
+            "report",
+            placed.iter_mut(),
+            &got,
+            &mut fluree_doc_model::budget::Budget::default(),
+            false,
+            true,
+        );
         assert!(placed[0].read.as_ref().is_some_and(Vec::is_empty));
         assert!(placed[0].failure.is_none());
         assert!(placed[1].read.is_none());
@@ -3935,7 +4043,14 @@ mod tests {
             readings,
             ..Default::default()
         });
-        settle("report", placed.iter_mut(), &got, false, true);
+        settle(
+            "report",
+            placed.iter_mut(),
+            &got,
+            &mut fluree_doc_model::budget::Budget::default(),
+            false,
+            true,
+        );
         assert!(placed[0].read.as_ref().is_some_and(Vec::is_empty));
         assert!(placed[0].failure.is_none());
     }
@@ -3953,6 +4068,7 @@ mod tests {
             ..Default::default()
         };
         let mut head = |_: &str| Ok(Vec::new());
+        let mut budget = fluree_doc_model::budget::Budget::default();
         let mut reader = MediaReader {
             stem: "report",
             cfg: &cfg,
@@ -3961,6 +4077,7 @@ mod tests {
             asked: 0,
             over_budget: 0,
             verdicts: HashMap::new(),
+            budget: &mut budget,
             quiet: true,
         };
         assert_eq!(reader.pixels(&fake), Ok(fake.len() as u64));
@@ -4027,6 +4144,7 @@ mod tests {
             ..Default::default()
         };
         let mut head = |_: &str| Ok(Vec::new());
+        let mut budget = fluree_doc_model::budget::Budget::default();
         let mut reader = MediaReader {
             stem: "report",
             cfg: &cfg,
@@ -4035,6 +4153,7 @@ mod tests {
             asked: 0,
             over_budget: 0,
             verdicts: HashMap::new(),
+            budget: &mut budget,
             quiet: true,
         };
         let source = fluree_doc_model::MediaSource::Part("word/media/image1.png".into());
