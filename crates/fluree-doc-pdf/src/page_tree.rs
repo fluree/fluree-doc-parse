@@ -103,9 +103,12 @@ pub const MAX_OBJECT_STREAMS_BYTES: u64 = scaled(256 << 20);
 /// for each of its objects, a few hundred thousand for the longest.
 pub const MAX_XREF_ENTRIES: u64 = scaled(4_000_000);
 
-/// How many times over the file the measure may scan, reading its objects
-/// where the parser could read them: a real file is scanned about once,
-/// an object that starts where another one does not end being rare.
+/// How many times over the file, and over what its object streams decode
+/// to, the measure may scan, reading its objects where the parser could
+/// read them: a real file is scanned about once, an object that starts
+/// where another one does not end being rare. What object streams decode
+/// to counts beside the file: their objects are scanned there, and a
+/// stream compresses its objects many times over.
 const SCANS: usize = 16;
 
 /// Open `data` as a PDF, its page tree measured first: past
@@ -143,7 +146,8 @@ pub struct Shape {
 /// Measure the page tree of the PDF in `data`, over every object the file
 /// holds. An error is the file refused before the measure could finish:
 /// an object nesting past [`MAX_OBJECT_NESTING`], object streams decoding
-/// past their bounds, objects overlapping past [`SCANS`] passes.
+/// past their bounds, objects overlapping past [`SCANS`] passes over the
+/// file and what its object streams decode to.
 pub fn measure(data: &[u8]) -> Result<Shape, TooLarge> {
     let mut m = Measure {
         data,
@@ -447,7 +451,8 @@ struct Measure<'a> {
     /// The entries read from cross-reference streams, against
     /// [`MAX_XREF_ENTRIES`].
     entries: u64,
-    /// Bytes scanned, against [`SCANS`] passes over the file.
+    /// Bytes scanned, against [`SCANS`] passes over the file and
+    /// [`Measure::decoded`].
     scanned: usize,
     /// Bytes object streams were decoded to, against
     /// [`MAX_OBJECT_STREAMS_BYTES`].
@@ -466,17 +471,18 @@ struct StreamKind {
 }
 
 impl<'a> Measure<'a> {
-    /// Spend `n` bytes of scanning: past [`SCANS`] passes over the file,
-    /// the file is refused.
+    /// Spend `n` bytes of scanning: past [`SCANS`] passes over the file
+    /// and what its object streams decoded to, the file is refused. That is
+    /// bounded too, by [`MAX_OBJECT_STREAMS_BYTES`], so the scan is.
     fn scan_spent(&mut self, n: usize) -> Result<(), TooLarge> {
         self.scanned = self.scanned.saturating_add(n);
-        if self.scanned
-            > SCANS
-                .saturating_mul(self.data.len())
-                .saturating_add(1 << 20)
-        {
+        let read = self
+            .data
+            .len()
+            .saturating_add(usize::try_from(self.decoded).unwrap_or(usize::MAX));
+        if self.scanned > SCANS.saturating_mul(read).saturating_add(1 << 20) {
             return Err(TooLarge::fixed(format!(
-                "its objects overlap past {SCANS} passes over the file"
+                "its objects overlap past {SCANS} passes over the file and its object streams"
             )));
         }
         Ok(())
@@ -1962,6 +1968,37 @@ mod tests {
         ));
         updated.extend(b"1 0 obj\n<< /Type /Catalog /Pages 6 0 R >>\nendobj\n");
         assert_eq!(pages(&updated), 300_000);
+    }
+
+    #[test]
+    fn an_object_stream_s_objects_are_scanned_within_what_it_decodes_to() {
+        // 3,000 objects of a thousand bytes each, packed in a stream of a
+        // few kilobytes: 3 MB scanned, more than sixteen passes over the
+        // file, and once each over what the stream decodes to.
+        let bodies: Vec<String> = (0..3000)
+            .map(|_| format!("<< /P /{} >>", "a".repeat(1000)))
+            .collect();
+        let mut header = String::new();
+        let mut off = 0;
+        for (i, b) in bodies.iter().enumerate() {
+            header.push_str(&format!("{} {off} ", 10 + i));
+            off += b.len() + 1;
+        }
+        let body: String = bodies.iter().map(|b| format!("{b} ")).collect();
+        let packed = zlib(format!("{header}{body}").as_bytes());
+        let mut file = chain(3);
+        file.extend(
+            format!(
+                "400 0 obj\n<< /Type /ObjStm /N 3000 /First {} /Filter /FlateDecode /Length {} >>\nstream\n",
+                header.len(),
+                packed.len()
+            )
+            .bytes(),
+        );
+        file.extend(&packed);
+        file.extend(b"\nendstream\nendobj\n");
+        assert!(16 * file.len() + (1 << 20) < 3_000_000, "{}", file.len());
+        assert_eq!(depth(&file), 3);
     }
 
     #[test]
