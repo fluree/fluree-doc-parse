@@ -636,7 +636,9 @@ pub fn read_placed(
 /// heading read in a screenshot is a heading of the screen, not of the
 /// document: it is read as a paragraph, so the document's outline stays its
 /// own. Tables stay tables. Ids are renumbered in order, and an element's
-/// reference to another by id (`resumes`, `continues`) follows it.
+/// reference to another by id (`resumes`, `continues`) follows it: the
+/// document's to the document's elements, a reading's to that reading's
+/// own, and one a reading makes to an element it does not hold is dropped.
 pub fn place_after_figures(
     elements: &mut Vec<fluree_doc_model::Element>,
     readings: Vec<(String, Vec<fluree_doc_model::Element>)>,
@@ -646,28 +648,44 @@ pub fn place_after_figures(
     }
     // A figure may hold several images (a group of pictures): their texts
     // follow it in order.
-    let mut by_figure: std::collections::HashMap<String, Vec<fluree_doc_model::Element>> =
+    let mut by_figure: std::collections::HashMap<String, Vec<Vec<fluree_doc_model::Element>>> =
         std::collections::HashMap::new();
     for (figure, read) in readings {
-        by_figure.entry(figure).or_default().extend(read);
+        by_figure.entry(figure).or_default().push(read);
     }
     let mut out = Vec::with_capacity(elements.len());
+    // Each reading's elements are named apart from the document's before the
+    // renaming below, by a name no element of a document has: a reading's
+    // own ids (`elem-00001`… from its analysis) name nothing of this
+    // document, and kept, they would take the place of the document's
+    // elements of the same id. A reference inside a reading (a table of the
+    // screen continued under it) follows its element; one to an element the
+    // reading does not hold names nothing here, and is dropped.
+    let mut readings = 0usize;
     for e in elements.drain(..) {
         let read = e.figure.as_ref().and_then(|f| by_figure.remove(f));
         let page = e.page;
         out.push(e);
-        for mut r in read.into_iter().flatten() {
-            // The reading's own ids (`elem-00001`… from its analysis) name
-            // nothing of this document: kept, they would take the place of
-            // the document's elements of the same id in the renaming below.
-            r.id.clear();
-            r.page = page;
-            r.bbox = None;
-            if r.kind != "doco:Table" {
-                r.kind = "doco:Paragraph".into();
-                r.level = None;
+        for mut read in read.into_iter().flatten() {
+            readings += 1;
+            let own: std::collections::HashMap<String, String> = read
+                .iter()
+                .filter(|r| !r.id.is_empty())
+                .map(|r| (r.id.clone(), format!("\0reading-{readings}-{}", r.id)))
+                .collect();
+            for mut r in read.drain(..) {
+                r.id = own.get(&r.id).cloned().unwrap_or_default();
+                for to in [&mut r.resumes, &mut r.continues] {
+                    *to = to.take().and_then(|id| own.get(&id).cloned());
+                }
+                r.page = page;
+                r.bbox = None;
+                if r.kind != "doco:Table" {
+                    r.kind = "doco:Paragraph".into();
+                    r.level = None;
+                }
+                out.push(r);
             }
-            out.push(r);
         }
     }
     let mut renamed = std::collections::HashMap::new();
@@ -1012,10 +1030,16 @@ mod tests {
         let mut part = el("doco:Table", "", "elem-00005", "eml");
         part.continues = Some("elem-00003".into());
         let mut els = vec![opener, figure, quoted, back, part];
+        // The reading's own table continued under its first part, and a
+        // reference to an element the reading does not hold.
+        let mut read2 = el("doco:Table", "Read 2", "elem-00002", "ocr");
+        read2.continues = Some("elem-00001".into());
+        let mut read3 = el("doco:Paragraph", "Read 3", "elem-00003", "ocr");
+        read3.resumes = Some("elem-00004".into());
         let read = vec![
-            el("doco:Paragraph", "Read 1", "elem-00001", "ocr"),
-            el("doco:Paragraph", "Read 2", "elem-00002", "ocr"),
-            el("doco:Paragraph", "Read 3", "elem-00003", "ocr"),
+            el("doco:Table", "Read 1", "elem-00001", "ocr"),
+            read2,
+            read3,
         ];
         place_after_figures(&mut els, vec![("figure-0-1".into(), read)]);
         let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
@@ -1034,6 +1058,12 @@ mod tests {
         );
         assert_eq!(els[6].resumes.as_deref(), Some("elem-00001"));
         assert_eq!(els[7].continues.as_deref(), Some("elem-00006"));
+        // The reading's table goes on in the reading's own first part, not
+        // in the document's opener its old id named; and nothing the
+        // reading does not hold is named from it.
+        assert_eq!(els[3].continues.as_deref(), Some("elem-00003"));
+        assert_eq!(els[4].resumes, None);
+        assert!(els.iter().all(|e| !e.id.starts_with('\0')));
     }
 
     #[test]
