@@ -1121,6 +1121,97 @@ fn byline(t: &str) -> bool {
     names > 0 && marked && (names >= 2 || strong)
 }
 
+/// Degrees set after an author's name (`John Woodside, PhD`).
+const DEGREES: &[&str] = &[
+    "PhD", "MD", "DPhil", "DSc", "MSc", "BSc", "MS", "BS", "MA", "BA", "MBA", "MPH", "MBBS",
+    "MBChB", "MRCP", "FRCP", "FRCS", "FACS", "FACP", "DVM", "PharmD", "RN",
+];
+
+/// A line naming a work's authors, which no subtitle does: a byline
+/// ([`byline`]), or a short citation of them (`Smiderle et al.`), or
+/// people's names with a mark for an affiliation or the corresponding
+/// author, or with their degrees. Under a title it is often set as a
+/// subtitle would be, a step smaller.
+///
+/// It is looser than [`byline`], which weighs a line anywhere on the page:
+/// one name with a star (`Onjefu Okidu*`), affiliations by letter (`Katharina
+/// Janek a, Agathe Niewienda a`), degrees (`Edwin Jabbari, BSc, MBBS, MRCP,¹
+/// John Woodside, PhD,1`), and a group named after the people (`Brad Evans¹,
+/// Erin Griner2, Reproducibility Project: Cancer Biology`), and a name with
+/// an initial (`Grace E. Rice`). Directly under a title, a starred pair of
+/// capitalised words is a person's name.
+pub(crate) fn authors_line(t: &str) -> bool {
+    if byline(t) || t.contains(" et al") {
+        return true;
+    }
+    // TeX sets the corresponding author's star as the operator `∗`.
+    let units = t
+        .replace('\u{2217}', "*")
+        .replace(" and ", ", ")
+        .replace(" & ", ", ")
+        .replace(" \u{00B7} ", ", ")
+        .replace(';', ",");
+    let (mut names, mut others, mut marked) = (0, 0, false);
+    for unit in units.split(',') {
+        let mut words: Vec<&str> = unit.split_whitespace().collect();
+        // Marks before the name are the name's before it, after its comma
+        // (`MRCP,¹ John Woodside`).
+        while words
+            .first()
+            .is_some_and(|w| w.chars().all(affiliation_mark))
+        {
+            words.remove(0);
+            marked = true;
+        }
+        // Marks after the name: raised or set apart, or a letter.
+        while let Some(last) = words.last() {
+            let name = last.trim_end_matches(affiliation_mark);
+            // A number past two figures is no affiliation's: a year.
+            if last[name.len()..].chars().filter(|&c| figure(c)).count() > 2 {
+                break;
+            }
+            let letter = name.chars().count() == 1 && name.chars().all(|c| c.is_ascii_lowercase());
+            if name.len() < last.len() || letter {
+                marked = true;
+            }
+            if name.is_empty() || (letter && words.len() > 1) {
+                words.pop();
+            } else {
+                let n = words.len();
+                words[n - 1] = name;
+                break;
+            }
+        }
+        if words.is_empty() {
+            continue;
+        }
+        if words
+            .iter()
+            .all(|w| DEGREES.contains(&w.trim_end_matches('.')))
+        {
+            marked = true;
+            continue;
+        }
+        let name_word = |w: &&str| {
+            NAME_PARTICLES.contains(w)
+                || (w.chars().next().is_some_and(char::is_uppercase)
+                    && w.chars()
+                        .all(|c| c.is_alphabetic() || matches!(c, '.' | '-' | '\'' | '\u{2019}')))
+        };
+        if (2..=4).contains(&words.len()) && words.iter().all(name_word) {
+            names += 1;
+            // An initial is a person's: `Grace E. Rice`, `J. Ponce`.
+            marked |= words.iter().any(|w| {
+                let mut c = w.chars();
+                matches!((c.next(), c.next(), c.next()), (Some(i), Some('.'), None) if i.is_uppercase())
+            });
+        } else {
+            others += 1;
+        }
+    }
+    marked && names > 0 && names > others
+}
+
 /// A mark only an author's name carries: an affiliation's number with a
 /// symbol for the corresponding author (`2*`), or a list of affiliations
 /// (`1,2`). A symbol alone is as often a note's (`Posted Transactions*`).
@@ -1777,6 +1868,18 @@ pub fn detect_with_body(
     body: f32,
     body_bold: Option<bool>,
 ) -> Vec<Heading> {
+    detect_with_kickers(pages, outline, body, body_bold).0
+}
+
+/// Detect headings as [`detect_with_body`] does, and name the blocks of the
+/// first page read as kickers over the title ([`drop_kickers`]), by their
+/// index: text, set apart from the body as the line over the title.
+pub fn detect_with_kickers(
+    pages: &[Vec<Block>],
+    outline: &[OutlineItem],
+    body: f32,
+    body_bold: Option<bool>,
+) -> (Vec<Heading>, Vec<usize>) {
     // Numbered lines that recur, by their text; see the check in the loop
     // below. Counted as occurrences rather than pages: a form answers
     // several items on one page with the same code. A contents entry does
@@ -2357,9 +2460,9 @@ pub fn detect_with_body(
         out.sort_by_key(|h| (h.page, h.block_index));
     }
     open_merged_parts(&mut out, pages, outline);
-    drop_kickers(&mut out, pages, document_title);
+    let kickers = drop_kickers(&mut out, pages, document_title);
     normalize_levels(&mut out, pages);
-    out
+    (out, kickers)
 }
 
 /// Text an OCR engine read in a picture set on a page that has text of its
@@ -3751,13 +3854,16 @@ const ADDRESS_WORDS: usize = 10;
 /// title with nothing in it. Read as text, it stays where the page sets it.
 ///
 /// Only typography makes a kicker a heading, and only blocks with no text
-/// between them and the title, and smaller than it, are kickers.
-fn drop_kickers(out: &mut Vec<Heading>, pages: &[Vec<Block>], title: Option<usize>) {
+/// between them and the title, and smaller than it, are kickers. Their
+/// blocks on the first page are returned, top first, for the text to say
+/// what they are.
+fn drop_kickers(out: &mut Vec<Heading>, pages: &[Vec<Block>], title: Option<usize>) -> Vec<usize> {
+    let mut kickers = Vec::new();
     let (Some(t), Some(blocks)) = (title, pages.first()) else {
-        return;
+        return kickers;
     };
     let Some(title_block) = blocks.get(t) else {
-        return;
+        return kickers;
     };
     for k in (0..t).rev() {
         let b = &blocks[k];
@@ -3781,7 +3887,9 @@ fn drop_kickers(out: &mut Vec<Heading>, pages: &[Vec<Block>], title: Option<usiz
             continue;
         }
         out.remove(pos);
+        kickers.insert(0, k);
     }
+    kickers
 }
 
 /// Words that name a division of a document, in the languages the corpus
@@ -5076,6 +5184,37 @@ mod tests {
         b.bbox.y1 = y + fs as f64;
         b.bold = bold;
         b
+    }
+
+    #[test]
+    fn a_line_of_authors_is_no_subtitle() {
+        for t in [
+            "Edwin Jabbari, BSc, MBBS, MRCP,\u{00B9} John Woodside, PhD,1",
+            "Brad Evans\u{00B9}, Erin Griner2, Reproducibility Project: Cancer Biology",
+            "Onjefu Okidu*",
+            "Katharina Janek a, Agathe Niewienda a, Johannes W\u{00F6}stemeyer b",
+            "Smiderle et al.",
+            "Linke Ouyang1\u{2217}",
+            "Grace E. Rice",
+            "J. Ponce,\u{00B9} V. Garrigues,1",
+        ] {
+            assert!(authors_line(t), "{t}");
+        }
+        for t in [
+            "July 2026",
+            "End User Guide",
+            "Standard Reference Material 1648a",
+            "Fluree, PBC For the months ended January Through August 2021",
+            "Exterior Continuous Insulation",
+            "Fast acceleration and exceptional precision",
+            "Graph Databases for AI Agents: vendor demonstration",
+            "LED Wall Pack",
+            "Quarries Regulations 1999",
+            "The Drive Behind AI",
+            "Phase 2: Partner Pilot Package (Ontology)",
+        ] {
+            assert!(!authors_line(t), "{t}");
+        }
     }
 
     #[test]
