@@ -2639,8 +2639,8 @@ fn synthesize_missing_boxes(glyphs: &mut [Glyph], rules: &[crate::rule::Rule]) {
     // for it on the page. Measured once more widely, the pen crossed a gap
     // no space glyph was drawn for: a spreadsheet sets each cell's text in
     // one string, an amount right against its cell's edge and the next
-    // cell's word moved on by the string's own offset (`9,672.95` and
-    // `WIRE`), and the `5`'s width took in the gap, its box the border.
+    // cell's word moved on by the string's own offset (`1,234.95` and
+    // `CASH`), and the `5`'s width took in the gap, its box the border.
     let keys: Vec<(String, i64)> = candidates
         .iter()
         .map(|&i| {
@@ -2872,9 +2872,9 @@ mod tests {
         g.extend(run("9", 464.0, 116.25, 5.26));
         let five = g.len();
         g.push(glyph("5", 469.26, 116.25));
-        g.extend(run("WIRE", 479.77, 116.25, 5.5));
+        g.extend(run("CASH", 479.77, 116.25, 5.5));
         // A letter seen once, measured across its cell's edge.
-        g.extend(run("FERNAND", 200.0, 46.5, 5.25));
+        g.extend(run("ABCDEFG", 200.0, 46.5, 5.25));
         let z = g.len();
         g.push(glyph("Z", 236.75, 46.5));
         g.extend(run("11", 247.78, 46.5, 5.25));

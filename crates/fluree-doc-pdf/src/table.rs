@@ -10223,8 +10223,8 @@ fn within_pitch(rows: &[Vec<&crate::glyph::Glyph>], line: &[&crate::glyph::Glyph
 }
 
 /// Whether a row is a field grid's: label and value pairs across it, each
-/// label ending in a colon (`Ordering account: | A98… | Ordering address: |
-/// 6274 ASPEN CT`). Only such a grid's run goes on past a wrapped value: a
+/// label ending in a colon (`Ordering account: | A10… | Ordering address: |
+/// 12 OAK ST`). Only such a grid's run goes on past a wrapped value: a
 /// run of other rows joined over the line read their pitch from rows that
 /// are not the grid's.
 fn field_row(row: &[&crate::glyph::Glyph], starts: &[f64]) -> bool {
@@ -10248,7 +10248,7 @@ fn field_row(row: &[&crate::glyph::Glyph], starts: &[f64]) -> bool {
 /// Whether a line of one cell is a field's value wrapped from the row
 /// above: set where one of that row's values starts, past its first
 /// column, beside a label that ends in a colon (`Ordering address:` over
-/// `6274 ASPEN CT`, then `ANN ARBOR, MI 48161` under the street), within
+/// `12 OAK ST`, then `SPRINGFIELD, ST 00000` under the street), within
 /// that value's column, and no field of its own. A line that starts a
 /// column of figures, a row's label of its own, or a field, is a row.
 fn wraps_a_value(
@@ -14576,46 +14576,38 @@ mod tests {
         let mut gl = Vec::new();
         pairs(
             0,
-            ["Record name:", "Davis Trust", "Record ID:", "BR2558"],
+            ["Record name:", "Oak Trust", "Record ID:", "R1001"],
             &mut gl,
         );
         pairs(
             1,
-            ["Tax ID:", "XX-1527", "Source system:", "Brokerage"],
+            ["Tax ID:", "XX-0001", "Source system:", "Brokerage"],
             &mut gl,
         );
-        pairs(
-            2,
-            ["Address:", "2874 ELM BLVD", "Account:", "A8642"],
-            &mut gl,
-        );
-        gl.push(word(120.0, 3, "GAINESVILLE, FL", None));
+        pairs(2, ["Address:", "40 PINE RD", "Account:", "A2002"], &mut gl);
+        gl.push(word(120.0, 3, "RIVERTON, ST", None));
         let (rows, cells) = aligned_rows(&gl);
         let grids = aligned_runs(&rows, &cells, 0);
         assert_eq!(grids.len(), 1);
         let texts = grids[0].cell_texts(&gl);
-        assert_eq!(texts[2 * 4 + 1], "2874 ELM BLVD GAINESVILLE, FL");
+        assert_eq!(texts[2 * 4 + 1], "40 PINE RD RIVERTON, ST");
         // A line a row's pitch and more under the grid is the next block's.
         let mut gl = Vec::new();
         pairs(
             0,
-            ["Record name:", "Davis Trust", "Record ID:", "BR2558"],
+            ["Record name:", "Oak Trust", "Record ID:", "R1001"],
             &mut gl,
         );
         pairs(
             1,
-            ["Tax ID:", "XX-1527", "Source system:", "Brokerage"],
+            ["Tax ID:", "XX-0001", "Source system:", "Brokerage"],
             &mut gl,
         );
-        pairs(
-            2,
-            ["Address:", "2874 ELM BLVD", "Account:", "A8642"],
-            &mut gl,
-        );
-        gl.push(word(120.0, 5, "GAINESVILLE, FL", None));
+        pairs(2, ["Address:", "40 PINE RD", "Account:", "A2002"], &mut gl);
+        gl.push(word(120.0, 5, "RIVERTON, ST", None));
         let (rows, cells) = aligned_rows(&gl);
         let texts = aligned_runs(&rows, &cells, 0)[0].cell_texts(&gl);
-        assert_eq!(texts[2 * 4 + 1], "2874 ELM BLVD");
+        assert_eq!(texts[2 * 4 + 1], "40 PINE RD");
         // A signature block: three fields a line apart, two more a blank
         // line apart, the last one's value wrapped. The wrapped line deepens
         // the last row only; the rows a line apart stay rows of their own.
@@ -14647,50 +14639,42 @@ mod tests {
         // own under its first line; the grid goes on under it.
         let mut gl = Vec::new();
         for (r, cells) in [
-            (
-                0,
-                ["Message ref:", "MSG39", "Message type:", "Outgoing wire"],
-            ),
-            (1, ["Amount:", "USD 12.60", "Value date:", "11/25/2027"]),
+            (0, ["Message ref:", "REF01", "Message type:", "Outgoing"]),
+            (1, ["Amount:", "USD 10.00", "Value date:", "01/02/2030"]),
             (
                 2,
                 [
                     "Ordering account:",
-                    "A9839",
+                    "A1001",
                     "Ordering address:",
-                    "6274 ASPEN CT",
+                    "12 OAK ST",
                 ],
             ),
             (
                 4,
-                [
-                    "Beneficiary:",
-                    "VELIKOV",
-                    "Beneficiary bank:",
-                    "OSTREVAN BANK",
-                ],
+                ["Beneficiary:", "J. DOE", "Beneficiary bank:", "FIRST BANK"],
             ),
         ] {
             for (k, t) in cells.iter().enumerate() {
                 gl.push(word([0.0, 120.0, 300.0, 420.0][k], r, t, None));
             }
         }
-        gl.push(word(420.0, 3, "ANN ARBOR, MI", None));
+        gl.push(word(420.0, 3, "SPRINGFIELD, ST", None));
         let (rows, cells) = aligned_rows(&gl);
         let grids = aligned_runs(&rows, &cells, 0);
         assert_eq!(grids.len(), 1, "one grid, not two around the wrap");
         let g = &grids[0];
         assert_eq!((g.rows(), g.cols()), (4, 4));
         let texts = g.cell_texts(&gl);
-        assert_eq!(texts[2 * 4 + 3], "6274 ASPEN CT ANN ARBOR, MI");
-        assert_eq!(texts[3 * 4 + 3], "OSTREVAN BANK");
+        assert_eq!(texts[2 * 4 + 3], "12 OAK ST SPRINGFIELD, ST");
+        assert_eq!(texts[3 * 4 + 3], "FIRST BANK");
         // A line set where a value starts, under a row that is no field
         // grid's (a schedule's figures), ends the run as it did.
         let mut gl = Vec::new();
         for (r, cells) in [
-            (0, ["0002", "1", "F2MTN7", "01 Feb 2023"]),
-            (1, ["0003", "1", "F2MTN7", "01 Feb 2023"]),
-            (3, ["0004", "1", "F2MTN7", "01 Feb 2023"]),
+            (0, ["0002", "1", "LN0001", "01 Feb 2023"]),
+            (1, ["0003", "1", "LN0001", "01 Feb 2023"]),
+            (3, ["0004", "1", "LN0001", "01 Feb 2023"]),
         ] {
             for (k, t) in cells.iter().enumerate() {
                 gl.push(word([0.0, 120.0, 300.0, 420.0][k], r, t, None));
