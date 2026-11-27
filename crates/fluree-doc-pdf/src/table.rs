@@ -8145,6 +8145,19 @@ pub fn detect_aligned(
     fills: &[crate::rule::Fill],
     page: usize,
 ) -> Vec<Grid> {
+    detect_aligned_with_refused(glyphs, rules, fills, page).0
+}
+
+/// [`detect_aligned`]'s grids, and the runs of aligned rows it refused for
+/// want of anything to corroborate them: text that lines up into columns,
+/// which is not a table. Bulleted lists set side by side are such a run
+/// (`document::list_boxes`).
+pub fn detect_aligned_with_refused(
+    glyphs: &[crate::glyph::Glyph],
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    page: usize,
+) -> (Vec<Grid>, Vec<Grid>) {
     // The page's lines, read only for a candidate its geometry does not
     // already accept and big enough for a caption to name.
     let captions = std::cell::OnceCell::new();
@@ -8158,9 +8171,9 @@ pub fn detect_aligned(
         })
     };
     let (rows, cells) = aligned_rows(glyphs);
-    let mut out: Vec<Grid> = aligned_runs(&rows, &cells, page)
+    let (mut out, refused): (Vec<Grid>, Vec<Grid>) = aligned_runs(&rows, &cells, page)
         .into_iter()
-        .filter(|g| {
+        .partition(|g| {
             let captioned = || {
                 g.cols() >= 3
                     && g.rows() >= 3
@@ -8175,8 +8188,7 @@ pub fn detect_aligned(
                 || captioned()
                 || has_typeset_header(g, glyphs)
                 || has_two_axis_header(g, glyphs)
-        })
-        .collect();
+        });
     // Two unruled tables set close together — a key/value block of two
     // columns just above a line table of five — align as one run, and the
     // run is neither: its first row is no header and its rows disagree on
@@ -8205,7 +8217,7 @@ pub fn detect_aligned(
         fit_right_aligned_heads(g, glyphs);
         fit_heads_to_figures(g, glyphs);
     }
-    out
+    (out, refused)
 }
 
 /// Least share of an aligned grid's width a rule spans to rule its first
