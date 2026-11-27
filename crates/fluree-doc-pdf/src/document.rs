@@ -2992,6 +2992,11 @@ fn drop_blank_rows(e: &mut Element) {
     };
     indexes(&mut e.sub_headers);
     indexes(&mut e.restated_headers);
+    // Each blank row ends the group over it: a section the rows over it
+    // open stops at the row that follows.
+    let mut breaks: Vec<usize> = blank.iter().map(|&b| up(b + 1)).collect();
+    breaks.dedup();
+    e.section_breaks = Some(breaks);
     if let Some(h) = e.header_rows.as_mut() {
         *h = up(*h);
     }
@@ -6872,7 +6877,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 merges.continues_above[k] = false;
             }
             // Banner bands below the header block are sub-headers: they label
-            // the rows beneath them rather than the columns.
+            // the rows beneath them rather than the columns. So are a list's
+            // bold labels with nothing beside them, over fields set plain.
+            let by_weight = match explicit {
+                Some(_) => Vec::new(),
+                None => g.bold_section_rows(&rows, &raw.pages[pi].glyphs, header_rows),
+            };
             let sub_headers: Vec<usize> = match explicit {
                 Some(lay) => lay.sub_headers.clone(),
                 // Not a row the ruling leaves open but whose values stand
@@ -6885,7 +6895,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .filter(|(r, full)| {
                         let spans = (1..cols).all(|c| merges.continues_left[*r * cols + c]);
                         (**full && spans && rows[*r].iter().any(|c| !c.trim().is_empty())
-                            || group_label(&rows, *r))
+                            || group_label(&rows, *r)
+                            || by_weight.contains(r))
                             && *r >= header_rows
                     })
                     .map(|(r, _)| r)
@@ -8751,6 +8762,9 @@ mod tests {
             )
         );
         assert_eq!(t.sub_headers, Some(vec![1]));
+        // The section over the first blank row's group ends there; the
+        // merged cell's row is no break.
+        assert_eq!(t.section_breaks, Some(vec![1]));
         assert_eq!(t.merged_down.as_ref().map(Vec::len), Some(12));
         assert_eq!(t.merged_down.as_ref().map(|m| m[8]), Some(true));
         assert!(t.text.starts_with("Mode | Constant flow\nHeadspace | "));
