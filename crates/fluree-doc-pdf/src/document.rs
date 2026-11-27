@@ -7436,20 +7436,6 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                         }
                                     }
                                 }
-                                // And a cell under the block's first row holding
-                                // text of its own is a value of its own, not
-                                // the rest of the cell above it: `05/13/2021`
-                                // under `1. DATE OF ORDER`, the block read
-                                // whole neither way.
-                                for i in r + 1..r_end {
-                                    for k in c..c_end {
-                                        if !rows[i][k].trim().is_empty()
-                                            && merges.continues_above[i * cols + k]
-                                        {
-                                            unspanned.push(i * cols + k);
-                                        }
-                                    }
-                                }
                                 for k in apart {
                                     merges.continues_left[k] = false;
                                 }
