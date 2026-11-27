@@ -28,6 +28,7 @@ impl OcrEngine for Bands {
                     ],
                     angle: None,
                     conf: Some(0.9),
+                    ink: None,
                 })
             })
             .collect();
