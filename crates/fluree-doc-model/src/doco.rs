@@ -608,6 +608,7 @@ struct TablePart {
     band_at_end: Option<String>,
     lone_end: Option<String>,
     opening: Vec<Vec<String>>,
+    page: usize,
 }
 
 impl<'a> Emitter<'a> {
@@ -1186,7 +1187,11 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             Some(p.last.clone()),
                             p.rows,
                             Some((p.head.clone(), p.head_left.clone(), p.header_only)),
-                            p.band_at_end.clone(),
+                            // A part split from the one before on the same page
+                            // was parted at the table's own rule or gap, which
+                            // closes the band over it as a blank row does: the
+                            // band carries over a page break only.
+                            p.band_at_end.clone().filter(|_| p.page < e.page),
                             Some(p.opening.clone()),
                             p.lone_end.clone(),
                         )
@@ -1701,6 +1706,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 band_at_end,
                                 lone_end,
                                 opening,
+                                page: e.page,
                             },
                         );
                     }
@@ -2804,6 +2810,31 @@ mod tests {
             .find(|n| n["doc:cellValue"] == "Table 15-1.")
             .unwrap();
         assert!(title.get("doc:sectionLabel").is_none());
+    }
+
+    #[test]
+    fn a_part_split_on_the_same_page_carries_no_band() {
+        // A schedule parted by a rule under its last group's closing row:
+        // the carrying amounts under the rule are no part of that group.
+        let r = |a: &str, b: &str| vec![a.to_string(), b.into()];
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.cells = Some(vec![
+            r("", "Patents"),
+            r("Depreciation", ""),
+            r("Closing balance", "421"),
+        ]);
+        a.header_rows = Some(1);
+        a.sub_headers = Some(vec![1]);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.cells = Some(vec![r("Carrying amount", "50")]);
+        b.header_rows = Some(0);
+        b.continues = Some("elem-00001".into());
+        let g = graph(&[a, b]);
+        let fifty = g.iter().find(|n| n["doc:cellValue"] == "50").unwrap();
+        assert!(fifty.get("doc:sectionLabel").is_none());
+        assert_eq!(fifty["doc:columnHeader"], "Patents");
     }
 
     #[test]
