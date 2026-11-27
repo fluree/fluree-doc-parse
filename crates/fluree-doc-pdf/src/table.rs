@@ -10320,6 +10320,29 @@ mod header_tests {
     }
 
     #[test]
+    fn a_shaded_first_band_is_no_header_row() {
+        // A funding table: its header shaded, its first period band shaded
+        // under it, and the next period's band shaded further down. The
+        // shaded run is the header and the first band, not a two-row header.
+        let g = grid_with_bands();
+        let row = |r: usize| fill(0.0, 100.0 + 20.0 * r as f64, 400.0, 120.0 + 20.0 * r as f64);
+        let rows: Vec<Vec<String>> = [
+            ["CLIN", "Funding Amount", "Estimated Date", "Note"],
+            ["Months 1 – 12", "", "", ""],
+            ["0001 – Storage", "TBD", "TBD", "a"],
+            ["Months 13-24", "", "", ""],
+            ["0006 – Storage", "$2,947,920.24", "December 3, 2021", "b"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1), row(3)]), 1);
+        // With no band of the kind further down, a shaded second row under
+        // the header is the header's own.
+        assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1)]), 2);
+    }
+
+    #[test]
     fn full_shading_gives_no_contrast_and_falls_back() {
         let g = grid_with_bands();
         let fills: Vec<_> = (0..5)
