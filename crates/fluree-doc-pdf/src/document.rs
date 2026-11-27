@@ -1866,6 +1866,33 @@ const RULED_TABLE_FILL: f64 = 0.5;
 /// running line's row and still be on it: a baseline's wobble between pages.
 const FURNITURE_ROW_SLACK: f64 = 0.005;
 
+/// The running strings of `scrub` a box `at` (`[x0, y0, x1, y1]`, as shares
+/// of the page's width and height) reaches: those standing, on a page they
+/// run on, at a place (`places`, by [`furniture_key`]) that overlaps the
+/// box, within [`FURNITURE_ROW_SLACK`]. A string with no place known is
+/// kept. A form's first page sets its order number in a box of its own,
+/// the number every later page carries as its head beside that box's row:
+/// the box is no place of the head's.
+fn furniture_reaching(
+    scrub: &[(String, bool)],
+    places: &std::collections::HashMap<String, Vec<[f64; 4]>>,
+    at: [f64; 4],
+) -> Vec<(String, bool)> {
+    let slack = FURNITURE_ROW_SLACK;
+    let [x0, y0, x1, y1] = at;
+    scrub
+        .iter()
+        .filter(|(t, vary)| {
+            places.get(&furniture_key(t, *vary)).is_none_or(|places| {
+                places.iter().any(|&[a, b, c, d]| {
+                    a < x1 + slack && x0 < c + slack && b < y1 + slack && y0 < d + slack
+                })
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 /// Least share of a page's text lying on its pictures for the page to be
 /// pictures and a caption: all but a caption's or a title's line or two.
 const PICTURE_PAGE_TEXT: f64 = 0.9;
@@ -6326,18 +6353,32 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // running head parted into its groups (`July 26, 2023`, `Chair Powell's
     // Press Conference`) is set again in the transcript's title under it.
     let mut furniture_rows: std::collections::HashMap<String, Vec<(f64, f64)>> = Default::default();
+    // And the places it stands at, its line's box as shares of the page's
+    // width and height: a table's cell takes it in only where the cell
+    // reaches one of them.
+    let mut furniture_places: std::collections::HashMap<String, Vec<[f64; 4]>> = Default::default();
     for (pi, page_marks) in marks.iter().enumerate() {
         let (lines, height) = &flat_lines[pi];
         if *height <= 0.0 {
             continue;
         }
+        let width = raw.pages[pi].width;
         for (li, kind) in page_marks.iter() {
             let l = &lines[*li];
+            let key = furniture_key(
+                l.text.trim(),
+                matches!(kind, furniture::Furniture::PageNumber),
+            );
+            if width > 0.0 {
+                furniture_places.entry(key.clone()).or_default().push([
+                    l.bbox.x0 / width,
+                    l.bbox.y0 / height,
+                    l.bbox.x1 / width,
+                    l.bbox.y1 / height,
+                ]);
+            }
             furniture_rows
-                .entry(furniture_key(
-                    l.text.trim(),
-                    matches!(kind, furniture::Furniture::PageNumber),
-                ))
+                .entry(key)
                 .or_default()
                 .push((l.bbox.y0 / height, l.bbox.y1 / height));
         }
@@ -6898,6 +6939,34 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             } else {
                 scrub_texts.clone()
             };
+            // And into a cell only where the cell reaches a place it stands
+            // at on the pages it runs on: a form's first page sets its
+            // order number in a box of its own, the number that heads every
+            // later page beside the box's row. Read from the cells' edges;
+            // a grid read by its layout scrubs as a whole.
+            let width = raw.pages[pi].width;
+            let cell_scrub = |g: &crate::table::Grid,
+                              rs: std::ops::Range<usize>,
+                              cs: std::ops::Range<usize>|
+             -> Vec<(String, bool)> {
+                if g.layout.is_some()
+                    || height <= 0.0
+                    || width <= 0.0
+                    || rs.end > g.rows()
+                    || cs.end > g.cols()
+                    || rs.is_empty()
+                    || cs.is_empty()
+                {
+                    return scrub_texts.clone();
+                }
+                let at = [
+                    g.xs[cs.start] / width,
+                    g.ys[rs.start] / height,
+                    g.xs[cs.end] / width,
+                    g.ys[rs.end] / height,
+                ];
+                furniture_reaching(&scrub_texts, &furniture_places, at)
+            };
             // A title band over the table is the table's title, not its
             // header: it is read out as text above the table, and the table
             // is read from the row under it.
@@ -6993,7 +7062,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             .enumerate()
             .map(|(i, c)| {
                 unfolio(
-                    furniture::scrub_cell(&c, &scrub_texts),
+                    furniture::scrub_cell(
+                        &c,
+                        &cell_scrub(g, i / cols..i / cols + 1, i % cols..i % cols + 1),
+                    ),
                     i / cols,
                     i / cols + 1,
                 )
@@ -7190,7 +7262,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .filter_map(|&r| r.checked_sub(shift))
             {
                 rows[r][0] = unfolio(
-                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &scrub_texts),
+                    furniture::scrub_cell(
+                        &g.row_text(&raw.pages[pi].glyphs, r),
+                        &cell_scrub(g, r..r + 1, 0..cols),
+                    ),
                     r,
                     r + 1,
                 );
@@ -7320,7 +7395,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         .collect();
                     let text =
                         match g.region_text(&raw.pages[pi].glyphs, &merges, r..r_end, c..c_end) {
-                            Some(t) => unfolio(furniture::scrub_cell(&t, &scrub_texts), r, r_end),
+                            Some(t) => unfolio(
+                                furniture::scrub_cell(&t, &cell_scrub(g, r..r_end, c..c_end)),
+                                r,
+                                r_end,
+                            ),
                             None if held.len() == 1 => rows[held[0].0][held[0].1].clone(),
                             None => {
                                 // A block across rows and columns that reads
@@ -7387,7 +7466,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                         };
                                         row[c..ce].iter_mut().for_each(String::clear);
                                         row[c] = unfolio(
-                                            furniture::scrub_cell(&t, &scrub_texts),
+                                            furniture::scrub_cell(
+                                                &t,
+                                                &cell_scrub(g, i..i + 1, c..ce),
+                                            ),
                                             i,
                                             i + 1,
                                         );
@@ -7455,7 +7537,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                         match joined {
                                             Some((p, t)) => {
                                                 rows[i][p] = unfolio(
-                                                    furniture::scrub_cell(&t, &scrub_texts),
+                                                    furniture::scrub_cell(
+                                                        &t,
+                                                        &cell_scrub(g, i..i + 1, p..k + 1),
+                                                    ),
                                                     i,
                                                     i + 1,
                                                 );
@@ -7977,6 +8062,34 @@ fn furniture_key(text: &str, digits_vary: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_running_string_leaves_only_cells_at_its_place() {
+        let key = furniture_key("ORDER 0019", false);
+        let scrub = vec![
+            ("ORDER 0019".to_string(), false),
+            ("Draft".to_string(), false),
+        ];
+        // The head runs at the page's top right on its later pages.
+        let places: std::collections::HashMap<String, Vec<[f64; 4]>> =
+            [(key, vec![[0.72, 0.076, 0.88, 0.095]])]
+                .into_iter()
+                .collect();
+        let texts = |v: Vec<(String, bool)>| v.into_iter().map(|(t, _)| t).collect::<Vec<_>>();
+        // A box on the head's row, left of it, keeps the number; a string
+        // with no place known is scrubbed wherever it is.
+        let box_on_row = [0.40, 0.060, 0.66, 0.094];
+        assert_eq!(
+            texts(furniture_reaching(&scrub, &places, box_on_row)),
+            ["Draft"]
+        );
+        // A cell where the head stands takes it in.
+        let under_head = [0.70, 0.060, 0.95, 0.094];
+        assert_eq!(
+            texts(furniture_reaching(&scrub, &places, under_head)),
+            ["ORDER 0019", "Draft"]
+        );
+    }
+
     use super::*;
     use crate::geom::BBox;
 
