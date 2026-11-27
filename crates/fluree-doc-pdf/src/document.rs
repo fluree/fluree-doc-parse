@@ -538,11 +538,16 @@ const MAX_FIELD_LABEL_WORDS: usize = 4;
 /// the line taken, that heading is the title: a journal's mark (`materials`)
 /// set larger than the article's title, a pharmacy's name over a drug's
 /// label. A line in doubt stays a level-1 heading.
-fn settle_title(
+///
+/// Around a title that is sure, its subtitle ([`read_subtitle`]) and its
+/// kickers ([`settle_kickers`]) are read. `block` gives a heading's block,
+/// and `body` the body's size.
+fn settle_title<'a>(
     elements: &mut [Element],
     meta: Option<&str>,
     outline: &[OutlineItem],
-    size: impl Fn(&Element) -> Option<f32>,
+    block: impl Fn(&Element) -> Option<&'a Block>,
+    body: f32,
 ) {
     let meta = meta.filter(|m| heading::meaningful_title(m));
     let bookmarked = |text: &str| {
@@ -605,7 +610,7 @@ fn settle_title(
                 "TITLE\t{}\t{}\t{:.2}\t{}\t{}",
                 decision.0,
                 decision.1,
-                size(&elements[i]).unwrap_or(0.0),
+                block(&elements[i]).map_or(0.0, |b| b.font_size / body.max(1.0)),
                 text,
                 meta.unwrap_or("")
             );
@@ -618,6 +623,95 @@ fn settle_title(
         } else {
             e.evidence = "font-size";
             e.level = Some(1);
+        }
+    }
+    read_subtitle(elements, &block);
+    settle_kickers(elements);
+}
+
+/// Most lines a subtitle runs to.
+const MAX_SUBTITLE_LINES: usize = 2;
+
+/// Largest a subtitle is set, against its title: a step down. A line as
+/// large as the title is more of it.
+const SUBTITLE_STEP: f32 = 0.95;
+
+/// Most space between a title and its subtitle, in the title's size: a
+/// subtitle is set close under its title, as one more line of the display.
+/// A heading set further down opens the text.
+const SUBTITLE_GAP: f64 = 1.0;
+
+/// The title's subtitle: an explanatory or alternative title set directly
+/// under it (`July 2026` under `Monetary Policy Report`, `Quarries
+/// Regulations 1999` under a guide's title, `LED Wall Pack` under a product
+/// series), a `doco:Subtitle`. Read until here as a heading by its size, it
+/// opened a section holding the front matter or nothing.
+///
+/// The element after the document's title is its subtitle when:
+/// - it is a heading by its size alone, on the title's page;
+/// - it is set close under the title and across it, a step smaller than the
+///   title, in one or two lines;
+/// - nothing marks it a section's head (a number, a section's or a
+///   division's name, a lead-in) or the authors' names.
+///
+/// How the rest of the document's headings are set says nothing of it: a
+/// deck sets its title slide's date as its slides' headings, and a spec
+/// sheet its product line as its sections' heads.
+fn read_subtitle<'a>(elements: &mut [Element], block: &impl Fn(&Element) -> Option<&'a Block>) {
+    let Some(t) = elements.iter().position(|e| e.kind == "doco:Title") else {
+        return;
+    };
+    let s = t + 1;
+    let (Some(title), Some(sub)) = (block(&elements[t]), elements.get(s).and_then(|e| block(e)))
+    else {
+        return;
+    };
+    let e = &elements[s];
+    if e.kind != "doco:SectionTitle" || e.evidence != "font-size" || e.page != elements[t].page {
+        return;
+    }
+    let size = title.font_size as f64;
+    let under = sub.bbox.y0 >= title.bbox.y1 - size * 0.2
+        && sub.bbox.y0 - title.bbox.y1 <= size * SUBTITLE_GAP
+        && sub.bbox.x1.min(title.bbox.x1) > sub.bbox.x0.max(title.bbox.x0);
+    let set =
+        sub.font_size <= title.font_size * SUBTITLE_STEP && sub.lines.len() <= MAX_SUBTITLE_LINES;
+    let sectional = matches!(
+        heading::title_doubt(&e.text),
+        Some("numbered" | "section-name" | "division" | "continued" | "lead-in")
+    ) || heading::authors_line(&e.text);
+    if std::env::var_os("FDOC_TITLE_DEBUG").is_some() {
+        eprintln!(
+            "SUBTITLE\t{}\t{}\t{}\t{}\t{}\t{}",
+            under && set && !sectional,
+            under,
+            set,
+            sectional,
+            e.text,
+            elements[t].text
+        );
+    }
+    if under && set && !sectional {
+        let e = &mut elements[s];
+        e.kind = "doco:Subtitle".into();
+        e.level = None;
+        e.evidence = "subtitle";
+    }
+}
+
+/// A kicker is a kicker over the document's title. Over a line in doubt,
+/// which stays a heading, it is text as any line is.
+fn settle_kickers(elements: &mut [Element]) {
+    for i in 0..elements.len() {
+        if elements[i].evidence != "kicker" {
+            continue;
+        }
+        let over_title = elements[i + 1..]
+            .iter()
+            .find(|e| e.evidence != "kicker")
+            .is_some_and(|e| e.kind == "doco:Title");
+        if !over_title {
+            elements[i].evidence = "layout";
         }
     }
 }
@@ -5981,20 +6075,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         body_font = size;
     }
     let body_bold = heading::body_is_bold(raw.pages.iter().flat_map(|p| p.glyphs.iter()));
-    let headings = timed(&mut timings.headings, || {
-        let first = heading::detect_with_body(&blocks_per_page, outline, body_font, body_bold);
+    let (headings, kickers) = timed(&mut timings.headings, || {
+        let first = heading::detect_with_kickers(&blocks_per_page, outline, body_font, body_bold);
         let named = heading::outline_names(outline);
-        let in_section = heading::in_section(&first);
+        let in_section = heading::in_section(&first.0);
         if block::gather_counted_items(&mut blocks_per_page, &|t| named(t), &in_section) {
             page_figures = find_figures(&raw.pages, &blocks_per_page, &layouts);
             body_font = thin.unwrap_or_else(|| {
                 heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures))
             });
-            heading::detect_with_body(&blocks_per_page, outline, body_font, body_bold)
+            heading::detect_with_kickers(&blocks_per_page, outline, body_font, body_bold)
         } else {
             first
         }
     });
+    // The first page's kickers, by block: text over the title.
+    let kickers: std::collections::HashSet<(usize, usize)> =
+        kickers.into_iter().map(|b| (0, b)).collect();
 
     // Heading lookup by source block. Text is not an identity: repeated chart
     // labels and form fields can have identical text on one page while only
@@ -6124,6 +6221,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 None if block::strip_leading_bullet(&text).is_some() => {
                     ("doc:ListItem", None, "bullet")
                 }
+                // A line set over the title, smaller than it: the title's
+                // kicker, until the title is settled.
+                None if kickers.contains(&(pi, block_idx)) => ("doco:Paragraph", None, "kicker"),
                 None => ("doco:Paragraph", None, "layout"),
                 Some(_) => unreachable!("weak figure heading has figure membership"),
             };
@@ -6285,13 +6385,20 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // own number where page numbers stand (`furniture::is_folio_cell`),
             // in the grid's row nearest that edge. A table's own figure in a
             // row above its last can match the page's number, as a tax
-            // table's line 111 does on page 111.
+            // table's line 111 does on page 111. Nor where the page's number
+            // is printed outside the grid, its line's top above the grid's or
+            // under its foot: the page has its number, and a row's `4` over a
+            // foot reading `Page 4 of 6` is the row's.
             let page_h = raw.pages[pi].height.max(1.0);
+            let printed_apart = furniture::folio_outside(folio_places[pi], page_h, &g.bbox);
             let unfolio = |t: String, r0: usize, r1: usize| {
                 let last = g.ys.len().saturating_sub(1);
                 let mid = (g.ys[r0.min(last)] + g.ys[r1.min(last)]) / 2.0 / page_h;
                 let edge_row = if mid > 0.5 { r1 >= last } else { r0 == 0 };
-                if edge_row && furniture::is_folio_cell(&t, folios[pi].as_deref(), mid) {
+                if edge_row
+                    && !printed_apart
+                    && furniture::is_folio_cell(&t, folios[pi].as_deref(), mid)
+                {
                     String::new()
                 } else {
                     t
@@ -7057,11 +7164,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             e.text = e.text.split_whitespace().collect::<Vec<_>>().join(" ");
         }
     }
-    settle_title(&mut elements, raw.title.as_deref(), outline, |e| {
-        heading_block
-            .get(&e.id)
-            .map(|&(p, b)| blocks_per_page[p][b].font_size / body_font.max(1.0))
-    });
+    settle_title(
+        &mut elements,
+        raw.title.as_deref(),
+        outline,
+        |e| {
+            heading_block
+                .get(&e.id)
+                .map(|&(p, b)| &blocks_per_page[p][b])
+        },
+        body_font,
+    );
     Analysis {
         elements,
         suspect_headings,
@@ -9140,6 +9253,112 @@ mod tests {
     }
 
     #[test]
+    fn a_sure_titles_subtitle_follows_it_and_its_kickers_stand_over_it() {
+        // A block of `lines` lines at `fs` points, its top at `y`.
+        let block = |fs: f32, y: f64, lines: usize, bold: bool| -> Block {
+            let bbox = BBox {
+                x0: 50.0,
+                y0: y,
+                x1: 400.0,
+                y1: y + fs as f64 * 1.2 * lines as f64,
+            };
+            let line = Line {
+                text: String::new(),
+                bbox,
+                page: 0,
+                rotation_bucket: 0,
+                glyphs: vec![],
+                font_size: fs,
+                bold,
+                opens_with_script: false,
+                italic: false,
+                ocr: None,
+                x_height: None,
+                compounds: Vec::new(),
+                opens_bold: false,
+            };
+            Block {
+                lines: vec![line; lines],
+                bbox,
+                page: 0,
+                font_size: fs,
+                bold,
+                gap_above: None,
+                marker: None,
+                marker_x: None,
+                stacked: false,
+                field: false,
+            }
+        };
+        let el = |kind: &str, text: &str, evidence: &'static str| Element {
+            page: 0,
+            level: (kind == "doco:SectionTitle").then_some(1),
+            ..Element::new(kind, text, "rust", evidence)
+        };
+        // Kicker, title, the line under it, a section's heading and its text,
+        // each line's block by its text.
+        let settle = |under: (&str, f32, f64, usize, bool), title: &str, meta: Option<&str>| {
+            let blocks: std::collections::HashMap<String, Block> = [
+                (title.to_string(), block(24.0, 100.0, 1, true)),
+                (
+                    under.0.to_string(),
+                    block(under.1, under.2, under.3, under.4),
+                ),
+                ("Overview".to_string(), block(14.0, 300.0, 1, true)),
+                ("Outlook".to_string(), block(14.0, 500.0, 1, true)),
+            ]
+            .into_iter()
+            .collect();
+            let mut els = vec![
+                el("doco:Paragraph", "Policy series", "kicker"),
+                el("doco:SectionTitle", title, "title"),
+                el("doco:SectionTitle", under.0, "font-size"),
+                el("doco:SectionTitle", "Overview", "font-size"),
+                el("doco:Paragraph", "The report's text.", "layout"),
+                el("doco:SectionTitle", "Outlook", "font-size"),
+            ];
+            settle_title(&mut els, meta, &[], |e| blocks.get(&e.text), 10.0);
+            els.into_iter()
+                .map(|e| (e.kind, e.evidence))
+                .collect::<Vec<_>>()
+        };
+        let report = "Monetary Policy Report";
+        let kinds = settle(("July 2026", 16.0, 130.0, 1, false), report, Some(report));
+        assert_eq!(
+            kinds[..3],
+            [
+                ("doco:Paragraph".to_string(), "kicker"),
+                ("doco:Title".to_string(), "metadata"),
+                ("doco:Subtitle".to_string(), "subtitle"),
+            ]
+        );
+        // The sections stay headings.
+        assert_eq!(kinds[3], ("doco:SectionTitle".to_string(), "font-size"));
+        // Not a subtitle: far under the title, as large as it, over three
+        // lines, numbered, or the authors' names.
+        for under in [
+            ("Grace E. Rice", 14.0, 130.0, 1, false),
+            ("July 2026", 16.0, 200.0, 1, false),
+            ("July 2026", 24.0, 130.0, 1, false),
+            ("A line run on over three lines", 16.0, 130.0, 3, false),
+            ("1. Purpose", 16.0, 130.0, 1, false),
+        ] {
+            let kinds = settle(under, report, Some(report));
+            assert_eq!(kinds[2].0, "doco:SectionTitle", "{under:?}");
+        }
+        // Under a line in doubt there is no title: no subtitle, and the
+        // kicker is text.
+        let kinds = settle(
+            ("Opening remarks", 16.0, 130.0, 1, false),
+            "September 20, 2023",
+            None,
+        );
+        assert_eq!(kinds[0], ("doco:Paragraph".to_string(), "layout"));
+        assert_eq!(kinds[1].0, "doco:SectionTitle");
+        assert_eq!(kinds[2].0, "doco:SectionTitle");
+    }
+
+    #[test]
     fn the_title_is_the_documents_only_where_it_is_sure() {
         let at = |kind: &str, text: &str, evidence: &'static str| Element {
             page: 0,
@@ -9147,7 +9366,7 @@ mod tests {
             ..Element::new(kind, text, "rust", evidence)
         };
         let settle = |mut els: Vec<Element>, meta: Option<&str>| {
-            settle_title(&mut els, meta, &[], |_| None);
+            settle_title(&mut els, meta, &[], |_| None, 10.0);
             els.into_iter()
                 .map(|e| (e.kind, e.text, e.evidence))
                 .collect::<Vec<_>>()

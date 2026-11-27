@@ -48,6 +48,7 @@ Fluree's `doc:` namespace where no standard ontology has a class:
 |---|---|
 | `foaf:Document` | the root |
 | `doco:Title` | the title the document declares for itself |
+| `doco:Subtitle` | the title's subtitle, directly after it |
 | `doco:BodyMatter` | the body partition |
 | `doco:Section` | a heading and everything under it |
 | `doco:SectionTitle` | the heading itself, with `level` |
@@ -56,8 +57,8 @@ Fluree's `doc:` namespace where no standard ontology has a class:
 | `doco:Table` | a table, with `cells` |
 | `doco:Figure` | text inside a drawing, or an [anchor](../integration/anchors.md) for an escalated region |
 
-Readers emit six of these — `Title`, `SectionTitle`, `Paragraph`, `ListItem`,
-`Table` and `Figure`. `Document`, `BodyMatter`, `Section`, `List` and
+Readers emit seven of these — `Title`, `Subtitle`, `SectionTitle`,
+`Paragraph`, `ListItem`, `Table` and `Figure`. `Document`, `BodyMatter`, `Section`, `List` and
 `doc:TableCell` are minted by the [DoCO emitter](../formats/doco.md) when the
 flat list becomes a graph.
 
@@ -78,7 +79,14 @@ on a deck's title slide, and a PDF's title read off its first page where it
 is sure (its evidence says how: `metadata`, `outline` or `type`). It heads
 the document, apart from its sections, which start
 at level 1. The first is the document's; the emitter reads any later one as a
-top-level heading.
+top-level heading. A document with no `doco:Title` is untitled.
+
+A `doco:Subtitle` is the title's subtitle, the element directly after the
+title: Word's Subtitle style, a title slide's subtitle, and a PDF's line set
+as one under a sure title (evidence `subtitle`). It opens no section. A PDF's
+kicker, a line set over its title, is a `doco:Paragraph` before it with
+evidence `kicker`. The [DoCO format](../formats/doco.md#the-title-its-subtitle-and-its-kickers)
+gives the whole contract.
 
 `doco:Caption` and `doco:FrontMatter` are **not** emitted — see the
 [vocabulary](../reference/vocabulary.md#types) for why.

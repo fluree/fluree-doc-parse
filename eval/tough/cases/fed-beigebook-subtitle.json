@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "fed-beigebook-2023-01.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/BeigeBook_20230118.pdf",
+    "sha256": "cb7be8a6ea4382d1ebd46187ed1f203786b0f7a0348f9b4a8d38e823835b0ed3",
+    "about": "Federal Reserve Beige Book, January 2023. Each district's report opens on `Summary of Economic Activity` in 16pt bold and runs on through its topics in 12pt bold, under the district's bookmarked name."
+  },
+  "notes": [
+    "2026-11-26 (#456): read as a heading by its size, the line under the title opened a section holding the front matter or nothing. The title's subtitle is a `doco:Subtitle`, directly after the `doco:Title`, and opens no section."
+  ],
+  "checks": [
+    {
+      "id": "subtitle",
+      "found": "2026-11-26",
+      "issue": "#456: the Beige Book's subtitle was a heading opening a section.",
+      "element": {
+        "type": "doco:Subtitle",
+        "text": "Summary of Commentary on Current Economic Conditions By Federal Reserve District",
+        "evidence": "subtitle"
+      }
+    },
+    {
+      "id": "subtitle-opens-no-section",
+      "found": "2026-11-26",
+      "issue": "#456: the subtitle opened a section holding the front matter.",
+      "no_section": "Summary of Commentary on Current Economic Conditions"
+    }
+  ]
+}
