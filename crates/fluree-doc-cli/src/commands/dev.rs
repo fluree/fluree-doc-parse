@@ -1698,7 +1698,7 @@ fn media_crops(
             // One under the pixels a model is sent, as `convert` sends it
             // none, is told apart: for OCR only.
             let (w, h) = (decoded.pixels.width, decoded.pixels.height);
-            let reason = if crate::commands::convert::under_model_floor(w, h) {
+            let reason = if fluree_doc_model::under_model_floor(w, h) {
                 fluree_doc_pdf::escalate::CropReason::SmallImage
             } else {
                 fluree_doc_pdf::escalate::CropReason::EmbeddedImage
