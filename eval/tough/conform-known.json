@@ -1,18 +1,17 @@
 {
  "acl-2024-stub-head-down-the-header": {
   "md table.header_rows": 4,
-  "md table.lost": 5,
   "xhtml block.merged": 9
  },
  "acl-bart-columns-over-page-number": {
   "md table.header_rows": 1,
-  "md table.lost": 2,
   "xhtml block.merged": 1
  },
  "apple-env-callout-beside-column": {
-  "md table.header_rows": 6,
-  "md table.lost": 6,
+  "md table.header_rows": 7,
   "md table.restated_headers": 1,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 14,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 1,
@@ -22,21 +21,21 @@
   "xhtml text.lost": 14
  },
  "asian-paints-stub-head-down-the-header": {
-  "md table.header_rows": 13,
-  "md table.lost": 75,
-  "md table.restated_headers": 2,
+  "md table.header_rows": 39,
+  "md table.restated_headers": 5,
+  "md table.sub_headers": 40,
   "xhtml block.merged": 12,
   "xhtml table.header_rows": 26,
   "xhtml table.restated_headers": 5,
   "xhtml table.sub_headers": 40
  },
  "bmc-pmc5131497-shaded-first-row": {
-  "md table.header_rows": 2,
-  "md table.lost": 3
+  "md table.header_rows": 2
  },
  "bosch-bme280-header-over-figures": {
-  "md table.header_rows": 1,
-  "md table.lost": 16,
+  "md table.header_rows": 5,
+  "md table.shape": 1,
+  "md table.sub_headers": 4,
   "xhtml block.merged": 13,
   "xhtml table.header_rows": 4,
   "xhtml table.shape": 1,
@@ -44,7 +43,8 @@
  },
  "brother-dialog-picture-no-table": {
   "md table.header_rows": 7,
-  "md table.lost": 51,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 75,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1,
@@ -55,73 +55,72 @@
   "md table.header_rows": 1
  },
  "cbs-kms-overview-first-row-is-a-field": {
-  "md table.header_rows": 1,
-  "md table.lost": 3
+  "md table.header_rows": 1
  },
  "census-p60-glyph-names": {
-  "md table.header_rows": 8,
-  "md table.lost": 37,
+  "md table.header_rows": 23,
+  "md table.sub_headers": 15,
   "xhtml block.merged": 7,
   "xhtml table.header_rows": 15,
   "xhtml table.sub_headers": 15
  },
  "cree-cr4t-beam-angle": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-cu-header": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-degree": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-field-lines": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-figure-panels": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-hanging-bullets": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-polar-labels": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-running-lines": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-side-by-side-tables": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-stacked-boxes": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-table-regions": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "cree-cr4t-table-title-rows": {
-  "md table.lost": 7,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
@@ -147,84 +146,72 @@
   "xhtml block.merged": 9
  },
  "ecb-diagram-picture-no-table": {
-  "md table.header_rows": 1,
-  "md table.lost": 3,
+  "md table.header_rows": 2,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 8,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
  "edgar-turned-axis-labels": {
-  "md table.header_rows": 214,
-  "md table.lost": 5,
+  "md table.header_rows": 217,
+  "md table.shape": 1,
+  "md table.sub_headers": 3,
   "xhtml block.merged": 229,
   "xhtml table.header_rows": 9,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 3
  },
- "eia-coal-prices": {
-  "md table.lost": 1
- },
  "elife-registered-report-open-heads": {
-  "md table.header_rows": 1,
-  "md table.lost": 10,
+  "md table.header_rows": 4,
   "md table.restated_headers": 2,
+  "md table.sub_headers": 3,
   "xhtml table.header_rows": 3,
   "xhtml table.restated_headers": 2,
   "xhtml table.sub_headers": 3
  },
- "epa-200-7-logo-read-by-ocr": {
-  "md table.lost": 12
- },
- "epa-method-200-7-formulas": {
-  "md table.lost": 12
- },
  "eppendorf-arrow-items": {
-  "md table.header_rows": 2,
-  "md table.lost": 1
+  "md table.header_rows": 2
  },
  "eppendorf-bold-abbreviations": {
-  "md table.header_rows": 2,
-  "md table.lost": 1
+  "md table.header_rows": 2
  },
  "eppendorf-field-list": {
-  "md table.header_rows": 2,
-  "md table.lost": 1
+  "md table.header_rows": 2
  },
  "eppendorf-footnote": {
-  "md table.header_rows": 2,
-  "md table.lost": 1
+  "md table.header_rows": 2
  },
  "eppendorf-performance-groups": {
-  "md table.header_rows": 2,
-  "md table.lost": 1
+  "md table.header_rows": 2
  },
  "eppendorf-qr-box": {
-  "md table.header_rows": 2,
-  "md table.lost": 1
+  "md table.header_rows": 2
  },
  "eppendorf-tall-rows": {
-  "md table.header_rows": 2,
-  "md table.lost": 1
+  "md table.header_rows": 2
  },
  "erp-2023-cell-hyphens": {
-  "md table.header_rows": 15,
-  "md table.lost": 82,
+  "md table.header_rows": 23,
+  "md table.shape": 2,
+  "md table.sub_headers": 8,
   "xhtml block.merged": 62,
   "xhtml table.header_rows": 8,
   "xhtml table.shape": 2,
   "xhtml table.sub_headers": 8
  },
  "erp-2023-link-underlines": {
-  "md table.header_rows": 15,
-  "md table.lost": 82,
+  "md table.header_rows": 23,
+  "md table.shape": 2,
+  "md table.sub_headers": 8,
   "xhtml block.merged": 62,
   "xhtml table.header_rows": 8,
   "xhtml table.shape": 2,
   "xhtml table.sub_headers": 8
  },
  "erp-2023-same-every-run": {
-  "md table.header_rows": 15,
-  "md table.lost": 82,
+  "md table.header_rows": 23,
+  "md table.shape": 2,
+  "md table.sub_headers": 8,
   "xhtml block.merged": 62,
   "xhtml table.header_rows": 8,
   "xhtml table.shape": 2,
@@ -232,17 +219,19 @@
  },
  "eurjepi-full-width-table-last-rows": {
   "md table.header_rows": 2,
-  "md table.lost": 4,
+  "md table.sub_headers": 1,
   "xhtml table.sub_headers": 1
  },
  "fda-175551-logo-read-by-ocr": {
   "md table.header_rows": 2,
-  "md table.lost": 2,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.restated_headers": 1
  },
  "fda-ndma-wingdings-arrows": {
-  "md table.lost": 2,
+  "md table.header_rows": 1,
+  "md table.restated_headers": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 1,
   "xhtml table.sub_headers": 1
@@ -257,8 +246,11 @@
   "xhtml block.merged": 2
  },
  "fed-combined-soma-group-head": {
-  "md table.header_rows": 6,
-  "md table.lost": 45,
+  "md table.grid": 4,
+  "md table.header_rows": 16,
+  "md table.shape": 2,
+  "md table.spans": 2,
+  "md table.sub_headers": 10,
   "xhtml table.grid": 4,
   "xhtml table.header_rows": 10,
   "xhtml table.shape": 2,
@@ -266,8 +258,11 @@
   "xhtml table.sub_headers": 10
  },
  "fed-fin-stmts-table-stubs": {
-  "md table.header_rows": 6,
-  "md table.lost": 45,
+  "md table.grid": 4,
+  "md table.header_rows": 16,
+  "md table.shape": 2,
+  "md table.spans": 2,
+  "md table.sub_headers": 10,
   "xhtml table.grid": 4,
   "xhtml table.header_rows": 10,
   "xhtml table.shape": 2,
@@ -275,8 +270,11 @@
   "xhtml table.sub_headers": 10
  },
  "fed-fin-stmts-underlined-columns": {
-  "md table.header_rows": 6,
-  "md table.lost": 45,
+  "md table.grid": 4,
+  "md table.header_rows": 16,
+  "md table.shape": 2,
+  "md table.spans": 2,
+  "md table.sub_headers": 10,
   "xhtml table.grid": 4,
   "xhtml table.header_rows": 10,
   "xhtml table.shape": 2,
@@ -291,7 +289,7 @@
  },
  "fed-fsr-2024-04-scales-beside-prose": {
   "md table.header_rows": 3,
-  "md table.lost": 4,
+  "md table.shape": 1,
   "xhtml block.merged": 89,
   "xhtml table.shape": 1,
   "xhtml text.changed": 1,
@@ -300,7 +298,7 @@
  },
  "fed-fsr-body-from-prose": {
   "md table.header_rows": 1,
-  "md table.lost": 6,
+  "md table.shape": 2,
   "xhtml block.merged": 89,
   "xhtml table.shape": 2,
   "xhtml text.changed": 1,
@@ -308,7 +306,7 @@
  },
  "fed-fsr-case-folded-map": {
   "md table.header_rows": 1,
-  "md table.lost": 6,
+  "md table.shape": 2,
   "xhtml block.merged": 89,
   "xhtml table.shape": 2,
   "xhtml text.changed": 1,
@@ -316,7 +314,7 @@
  },
  "fed-fsr-header-band": {
   "md table.header_rows": 1,
-  "md table.lost": 6,
+  "md table.shape": 2,
   "xhtml block.merged": 89,
   "xhtml table.shape": 2,
   "xhtml text.changed": 1,
@@ -324,15 +322,16 @@
  },
  "fed-fsr-item-column-head": {
   "md table.header_rows": 1,
-  "md table.lost": 6,
+  "md table.shape": 2,
   "xhtml block.merged": 89,
   "xhtml table.shape": 2,
   "xhtml text.changed": 1,
   "xhtml text.lost": 1
  },
  "fed-mpr-2023-03-scales-beside-prose": {
-  "md table.header_rows": 7,
-  "md table.lost": 5,
+  "md table.header_rows": 9,
+  "md table.shape": 1,
+  "md table.sub_headers": 2,
   "xhtml block.merged": 128,
   "xhtml order": 67,
   "xhtml table.header_rows": 2,
@@ -343,8 +342,8 @@
   "xhtml text.lost": 201
  },
  "fed-mpr-2023-06-stacked-projection-rows": {
-  "md table.header_rows": 9,
-  "md table.lost": 7,
+  "md table.header_rows": 14,
+  "md table.sub_headers": 5,
   "xhtml block.merged": 98,
   "xhtml order": 22,
   "xhtml table.header_rows": 5,
@@ -354,8 +353,9 @@
   "xhtml text.lost": 133
  },
  "fed-mpr-chart-titles-side-by-side": {
-  "md table.header_rows": 9,
-  "md table.lost": 5,
+  "md table.header_rows": 10,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 107,
   "xhtml order": 38,
   "xhtml table.header_rows": 1,
@@ -366,8 +366,9 @@
   "xhtml text.lost": 103
  },
  "fed-mpr-continued-box-title": {
-  "md table.header_rows": 13,
-  "md table.lost": 6,
+  "md table.header_rows": 15,
+  "md table.shape": 1,
+  "md table.sub_headers": 2,
   "xhtml block.merged": 105,
   "xhtml order": 14,
   "xhtml table.header_rows": 2,
@@ -378,8 +379,9 @@
   "xhtml text.lost": 103
  },
  "fed-mpr-continued-boxes": {
-  "md table.header_rows": 9,
-  "md table.lost": 5,
+  "md table.header_rows": 10,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 107,
   "xhtml order": 38,
   "xhtml table.header_rows": 1,
@@ -390,8 +392,9 @@
   "xhtml text.lost": 103
  },
  "fed-mpr-finding-heads": {
-  "md table.header_rows": 9,
-  "md table.lost": 5,
+  "md table.header_rows": 10,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 107,
   "xhtml order": 38,
   "xhtml table.header_rows": 1,
@@ -402,8 +405,9 @@
   "xhtml text.lost": 103
  },
  "fed-mpr-header-band": {
-  "md table.header_rows": 9,
-  "md table.lost": 5,
+  "md table.header_rows": 10,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 107,
   "xhtml order": 38,
   "xhtml table.header_rows": 1,
@@ -414,8 +418,9 @@
   "xhtml text.lost": 103
  },
  "fed-mpr-line-charts": {
-  "md table.header_rows": 13,
-  "md table.lost": 6,
+  "md table.header_rows": 15,
+  "md table.shape": 1,
+  "md table.sub_headers": 2,
   "xhtml block.merged": 105,
   "xhtml order": 14,
   "xhtml table.header_rows": 2,
@@ -426,8 +431,9 @@
   "xhtml text.lost": 103
  },
  "fed-mpr-prose-beside-chart-notes": {
-  "md table.header_rows": 13,
-  "md table.lost": 6,
+  "md table.header_rows": 15,
+  "md table.shape": 1,
+  "md table.sub_headers": 2,
   "xhtml block.merged": 105,
   "xhtml order": 14,
   "xhtml table.header_rows": 2,
@@ -438,8 +444,9 @@
   "xhtml text.lost": 103
  },
  "fed-mpr-scale-beside-prose": {
-  "md table.header_rows": 13,
-  "md table.lost": 6,
+  "md table.header_rows": 15,
+  "md table.shape": 1,
+  "md table.sub_headers": 2,
   "xhtml block.merged": 105,
   "xhtml order": 14,
   "xhtml table.header_rows": 2,
@@ -450,8 +457,8 @@
   "xhtml text.lost": 103
  },
  "fed-sep-tables": {
-  "md table.header_rows": 1,
-  "md table.lost": 2,
+  "md table.header_rows": 2,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 53,
   "xhtml order": 17,
   "xhtml table.header_rows": 1,
@@ -464,7 +471,6 @@
  },
  "fomc-sep-histograms": {
   "md table.header_rows": 1,
-  "md table.lost": 2,
   "xhtml block.merged": 21,
   "xhtml order": 23,
   "xhtml text.extra": 5,
@@ -472,7 +478,6 @@
  },
  "fomc-sep-line-charts": {
   "md table.header_rows": 1,
-  "md table.lost": 2,
   "xhtml block.merged": 21,
   "xhtml order": 23,
   "xhtml text.extra": 5,
@@ -480,54 +485,42 @@
  },
  "fomc-sep-paired-scales": {
   "md table.header_rows": 1,
-  "md table.lost": 2,
   "xhtml block.merged": 21,
   "xhtml order": 23,
   "xhtml text.extra": 5,
   "xhtml text.lost": 43
  },
- "form-boxes-parted-by-a-rule": {
-  "md table.lost": 3
- },
  "google-axis-years-at-the-foot": {
   "md table.header_rows": 37,
-  "md table.lost": 11,
+  "md table.restated_headers": 1,
+  "md table.shape": 1,
   "xhtml block.merged": 26,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 1
  },
  "google-chart-over-picture": {
   "md table.header_rows": 37,
-  "md table.lost": 11,
+  "md table.restated_headers": 1,
+  "md table.shape": 1,
   "xhtml block.merged": 26,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 1
  },
  "google-map-labels": {
   "md table.header_rows": 37,
-  "md table.lost": 11,
+  "md table.restated_headers": 1,
+  "md table.shape": 1,
   "xhtml block.merged": 26,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 1
  },
  "google-text-columns": {
   "md table.header_rows": 37,
-  "md table.lost": 11,
+  "md table.restated_headers": 1,
+  "md table.shape": 1,
   "xhtml block.merged": 26,
   "xhtml table.restated_headers": 1,
   "xhtml table.shape": 1
- },
- "hasm-footer-gap": {
-  "md table.lost": 3
- },
- "hasm-header-box": {
-  "md table.lost": 3
- },
- "hasm-header-cells": {
-  "md table.lost": 3
- },
- "hasm-template-title": {
-  "md table.lost": 3
  },
  "hermanmiller-aeron-field-lists": {
   "md table.header_rows": 4,
@@ -562,88 +555,83 @@
   "xhtml block.merged": 3
  },
  "hess-full-width-table": {
-  "md table.header_rows": 1,
-  "md table.lost": 1,
+  "md table.header_rows": 2,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
  "hmrc-sa100-pound-before-box": {
   "xhtml block.merged": 13
  },
- "hobart-am15-model-titles": {
-  "md table.lost": 1
- },
- "hobart-am15-option-boxes": {
-  "md table.lost": 1
- },
- "hobart-am15-prose-columns": {
-  "md table.lost": 1
- },
- "hobart-am15-run-in-labels": {
-  "md table.lost": 1
- },
- "hobart-am15-section-dividers": {
-  "md table.lost": 1
- },
- "hobart-am15-soft-hyphens": {
-  "md table.lost": 1
- },
  "hoshizaki-mixed-numbers": {
   "md table.header_rows": 1,
-  "md table.lost": 1,
   "xhtml block.merged": 7
  },
  "hpe-hdd-band-titles": {
-  "md table.header_rows": 2,
-  "md table.lost": 17,
+  "md table.header_rows": 3,
+  "md table.restated_headers": 11,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-blank-ruled-row": {
-  "md table.header_rows": 2,
-  "md table.lost": 17,
+  "md table.header_rows": 3,
+  "md table.restated_headers": 11,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-minus-items": {
-  "md table.header_rows": 2,
-  "md table.lost": 17,
+  "md table.header_rows": 3,
+  "md table.restated_headers": 11,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-partial-columns": {
-  "md table.header_rows": 2,
-  "md table.lost": 17,
+  "md table.header_rows": 3,
+  "md table.restated_headers": 11,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-section-running-heads": {
-  "md table.header_rows": 2,
-  "md table.lost": 17,
+  "md table.header_rows": 3,
+  "md table.restated_headers": 11,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-tall-rows": {
-  "md table.header_rows": 2,
-  "md table.lost": 17,
+  "md table.header_rows": 3,
+  "md table.restated_headers": 11,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-workload-row": {
-  "md table.header_rows": 2,
-  "md table.lost": 17,
+  "md table.header_rows": 3,
+  "md table.restated_headers": 11,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
   "xhtml table.shape": 1,
@@ -651,43 +639,33 @@
  },
  "hse-l118-regulation-parts": {
   "md table.header_rows": 2,
-  "md table.lost": 4,
+  "md table.restated_headers": 1,
   "xhtml table.restated_headers": 1
  },
  "hse-l118-subtitle-kicker": {
   "md table.header_rows": 2,
-  "md table.lost": 4,
+  "md table.restated_headers": 1,
   "xhtml table.restated_headers": 1
  },
  "hse-l153-bold-display-heads": {
   "md table.header_rows": 1,
-  "md table.lost": 1,
   "xhtml text.extra": 1,
   "xhtml text.lost": 2
  },
  "hse-l153-numbered-lead-ins": {
   "md table.header_rows": 1,
-  "md table.lost": 1,
   "xhtml text.extra": 1,
   "xhtml text.lost": 2
  },
  "html-list-in-a-table-under-bold-heads": {
-  "md table.lost": 9,
+  "md table.header_rows": 3,
+  "md table.sub_headers": 3,
   "xhtml table.header_rows": 3,
   "xhtml table.sub_headers": 3
  },
- "html-notes-under-a-statement-are-no-bands": {
-  "md table.lost": 146
- },
- "ibf-bopp-degree-units": {
-  "md table.lost": 1
- },
- "ibf-bopp-partial-columns": {
-  "md table.lost": 1
- },
  "ibge-chart-picture-no-table": {
   "md table.header_rows": 15,
-  "md table.lost": 9,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 21,
   "xhtml table.sub_headers": 1
  },
@@ -696,7 +674,7 @@
  },
  "ilo-columns-under-wrapped-title": {
   "md table.header_rows": 3,
-  "md table.lost": 6,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 22,
   "xhtml order": 1,
   "xhtml table.restated_headers": 1,
@@ -705,7 +683,7 @@
  },
  "ilo-word-across-table-edge-read-once": {
   "md table.header_rows": 3,
-  "md table.lost": 6,
+  "md table.restated_headers": 1,
   "xhtml block.merged": 22,
   "xhtml order": 1,
   "xhtml table.restated_headers": 1,
@@ -713,61 +691,51 @@
   "xhtml text.lost": 35
  },
  "infineon-dimensions-table-set-as-picture": {
-  "md table.lost": 6,
+  "md table.restated_headers": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 2,
   "xhtml table.restated_headers": 1,
   "xhtml table.sub_headers": 1
  },
  "insee-chart-titles-in-sections": {
-  "md table.lost": 2,
   "xhtml block.merged": 3
  },
  "insee-header-spaces": {
-  "md table.lost": 4,
   "xhtml block.merged": 8
  },
  "insee-ligatures": {
-  "md table.lost": 2,
   "xhtml block.merged": 3
  },
  "insee-long-section-heads": {
-  "md table.lost": 4,
   "xhtml block.merged": 8
  },
  "insee-stray-spaces": {
-  "md table.lost": 1,
   "xhtml block.merged": 1
  },
  "irs-f1040-answer-heads": {
-  "md table.lost": 6,
+  "md table.shape": 2,
   "xhtml block.merged": 1,
   "xhtml table.shape": 2
  },
  "irs-f1040s1-bold-labels": {
-  "md table.lost": 4,
+  "md table.shape": 2,
   "xhtml table.shape": 2
  },
  "irs-f1120-line-captions": {
   "md table.header_rows": 1,
-  "md table.lost": 12,
+  "md table.shape": 5,
+  "md table.sub_headers": 1,
   "xhtml table.shape": 5,
   "xhtml table.sub_headers": 1
  },
- "irs-f8949-grid-keys": {
-  "md table.lost": 1
- },
- "irs-fw9-line-heads": {
-  "md table.lost": 1
- },
  "jmlr-dropout-italic-before-bracket": {
-  "md table.lost": 1,
   "xhtml block.merged": 10,
   "xhtml text.changed": 1,
   "xhtml text.lost": 2
  },
  "kao-katakana-dot-bullets": {
-  "md table.header_rows": 3,
-  "md table.lost": 25,
+  "md table.header_rows": 7,
+  "md table.sub_headers": 6,
   "xhtml table.header_rows": 4,
   "xhtml table.sub_headers": 6
  },
@@ -800,360 +768,296 @@
   "xhtml block.merged": 1
  },
  "lapp-box-columns": {
-  "md table.header_rows": 1,
-  "md table.lost": 9,
+  "md table.header_rows": 2,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
  "lapp-product-panel-prose": {
-  "md table.header_rows": 1,
-  "md table.lost": 9,
+  "md table.header_rows": 2,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
  "lapp-qr-caption": {
-  "md table.header_rows": 1,
-  "md table.lost": 9,
+  "md table.header_rows": 2,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
  "lapp-template-text": {
-  "md table.header_rows": 1,
-  "md table.lost": 9,
+  "md table.header_rows": 2,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
  "lutron-369613a-list-or": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-hanging-bullets": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-369-116-folio": {
-  "md table.lost": 1,
   "xhtml block.merged": 7,
   "xhtml text.extra": 1,
   "xhtml text.lost": 7
  },
  "lutron-maestro-369-116-wordmark": {
-  "md table.lost": 1,
   "xhtml block.merged": 7,
   "xhtml text.extra": 1,
   "xhtml text.lost": 7
  },
  "lutron-maestro-369613a-continued": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-369613a-diagram-titles": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-369613a-footer-code": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-369613a-frame": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-369613a-gutter-stops": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-369613a-nested-loads": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-369613a-note-marks": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-cell-hyphens": {
-  "md table.lost": 1,
   "xhtml block.merged": 7,
   "xhtml text.extra": 1,
   "xhtml text.lost": 7
  },
  "lutron-maestro-dash-items": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-figure-labels": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-medium-headings": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-notes-label": {
-  "md table.lost": 1,
   "xhtml block.merged": 8,
   "xhtml text.extra": 4,
   "xhtml text.lost": 27
  },
  "lutron-maestro-title": {
-  "md table.lost": 1,
   "xhtml block.merged": 7,
   "xhtml text.extra": 1,
   "xhtml text.lost": 7
  },
  "mahle-band-titles": {
   "md table.header_rows": 48,
-  "md table.lost": 106,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 4,
   "xhtml table.sub_headers": 1
  },
  "mahle-wrapped-interchange": {
   "md table.header_rows": 48,
-  "md table.lost": 106,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 4,
   "xhtml table.sub_headers": 1
  },
  "malaria-j-table-heads": {
   "md table.header_rows": 2,
-  "md table.lost": 5,
   "xhtml block.merged": 1
  },
  "mfsupply-field-lists": {
-  "md table.header_rows": 2,
-  "md table.lost": 2
+  "md table.header_rows": 2
  },
  "mfsupply-hex-facing-pages": {
-  "md table.header_rows": 2,
-  "md table.lost": 2
+  "md table.header_rows": 2
  },
  "mfsupply-table-title": {
-  "md table.header_rows": 2,
-  "md table.lost": 2
+  "md table.header_rows": 2
  },
  "mfsupply-tolerance-table": {
-  "md table.header_rows": 2,
-  "md table.lost": 2
+  "md table.header_rows": 2
  },
  "multiplastics-7500-gloss-angle": {
-  "md table.lost": 1,
   "xhtml block.merged": 1
  },
  "multiplastics-7500-gutter": {
-  "md table.lost": 1,
   "xhtml block.merged": 1
  },
  "multiplastics-7500-picture-labels": {
-  "md table.lost": 1,
   "xhtml block.merged": 1
  },
  "multiplastics-7500-subtitle": {
-  "md table.lost": 1,
   "xhtml block.merged": 1
  },
  "multiplastics-figure-reach": {
-  "md table.lost": 1,
   "xhtml block.merged": 1
  },
  "multiplastics-letterhead": {
-  "md table.lost": 1,
   "xhtml block.merged": 1
  },
  "multiplastics-symbol-bullets": {
-  "md table.lost": 1,
   "xhtml block.merged": 1
  },
  "niosh-7400-graticule-labels-read-by-ocr": {
-  "md table.lost": 1,
   "xhtml block.merged": 1
  },
  "niosh-nmam-3900-open-heads": {
-  "md table.header_rows": 2,
-  "md table.lost": 3
- },
- "nist-af4": {
-  "md table.lost": 2
- },
- "nist-nta": {
-  "md table.lost": 1
- },
- "nist-sec": {
-  "md table.lost": 3
+  "md table.header_rows": 2
  },
  "omb-dot-leaders": {
-  "md table.lost": 13,
+  "md table.header_rows": 2,
+  "md table.sub_headers": 2,
   "xhtml table.header_rows": 2,
   "xhtml table.sub_headers": 2
  },
- "owens-corning-procat-es": {
-  "md table.lost": 2
- },
- "owens-corning-procat-es-address": {
-  "md table.lost": 2
- },
  "owenscorning-procat-accessories": {
-  "md table.header_rows": 12,
-  "md table.lost": 3
+  "md table.header_rows": 12
  },
  "owenscorning-procat-accessories-address": {
-  "md table.header_rows": 12,
-  "md table.lost": 3
+  "md table.header_rows": 12
  },
  "owenscorning-procat-accessories-folios": {
-  "md table.header_rows": 12,
-  "md table.lost": 3
+  "md table.header_rows": 12
  },
  "owenscorning-procat-accessory-tables": {
-  "md table.header_rows": 12,
-  "md table.lost": 3
+  "md table.header_rows": 12
  },
  "owenscorning-procat-bracketed-note": {
-  "md table.header_rows": 12,
-  "md table.lost": 3
- },
- "owenscorning-procat-es-tables": {
-  "md table.lost": 2
+  "md table.header_rows": 12
  },
  "owenscorning-procat-table-headings": {
-  "md table.header_rows": 12,
-  "md table.lost": 3
- },
- "owenscorning-procat-unit-powers": {
-  "md table.lost": 2
+  "md table.header_rows": 12
  },
  "panasonic-fp-digest": {
+  "md table.grid": 1,
   "md table.header_rows": 2,
-  "md table.lost": 22,
+  "md table.spans": 2,
   "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "panasonic-fp-drawings": {
+  "md table.grid": 1,
   "md table.header_rows": 2,
-  "md table.lost": 22,
+  "md table.spans": 2,
   "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "panasonic-fp-gutter": {
+  "md table.grid": 1,
   "md table.header_rows": 2,
-  "md table.lost": 22,
+  "md table.spans": 2,
   "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "panasonic-fp-long-titles": {
+  "md table.grid": 1,
   "md table.header_rows": 2,
-  "md table.lost": 22,
+  "md table.spans": 2,
   "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "panasonic-fp-numbered-features": {
+  "md table.grid": 1,
   "md table.header_rows": 2,
-  "md table.lost": 22,
+  "md table.spans": 2,
   "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
  "panasonic-fp-table-regions": {
+  "md table.grid": 1,
   "md table.header_rows": 2,
-  "md table.lost": 22,
+  "md table.spans": 2,
   "xhtml block.merged": 18,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
- "plos-one-banner-read-by-ocr": {
-  "md table.lost": 1
- },
- "plos-stacked-bold-heads": {
-  "md table.lost": 1
- },
  "pmc1343572-section-bands": {
-  "md table.header_rows": 7,
-  "md table.lost": 6,
+  "md table.header_rows": 9,
+  "md table.sub_headers": 3,
   "xhtml block.merged": 2,
   "xhtml table.header_rows": 2,
   "xhtml table.sub_headers": 3
  },
  "pmc1866754-centred-group-labels": {
-  "md table.lost": 1,
+  "md table.header_rows": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 2,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
- "pmc1919390-ruled-header-levels": {
-  "md table.lost": 1
- },
  "pmc2045680-wrapped-qualifier": {
   "md table.header_rows": 2,
-  "md table.lost": 3,
   "xhtml block.merged": 6
- },
- "pmc2228321-group-underline": {
-  "md table.lost": 1
  },
  "pmc2747013-spacing-accents": {
   "md table.header_rows": 1
  },
  "pmc2754493-tables-side-by-side": {
   "md table.header_rows": 2,
-  "md table.lost": 5,
   "xhtml block.merged": 1
  },
  "pmc2961758-crystal-data-beside-title": {
   "md table.header_rows": 4,
-  "md table.lost": 2,
+  "md table.shape": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.shape": 1
  },
  "pmc3039689-label-fused-with-figure": {
-  "md table.header_rows": 1,
-  "md table.lost": 4,
+  "md table.header_rows": 2,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1
  },
  "pmc3039689-units-under-groups": {
-  "md table.header_rows": 1,
-  "md table.lost": 4,
+  "md table.header_rows": 2,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.shape": 1,
   "xhtml table.sub_headers": 1
  },
  "pmc3138022-caption-above-next-figure": {
-  "md table.lost": 2,
   "xhtml block.merged": 7,
   "xhtml order": 1,
   "xhtml text.extra": 2,
   "xhtml text.lost": 15
  },
  "pmc3262816-columns-under-caption": {
-  "md table.header_rows": 2,
-  "md table.lost": 3
+  "md table.header_rows": 2
  },
  "pmc3280740-captions-above-plots": {
   "md table.header_rows": 1,
@@ -1163,108 +1067,95 @@
  },
  "pmc3359190-age-over-its-rule": {
   "md table.header_rows": 1,
-  "md table.lost": 11,
+  "md table.sub_headers": 1,
   "xhtml table.sub_headers": 1
  },
- "pmc3608546-units-under-groups": {
-  "md table.lost": 1
- },
  "pmc4429933-country-blocks": {
-  "md table.header_rows": 1,
-  "md table.lost": 9,
+  "md table.header_rows": 3,
+  "md table.restated_headers": 2,
+  "md table.sub_headers": 2,
   "xhtml table.header_rows": 2,
   "xhtml table.restated_headers": 2,
   "xhtml table.sub_headers": 2
  },
  "pmc4723313-wrapped-name": {
-  "md table.header_rows": 2,
-  "md table.lost": 3
+  "md table.header_rows": 2
  },
  "pmc4791410-banner-kickers": {
-  "md table.header_rows": 2,
-  "md table.lost": 2
+  "md table.header_rows": 2
  },
  "pmc4791410-tables-side-by-side": {
-  "md table.header_rows": 2,
-  "md table.lost": 2
+  "md table.header_rows": 2
  },
  "pmc4802872-group-labels": {
-  "md table.lost": 4,
+  "md table.header_rows": 3,
+  "md table.sub_headers": 3,
   "xhtml table.header_rows": 3,
   "xhtml table.sub_headers": 3
  },
  "pmc4967591-compound-hyphen": {
   "md table.header_rows": 10,
-  "md table.lost": 2,
   "xhtml block.merged": 2
  },
  "pmc4967591-prose-in-figure-region": {
   "md table.header_rows": 10,
-  "md table.lost": 2,
   "xhtml block.merged": 2
  },
  "pmc5007710-booktabs-groups": {
-  "md table.lost": 6,
+  "md table.header_rows": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 3,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
  "pmc5662628-equation-no-table": {
-  "md table.header_rows": 3,
-  "md table.lost": 2
+  "md table.header_rows": 3
  },
  "pmc5847320-captions-under-plots": {
   "md table.header_rows": 1,
-  "md table.lost": 5,
   "xhtml block.merged": 4
  },
  "pmc5859216-trial-profile": {
-  "md table.lost": 7,
+  "md table.header_rows": 1,
+  "md table.sub_headers": 5,
   "xhtml block.merged": 4,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 5
  },
  "pmc5989438-tight-references": {
-  "md table.header_rows": 8,
-  "md table.lost": 10
- },
- "pmc6000953-sample-size-header": {
-  "md table.lost": 3
+  "md table.header_rows": 8
  },
  "pmc6073000-ring-over-a": {
-  "md table.header_rows": 12,
-  "md table.lost": 3,
+  "md table.header_rows": 13,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 2,
   "xhtml table.sub_headers": 1
  },
  "pmc6114051-country-blocks": {
-  "md table.lost": 3,
+  "md table.header_rows": 2,
+  "md table.restated_headers": 2,
+  "md table.sub_headers": 2,
   "xhtml table.header_rows": 2,
   "xhtml table.restated_headers": 2,
   "xhtml table.sub_headers": 2
  },
  "pmc6116456-participant-flow": {
   "md table.header_rows": 1,
-  "md table.lost": 1,
   "xhtml block.merged": 3
  },
  "pmc6166639-label-wrapped-over-a-rule": {
   "md table.header_rows": 3,
-  "md table.lost": 1,
   "xhtml block.merged": 8
  },
- "pmc6174244-tight-caption": {
-  "md table.lost": 3
- },
  "pmc6227383-table-beside-prose": {
-  "md table.lost": 2,
+  "md table.header_rows": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 4,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
  "pmc6238812-scale-beside-prose": {
   "md table.header_rows": 1,
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "pmc6241217-flowchart": {
@@ -1276,67 +1167,48 @@
   "xhtml table.restated_headers": 1
  },
  "rockwool-comfortboard-80": {
-  "md table.lost": 1,
+  "md table.header_rows": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
  "rockwool-comfortboard-panels": {
-  "md table.lost": 1,
+  "md table.header_rows": 1,
+  "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 1
  },
  "rohm-katakana-dot-bullets": {
   "md table.header_rows": 1,
-  "md table.lost": 10,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 52,
   "xhtml table.sub_headers": 1,
   "xhtml text.changed": 1,
   "xhtml text.extra": 2,
   "xhtml text.lost": 6
  },
- "seagate-exos-drawn-bullets": {
-  "md table.lost": 1
- },
- "seagate-exos-run-on": {
-  "md table.lost": 1
- },
- "seagate-exos-wrapped-items": {
-  "md table.lost": 1
- },
- "seagate-exos-x16": {
-  "md table.lost": 1
- },
- "seagate-exos-x16-folio": {
-  "md table.lost": 1
- },
- "seagate-exos-x16-kicker": {
-  "md table.lost": 1
- },
- "seagate-exos-x16-note-marks": {
-  "md table.lost": 1
- },
  "sherwin-williams-eds-columns": {
-  "md table.lost": 7,
+  "md table.restated_headers": 6,
   "xhtml table.restated_headers": 6
  },
  "sherwin-williams-eds-label-over-value": {
-  "md table.lost": 7,
+  "md table.restated_headers": 6,
   "xhtml table.restated_headers": 6
  },
  "sherwin-williams-eds-label-values": {
-  "md table.lost": 7,
+  "md table.restated_headers": 6,
   "xhtml table.restated_headers": 6
  },
  "sherwin-williams-eds-restated-units": {
-  "md table.lost": 7,
+  "md table.restated_headers": 6,
   "xhtml table.restated_headers": 6
  },
  "sherwin-williams-eds-stacked-labels": {
-  "md table.lost": 7,
+  "md table.restated_headers": 6,
   "xhtml table.restated_headers": 6
  },
  "sherwin-williams-eds-tables": {
-  "md table.lost": 7,
+  "md table.restated_headers": 6,
   "xhtml table.restated_headers": 6
  },
  "sherwin-williams-emerald-edge": {
@@ -1358,9 +1230,11 @@
   "md table.header_rows": 3
  },
  "shimadzu-columns-read-whole": {
-  "md table.header_rows": 14,
-  "md table.lost": 28,
-  "md table.restated_headers": 1,
+  "md table.grid": 1,
+  "md table.header_rows": 17,
+  "md table.restated_headers": 2,
+  "md table.spans": 1,
+  "md table.sub_headers": 3,
   "xhtml block.merged": 160,
   "xhtml order": 6,
   "xhtml table.grid": 1,
@@ -1373,9 +1247,11 @@
   "xhtml text.lost": 91
  },
  "shimadzu-katakana-dot-bullets": {
-  "md table.header_rows": 14,
-  "md table.lost": 28,
-  "md table.restated_headers": 1,
+  "md table.grid": 1,
+  "md table.header_rows": 17,
+  "md table.restated_headers": 2,
+  "md table.spans": 1,
+  "md table.sub_headers": 3,
   "xhtml block.merged": 160,
   "xhtml order": 6,
   "xhtml table.grid": 1,
@@ -1388,22 +1264,18 @@
   "xhtml text.lost": 91
  },
  "stat-japan-katakana-dot-bullets": {
+  "md table.grid": 1,
   "md table.header_rows": 7,
-  "md table.lost": 9,
+  "md table.shape": 1,
   "xhtml block.merged": 20,
   "xhtml table.grid": 1,
   "xhtml table.shape": 1
  },
- "statcan-note-links": {
-  "md table.lost": 1
- },
- "statcan-note-links-fra": {
-  "md table.lost": 1
- },
  "telstra-three-columns-on-shared-baselines": {
-  "md table.header_rows": 15,
-  "md table.lost": 144,
+  "md table.header_rows": 49,
   "md table.restated_headers": 1,
+  "md table.shape": 4,
+  "md table.sub_headers": 35,
   "xhtml block.merged": 35,
   "xhtml table.header_rows": 34,
   "xhtml table.restated_headers": 1,
@@ -1411,36 +1283,30 @@
   "xhtml table.sub_headers": 35
  },
  "thermo-m-series-callout-line": {
-  "md table.lost": 2,
   "xhtml block.merged": 2
  },
  "thermo-m-series-flyer": {
-  "md table.lost": 2,
   "xhtml block.merged": 2
  },
  "thermo-m-series-gutter": {
-  "md table.lost": 2,
   "xhtml block.merged": 2
  },
  "thermo-m-series-ligature-space": {
-  "md table.lost": 2,
   "xhtml block.merged": 2
  },
  "thermo-m-series-note-marks": {
-  "md table.lost": 2,
   "xhtml block.merged": 2
  },
  "thermo-m-series-spread-values": {
-  "md table.lost": 2,
   "xhtml block.merged": 2
  },
  "thermo-m-series-table-caption": {
-  "md table.lost": 2,
   "xhtml block.merged": 2
  },
  "ti-lm358-body-from-prose": {
-  "md table.header_rows": 4,
-  "md table.lost": 22,
+  "md table.header_rows": 13,
+  "md table.shape": 1,
+  "md table.sub_headers": 9,
   "xhtml block.merged": 38,
   "xhtml order": 17,
   "xhtml table.header_rows": 9,
@@ -1450,8 +1316,9 @@
   "xhtml text.lost": 29
  },
  "ti-lm358-continued-heads": {
-  "md table.header_rows": 4,
-  "md table.lost": 22,
+  "md table.header_rows": 13,
+  "md table.shape": 1,
+  "md table.sub_headers": 9,
   "xhtml block.merged": 38,
   "xhtml order": 17,
   "xhtml table.header_rows": 9,
@@ -1461,8 +1328,9 @@
   "xhtml text.lost": 29
  },
  "ti-lm358-note-numbers": {
-  "md table.header_rows": 4,
-  "md table.lost": 22,
+  "md table.header_rows": 13,
+  "md table.shape": 1,
+  "md table.sub_headers": 9,
   "xhtml block.merged": 38,
   "xhtml order": 17,
   "xhtml table.header_rows": 9,
@@ -1472,8 +1340,9 @@
   "xhtml text.lost": 29
  },
  "ti-lm358-revision-bullets": {
-  "md table.header_rows": 4,
-  "md table.lost": 22,
+  "md table.header_rows": 13,
+  "md table.shape": 1,
+  "md table.sub_headers": 9,
   "xhtml block.merged": 38,
   "xhtml order": 17,
   "xhtml table.header_rows": 9,
@@ -1483,8 +1352,10 @@
   "xhtml text.lost": 29
  },
  "ti-ne555-captions": {
+  "md table.grid": 2,
   "md table.header_rows": 1,
-  "md table.lost": 17,
+  "md table.shape": 1,
+  "md table.spans": 2,
   "xhtml block.merged": 35,
   "xhtml order": 4,
   "xhtml table.grid": 2,
@@ -1494,8 +1365,10 @@
   "xhtml text.lost": 2
  },
  "ti-ne555-package-drawing": {
+  "md table.grid": 2,
   "md table.header_rows": 1,
-  "md table.lost": 17,
+  "md table.shape": 1,
+  "md table.spans": 2,
   "xhtml block.merged": 35,
   "xhtml order": 4,
   "xhtml table.grid": 2,
@@ -1505,8 +1378,10 @@
   "xhtml text.lost": 2
  },
  "ti-ne555-plot-grids": {
+  "md table.grid": 2,
   "md table.header_rows": 1,
-  "md table.lost": 17,
+  "md table.shape": 1,
+  "md table.spans": 2,
   "xhtml block.merged": 35,
   "xhtml order": 4,
   "xhtml table.grid": 2,
@@ -1516,8 +1391,10 @@
   "xhtml text.lost": 2
  },
  "ti-ne555-same-every-run": {
+  "md table.grid": 2,
   "md table.header_rows": 1,
-  "md table.lost": 17,
+  "md table.shape": 1,
+  "md table.spans": 2,
   "xhtml block.merged": 35,
   "xhtml order": 4,
   "xhtml table.grid": 2,
@@ -1527,8 +1404,10 @@
   "xhtml text.lost": 2
  },
  "ti-tps5430-axis-titles": {
-  "md table.header_rows": 4,
-  "md table.lost": 15,
+  "md table.header_rows": 5,
+  "md table.shape": 4,
+  "md table.spans": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 29,
   "xhtml order": 2,
   "xhtml table.header_rows": 1,
@@ -1540,80 +1419,63 @@
   "xhtml text.lost": 106
  },
  "true-field-labels": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-form-labels-letterhead": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-mixed-numbers": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t23-address": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t23-blank-box-label": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t23-bold-headings": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t23-control-bullets": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t23-dimension-drawing": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t23-footer-box": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t23-letterhead-rule": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t23-list-ends": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t49-broken-item": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t49-control-bullets": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t49-feature-columns": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t49-footer-box": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t49-form-labels": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t49-heads-over-items": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "true-t49-small-bold-labels": {
-  "md table.lost": 1,
   "xhtml block.merged": 2
  },
  "undesa-wesp-header-over-figures": {
-  "md table.header_rows": 36,
-  "md table.lost": 22,
+  "md table.header_rows": 37,
+  "md table.shape": 1,
+  "md table.sub_headers": 1,
   "xhtml block.merged": 117,
   "xhtml order": 7,
   "xhtml table.header_rows": 1,
@@ -1622,48 +1484,35 @@
   "xhtml text.extra": 3,
   "xhtml text.lost": 10
  },
- "unit-caption-header": {
-  "md table.lost": 1
- },
  "usg-note-after-bracket": {
-  "md table.header_rows": 1,
-  "md table.lost": 5
+  "md table.header_rows": 1
  },
  "usg-sheetrock-closing-line": {
-  "md table.header_rows": 1,
-  "md table.lost": 5
+  "md table.header_rows": 1
  },
  "usg-sheetrock-note-marks": {
-  "md table.header_rows": 1,
-  "md table.lost": 5
+  "md table.header_rows": 1
  },
  "usg-sheetrock-numbered-items": {
-  "md table.header_rows": 1,
-  "md table.lost": 5
+  "md table.header_rows": 1
  },
  "usg-sheetrock-side-head-table": {
-  "md table.header_rows": 1,
-  "md table.lost": 5
+  "md table.header_rows": 1
  },
  "usg-sheetrock-side-heads": {
-  "md table.header_rows": 1,
-  "md table.lost": 5
+  "md table.header_rows": 1
  },
  "usg-sheetrock-table-regions": {
-  "md table.header_rows": 1,
-  "md table.lost": 5
+  "md table.header_rows": 1
  },
  "usg-sheetrock-test-groups": {
-  "md table.header_rows": 1,
-  "md table.lost": 5
+  "md table.header_rows": 1
  },
  "usg-sidebar-not-a-figure": {
-  "md table.header_rows": 1,
-  "md table.lost": 5
+  "md table.header_rows": 1
  },
  "usgs-tm5b12-axis-scales": {
   "md table.header_rows": 3,
-  "md table.lost": 4,
   "xhtml block.merged": 40,
   "xhtml order": 33,
   "xhtml text.changed": 19,
@@ -1671,57 +1520,59 @@
   "xhtml text.lost": 704
  },
  "usgs-tm5b13-axis-titles": {
-  "md table.header_rows": 16,
-  "md table.lost": 47,
+  "md table.header_rows": 17,
+  "md table.sub_headers": 2,
   "xhtml block.merged": 77,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 2
  },
  "usgs-tm5b13-plot-legends": {
-  "md table.header_rows": 16,
-  "md table.lost": 47,
+  "md table.header_rows": 17,
+  "md table.sub_headers": 2,
   "xhtml block.merged": 77,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 2
  },
  "usgs-tm5b13-running-heads": {
-  "md table.header_rows": 16,
-  "md table.lost": 47,
+  "md table.header_rows": 17,
+  "md table.sub_headers": 2,
   "xhtml block.merged": 77,
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 2
  },
  "wd-gold-footnotes": {
-  "md table.lost": 3,
+  "md table.sub_headers": 3,
   "xhtml table.sub_headers": 3
  },
  "wd-gold-note-after-quantity": {
-  "md table.lost": 3,
+  "md table.sub_headers": 3,
   "xhtml table.sub_headers": 3
  },
  "wd-gold-spec-tables": {
-  "md table.lost": 3,
+  "md table.sub_headers": 3,
   "xhtml table.sub_headers": 3
  },
  "wd-gold-template-labels": {
-  "md table.lost": 3,
+  "md table.sub_headers": 3,
   "xhtml table.sub_headers": 3
  },
  "wd-gold-title": {
-  "md table.lost": 3,
+  "md table.sub_headers": 3,
   "xhtml table.sub_headers": 3
  },
  "wes-italic-before-slash": {
-  "md table.header_rows": 4,
-  "md table.lost": 10
+  "md table.header_rows": 4
  },
  "worldbank-line-sample-legend": {
   "md table.header_rows": 13,
   "xhtml block.merged": 9
  },
  "wto-template-heads-not-furniture": {
-  "md table.header_rows": 100,
-  "md table.lost": 1474,
+  "md table.grid": 7,
+  "md table.header_rows": 148,
+  "md table.shape": 42,
+  "md table.spans": 7,
+  "md table.sub_headers": 50,
   "xhtml block.merged": 1162,
   "xhtml order": 10,
   "xhtml table.grid": 7,
