@@ -6,7 +6,8 @@
     "about": "Cree CR4T downlight spec sheet (Canada). Its photometry page sets ruled tables side by side, beside a polar chart, in two page columns parted by a vertical rule."
   },
   "notes": [
-    "#170: page 2 sets its margins further left than page 1, and opens with the title page 1 sets under its series name."
+    "#170: page 2 sets its margins further left than page 1, and opens with the title page 1 sets under its series name.",
+    "2026-11-26 (#456): the line under the title on page 1 is the title's subtitle, a `doco:Subtitle`."
   ],
   "checks": [
     {
@@ -14,10 +15,20 @@
       "found": "2026-11-24",
       "issue": "The title, restated as page 2’s running head, was a second SectionTitle.",
       "element": {
-        "type": "doco:SectionTitle",
+        "type": "doco:Subtitle",
         "text": "CR4T™ LED Downlight – 4\" (102mm)"
       },
       "count": 1
+    },
+    {
+      "id": "restated-no-heading",
+      "found": "2026-11-26",
+      "issue": "The title's subtitle, restated as page 2’s running head, was a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "CR4T™ LED Downlight – 4\" (102mm)"
+      },
+      "count": 0
     },
     {
       "id": "footer-once",
