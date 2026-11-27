@@ -336,10 +336,16 @@ fn detect_all(
         pages_seen.sort_unstable();
         pages_seen.dedup();
 
-        // Position must be stable: measured from where the group stands
-        // (see [`place_of`]), so a single outlier occurrence does not
-        // disqualify the group.
-        let median = place_of(&occ);
+        // Position must be stable. Use the median as the reference so a single
+        // outlier occurrence does not disqualify the group; a group of
+        // numbers stands where most of its pages set it (see [`place_of`]).
+        let median = if sig.contains('#') {
+            place_of(&occ)
+        } else {
+            let mut ys: Vec<f64> = occ.iter().map(|o| o.2).collect();
+            ys.sort_by(|a, b| a.total_cmp(b));
+            ys[ys.len() / 2]
+        };
 
         let stable = occ
             .iter()
