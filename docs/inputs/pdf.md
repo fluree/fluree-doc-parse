@@ -1044,7 +1044,9 @@ what the thousandth does.
 
 A reviewer's sticky note, the comment on a highlight, a free-text box typed
 onto a form: none is drawn by the page's content, and each is text to a
-person reading the page in a viewer. Text (sticky note), `FreeText`,
+person reading the page in a viewer. They are read only when asked for
+(`fdoc convert --comments`), since they are not the document's own text:
+without it a PDF converts as it did before notes were read. Text (sticky note), `FreeText`,
 `Highlight`, `Underline`, `StrikeOut` and `Squiggly` annotations with
 something written in them (`/Contents`) are read, each a `doco:Paragraph`
 after its page's own text, with the annotation's rectangle as its `bbox`,
@@ -1052,9 +1054,12 @@ after its page's own text, with the annotation's rectangle as its `bbox`,
 transcript turn's speaker does: `Sam Example: Check this total`. An
 annotation is read once however many times or pages list it, a note keeps
 at most 65,536 characters, at most 20,000 notes are read, and each is
-counted, with its text, against the memory one document may take; a
-document past it fails as too large. What a
-highlight covers is the page's text already, and is not repeated. A note is
+counted, with its text, against the memory one document may take; past
+it, the notes are left out with a warning and the pages are still read.
+What a highlight covers is the page's text already, and is not repeated: a
+text markup (highlight, underline, strike-out, squiggly) whose note is the
+text under it, as viewers often copy it there, is left out, while one that
+says something of its own is kept (`fluree_doc_pdf::annot::drop_quoting_markups`). A note is
 not counted as the page's text when deciding whether a page was read, so a
 scan with a sticky note on it is still reported unread. Link annotations
 are read as the `links` of the text they cover, and form widgets by

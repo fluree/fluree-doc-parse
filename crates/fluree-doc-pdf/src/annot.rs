@@ -162,6 +162,41 @@ fn text(d: &Dict<'_>, key: &[u8], max: usize) -> Option<String> {
     Some(out.chars().take(max).collect())
 }
 
+/// Leave out each text markup note (a highlight, an underline, a strike-out
+/// or a squiggly line) whose text is the page's own text it marks.
+///
+/// A viewer that marks text often copies it into the markup's `/Contents`,
+/// so a highlighted `Net revenue rose 4%` carries `Net revenue rose 4%` as
+/// its note, and read as a note it would say the page's words a second
+/// time. The note is left out when its letters and digits, case aside, are
+/// found among those of the page's text under its rectangle and make at
+/// least half of them: a note of its own (`Check this total`) or a word
+/// that only happens to be on the line is kept.
+pub fn drop_quoting_markups(notes: &mut Vec<Annotation>, pages: &[crate::extract::Page]) {
+    notes.retain(|n| !quotes_its_page(n, pages));
+}
+
+fn quotes_its_page(n: &Annotation, pages: &[crate::extract::Page]) -> bool {
+    if !MARKUPS.contains(&n.subtype.as_str()) {
+        return false;
+    }
+    let Some(page) = pages.iter().find(|p| p.index == n.page) else {
+        return false;
+    };
+    let visible = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let said = visible(&n.contents);
+    let marked = visible(&crate::link::anchor_text(page, n.bbox));
+    !said.is_empty() && marked.contains(&said) && 2 * said.len() >= marked.len()
+}
+
+/// The text markup subtypes: they mark the page's text where they sit.
+const MARKUPS: [&str; 4] = ["Highlight", "Underline", "StrikeOut", "Squiggly"];
+
 /// The notes as elements: a paragraph each, where it sits on its page,
 /// `evidence` `annotation`, its text opening with its author
 /// (`Sam Example: Check this total`) as a transcript turn opens with its
@@ -664,6 +699,68 @@ mod tests {
         };
         let els = elements(&[note]);
         assert_eq!(crate::unread_pages(&doc, &els).len(), 1);
+    }
+
+    #[test]
+    fn a_markup_quoting_the_text_it_marks_is_left_out() {
+        // A page reading `Net revenue rose 4% in May` at y 100, glyphs of
+        // five points.
+        let line = "Net revenue rose 4% in May";
+        let bb = |x0, y0, x1, y1| BBox { x0, y0, x1, y1 };
+        let glyphs = line
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| *c != ' ')
+            .map(|(i, c)| {
+                let x = 5.0 * i as f64;
+                crate::glyph::Glyph {
+                    text: c.to_string(),
+                    bbox: Some(bb(x, 100.0, x + 5.0, 110.0)),
+                    page: 0,
+                    origin: (x, 108.0),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    weight: None,
+                    italic: false,
+                    advance: Some(5.0),
+                    draw_index: i,
+                    ocr: None,
+                }
+            })
+            .collect();
+        let page = crate::extract::Page {
+            glyphs,
+            ..crate::image::page_of(600, 800, false).pages.remove(0)
+        };
+        // Over `Net revenue rose 4%`.
+        let over = bb(0.0, 98.0, 95.0, 112.0);
+        let note = |subtype: &str, contents: &str| Annotation {
+            page: 0,
+            subtype: subtype.into(),
+            bbox: over,
+            author: None,
+            contents: contents.into(),
+        };
+        let mut notes = vec![
+            note("Highlight", "Net revenue rose 4%"),
+            note("Underline", "net  revenue rose 4 %"),
+            note("Highlight", "Check this total"),
+            note("Highlight", "revenue"),
+            note("Text", "Net revenue rose 4%"),
+        ];
+        drop_quoting_markups(&mut notes, std::slice::from_ref(&page));
+        let kept: Vec<_> = notes
+            .iter()
+            .map(|n| (n.subtype.as_str(), n.contents.as_str()))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                ("Highlight", "Check this total"),
+                ("Highlight", "revenue"),
+                ("Text", "Net revenue rose 4%")
+            ]
+        );
     }
 
     #[test]

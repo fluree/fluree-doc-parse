@@ -124,13 +124,32 @@ pub fn parse_with_ocr(
     })
 }
 
+/// What a document is read with beyond its printed text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Options {
+    /// Read the comments reviewers left (`word/comments.xml`), each after
+    /// the footer, `evidence` `comment`, opening with its author. Off by
+    /// default: Word does not print them, and they are not the document's
+    /// text.
+    pub comments: bool,
+}
+
 /// [`parse_with_info`], with the images of each figure in the body that has
 /// any, in reading order: what an OCR engine or a model can read, and the
 /// figure its text belongs after. Only where they are is read here; their
 /// bytes are read by [`read_pictures`], each image once, or one at a time
-/// by [`read_media`].
+/// by [`read_media`]. Read with the default [`Options`]: no comments.
 pub fn parse_with_media(
     bytes: &[u8],
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
+    parse_with_media_options(bytes, &Options::default())
+}
+
+/// [`parse_with_media`], with what is read beyond the printed text as
+/// `options` says.
+pub fn parse_with_media_options(
+    bytes: &[u8],
+    options: &Options,
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
     let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
     let main = pkg.main_part("word/document.xml");
@@ -206,11 +225,15 @@ pub fn parse_with_media(
     let footer = read_parts("footer", "footer");
     // Footnotes and endnotes, after the body, each labelled with the
     // number Word shows it by; then the footer; then the comments, which
-    // Word does not print. Each marked as what it is, so a consumer that
-    // wants the body alone leaves them out.
+    // Word does not print, when asked for. Each marked as what it is, so a
+    // consumer that wants the body alone leaves them out.
     let mut notes = Vec::new();
     let mut budget = Budget::default();
-    for kind in [&FOOTNOTES, &ENDNOTES, &COMMENTS] {
+    let kinds = [&FOOTNOTES, &ENDNOTES, &COMMENTS];
+    for kind in kinds
+        .into_iter()
+        .filter(|k| options.comments || k.item != "comment")
+    {
         let part = pkg.related(&main, kind.rel, kind.fallback);
         let Some(part_xml) = aside(&mut pkg, &part)? else {
             continue;
@@ -2829,21 +2852,33 @@ mod tests {
             z.write_all(xml.as_bytes()).unwrap();
         }
         z.finish().unwrap();
-        let els = parse(&buf.into_inner()).unwrap();
+        let bytes = buf.into_inner();
+        let els = with_comments(&bytes).unwrap();
         let got: Vec<(&str, &str)> = els.iter().map(|e| (e.text.as_str(), e.evidence)).collect();
-        assert_eq!(
-            got,
-            [
-                ("Yield rose", "docx"),
-                ("Costs fell", "docx"),
-                ("1 Survey of Alex Sample, 2026.", "footnote"),
-                ("2 Annual report, p. 4.", "footnote"),
-                ("i Method in the annex.", "endnote"),
-                ("Sam Example: Source?", "comment"),
-                ("Alex Sample: On the header.", "comment"),
-            ]
-        );
+        let printed = [
+            ("Yield rose", "docx"),
+            ("Costs fell", "docx"),
+            ("1 Survey of Alex Sample, 2026.", "footnote"),
+            ("2 Annual report, p. 4.", "footnote"),
+            ("i Method in the annex.", "endnote"),
+        ];
+        let comments = [
+            ("Sam Example: Source?", "comment"),
+            ("Alex Sample: On the header.", "comment"),
+        ];
+        assert_eq!(got, [&printed[..], &comments[..]].concat());
         assert!(els.iter().all(|e| e.kind == "doco:Paragraph"));
+        // Not asked for, the comments are not read: what Word prints is,
+        // under the same ids.
+        let els = parse(&bytes).unwrap();
+        let got: Vec<(&str, &str)> = els.iter().map(|e| (e.text.as_str(), e.evidence)).collect();
+        assert_eq!(got, printed);
+        assert_eq!(els.last().unwrap().id, "elem-00005");
+    }
+
+    /// The elements of `bytes`, its comments read.
+    fn with_comments(bytes: &[u8]) -> Result<Vec<Element>, DocxError> {
+        parse_with_media_options(bytes, &Options { comments: true }).map(|(els, ..)| els)
     }
 
     #[test]
@@ -2867,15 +2902,16 @@ mod tests {
                 ("word/comments.xml".into(), comments),
             ])
         };
-        let els = parse(&docx(comments.into_bytes())).unwrap();
+        let els = with_comments(&docx(comments.into_bytes())).unwrap();
         let got: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(got, ["Body", "First", "Unanchored"]);
         // Past the bound by a byte, deflated to a few kilobytes: refused as
-        // it inflates, not read whole.
+        // it inflates, not read whole; not asked for, not read at all.
         let mut big = b"<w:comments>".to_vec();
         big.resize(fluree_doc_ooxml::MAX_XML_BYTES as usize + 1, b' ');
-        let err = parse(&docx(big)).unwrap_err().to_string();
+        let err = with_comments(&docx(big.clone())).unwrap_err().to_string();
         assert!(err.contains("word/comments.xml"), "{err}");
+        assert!(parse(&docx(big)).is_ok());
     }
 
     #[test]

@@ -81,8 +81,10 @@ footnotes and `i`, `ii`, … for endnotes, or the format the document sets
 (`w:footnotePr`, `w:endnotePr`). The reference mark in the body adds nothing
 to the body's text, so the body reads as it did. A note no reference cites,
 or cited only inside a tracked deletion, is not shown by Word and is not
-read; Word's separator lines are no notes. Comments come last, after the
-footer, since Word does not print them: in the order the body anchors them,
+read; Word's separator lines are no notes. Comments are read only when
+asked for (`--comments`; `fluree_doc_docx::Options::comments` in a
+library), since Word does not print them, and come last, after the footer:
+in the order the body anchors them,
 then any anchored elsewhere, each `evidence` `comment` and opening with its
 author (`Sam Example: Source?`). A heading inside a note is read as a
 paragraph, and a picture in one is left out. Footnote reference marks set
@@ -226,7 +228,8 @@ the piece table says which run of the document each holds. What is read:
   a footnote reference in the body adds nothing to it.
 - **Footnotes, endnotes and comments** after the body, marked by `evidence`
   `footnote`, `endnote` and `comment` as in a DOCX; a note opens with its
-  number (`1`, `2`, … and `i`, `ii`, … for endnotes).
+  number (`1`, `2`, … and `i`, `ii`, … for endnotes). `fdoc convert` keeps
+  the comments only with `--comments`, as a DOCX's.
 
 What this round leaves out, and says so here rather than guessing: styles
 (so no heading, title or list is told apart from a paragraph, and list

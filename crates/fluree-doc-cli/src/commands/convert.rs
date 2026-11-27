@@ -362,8 +362,12 @@ fn convert_source(
             )
         }
         SourceKind::Docx => {
+            let options = fluree_doc_docx::Options {
+                comments: args.comments,
+            };
             let (mut elements, info, media) =
-                fluree_doc_docx::parse_with_media(&data).map_err(|e| e.to_string())?;
+                fluree_doc_docx::parse_with_media_options(&data, &options)
+                    .map_err(|e| e.to_string())?;
             // The images placed in the flow: a pasted screenshot's text
             // follows its figure, read by OCR. Their bytes are only read
             // when something is there to read them.
@@ -510,6 +514,14 @@ fn convert_source(
         }
         _ => return convert_bytes(data, src, cfg, args, pages, quiet),
     };
+    // The comments an OpenDocument, RTF or Word 97-2003 document carries,
+    // read with it, are left out unless asked for (`--comments`), as a
+    // DOCX's are. The ids around them are kept, so an element is named
+    // alike with and without them.
+    let mut elements = elements;
+    if !args.comments {
+        elements.retain(|e| e.evidence != "comment");
+    }
     Ok(render(&elements, src, args, Vec::new(), &notes))
 }
 
@@ -2222,15 +2234,25 @@ fn convert_bytes(
         &fluree_doc_pdf::link::extract(&raw),
         &doc.pages,
     );
-    // The notes a reader left on the pages, after each page's own text,
-    // within what one document may make.
-    let mut budget = fluree_doc_model::budget::Budget::default();
-    let annotations = fluree_doc_pdf::annot::annotations(&raw, &mut budget)
-        .map_err(|e| format!("PDF too large: its notes, {e}"))?;
-    fluree_doc_pdf::annot::place(
-        &mut a.elements,
-        fluree_doc_pdf::annot::elements(&annotations),
-    );
+    // The notes a reader left on the pages, when asked for (`--comments`),
+    // after each page's own text, within what one document may make: past
+    // it, the page's text is still read, and the notes are left out with a
+    // warning rather than failing the document. A markup quoting the text
+    // it marks would say that text twice, and is left out.
+    if args.comments {
+        let mut budget = fluree_doc_model::budget::Budget::default();
+        match fluree_doc_pdf::annot::annotations(&raw, &mut budget) {
+            Ok(mut annotations) => {
+                fluree_doc_pdf::annot::drop_quoting_markups(&mut annotations, &doc.pages);
+                fluree_doc_pdf::annot::place(
+                    &mut a.elements,
+                    fluree_doc_pdf::annot::elements(&annotations),
+                );
+            }
+            Err(e) if !quiet => eprintln!("warning: {stem}: notes left out: {e}"),
+            Err(_) => {}
+        }
+    }
     // The files it embeds, described as an e-mail's attachments are, and
     // saved with them under `--attachments`.
     let (embedded, skipped) = fluree_doc_pdf::annot::embedded_files(&raw);

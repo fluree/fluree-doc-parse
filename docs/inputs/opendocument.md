@@ -30,7 +30,8 @@ Read as a [Word file](office-and-web.md#docx) is:
   continuations (`merged_left`, `merged_down`);
 - footnotes and endnotes are read after the body, each opening with its
   citation (`1`, `i`), marked `evidence` `footnote` or `endnote`; comments
-  last, each opening with its author, `evidence` `comment`; the page header
+  last, each opening with its author, `evidence` `comment` (`fdoc convert`
+  keeps them only with `--comments`, as a DOCX's); the page header
   and footer of the master pages once each, before and after, as `header`
   and `footer`;
 - a text box is read where it is anchored: one anchored to a paragraph or

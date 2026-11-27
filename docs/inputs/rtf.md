@@ -33,7 +33,8 @@ is, with no geometry and nothing to escalate. Provenance and evidence are
 - **Footnotes and endnotes** (`\footnote`, `\ftnalt`) are read after the
   body, each opening with its number (`1`, `i`), marked `footnote` or
   `endnote`; the reference mark adds nothing to the body. **Comments**
-  (`\annotation`) come last, opening with their author (`\atnauthor`). The
+  (`\annotation`) come last, opening with their author (`\atnauthor`);
+  `fdoc convert` keeps them only with `--comments`, as a DOCX's. The
   page **header and footer** (`\header`, `\footer` and their first-page and
   left/right variants) are read once each, before and after the body: a
   line the first page's header says again is read once, a line one header

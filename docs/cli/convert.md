@@ -32,6 +32,7 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--base-iri <IRI>` | what every node IRI minted by `-f doco` starts with (`<IRI>-element-3`). Default: `--doc-iri`, else `urn:fluree-doc-parse:<stem>-<first 12 hex digits of the SHA-256>`. One input only |
 | `--doc-iri <IRI>` | stamp `-f doco` nodes with `doc:sourceDocument`, the tag a re-extraction retracts by. One input only |
 | `--source-name <NAME>` | what `-f doco` records as the input's name, `doc:sourceName`. Default: the input's file name; none from stdin. One input only |
+| `--comments` | also read the notes reviewers left: a PDF's annotations, and the comments of a Word, OpenDocument or RTF document. Off by default. See [PDF](../inputs/pdf.md#annotations-and-embedded-files) |
 | `--attachments <DIR>` | save each email's attachments, and each PDF's embedded files, under `DIR/<input name>/`, to convert on their own. See [Email](../inputs/email.md#attachments) and [PDF](../inputs/pdf.md#annotations-and-embedded-files) |
 | `--parse-attachments` | with `--attachments`, also convert each email's attachments, and those of attached messages, into `DIR/<email name>/<sha256>.<format>`. See [Email](../inputs/email.md#reading-the-attachments-too) |
 | `--layout-boxes <DIR>` | layout-detector sidecars. Env: `FDOC_TITLE_BOXES` |
