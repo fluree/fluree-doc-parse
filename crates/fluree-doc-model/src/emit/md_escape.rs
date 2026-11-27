@@ -88,16 +88,11 @@ fn spans(chars: &[char], ctx: Context, m: &mut [Mark]) {
             '\\' if ctx != Context::Cell && at(i + 1).is_some_and(|c| c.is_ascii_punctuation()) => {
                 escape(m, i)
             }
-            // `<` opens a tag (a letter, `/`, `!` or `?` after it) or an
-            // autolink (a scheme, or an address whose name may open with
-            // any of `.!#$%&'*+/=?^_{|}~-`) where a `>` closes it:
-            // `<name>`, `<a@b.org>`, `<.ward@example.com>`.
-            '<' if at(i + 1).is_some_and(|c| {
-                c.is_ascii_alphanumeric() || ".!#$%&'*+/=?^_`{|}~-".contains(c)
-            }) && chars[i + 1..].contains(&'>') =>
-            {
-                escape(m, i)
-            }
+            // `<` where it opens an autolink or a piece of inline HTML, as
+            // CommonMark defines them: `<a@b.org>`, `<https://…>`,
+            // `<name>`, `</b>`, `<!-- … -->`. Anything else, `Re<2000` or
+            // `<Model_rawdata>`, Markdown shows as it is.
+            '<' if markup_at(chars, i) => escape(m, i),
             // An entity or numeric reference is read as the character it
             // names: `&amp;` as `&`.
             '&' if entity_at(chars, i + 1) => escape(m, i),
@@ -112,6 +107,251 @@ fn spans(chars: &[char], ctx: Context, m: &mut [Mark]) {
     code_spans(chars, m);
 }
 
+/// Whether `chars[i]`, a `<`, opens an autolink or inline HTML.
+fn markup_at(chars: &[char], i: usize) -> bool {
+    let rest = &chars[i + 1..];
+    autolink(rest) || tag(rest).is_some() || other_html(rest)
+}
+
+/// `scheme:…>` or `name@domain>`, after the `<`.
+fn autolink(rest: &[char]) -> bool {
+    let Some(end) = rest.iter().position(|c| *c == '>') else {
+        return false;
+    };
+    let body = &rest[..end];
+    if body
+        .iter()
+        .any(|c| c.is_whitespace() || c.is_control() || *c == '<')
+    {
+        return false;
+    }
+    // A URI: a scheme of 2 to 32 characters, a letter first, then a colon.
+    if let Some(colon) = body.iter().position(|c| *c == ':') {
+        let scheme = &body[..colon];
+        if (2..=32).contains(&scheme.len())
+            && scheme[0].is_ascii_alphabetic()
+            && scheme
+                .iter()
+                .all(|c| c.is_ascii_alphanumeric() || "+.-".contains(*c))
+        {
+            return true;
+        }
+    }
+    // An address.
+    let Some(at) = body.iter().position(|c| *c == '@') else {
+        return false;
+    };
+    let (local, domain) = (&body[..at], &body[at + 1..]);
+    !local.is_empty()
+        && local
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || ".!#$%&'*+/=?^_`{|}~-".contains(*c))
+        && !domain.is_empty()
+        && domain.split(|c| *c == '.').all(|label| {
+            (1..=63).contains(&label.len())
+                && label.iter().all(|c| c.is_ascii_alphanumeric() || *c == '-')
+                && label[0] != '-'
+                && label[label.len() - 1] != '-'
+        })
+}
+
+/// An open or closing tag after the `<`, as CommonMark defines one: its
+/// length up to the `>` and whether it is a closing tag.
+fn tag(rest: &[char]) -> Option<(usize, bool)> {
+    let mut k = 0;
+    let closing = rest.first() == Some(&'/');
+    if closing {
+        k = 1;
+    }
+    let name = |c: char| c.is_ascii_alphanumeric() || c == '-';
+    if !rest.get(k).is_some_and(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    while rest.get(k).copied().is_some_and(name) {
+        k += 1;
+    }
+    let ws = |k: &mut usize| {
+        let s = *k;
+        while rest.get(*k).is_some_and(|c| c.is_whitespace()) {
+            *k += 1;
+        }
+        *k > s
+    };
+    if closing {
+        ws(&mut k);
+        return (rest.get(k) == Some(&'>')).then_some((k + 1, true));
+    }
+    loop {
+        let spaced = ws(&mut k);
+        match rest.get(k) {
+            Some('>') => return Some((k + 1, false)),
+            Some('/') if rest.get(k + 1) == Some(&'>') => return Some((k + 2, false)),
+            Some(c) if spaced && (c.is_ascii_alphabetic() || "_:".contains(*c)) => {
+                k += 1;
+                while rest
+                    .get(k)
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || "_.:-".contains(*c))
+                {
+                    k += 1;
+                }
+                // An attribute's value, if it has one.
+                let before = k;
+                ws(&mut k);
+                if rest.get(k) == Some(&'=') {
+                    k += 1;
+                    ws(&mut k);
+                    match rest.get(k) {
+                        Some(q @ ('"' | '\'')) => {
+                            let q = *q;
+                            let close = rest[k + 1..].iter().position(|c| *c == q)?;
+                            k += close + 2;
+                        }
+                        Some(_) => {
+                            let s = k;
+                            while rest
+                                .get(k)
+                                .is_some_and(|c| !c.is_whitespace() && !"\"'=<>`".contains(*c))
+                            {
+                                k += 1;
+                            }
+                            if k == s {
+                                return None;
+                            }
+                        }
+                        None => return None,
+                    }
+                } else {
+                    k = before;
+                }
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// A comment, a processing instruction, a declaration or a CDATA section
+/// after the `<`, closed.
+fn other_html(rest: &[char]) -> bool {
+    let s: String = rest.iter().take(4096).collect();
+    if let Some(body) = s.strip_prefix("!--") {
+        return body.starts_with('>') || body.starts_with("->") || body.contains("-->");
+    }
+    if let Some(body) = s.strip_prefix('?') {
+        return body.contains("?>");
+    }
+    if let Some(body) = s.strip_prefix("![CDATA[") {
+        return body.contains("]]>");
+    }
+    if let Some(body) = s.strip_prefix('!') {
+        return body.starts_with(|c: char| c.is_ascii_alphabetic()) && body.contains('>');
+    }
+    false
+}
+
+/// Whether a line, `<` first, opens an HTML block: a raw-text tag
+/// (`script`, `pre`, `style`, `textarea`), a comment, an instruction, a
+/// declaration, CDATA or a block-level tag, any of which interrupts a
+/// paragraph; or, on a block's first line, any complete tag alone on it.
+fn html_block_at(line: &[char], first: bool) -> bool {
+    let rest = &line[1..];
+    let s: String = rest
+        .iter()
+        .take(16)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let after = |n: usize| {
+        rest.get(n).is_none_or(|c| {
+            c.is_whitespace() || *c == '>' || (*c == '/' && rest.get(n + 1) == Some(&'>'))
+        })
+    };
+    for t in ["script", "pre", "style", "textarea"] {
+        if s.starts_with(t) && after(t.len()) {
+            return true;
+        }
+    }
+    if s.starts_with("!--") || s.starts_with('?') || s.starts_with("![cdata[") {
+        return true;
+    }
+    if s.starts_with('!') && s[1..].starts_with(|c: char| c.is_ascii_alphabetic()) {
+        return true;
+    }
+    let name_at = usize::from(s.starts_with('/'));
+    let name: String = s[name_at..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if BLOCK_TAGS.contains(&name.as_str()) && after(name_at + name.len()) {
+        return true;
+    }
+    first && tag(rest).is_some_and(|(n, _)| rest[n..].iter().all(|c| c.is_whitespace()))
+}
+
+/// The tags that open an HTML block of their own (CommonMark's sixth kind).
+const BLOCK_TAGS: &[&str] = &[
+    "address",
+    "article",
+    "aside",
+    "base",
+    "basefont",
+    "blockquote",
+    "body",
+    "caption",
+    "center",
+    "col",
+    "colgroup",
+    "dd",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "frame",
+    "frameset",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "header",
+    "hr",
+    "html",
+    "iframe",
+    "legend",
+    "li",
+    "link",
+    "main",
+    "menu",
+    "menuitem",
+    "nav",
+    "noframes",
+    "ol",
+    "optgroup",
+    "option",
+    "p",
+    "param",
+    "search",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "title",
+    "tr",
+    "track",
+    "ul",
+];
+
 /// `&name;`, `&#123;` or `&#x1F;` from `i`.
 fn entity_at(chars: &[char], i: usize) -> bool {
     let rest = &chars[i.min(chars.len())..];
@@ -120,7 +360,9 @@ fn entity_at(chars: &[char], i: usize) -> bool {
     };
     let body = &rest[..end];
     match body {
-        ['#', 'x' | 'X', hex @ ..] => (1..=6).contains(&hex.len()) && hex.iter().all(char::is_ascii_hexdigit),
+        ['#', 'x' | 'X', hex @ ..] => {
+            (1..=6).contains(&hex.len()) && hex.iter().all(char::is_ascii_hexdigit)
+        }
         ['#', dec @ ..] => (1..=7).contains(&dec.len()) && dec.iter().all(char::is_ascii_digit),
         [first, ..] => first.is_ascii_alphabetic() && body.iter().all(char::is_ascii_alphanumeric),
         [] => false,
@@ -147,10 +389,10 @@ fn emphasis(chars: &[char], c: char, m: &mut [Mark]) {
         }
         let prev = s.checked_sub(1).map_or(' ', |p| chars[p]);
         let next = chars.get(i).copied().unwrap_or(' ');
-        let left = !next.is_whitespace()
-            && (!is_punct(next) || prev.is_whitespace() || is_punct(prev));
-        let right = !prev.is_whitespace()
-            && (!is_punct(prev) || next.is_whitespace() || is_punct(next));
+        let left =
+            !next.is_whitespace() && (!is_punct(next) || prev.is_whitespace() || is_punct(prev));
+        let right =
+            !prev.is_whitespace() && (!is_punct(prev) || next.is_whitespace() || is_punct(next));
         let (open, close) = if c == '_' {
             (
                 left && (!right || is_punct(prev)),
@@ -195,7 +437,10 @@ fn code_spans(chars: &[char], m: &mut [Mark]) {
 /// A closing run of `#` ends an ATX heading's text and is not shown:
 /// `Section #` would read `Section`.
 fn closing_hashes(chars: &[char], m: &mut [Mark]) {
-    let end = chars.iter().rposition(|c| !c.is_whitespace()).map_or(0, |p| p + 1);
+    let end = chars
+        .iter()
+        .rposition(|c| !c.is_whitespace())
+        .map_or(0, |p| p + 1);
     let run = chars[..end].iter().rev().take_while(|c| **c == '#').count();
     if run == 0 {
         return;
@@ -215,7 +460,10 @@ fn lines(chars: &[char], start: usize, m: &mut [Mark]) {
     let mut first = true;
     let mut prev_line: Option<(usize, usize)> = None;
     while ls <= n {
-        let le = chars[ls..].iter().position(|c| *c == '\n').map_or(n, |p| ls + p);
+        let le = chars[ls..]
+            .iter()
+            .position(|c| *c == '\n')
+            .map_or(n, |p| ls + p);
         // Leading whitespace is indentation to Markdown: four spaces open a
         // code block, where every escape would show. It is left out.
         let mut s = ls;
@@ -260,18 +508,24 @@ fn line_start(
     let content_after = |i: usize| line[i.min(line.len())..].iter().any(|c| !c.is_whitespace());
     let c0 = line[0];
     // A row of one of `-*_` (spaces between allowed), three or more: a rule.
-    let marks: Vec<char> = line.iter().copied().filter(|c| !c.is_whitespace()).collect();
+    let marks: Vec<char> = line
+        .iter()
+        .copied()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     let rule = marks.len() >= 3 && "-*_".contains(marks[0]) && marks.iter().all(|c| *c == marks[0]);
     // A row of `=` or of `-` under a line makes that line a heading.
     let underline = !first
         && (c0 == '=' || c0 == '-')
-        && line.iter().skip_while(|c| **c == c0).all(|c| c.is_whitespace());
+        && line
+            .iter()
+            .skip_while(|c| **c == c0)
+            .all(|c| c.is_whitespace());
     // A table's delimiter row under a row with a pipe in it.
     let delimiter = !first
         && marks.contains(&'-')
         && marks.iter().all(|c| "-:|".contains(*c))
-        && (marks.contains(&'|')
-            || prev_line.is_some_and(|(ps, pe)| chars[ps..pe].contains(&'|')));
+        && (marks.contains(&'|') || prev_line.is_some_and(|(ps, pe)| chars[ps..pe].contains(&'|')));
     let hashes = line.iter().take_while(|c| **c == '#').count();
     let digits = line.iter().take_while(|c| c.is_ascii_digit()).count();
     let escape_first = if (1..=6).contains(&hashes) && blank_after(hashes) {
@@ -286,7 +540,7 @@ fn line_start(
             // A fence.
             '`' | '~' => line.iter().take_while(|c| **c == c0).count() >= 3,
             // An HTML block.
-            '<' => at(1).is_some_and(|c| c.is_ascii_alphabetic() || "/!?".contains(c)),
+            '<' => html_block_at(line, first),
             // A link reference or footnote definition opens a block only.
             '[' => first && defines(line),
             _ => false,

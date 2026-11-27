@@ -918,12 +918,10 @@ pub fn to_markdown_with_options(
                     // A paragraph whose lines were stacked by hand keeps their
                     // breaks, as CommonMark hard breaks: a plain line end reads
                     // as a space.
-                    (None, None) => {
-                        out.push_str(&format!(
-                            "{}\n\n",
-                            md_linked(e, opts, Context::Block).replace('\n', "  \n")
-                        ))
-                    }
+                    (None, None) => out.push_str(&format!(
+                        "{}\n\n",
+                        md_linked(e, opts, Context::Block).replace('\n', "  \n")
+                    )),
                 }
             }
         }
@@ -963,6 +961,36 @@ mod tests {
         Element {
             depth,
             ..Element::new("doc:ListItem", text, "rust", "layout")
+        }
+    }
+
+    #[test]
+    fn text_is_escaped_only_where_markdown_reads_markup() {
+        let md = |t: &str| to_markdown(&[para(t, vec![])]);
+        // Markup: escaped.
+        assert_eq!(md("1. The purpose"), "1\\. The purpose\n\n");
+        assert_eq!(
+            md("From: Ann <ann@example.org>"),
+            "From: Ann \\<ann@example.org>\n\n"
+        );
+        assert_eq!(md("as FROM <iri> would"), "as FROM \\<iri> would\n\n");
+        assert_eq!(md("classes[*].refs[*]"), "classes[\\*].refs[\\*]\n\n");
+        assert_eq!(md("Exclusive\n---"), "Exclusive  \n\\---\n\n");
+        // Not markup: as it is. No tag has a digit for an attribute or an
+        // underscore in its name, and a lone star opens nothing.
+        for t in [
+            "<MultinomialLikelihood 9>.",
+            "<TwoAFC_rawdata>.",
+            "laminar flow (Re<2000 )",
+            "p < 0.05* and snake_case, C#",
+            "2. after other text",
+        ] {
+            let plain = if t.starts_with("2.") {
+                format!("x {t}")
+            } else {
+                t.to_string()
+            };
+            assert_eq!(md(&plain), format!("{plain}\n\n"), "{plain}");
         }
     }
 

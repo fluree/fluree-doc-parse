@@ -189,3 +189,55 @@ fn a_depth_is_read_as_nesting() {
         [0, usize::MAX, 0]
     );
 }
+
+#[test]
+fn text_markdown_reads_as_markup_is_written_as_text() {
+    // Each would read back as something else were it written as it is.
+    let texts = [
+        "1. The purpose of this Regulation",   // a list
+        "* Sections omitted are not listed",   // a list
+        "-",                                   // an empty item
+        "4.",                                  // an empty item
+        "_______________________",             // a rule
+        "~~~~ ~",                              // a fence, swallowing what follows
+        "> +300%",                             // a quote
+        "# of Users: 50",                      // a heading
+        "From: Ann Lee <ann@example.org>",     // an autolink
+        "SPARQL only, as FROM <iri> would",    // an HTML tag
+        "stats.classes[*].properties[*].refs", // emphasis
+        "Fresh`N`Fruity and `more`",           // code
+        "x &amp; y &#65;",                     // entities
+        "L\\/2 and \\* and a\\",               // escapes
+        "Exclusive\n---------",                // a setext heading
+        "line one\n1. two",                    // a list interrupting
+        "a | b\n--- | ---",                    // a table
+        "[^1]: a note",                        // a footnote definition
+        "code\n\n    indented",                // a blank line, then code
+        "-_z and later\n_______",              // a rule's rest closing emphasis
+        "said, ``I don't'' and `Hey ``ok''",   // code span closed by an escape
+    ];
+    let mut els: Vec<Element> = texts.iter().map(|t| el("doco:Paragraph", t)).collect();
+    els.push(heading("Section #", 2));
+    els.push(item("- nested?", 0));
+    els.push(table("t", &[&["a\\", "*b*"], &["<c>", "d"]], 1));
+    // An item whose link takes in its own number keeps the number its
+    // marker, outside the link.
+    let mut linked = item("1. INCITE", 0);
+    linked.links = Some(vec![
+        fluree_doc_model::Link::uri("https://e.example").spanning(0, 9)
+    ]);
+    els.push(linked);
+    let md: Vec<_> = conform(&els, &Notes::default())
+        .into_iter()
+        .filter(|v| v.format == Format::Md)
+        .collect();
+    assert_eq!(md, []);
+    // A lone star after a value, and words joined by underscores, open
+    // nothing and are written as they are.
+    let plain = to_md(&[el("doco:Paragraph", "p < 0.05* and snake_case_name, C#")]);
+    assert_eq!(plain, "p < 0.05* and snake_case_name, C#\n\n");
+}
+
+fn to_md(els: &[Element]) -> String {
+    fluree_doc_model::to_markdown(els)
+}
