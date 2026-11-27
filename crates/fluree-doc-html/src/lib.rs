@@ -2648,12 +2648,17 @@ impl BandStyle {
 ///
 /// Blank rows hold no data, and the last row has nothing beneath it to
 /// label.
+///
+/// The rows each band is looked for over are counted by `work` as they
+/// are walked, `None` once it says no more: bands set each over the next,
+/// down a table of them, are each walked down to the first row of data.
 fn bands(
     cells: &[Vec<String>],
     full_width: &[bool],
     styles: &[Option<BandStyle>],
     header_rows: usize,
-) -> Vec<usize> {
+    work: &mut dyn FnMut(u64) -> bool,
+) -> Option<Vec<usize>> {
     let n = cells.len();
     let has_text = |r: usize| cells[r].iter().any(|t| !t.trim().is_empty());
     // The first row of data, found once rather than looked for above each
@@ -2675,11 +2680,16 @@ fn bands(
     // From the foot up: whether a row is a band rests on the rows under it.
     let mut band = vec![false; n];
     for r in (0..n).rev().filter(|&r| candidate(r)) {
+        let mut walked = 0u64;
         band[r] = (r + 1..n)
+            .inspect(|_| walked += 1)
             .take_while(|&s| !one_cell[s] || style(r).stands_over(&style(s)))
             .any(|s| has_text(s) && !band[s]);
+        if !work(walked) {
+            return None;
+        }
     }
-    (0..n).filter(|&r| band[r]).collect()
+    Some((0..n).filter(|&r| band[r]).collect())
 }
 
 /// Does a line open on a note's mark: a number or a letter in brackets
@@ -2917,7 +2927,11 @@ fn emit_table(table: &Handle, out: &mut Out) {
         .collect::<Vec<_>>()
         .join("\n");
     let header_rows = header_rows.min(n);
-    let sub_headers = bands(&cells, &full_width, &styles, header_rows);
+    let Some(sub_headers) = bands(&cells, &full_width, &styles, header_rows, &mut |steps| {
+        out.spend(|b| b.spend_work(steps))
+    }) else {
+        return;
+    };
     let mut e = element("doco:Table", text, None);
     e.header_rows = Some(header_rows);
     e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
@@ -4170,6 +4184,28 @@ mod tests {
                 .repeat(20_000)
         );
         assert_eq!(super::parse(&ordinary).unwrap().len(), 20_000);
+    }
+
+    #[test]
+    fn bands_each_over_the_next_are_walked_as_steps() {
+        // Each band set further in than the one over it stands over all the
+        // bands under it, so each is walked down to the first row of data:
+        // the square of their number, counted as steps of the page.
+        let stacked = |k: usize| {
+            let bands: String = (0..k)
+                .map(|i| {
+                    format!("<tr><td colspan=\"2\" style=\"padding-left:{i}pt\">B{i}</td></tr>")
+                })
+                .collect();
+            format!(
+                "<table><tr><th>Item</th><th>Value</th></tr>{bands}<tr><td>a</td><td>1</td></tr></table>"
+            )
+        };
+        let t = &parse(&stacked(4))[0];
+        assert_eq!(t.sub_headers, Some(vec![1, 2, 3, 4]));
+        // Twice the bands, four times the walk: well over twice the steps.
+        let (once, twice) = (steps_to_read(&stacked(400)), steps_to_read(&stacked(800)));
+        assert!(twice > 3 * once, "{once} then {twice}");
     }
 
     /// [`read_within`] `work` steps, as [`nesting_the_parser_walks_is_spent_as_steps`].
