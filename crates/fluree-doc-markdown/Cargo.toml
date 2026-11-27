@@ -7,6 +7,7 @@ description = "Markdown to Fluree document elements (DoCO-typed)"
 
 [dependencies]
 fluree-doc-model.workspace = true
+fluree-doc-html.workspace = true
 pulldown-cmark = { version = "0.12", default-features = false }
 
 [dev-dependencies]

@@ -12,6 +12,7 @@ surface](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 - [Page furniture](furniture.md) — headers, footers, watermarks
 - [The router](router.md) — what earns escalation
 - [How the limits were sized](limits.md) — what each bound on a document was measured against
+- [Projection conformance](conformance.md) — every format's writer held to the element model
 
 ## A note on how these decisions were made
 

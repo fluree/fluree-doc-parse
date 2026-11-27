@@ -152,6 +152,21 @@ If you want rows that stand on their own, use [`doco`](doco.md), whose
 and column headers. If you want the spans themselves, use
 [`xhtml`](xhtml.md), which emits real `rowspan` and `colspan`.
 
+A table with no header has an empty header row. A pipe table must open with a
+header row, so a table measured to have none is written under an empty one,
+and every row of it is a body row:
+
+```markdown
+| | |
+|---|---|
+|Speed|60|
+|Load|40|
+```
+
+Read back, a header row with nothing in it means the table has no header. A
+table whose header is unknown (`header_rows` absent in [`json`](json.md)) is
+written with its first row as the header, as before.
+
 A table that runs onto the next page is printed as one table: the rows of
 each part after the first follow on with no blank line and no second
 separator, and a header the document repeats on the new page is left out.
