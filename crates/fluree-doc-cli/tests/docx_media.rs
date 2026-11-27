@@ -1164,7 +1164,8 @@ fn a_part_that_cannot_be_read_failed_with_nothing_to_read_it() {
 fn a_documents_pictures_are_read_within_what_the_document_left() {
     // Six pictures, each read as a table of three columns under their
     // names, forty rows of numbers: well within a document's budget alone,
-    // some 0.6 MiB of DoCO each. Each spent from a budget of its own, all
+    // some 0.25 MiB of it each as DoCO, which writes each cell as a node,
+    // a node at a time, and copies its long labels into it. Each spent from a budget of its own, all
     // six were read whatever the document's budget; spent from the
     // document's, those past what it left are listed unread, and the
     // document converts.
@@ -1183,7 +1184,13 @@ fn a_documents_pictures_are_read_within_what_the_document_left() {
             (0..3).map(move |c| {
                 let (x, y) = (100 + 400 * c, 60 + 40 * r);
                 let text = match r {
-                    0 => [format!("Picture{i}"), "Value".into(), "Unit".into()][c].clone(),
+                    0 => [
+                        format!("Picture{i}"),
+                        "Value read at the north gauge, in litres a second".into(),
+                        "Unit of the reading, as the gauge's log names it".into(),
+                    ][c]
+                        .clone(),
+                    _ if c == 0 => format!("{i}.{r:02} sampled at the north gauge at dawn"),
                     _ => format!("{i}.{r:02}{c}"),
                 };
                 serde_json::json!({ "text": text, "box": [x, y, x + 120, y + 24], "conf": 0.95 })
@@ -1218,7 +1225,7 @@ fn a_documents_pictures_are_read_within_what_the_document_left() {
     };
     let (doco, err) = convert(&[]);
     assert_eq!(read(&doco), [1, 2, 3, 4, 5, 6], "{err}");
-    let (doco, err) = convert(&["--max-memory", "2"]);
+    let (doco, err) = convert(&["--max-memory", "1"]);
     // The document's own text, and the first pictures, those that fit.
     assert!(doco.contains("See the screens below.") && doco.contains("That is all."));
     let kept = read(&doco);
@@ -1241,7 +1248,7 @@ fn a_documents_pictures_are_read_within_what_the_document_left() {
     let long = dir.join("long").join("report.docx");
     std::fs::create_dir_all(long.parent().unwrap()).unwrap();
     std::fs::write(&long, docx_distinct_of(6, png, &"y".repeat(60_000))).unwrap();
-    let (doco, err) = convert_file(&long, &["--max-memory", "2"]);
+    let (doco, err) = convert_file(&long, &["--max-memory", "1"]);
     let fewer = read(&doco);
     assert!(fewer.len() < n, "{fewer:?} of {kept:?}: {err}");
     assert_eq!(fewer, (1..=fewer.len()).collect::<Vec<_>>(), "{err}");

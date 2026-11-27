@@ -1186,9 +1186,10 @@ mod tests {
         assert!(read.past_budget.is_none() && !read.ocr.is_empty());
         let spent = fluree_doc_model::budget::MAX_MEMORY - whole.memory_left();
         // Its elements, its cells and the copies DoCO writes of them: the
-        // names on each of the 117 cells under them.
+        // names on each of the 117 cells under them, each cell a node DoCO
+        // writes a node at a time, at a cell's cost.
         assert!(
-            spent > 117 * fluree_doc_model::budget::ELEMENT_BYTES,
+            spent > 117 * fluree_doc_model::budget::FLAT_CELL_BYTES,
             "{spent}"
         );
         // What a document left that holds it, exactly, keeps it.

@@ -985,7 +985,7 @@ mod tests {
 #[cfg(test)]
 mod copies_tests {
     use super::*;
-    use fluree_doc_model::budget::{Budget, Limit, ELEMENT_BYTES, TEXT_BYTES};
+    use fluree_doc_model::budget::{Budget, Limit, FLAT_CELL_BYTES, TEXT_BYTES};
     use fluree_doc_model::doco::{table_copies, Copies, TableCopies};
     use fluree_doc_model::Element;
 
@@ -1070,7 +1070,7 @@ mod copies_tests {
 
     /// What DoCO's copies `c` are spent at.
     fn cost(c: Copies) -> u64 {
-        c.cells * ELEMENT_BYTES + c.text * TEXT_BYTES
+        c.cells * FLAT_CELL_BYTES + c.text * TEXT_BYTES
     }
 
     /// What the copies of `elements`' tables are spent, each part with what
