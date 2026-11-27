@@ -23,7 +23,8 @@ Read as a [Word file](office-and-web.md#docx) is:
   whose style, or a style it is based on, states an outline level or is a
   built-in heading (`Heading 2`): a heading LibreOffice imported from HTML is
   often such a paragraph. The built-in `Title` style is the `doco:Title`;
-- list items are list items, nested lists included; their numbers, which a
+- list items are list items, a list in an item's a level deeper (`depth`);
+  their numbers, which a
   list style computes, are not written;
 - tables are tables, their declared header rows (`table-header-rows`) their
   `header_rows`, a cell spanning columns or rows making the cells it covers

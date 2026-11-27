@@ -28,8 +28,8 @@
 //! **Pictures** are each a figure where they stand, their alternative
 //! text its text, their bytes in the picture store ([`parse_with_media`],
 //! [`read_media`]) for an OCR engine or a model to read.
-//! **What is not**: the masters' placeholder prompts, the list level itself
-//! (the element model keeps a level on headings only), charts and embedded
+//! A list item's indent level is its `depth`.
+//! **What is not**: the masters' placeholder prompts, charts and embedded
 //! objects, and the summary information. Encrypted files fail as malformed
 //! or unsupported.
 //!
@@ -689,8 +689,9 @@ fn table_element(t: Table, page: usize) -> Element {
 /// properties give it a bullet or an indent level past the first, as a
 /// PPTX paragraph is; where they do not say, a body placeholder's text
 /// (`Body`, `HalfBody`, `QuarterBody`), which the master bullets, is one.
-/// Each is an element, spent from `budget` before it is made.
-fn paragraphs(t: &Text, budget: &mut Budget) -> Result<Vec<(String, bool)>, TooLarge> {
+/// Each is an element, spent from `budget` before it is made. A list item's
+/// indent level is its depth.
+fn paragraphs(t: &Text, budget: &mut Budget) -> Result<Vec<(String, bool, usize)>, TooLarge> {
     let body = matches!(t.kind, 1 | 7 | 8);
     let mut out = Vec::new();
     let mut start = 0usize;
@@ -717,7 +718,10 @@ fn paragraphs(t: &Text, budget: &mut Budget) -> Result<Vec<(String, bool)>, TooL
             Some(r) => r.bullet.unwrap_or(body) || r.indent > 0,
             None => body,
         };
-        out.push((text, listy));
+        let depth = run
+            .filter(|_| listy)
+            .map_or(0, |r| usize::from(r.indent.min(8)));
+        out.push((text, listy, depth));
     }
     Ok(out)
 }
@@ -1097,7 +1101,7 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
                 }
                 continue;
             }
-            for (text, listy) in paragraphs(&t, budget)? {
+            for (text, listy, depth) in paragraphs(&t, budget)? {
                 let kind = if listy {
                     "doc:ListItem"
                 } else {
@@ -1105,6 +1109,7 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
                 };
                 out.push(Element {
                     page,
+                    depth,
                     ..Element::new(kind, text, "ppt", "ppt")
                 });
             }
@@ -1113,7 +1118,7 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
             Item::Text(t) => Some(t),
             Item::Table(_) | Item::Picture(..) => None,
         }) {
-            for (l, _) in paragraphs(&t, budget)? {
+            for (l, ..) in paragraphs(&t, budget)? {
                 out.push(Element {
                     page,
                     ..Element::new("doco:Paragraph", l, "ppt", "notes")

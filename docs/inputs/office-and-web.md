@@ -301,8 +301,8 @@ the text's own header, is a level-1 heading; every other text is a
 paragraph a paragraph mark, a line break kept as a line. A paragraph whose
 properties (`StyleTextPropAtom`) give it a bullet or an indent level past the
 first is a list item, as a PPTX paragraph is; where they say nothing, a body
-placeholder's paragraph, which the master bullets, is one. The level itself
-is not kept: the element model gives a level to headings only. PowerPoint
+placeholder's paragraph, which the master bullets, is one. Its indent
+level is its `depth`, so a point under a point nests inside it. PowerPoint
 keeps a placeholder's text (the title, the body) in the slide list, the
 placeholder naming it there (`OutlineTextRefAtom`): it is read where the
 placeholder stands, among the slide's pictures, tables and text boxes. A

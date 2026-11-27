@@ -117,6 +117,9 @@ fn a_text_document_reads_as_a_word_file_does() {
             ("doco:Paragraph", None, "Sam Example: Source?", "comment"),
         ]
     );
+    // A list in a list's item is a level deeper.
+    let depths: Vec<usize> = els[5..8].iter().map(|e| e.depth).collect();
+    assert_eq!(depths, [0, 0, 1]);
     let t = &els[8];
     assert_eq!(t.header_rows, Some(1));
     assert!(t.merged_left.as_ref().unwrap()[1]);

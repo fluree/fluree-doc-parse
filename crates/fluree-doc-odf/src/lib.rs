@@ -522,13 +522,18 @@ fn rows_in_order(t: &Tree, id: usize) -> Vec<(usize, bool)> {
     out
 }
 
+/// The deepest a list item is nested, as its `depth`: OpenDocument styles
+/// ten levels.
+const MAX_LIST_DEPTH: usize = 9;
+
 /// The flow of a text body, a text box or a note: headings, paragraphs,
-/// lists, tables, sections.
+/// lists, tables, sections. `list` is the depth of the list it is in, if
+/// it is in one: a paragraph there is a list item at that depth.
 fn flow(
     t: &Tree,
     id: usize,
     page: usize,
-    list: bool,
+    list: Option<usize>,
     out: &mut Vec<Element>,
     asides: &mut Vec<Aside>,
     room: &mut Room,
@@ -539,7 +544,7 @@ fn flow(
             let mut frames = Vec::new();
             frames_in(t, c, &mut frames);
             for f in frames {
-                flow(t, f, page, false, out, asides, room);
+                flow(t, f, page, None, out, asides, room);
             }
         };
     for c in t.elements(id) {
@@ -568,15 +573,24 @@ fn flow(
                     .and_then(|s| t.roles.get(s))
                     .or((style == Some("Title")).then_some(&Role::Title));
                 let (kind, level) = match role {
-                    _ if list => ("doc:ListItem", None),
+                    _ if list.is_some() => ("doc:ListItem", None),
                     Some(Role::Title) => ("doco:Title", None),
                     Some(Role::Heading(l)) => ("doco:SectionTitle", Some(*l)),
                     None => ("doco:Paragraph", None),
                 };
-                out.push(element(kind, text, level, page));
+                let mut e = element(kind, text, level, page);
+                e.depth = list.unwrap_or(0);
+                out.push(e);
                 frames_after(c, out, asides, room);
             }
-            "list" | "list-item" | "list-header" => flow(t, c, page, true, out, asides, room),
+            // A list in a list's item is a level deeper.
+            "list" => {
+                let depth = list.map_or(0, |d| d + 1).min(MAX_LIST_DEPTH);
+                flow(t, c, page, Some(depth), out, asides, room)
+            }
+            "list-item" | "list-header" => {
+                flow(t, c, page, Some(list.unwrap_or(0)), out, asides, room)
+            }
             "table" => {
                 if let Some(e) = table(t, c, page, asides, room) {
                     out.push(e);
@@ -599,7 +613,7 @@ fn read_asides(t: &Tree, asides: Vec<Aside>, page: usize, out: &mut Vec<Element>
     for a in asides {
         let mut els = Vec::new();
         let mut nested = Vec::new();
-        flow(t, a.body, page, false, &mut els, &mut nested, room);
+        flow(t, a.body, page, None, &mut els, &mut nested, room);
         for (i, e) in els.iter_mut().enumerate() {
             if e.kind != "doco:Table" {
                 e.kind = "doco:Paragraph".into();
@@ -626,7 +640,7 @@ fn text_elements(content: &Tree, styles: Option<&Tree>, room: &mut Room) -> Vec<
     let mut body = Vec::new();
     let mut asides = Vec::new();
     if let Some(text) = content.find(0, "text") {
-        flow(content, text, 0, false, &mut body, &mut asides, room);
+        flow(content, text, 0, None, &mut body, &mut asides, room);
     }
     let (notes, comments): (Vec<Aside>, Vec<Aside>) =
         asides.into_iter().partition(|a| a.evidence != "comment");
@@ -645,7 +659,7 @@ fn text_elements(content: &Tree, styles: Option<&Tree>, room: &mut Room) -> Vec<
         for m in styles.elements(masters) {
             for h in styles.elements(m).filter(|&h| styles.node(h).name == name) {
                 let mut els = Vec::new();
-                flow(styles, h, 0, false, &mut els, &mut Vec::new(), room);
+                flow(styles, h, 0, None, &mut els, &mut Vec::new(), room);
                 for mut e in els {
                     if e.kind != "doco:Table" {
                         e.kind = "doco:Paragraph".into();
@@ -770,7 +784,7 @@ fn slide_shapes(
                         &t.elements(c)
                             .flat_map(|b| {
                                 let mut v = Vec::new();
-                                flow(t, b, page, false, &mut v, asides, room);
+                                flow(t, b, page, None, &mut v, asides, room);
                                 v.into_iter().map(|e| e.text)
                             })
                             .collect::<Vec<_>>()
@@ -784,7 +798,7 @@ fn slide_shapes(
                 let before = out.len();
                 // A shape's own paragraphs (a custom shape holds them), or
                 // the text box or table inside a frame.
-                flow(t, c, page, false, out, asides, room);
+                flow(t, c, page, None, out, asides, room);
                 // A bulleted text box: its paragraphs are list items when
                 // the frame is an outline.
                 if class == "outline" {

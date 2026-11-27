@@ -366,10 +366,11 @@ fn bullets_and_indent_levels_make_list_items() {
     };
     assert_eq!(
         paragraphs(&t, &mut Budget::default()).unwrap(),
+        // An indent level past the first is the item's depth.
         [
-            ("Orders up".to_string(), true),
-            ("West region".to_string(), true),
-            ("Costs down".to_string(), true)
+            ("Orders up".to_string(), true, 0),
+            ("West region".to_string(), true, 1),
+            ("Costs down".to_string(), true, 0)
         ]
     );
     // A body placeholder's paragraph that says it has no bullet is prose;
@@ -392,9 +393,9 @@ fn bullets_and_indent_levels_make_list_items() {
     assert_eq!(
         paragraphs(&body, &mut Budget::default()).unwrap(),
         [
-            ("Intro".to_string(), false),
-            ("Point".to_string(), true),
-            ("Sub".to_string(), true)
+            ("Intro".to_string(), false, 0),
+            ("Point".to_string(), true, 0),
+            ("Sub".to_string(), true, 2)
         ]
     );
     let other = Text {
@@ -404,7 +405,7 @@ fn bullets_and_indent_levels_make_list_items() {
     };
     assert_eq!(
         paragraphs(&other, &mut Budget::default()).unwrap(),
-        [("Caption".to_string(), false)]
+        [("Caption".to_string(), false, 0)]
     );
 }
 
