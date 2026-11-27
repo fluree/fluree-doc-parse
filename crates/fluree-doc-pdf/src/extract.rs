@@ -1735,13 +1735,8 @@ fn same_box(a: &BBox, b: &BBox) -> bool {
 /// Where a box of a page `w` × `h` lands once the page is turned by `turn`
 /// degrees, as [`turn_page`] turns it.
 fn turn_box(w: f64, h: f64, turn: i32, b: BBox) -> BBox {
-    let point = |(x, y): (f64, f64)| match turn {
-        90 => (y, w - x),
-        180 => (w - x, h - y),
-        _ => (h - y, x),
-    };
-    let (ax, ay) = point((b.x0, b.y0));
-    let (bx, by) = point((b.x1, b.y1));
+    let (ax, ay) = turn_point(w, h, turn, (b.x0, b.y0));
+    let (bx, by) = turn_point(w, h, turn, (b.x1, b.y1));
     BBox {
         x0: ax.min(bx),
         y0: ay.min(by),
@@ -2749,26 +2744,17 @@ fn read_upright(page: &mut Page) {
 
 /// Turn every coordinate a page carries by `turn` degrees (90, 180 or 270)
 /// counter-clockwise, and record the turn in [`Page::rotation`], on top of
-/// any it had, so the display frame stays where it was.
+/// any it had, so the display frame stays where it was. A turn is taken
+/// modulo 360 (-90 is 270); one of no quarter turn, or of a part of one,
+/// leaves the page as it is.
 pub(crate) fn turn_page(page: &mut Page, turn: i32) {
+    let turn = turn.rem_euclid(360);
+    if !matches!(turn, 90 | 180 | 270) {
+        return;
+    }
     let (w, h) = (page.width, page.height);
-    let point = |(x, y): (f64, f64)| -> (f64, f64) {
-        match turn {
-            90 => (y, w - x),
-            180 => (w - x, h - y),
-            _ => (h - y, x),
-        }
-    };
-    let rect = |b: BBox| -> BBox {
-        let (ax, ay) = point((b.x0, b.y0));
-        let (bx, by) = point((b.x1, b.y1));
-        BBox {
-            x0: ax.min(bx),
-            y0: ay.min(by),
-            x1: ax.max(bx),
-            y1: ay.max(by),
-        }
-    };
+    let point = |p: (f64, f64)| turn_point(w, h, turn, p);
+    let rect = |b: BBox| turn_box(w, h, turn, b);
     for g in page.glyphs.iter_mut() {
         g.origin = point(g.origin);
         g.bbox = g.bbox.map(rect);
@@ -2813,6 +2799,19 @@ pub(crate) fn turn_page(page: &mut Page, turn: i32) {
         page.height = w;
     }
     page.rotation = (page.rotation + turn).rem_euclid(360);
+}
+
+/// Where a point of a page `w` × `h` lands once the page is turned by `turn`
+/// degrees (90, 180 or 270) counter-clockwise, as [`turn_page`] turns it:
+/// modulo 360, and where it is for any other turn, which [`turn_page`]
+/// does not make.
+pub(crate) fn turn_point(w: f64, h: f64, turn: i32, (x, y): (f64, f64)) -> (f64, f64) {
+    match turn.rem_euclid(360) {
+        90 => (y, w - x),
+        180 => (w - x, h - y),
+        270 => (h - y, x),
+        _ => (x, y),
+    }
 }
 
 /// Ascent above the baseline as a fraction of font size, for synthesized
@@ -3072,6 +3071,34 @@ mod tests {
         let mut v: PageInk = (0..body).map(|_| Some((1u128, Some(0.50)))).collect();
         v.extend((0..heavy).map(|_| Some((2u128, Some(ratio)))));
         vec![v]
+    }
+
+    #[test]
+    fn a_page_turns_by_quarter_turns_only() {
+        let (w, h, p) = (600.0, 800.0, (100.0, 50.0));
+        assert_eq!(turn_point(w, h, 90, p), (50.0, 500.0));
+        assert_eq!(turn_point(w, h, 180, p), (500.0, 750.0));
+        assert_eq!(turn_point(w, h, 270, p), (750.0, 100.0));
+        assert_eq!(turn_point(w, h, -90, p), (750.0, 100.0));
+        // No turn, a whole one, or a part of a quarter: the point stays.
+        for turn in [0, 360, 45, -10] {
+            assert_eq!(turn_point(w, h, turn, p), p, "{turn}");
+        }
+        for turn in [0, 360, 45] {
+            let mut pg = page(1);
+            pg.glyphs[0].origin = p;
+            turn_page(&mut pg, turn);
+            assert_eq!((pg.width, pg.height, pg.rotation), (w, h, 0), "{turn}");
+            assert_eq!(pg.glyphs[0].origin, p, "{turn}");
+        }
+        // A quarter, and back by a quarter the other way.
+        let mut pg = page(1);
+        pg.glyphs[0].origin = p;
+        turn_page(&mut pg, 90);
+        assert_eq!((pg.width, pg.height, pg.rotation), (h, w, 90));
+        turn_page(&mut pg, -90);
+        assert_eq!((pg.width, pg.height, pg.rotation), (w, h, 0));
+        assert_eq!(pg.glyphs[0].origin, p);
     }
 
     #[test]

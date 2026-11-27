@@ -32,7 +32,10 @@ With the built-in engine (`--ocr`, see [`fdoc convert`](../cli/convert.md#ocr))
 or the words an engine wrote (`--ocr-words`, the file `<stem>_p0_full.json`, or
 `<stem>.json` as `fdoc ocr` names the words of an image file), the image's page
 is **upright** — a phone photo's EXIF orientation applied — and the engine's
-words are laid on it as glyphs, exactly as on a scanned PDF page. The same layout pass then gives paragraphs, tables and headings, each
+words are laid on it as glyphs, exactly as on a scanned PDF page; an image
+whose text is upside down or sideways is read in the frame where it runs
+upright (see
+[OCR](../cli/convert.md#ocr)). The same layout pass then gives paragraphs, tables and headings, each
 element with its `doc:bbox`, marked `provenance: "ocr"`.
 
 For an outside engine, [`fdoc dev render-routed`](../cli/dev.md) writes the

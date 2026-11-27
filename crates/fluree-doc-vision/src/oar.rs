@@ -8,7 +8,8 @@
 //!
 //! An image is read at its own resolution, in passes the [`OcrSizing`] it
 //! is opened with plans ([`crate::sizing`]): whole, or in overlapping strips
-//! across its width, whose lines are kept once ([`merge_strips`]). Each word
+//! across its width, whose lines are kept once ([`merge_strips`]); and read
+//! again turned a half if it reads poorly ([`read_upright`]). Each word
 //! box this engine gives is a detected line, turned upright about its
 //! center, with the line's angle.
 //!
@@ -450,16 +451,12 @@ impl OarEngine {
     }
 
     /// Read one pass of a plan, given as the image the detector reads
-    /// ([`pass_image`]), within the memory budget.
-    fn read_pass(
-        &self,
-        ocr: &OAROCR,
-        canvas: image::RgbImage,
-        pass: &Pass,
-    ) -> Result<Words, String> {
+    /// ([`pass_image`]), within the memory budget: its lines, in the
+    /// canvas's pixels, and the canvas handed back.
+    fn read_pass(&self, ocr: &OAROCR, pass: &Pass, canvas: image::RgbImage) -> Read {
         let bytes = (pass.det_pixels() as u64).saturating_mul(BYTES_PER_PIXEL);
         let _grant = self.budget.take(bytes);
-        read_one(ocr, canvas, pass.top)
+        lines_of(ocr, canvas)
     }
 }
 
@@ -491,31 +488,31 @@ impl OcrEngine for OarEngine {
             );
         }
         let lease = self.pipes.take(|| self.pipeline())?;
-        let mut words = match plan.passes.as_slice() {
-            // Read as it is: the image is given to the detector, not copied.
-            [pass] if pass.canvas == img.dimensions() => self
-                .read_pass(&lease, img, pass)?
-                .into_iter()
-                .map(|(w, _)| w)
-                .collect(),
-            _ => read_plan(&plan, &mut |pass| {
-                self.read_pass(&lease, pass_image(&img, pass), pass)
-            })?,
-        };
+        let mut lines = read_upright(
+            &plan,
+            &mut |pass, canvas| self.read_pass(&lease, pass, canvas),
+            img,
+        )?;
         drop(lease);
         if plan.shrunk.is_some() {
             let (sx, sy) = (
                 f64::from(image.width) / f64::from(plan.width),
                 f64::from(image.height) / f64::from(plan.height),
             );
-            for w in &mut words {
-                w.bbox = [
-                    w.bbox[0] * sx,
-                    w.bbox[1] * sy,
-                    w.bbox[2] * sx,
-                    w.bbox[3] * sy,
-                ];
+            for l in &mut lines {
+                l.quad = l.quad.map(|(x, y)| (x * sx, y * sy));
             }
+        }
+        let mut words = Vec::new();
+        // `lines_from` keeps only the lines that hold text.
+        for l in lines {
+            let (bbox, angle) = quad_box(l.quad);
+            words.push(OcrWord {
+                text: l.text,
+                bbox,
+                angle: Some((angle * 100.0).round() / 100.0),
+                conf: l.conf,
+            });
         }
         Ok(WordReading {
             coords: Coords::Px,
@@ -534,6 +531,77 @@ impl OarEngine {
             n(msg);
         }
     }
+}
+
+/// One pass through the pipeline ([`lines_of`]): its lines, in the pixels
+/// of the image it was given, and that image handed back.
+type Read = Result<(Vec<Line>, std::sync::Arc<image::RgbImage>), String>;
+
+/// What reads one pass of a plan, given the image the detector reads.
+type ReadPass<'a> = dyn FnMut(&Pass, image::RgbImage) -> Read + 'a;
+
+/// An image's lines, read by `read` as `plan` says, either way up.
+///
+/// PP-OCRv6 small has no page orientation classifier, and the pipeline
+/// turns every tall line a quarter counter-clockwise before reading it: a
+/// sheet fed upside down, and text running up the page, are read as noise,
+/// with little confidence. Turned a half, both read right (text running up
+/// then runs down), so such a page is read again turned a half, by the same
+/// plan (it is the same size), its quads mapped back onto the image as
+/// given, and the two readings are made one line by line ([`merge`]).
+fn read_upright(
+    plan: &OcrPlan,
+    read: &mut ReadPass<'_>,
+    img: image::RgbImage,
+) -> Result<Vec<Line>, String> {
+    let (w, h) = (f64::from(img.width()), f64::from(img.height()));
+    // The pipeline hands the image back: a page read once is not copied.
+    let (mut lines, img) = read_plan(plan, read, img)?;
+    if worth_turning(&lines) {
+        // Turned where it lies, not copied: the pipeline keeps no hold on
+        // the image it hands back, nor `read_plan` on the one it cuts its
+        // canvases from, so the second reading holds no more pixels than
+        // the first. A copy made alongside it would be a whole image more
+        // than the memory budget counts.
+        let mut img = std::sync::Arc::unwrap_or_clone(img);
+        image::imageops::rotate180_in_place(&mut img);
+        let (mut turned, _) = read_plan(plan, read, img)?;
+        for l in &mut turned {
+            l.quad = l.quad.map(|(x, y)| (w - x, h - y));
+        }
+        lines = merge(lines, turned);
+    }
+    Ok(lines)
+}
+
+/// An image's lines, read by `read` in `plan`'s passes, their quads in the
+/// image's pixels; and the image, handed back by the pipeline when it was
+/// read as it is, so a page read once is not copied. Strips' lines are
+/// merged ([`merge_line_strips`]).
+fn read_plan(
+    plan: &OcrPlan,
+    read: &mut ReadPass<'_>,
+    img: image::RgbImage,
+) -> Result<(Vec<Line>, std::sync::Arc<image::RgbImage>), String> {
+    let img = match plan.passes.as_slice() {
+        [pass] if pass.canvas == img.dimensions() => return read(pass, img),
+        _ => std::sync::Arc::new(img),
+    };
+    if let [pass] = plan.passes.as_slice() {
+        // Padded at its right and bottom: the canvas's pixels are the
+        // image's.
+        let (lines, _) = read(pass, pass_image(&img, pass))?;
+        return Ok((lines, img));
+    }
+    let mut strips = Vec::new();
+    for pass in &plan.passes {
+        let (mut lines, _) = read(pass, pass_image(&img, pass))?;
+        for l in &mut lines {
+            l.quad = l.quad.map(|(x, y)| (x, y + f64::from(pass.top)));
+        }
+        strips.push((pass.top, pass.bottom, lines));
+    }
+    Ok((merge_line_strips(strips, plan.height), img))
 }
 
 /// The image the detector is given for `pass`: its rows of `img`, at the
@@ -557,56 +625,12 @@ fn pass_image(img: &image::RgbImage, pass: &Pass) -> image::RgbImage {
     }
 }
 
-/// The words of an image read by `plan`, each pass read by `read`: one
-/// pass's words as they are, strips' merged ([`merge_strips`]).
-fn read_plan(
-    plan: &OcrPlan,
-    read: &mut dyn FnMut(&Pass) -> Result<Words, String>,
-) -> Result<Vec<OcrWord>, String> {
-    if let [whole] = plan.passes.as_slice() {
-        return Ok(read(whole)?.into_iter().map(|(w, _)| w).collect());
-    }
-    let mut strips = Vec::new();
-    for pass in &plan.passes {
-        strips.push((pass.top, pass.bottom, read(pass)?));
-    }
-    Ok(merge_strips(strips, plan.height))
-}
-
-/// Read one image, its rows starting at `dy` in the image the words are
-/// given for: each word, with its quad's bounds (see [`Bounds`]).
-fn read_one(ocr: &OAROCR, img: image::RgbImage, dy: u32) -> Result<Words, String> {
-    let result = ocr
-        .predict(vec![img])
-        .map_err(|e| format!("OCR: {e}"))?
-        .pop()
-        .ok_or("OCR returned no result")?;
-    let dy = dy as f64;
-    let mut words = Vec::new();
-    for r in &result.text_regions {
-        let Some(text) = r.text.as_ref() else {
-            continue;
-        };
-        let p = &r.bounding_box.points;
-        if p.len() != 4 || text.trim().is_empty() {
-            continue;
-        }
-        let quad = [
-            (p[0].x as f64, p[0].y as f64 + dy),
-            (p[1].x as f64, p[1].y as f64 + dy),
-            (p[2].x as f64, p[2].y as f64 + dy),
-            (p[3].x as f64, p[3].y as f64 + dy),
-        ];
-        let (bbox, angle) = quad_box(quad);
-        let word = OcrWord {
-            text: text.to_string(),
-            bbox,
-            angle: Some((angle * 100.0).round() / 100.0),
-            conf: r.confidence.map(f64::from),
-        };
-        words.push((word, bounds(&quad)));
-    }
-    Ok(words)
+/// The lines of an image read in strips, as one reading: each tested on its
+/// quad's [`Bounds`], so the reading turned a half for a page or a capture
+/// read upside down, or whose text runs up it, is merged as the reading as
+/// given is.
+fn merge_line_strips(read: Vec<(u32, u32, Vec<Line>)>, height: u32) -> Vec<Line> {
+    merge_strips(read, height, |l| place(&l.quad))
 }
 
 /// How near a strip's cut edge, in pixels, a word's box may reach before it
@@ -617,6 +641,25 @@ const CUT_EDGE: f64 = 2.0;
 /// image: unlike the word's box, which is set upright about its center, a
 /// line running down the image spans its length in rows.
 type Bounds = [f64; 4];
+
+/// Where a detected line lies: the rows and columns its quad spans, and its
+/// box set upright about its center, at its baseline's angle ([`quad_box`]).
+#[derive(Debug, Clone, Copy)]
+struct Place {
+    bounds: Bounds,
+    upright: [f64; 4],
+    angle: f64,
+}
+
+/// The [`Place`] of a quad.
+fn place(quad: &[(f64, f64); 4]) -> Place {
+    let (upright, angle) = quad_box(*quad);
+    Place {
+        bounds: bounds(quad),
+        upright,
+        angle,
+    }
+}
 
 /// The axis-aligned bounds of a quad.
 fn bounds(quad: &[(f64, f64); 4]) -> Bounds {
@@ -630,16 +673,9 @@ fn bounds(quad: &[(f64, f64); 4]) -> Bounds {
     ]
 }
 
-/// One strip's reading: its top and bottom rows, and its words, each with
-/// its quad's bounds, in the image's rows.
-type StripReading = (u32, u32, Words);
-
-/// One pass's words, each with its quad's [`Bounds`].
-type Words = Vec<(OcrWord, Bounds)>;
-
-/// The words of an image read in strips, `(top, bottom, words)` each in
-/// the image's rows, as one reading; each word comes with its quad's
-/// [`Bounds`], on which the cut-edge and duplicate tests below are made.
+/// What an image read in strips holds, `(top, bottom, items)` each in the
+/// image's rows, as one reading; each item is tested where `place_of` says
+/// it lies (for a detected line, its quad's [`Place`]).
 ///
 /// A word reaching a strip's cut edge is cut, and dropped: the strips
 /// overlap by more than a line, so the next one holds it whole. A line in
@@ -655,15 +691,21 @@ type Words = Vec<(OcrWord, Bounds)>;
 /// no strip: it is lost, or kept cut short where the detector's box stops a
 /// few pixels before the cut. Strips are at least as tall as the image is
 /// wide ([`crate::sizing`]), so this is a tall capture's sideways text.
-fn merge_strips(read: Vec<StripReading>, height: u32) -> Vec<OcrWord> {
-    // Each word kept so far: its strip, how far inside it it lies, its
-    // place in reading order, and its quad's bounds.
-    let mut cands: Vec<(usize, f64, usize, OcrWord, Bounds)> = Vec::new();
+fn merge_strips<T>(
+    read: Vec<(u32, u32, Vec<T>)>,
+    height: u32,
+    place_of: impl Fn(&T) -> Place,
+) -> Vec<T> {
+    // Each item kept so far: its strip, how far inside it it lies, its place
+    // in reading order, and where it lies.
+    let mut cands: Vec<(usize, f64, usize, T, Place)> = Vec::new();
     for (si, (top, bottom, words)) in read.into_iter().enumerate() {
         let (top, bottom) = (top as f64, bottom as f64);
         let cut_top = top > 0.0;
         let cut_bottom = bottom < height as f64;
-        for (w, b) in words {
+        for w in words {
+            let at_place = place_of(&w);
+            let b = at_place.bounds;
             if (cut_top && b[1] <= top + CUT_EDGE) || (cut_bottom && b[3] >= bottom - CUT_EDGE) {
                 continue;
             }
@@ -675,7 +717,7 @@ fn merge_strips(read: Vec<StripReading>, height: u32) -> Vec<OcrWord> {
                 (false, false) => f64::INFINITY,
             };
             let at = cands.len();
-            cands.push((si, inside, at, w, b));
+            cands.push((si, inside, at, w, at_place));
         }
     }
     let mut order: Vec<usize> = (0..cands.len()).collect();
@@ -684,17 +726,17 @@ fn merge_strips(read: Vec<StripReading>, height: u32) -> Vec<OcrWord> {
     for i in order {
         let twice = kept
             .iter()
-            .any(|&k| cands[k].0 != cands[i].0 && same_line(&cands[k], &cands[i]));
+            .any(|&k| cands[k].0 != cands[i].0 && same_line(&cands[k].4, &cands[i].4));
         if !twice {
             kept.push(i);
         }
     }
     kept.sort_unstable();
-    let mut out: Vec<Option<OcrWord>> = cands.into_iter().map(|c| Some(c.3)).collect();
+    let mut out: Vec<Option<T>> = cands.into_iter().map(|c| Some(c.3)).collect();
     kept.into_iter().filter_map(|i| out[i].take()).collect()
 }
 
-/// Whether two words, each with its quad's [`Bounds`], from two strips are
+/// Whether two lines from two strips, where [`Place`] says they lie, are
 /// one line read twice.
 ///
 /// Two words running the same way are compared along it: each one's box,
@@ -706,16 +748,11 @@ fn merge_strips(read: Vec<StripReading>, height: u32) -> Vec<OcrWord> {
 /// copy in the other for itself: one line lost at each seam. Words not
 /// running the same way are compared on the rows and columns their quads
 /// span.
-fn same_line(
-    a: &(usize, f64, usize, OcrWord, Bounds),
-    b: &(usize, f64, usize, OcrWord, Bounds),
-) -> bool {
-    let (wa, wb) = (&a.3, &b.3);
-    match (wa.angle, wb.angle) {
-        (Some(x), Some(y)) if ((x - y + 180.0).rem_euclid(360.0) - 180.0).abs() < SAME_WAY => {
-            covers_half_along(&wa.bbox, &wb.bbox, x)
-        }
-        _ => covers_half(&a.4, &b.4),
+fn same_line(a: &Place, b: &Place) -> bool {
+    if ((a.angle - b.angle + 180.0).rem_euclid(360.0) - 180.0).abs() < SAME_WAY {
+        covers_half_along(&a.upright, &b.upright, a.angle)
+    } else {
+        covers_half(&a.bounds, &b.bounds)
     }
 }
 
@@ -781,6 +818,306 @@ fn quad_box(p: [(f64, f64); 4]) -> ([f64; 4], f64) {
     )
 }
 
+/// A line the pipeline read: its quad, clockwise from its top-left as the
+/// image shows it, its text and the recognizer's confidence.
+struct Line {
+    quad: [(f64, f64); 4],
+    text: String,
+    conf: Option<f64>,
+}
+
+/// One image through the pipeline, as its lines, and the image.
+fn lines_of(
+    pipeline: &OAROCR,
+    img: image::RgbImage,
+) -> Result<(Vec<Line>, std::sync::Arc<image::RgbImage>), String> {
+    let result = pipeline
+        .predict(vec![img])
+        .map_err(|e| format!("OCR: {e}"))?
+        .pop()
+        .ok_or("OCR returned no result")?;
+    Ok((lines_from(&result.text_regions), result.input_img))
+}
+
+/// The lines of a reading's regions that hold text. A region the recognizer
+/// read as nothing, or as spaces, is no line: kept, it would take part in
+/// merging strips and readings, where an empty line further inside its
+/// strip, or read more confidently, would stand in for the line read over
+/// the same place, and then be dropped with it.
+fn lines_from(regions: &[oar_ocr::domain::TextRegion]) -> Vec<Line> {
+    regions
+        .iter()
+        .filter_map(|r| {
+            let p = &r.bounding_box.points;
+            let text = r.text.as_deref().unwrap_or_default();
+            (p.len() == 4 && !text.trim().is_empty()).then(|| Line {
+                quad: [0, 1, 2, 3].map(|i| (p[i].x as f64, p[i].y as f64)),
+                text: text.to_string(),
+                conf: r.confidence.map(f64::from),
+            })
+        })
+        .collect()
+}
+
+/// Which way a line's quad runs: what decides how the pipeline reads it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Run {
+    /// At least twice as long as thick: read as it stands.
+    Level,
+    /// At least [`TALL_LINE`] times as tall as wide: turned a quarter
+    /// counter-clockwise before it is read, so text running down the page
+    /// reads and text running up it does not.
+    Tall,
+    /// Neither: a short word, a box of a few characters.
+    Square,
+}
+
+fn run_of(q: &[(f64, f64); 4]) -> Run {
+    let [a, b, _, d] = *q;
+    let along = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+    let across = ((d.0 - a.0).powi(2) + (d.1 - a.1).powi(2)).sqrt();
+    if along >= 2.0 * across.max(1.0) {
+        Run::Level
+    } else if across >= TALL_LINE * along.max(1.0) {
+        Run::Tall
+    } else {
+        Run::Square
+    }
+}
+
+/// The confidences of a reading's lines of two characters or more that run
+/// `run`: what tells a line read the right way up from one read the wrong
+/// way. A short line reads poorly either way. A number read the wrong way
+/// up reads as another number, often confidently (`2024` at 0.92, where the
+/// words around it read under 0.7), so when at least [`TURN_LINES`] lines
+/// hold a letter, only those count: a table of numbers cannot outvote the
+/// text of its page. A page with fewer, digits and all, is judged on all
+/// its lines.
+fn confidences(lines: &[Line], run: Run) -> Vec<f64> {
+    let of_run = || {
+        lines
+            .iter()
+            .filter(|l| l.text.trim().chars().count() >= 2 && run_of(&l.quad) == run)
+            .filter_map(|l| Some((l.conf?, l.text.chars().any(char::is_alphabetic))))
+    };
+    let worded: Vec<f64> = of_run().filter(|&(_, w)| w).map(|(c, _)| c).collect();
+    if worded.len() >= TURN_LINES {
+        worded
+    } else {
+        of_run().map(|(c, _)| c).collect()
+    }
+}
+
+/// Whether lines read with these confidences may have been read the wrong
+/// way up: at least [`TURN_LINES`] of them, their median under
+/// [`UPRIGHT_CONFIDENCE`].
+fn poorly_read(mut c: Vec<f64>) -> bool {
+    if c.len() < TURN_LINES {
+        return false;
+    }
+    c.sort_by(f64::total_cmp);
+    c[c.len() / 2] < UPRIGHT_CONFIDENCE
+}
+
+/// Whether a reading is worth reading again turned a half: its level lines
+/// read poorly (a sheet upside down), or its tall ones do (text running up
+/// the page, whether the page or a table on it). A page read upright, or
+/// with its sideways text running down, reads well above the threshold.
+fn worth_turning(lines: &[Line]) -> bool {
+    poorly_read(confidences(lines, Run::Level)) || poorly_read(confidences(lines, Run::Tall))
+}
+
+/// The mean confidence of a reading's level and tall lines.
+fn mean_confidence(lines: &[Line]) -> Option<f64> {
+    let mut c = confidences(lines, Run::Level);
+    c.extend(confidences(lines, Run::Tall));
+    (!c.is_empty()).then(|| c.iter().sum::<f64>() / c.len() as f64)
+}
+
+/// A reading and the reading of the image turned a half, its quads mapped
+/// back, made one. The reading more confident by over [`TURNED_MARGIN`] on
+/// the whole is the base, the one given otherwise. A page upside down is
+/// read turned; an upright page holding a table whose text runs up keeps its
+/// text and takes the table's from the turned reading.
+///
+/// Each base line is paired with the other reading's line over the same
+/// place, if any. Only a line whose text tells which way up it was read
+/// ([`tells_its_way_up`]) is judged on its confidence: it is taken from the
+/// other reading when more confident by over the margin, or at all for a
+/// tall line (read turned a quarter in both readings, its text running down
+/// in one and up in the other, neither is the likelier). A number, or a
+/// word of a letter or two, reads as something else turned a half, often
+/// confidently (`1068` as `8901` at 0.99, a lone `6` as `9`): it follows
+/// the lines of its run that tell, taken from the other reading only when
+/// most of them were. On an upright page read poorly, its numbers stay as
+/// read upright, and lines taken turned, which carry their angle upside
+/// down, are only the ones that read better turned. A tall line in a run
+/// where no line tells (a table of numbers alone, set sideways) is judged
+/// on its confidence as one that tells is: kept as first read, it would be
+/// the wrong way up whenever the other reading is the right one, and taken
+/// either way it runs sideways, so it never turns a page a half.
+///
+/// A line only the other reading has, or whose box differs too much from
+/// the base's to pair (a line read whole in one, in pieces in the other),
+/// is kept when it would have been taken, and beats every base line it
+/// meets ([`meets`]) as it would beat its pair, those lines dropped for it.
+/// A line that tells must also read well, over [`UPRIGHT_CONFIDENCE`]: the
+/// other reading's line alone is all there is to judge it by.
+fn merge(given: Vec<Line>, turned: Vec<Line>) -> Vec<Line> {
+    let turned_wins = match (mean_confidence(&turned), mean_confidence(&given)) {
+        (Some(t), Some(g)) => t > g + TURNED_MARGIN,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    let (mut base, other) = if turned_wins {
+        (turned, given)
+    } else {
+        (given, turned)
+    };
+    let mut other: Vec<Option<Line>> = other.into_iter().map(Some).collect();
+    // Each base line and the other reading's line over the same place.
+    let mut pairs: Vec<(usize, Line)> = Vec::new();
+    for (b, line) in base.iter().enumerate() {
+        let best = other
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| o.as_ref().map(|o| (i, overlap(&line.quad, &o.quad))))
+            .filter(|&(_, v)| v >= SAME_LINE)
+            .max_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((i, _)) = best {
+            pairs.push((b, other[i].take().expect("a line not paired yet")));
+        }
+    }
+    // The pairs whose line tells decide, run by run: how many of them, and
+    // how many take the other reading's line.
+    let mut told = [(0usize, 0usize); 3];
+    let mut take = vec![false; pairs.len()];
+    for (k, (b, o)) in pairs.iter().enumerate() {
+        if tells_its_way_up(&o.text) {
+            let run = run_of(&base[*b].quad);
+            take[k] = beats(o, &base[*b], run);
+            told[run as usize].0 += 1;
+            told[run as usize].1 += usize::from(take[k]);
+        }
+    }
+    // Whether the lines of a run that tell were mostly taken; nothing when
+    // none tells.
+    let decided = |run: Run| {
+        let (n, taken) = told[run as usize];
+        (n > 0).then_some(taken * 2 > n)
+    };
+    for (k, (b, o)) in pairs.iter().enumerate() {
+        if !tells_its_way_up(&o.text) {
+            let run = run_of(&base[*b].quad);
+            take[k] = decided(run).unwrap_or(run == Run::Tall && beats(o, &base[*b], run));
+        }
+    }
+    for ((b, o), take) in pairs.into_iter().zip(take) {
+        if take {
+            base[b] = o;
+        }
+    }
+    for o in other.into_iter().flatten() {
+        let run = run_of(&o.quad);
+        let may = if tells_its_way_up(&o.text) {
+            o.conf.unwrap_or(0.0) > UPRIGHT_CONFIDENCE
+        } else {
+            decided(run).unwrap_or(run == Run::Tall)
+        };
+        if !may {
+            continue;
+        }
+        let met: Vec<usize> = (0..base.len())
+            .filter(|&b| meets(&o.quad, &base[b].quad))
+            .collect();
+        if !met.iter().all(|&b| beats(&o, &base[b], run)) {
+            continue;
+        }
+        let at = met.first().copied().unwrap_or(base.len());
+        for &b in met.iter().rev() {
+            base.remove(b);
+        }
+        base.insert(at, o);
+    }
+    base
+}
+
+/// Whether `o` reads its place better than `line`, read the other way up,
+/// for a line running `run`: more confidently by over [`TURNED_MARGIN`],
+/// or at all for a tall line of two characters or more, which both
+/// readings read turned a quarter. A single character reads poorly either
+/// way, and keeps the base's unless clearly beaten.
+fn beats(o: &Line, line: &Line, run: Run) -> bool {
+    let conf = |l: &Line| l.conf.unwrap_or(0.0);
+    let even = run == Run::Tall && o.text.trim().chars().count() >= 2;
+    let margin = if even { 0.0 } else { TURNED_MARGIN };
+    conf(o) > conf(line) + margin
+}
+
+/// Whether a line's text tells which way up it was read: three letters or
+/// more, one of them a capital, a lowercase letter rising over the others
+/// (`b d f h k l t`) or a letter of another script. Turned a half, such a
+/// line reads as noise, so the recognizer's confidence says which reading
+/// is right. Digits do not tell: `0`, `1` and `8` read the same turned, `6`
+/// and `9` as each other, and the recognizer reads a number either way up,
+/// confidently. Nor do a letter or two, or lowercase letters of one height
+/// alone (`sun` reads `uns` turned, `now` `mou`).
+fn tells_its_way_up(text: &str) -> bool {
+    let letters = || text.chars().filter(|c| c.is_alphabetic());
+    letters().count() >= 3
+        && letters().any(|c| {
+            !c.is_ascii_lowercase() || matches!(c, 'b' | 'd' | 'f' | 'h' | 'k' | 'l' | 't')
+        })
+}
+
+/// The overlap of two quads' bounds, over their union.
+fn overlap(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> f64 {
+    let (inter, a, b) = intersection(a, b);
+    let union = a + b - inter;
+    if union > 0.0 {
+        inter / union
+    } else {
+        0.0
+    }
+}
+
+/// Whether two quads' bounds share a tenth of the smaller one: a line read
+/// in one reading meets a line read over any part of the same place in the
+/// other, however their boxes were cut. The bounds of a line set askew
+/// reach over its neighbours: it meets them too, and is kept only if it
+/// beats them as well.
+fn meets(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> bool {
+    let (inter, a, b) = intersection(a, b);
+    inter > 0.0 && inter >= MEETS * a.min(b)
+}
+
+/// The area two quads' bounds share, and the area of each.
+fn intersection(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> (f64, f64, f64) {
+    let (a, b) = (bounds(a), bounds(b));
+    let area = |r: [f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    let inter = area([
+        a[0].max(b[0]),
+        a[1].max(b[1]),
+        a[2].min(b[2]),
+        a[3].min(b[3]),
+    ]);
+    (inter, area(a), area(b))
+}
+
+/// Fewest lines of one run that can tell a page was read the wrong way up.
+const TURN_LINES: usize = 3;
+/// Median line confidence under which a page is read again turned a half.
+const UPRIGHT_CONFIDENCE: f64 = 0.8;
+/// How much more confident the turned reading, or one of its lines that is
+/// not tall, must be.
+const TURNED_MARGIN: f64 = 0.15;
+/// How much two lines' bounds overlap, over their union, to be one line.
+const SAME_LINE: f64 = 0.5;
+/// Share of the smaller of two lines' bounds they must share to meet
+/// ([`meets`]): more than a box drawn a pixel or two wide touches its
+/// neighbour by.
+const MEETS: f64 = 0.1;
+
 /// How many times taller than wide a line's crop is for the pipeline to turn
 /// it a quarter before reading it (oar-ocr's `get_rotate_crop_image`, as
 /// PaddleOCR's).
@@ -808,6 +1145,32 @@ mod tests {
     }
 
     #[test]
+    fn a_region_read_as_nothing_is_no_line() {
+        use oar_ocr::domain::TextRegion;
+        use oar_ocr::processors::{BoundingBox, Point};
+        let quad = |y: f32| {
+            BoundingBox::new(
+                [(10.0, y), (90.0, y), (90.0, y + 12.0), (10.0, y + 12.0)]
+                    .map(|(x, y)| Point::new(x, y))
+                    .to_vec(),
+            )
+        };
+        let regions = [
+            TextRegion::with_recognition(quad(0.0), Some("Total 12".into()), Some(0.9)),
+            // Spaces, read confidently: in an overlap of strips, or against
+            // the reading turned a half, it would win over a line read there.
+            TextRegion::with_recognition(quad(1.0), Some(" \t".into()), Some(0.99)),
+            TextRegion::with_recognition(quad(2.0), Some(String::new().into()), Some(0.99)),
+            TextRegion::with_recognition(quad(3.0), None, None),
+        ];
+        let lines = lines_from(&regions);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Total 12");
+        assert_eq!(lines[0].conf, Some(f64::from(0.9f32)));
+        assert_eq!(lines[0].quad[2], (90.0, 12.0));
+    }
+
+    #[test]
     fn a_failed_build_frees_its_place() {
         let pipes = Pipelines::<u32>::new(1);
         assert!(pipes.take(|| Err("no".into())).is_err());
@@ -821,6 +1184,26 @@ mod tests {
         drop(pipes.take(|| Ok(1)).unwrap());
         assert_eq!(*pipes.take(|| Ok(2)).unwrap(), 1);
         assert_eq!(pipes.built(), 1);
+    }
+
+    /// A whole reading of `n` level lines `thick` pixels thick, each twenty
+    /// times as long.
+    fn lines(n: usize, thick: f64) -> Vec<Line> {
+        (0..n)
+            .map(|i| {
+                let (y, len) = (i as f64 * thick * 1.6, 20.0 * thick);
+                Line {
+                    quad: [
+                        (10.0, y),
+                        (10.0 + len, y),
+                        (10.0 + len, y + thick),
+                        (10.0, y + thick),
+                    ],
+                    text: format!("line {i}"),
+                    conf: Some(0.99),
+                }
+            })
+            .collect()
     }
 
     #[test]
@@ -946,32 +1329,61 @@ mod tests {
     fn a_plan_in_strips_reads_each_and_keeps_a_line_once() {
         let plan = OcrSizing::megapixels(1.0).unwrap().plan(800, 5000);
         assert!(plan.passes.len() > 2, "{plan:?}");
-        // Each strip reads one line at its own top quarter, and the line
-        // in the overlap with the next, at the same rows in the image.
+        // Each strip reads one line of its own a quarter down, and the line
+        // in its overlap with the next, at the same rows of the image.
         let mut seen = Vec::new();
-        let words = read_plan(&plan, &mut |pass| {
-            seen.push((pass.top, pass.bottom));
-            let mid = pass.bottom - (pass.bottom - pass.top) / 10;
-            Ok(vec![
-                w(
-                    &format!("own {}", pass.top),
-                    f64::from(pass.top) + 300.0,
-                    f64::from(pass.top) + 320.0,
-                ),
-                w("shared", f64::from(mid), f64::from(mid) + 20.0),
-            ])
-        })
+        let line = |text: String, y: f64| Line {
+            quad: [(60.0, y), (400.0, y), (400.0, y + 20.0), (60.0, y + 20.0)],
+            text,
+            conf: Some(0.9),
+        };
+        let (lines, _) = read_plan(
+            &plan,
+            &mut |pass, img| {
+                seen.push((pass.top, pass.bottom, img.dimensions()));
+                let len = pass.bottom - pass.top;
+                let own = line(format!("own {}", pass.top), 300.0);
+                // In the strip's pixels: the overlap is its last fifth.
+                let shared = line("shared".into(), f64::from(len - len / 10));
+                Ok((vec![own, shared], std::sync::Arc::new(img)))
+            },
+            image::RgbImage::new(800, 5000),
+        )
         .unwrap();
         assert_eq!(seen.len(), plan.passes.len());
-        let own = words.iter().filter(|w| w.text.starts_with("own")).count();
-        assert_eq!(own, plan.passes.len(), "every strip's own line");
-        // One whole plan: the words as read.
-        let one = OcrSizing::default().plan(800, 600);
-        let words = read_plan(&one, &mut |_| Ok(vec![w("a", 10.0, 30.0)])).unwrap();
-        assert_eq!(words.len(), 1);
+        assert!(seen.iter().all(|&(t, b, (w, h))| w == 800 && h == b - t));
+        let own: Vec<f64> = lines
+            .iter()
+            .filter(|l| l.text.starts_with("own"))
+            .map(|l| l.quad[0].1)
+            .collect();
+        assert_eq!(own.len(), plan.passes.len(), "every strip's own line");
+        assert!(own
+            .iter()
+            .zip(&plan.passes)
+            .all(|(y, p)| *y == f64::from(p.top) + 300.0));
+        // A small image is padded, and read once.
+        let one = OcrSizing::default().plan(1200, 40);
+        let mut sizes = Vec::new();
+        let (lines, img) = read_plan(
+            &one,
+            &mut |_, img| {
+                sizes.push(img.dimensions());
+                Ok((vec![line("a".into(), 10.0)], std::sync::Arc::new(img)))
+            },
+            image::RgbImage::new(1200, 40),
+        )
+        .unwrap();
+        assert_eq!(sizes, [(1200, 442)]);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            img.dimensions(),
+            (1200, 40),
+            "the image as given is handed back"
+        );
     }
 
-    fn w(text: &str, y0: f64, y1: f64) -> (OcrWord, Bounds) {
+    fn w(text: &str, y0: f64, y1: f64) -> (OcrWord, Place) {
         let quad = [(60.0, y0), (400.0, y0), (400.0, y1), (60.0, y1)];
         let (bbox, angle) = quad_box(quad);
         let word = OcrWord {
@@ -980,11 +1392,11 @@ mod tests {
             angle: Some(angle),
             conf: None,
         };
-        (word, bounds(&quad))
+        (word, place(&quad))
     }
 
     /// A line running down the image from row `y0` to `y1`, 30 px thick.
-    fn down(text: &str, x: f64, y0: f64, y1: f64) -> (OcrWord, Bounds) {
+    fn down(text: &str, x: f64, y0: f64, y1: f64) -> (OcrWord, Place) {
         let quad = [(x, y0), (x + 30.0, y0), (x + 30.0, y1), (x, y1)];
         let (bbox, angle) = quad_box(quad);
         let word = OcrWord {
@@ -993,13 +1405,14 @@ mod tests {
             angle: Some(angle),
             conf: None,
         };
-        (word, bounds(&quad))
+        (word, place(&quad))
     }
 
     #[test]
     fn a_line_down_a_tiled_image_is_tested_on_the_rows_it_spans() {
-        let texts =
-            |words: Vec<OcrWord>| -> Vec<String> { words.into_iter().map(|w| w.text).collect() };
+        let texts = |words: Vec<(OcrWord, Place)>| -> Vec<String> {
+            words.into_iter().map(|(w, _)| w.text).collect()
+        };
         // Strips 0-2000 and 1600-3600. "inside" runs down rows 1650-1950,
         // inside the overlap: the first strip reads it as one line, the
         // second as two, "ins" and "ide". Their upright boxes (30 tall) do
@@ -1030,13 +1443,55 @@ mod tests {
                 ],
             ),
         ];
-        assert_eq!(texts(merge_strips(read, 3600)), ["ins", "ide", "cut"]);
+        assert_eq!(
+            texts(merge_strips(read, 3600, |(_, p)| *p)),
+            ["ins", "ide", "cut"]
+        );
+    }
+
+    #[test]
+    fn a_reading_s_lines_are_merged_on_the_rows_they_span() {
+        // A capture read in strips 0-2000 and 1600-3600, as it is again
+        // turned a half: a line running down rows 1650-1950, in the
+        // overlap, read whole by the first strip and in two pieces by the
+        // second, is kept once; a piece reaching the first strip's bottom
+        // edge is dropped for the second's whole line.
+        let down = |text: &str, x: f64, y0: f64, y1: f64| Line {
+            quad: [(x, y0), (x + 30.0, y0), (x + 30.0, y1), (x, y1)],
+            text: text.into(),
+            conf: Some(0.9),
+        };
+        let read = vec![
+            (
+                0,
+                2000,
+                vec![
+                    down("inside", 100.0, 1650.0, 1950.0),
+                    down("cu", 300.0, 1700.0, 2000.0),
+                ],
+            ),
+            (
+                1600,
+                3600,
+                vec![
+                    down("ins", 101.0, 1651.0, 1790.0),
+                    down("ide", 101.0, 1800.0, 1951.0),
+                    down("cut", 300.0, 1700.0, 2100.0),
+                ],
+            ),
+        ];
+        let texts: Vec<String> = merge_line_strips(read, 3600)
+            .into_iter()
+            .map(|l| l.text)
+            .collect();
+        assert_eq!(texts, ["ins", "ide", "cut"]);
     }
 
     #[test]
     fn a_line_read_by_two_strips_is_kept_once() {
-        let texts =
-            |words: Vec<OcrWord>| -> Vec<String> { words.into_iter().map(|w| w.text).collect() };
+        let texts = |words: Vec<(OcrWord, Place)>| -> Vec<String> {
+            words.into_iter().map(|(w, _)| w.text).collect()
+        };
         // Strips 0-2000 and 1600-3600 of a 3,600-row image. "astride" sits
         // on the overlap's middle (1800), read a pixel lower by the second
         // strip: kept once. "cut" reaches the first strip's bottom edge and
@@ -1062,17 +1517,17 @@ mod tests {
             ),
         ];
         assert_eq!(
-            texts(merge_strips(read, 3600)),
+            texts(merge_strips(read, 3600, |(_, p)| *p)),
             ["first", "astride", "cut", "second"]
         );
         // Two lines one above the other in one strip are both kept.
         let read = vec![(0, 2000, vec![w("a", 100.0, 120.0), w("b", 110.0, 130.0)])];
-        assert_eq!(texts(merge_strips(read, 2000)), ["a", "b"]);
+        assert_eq!(texts(merge_strips(read, 2000, |(_, p)| *p)), ["a", "b"]);
     }
 
     /// A line `len` long and `thick` thick about `(cx, cy)`, its baseline
     /// rising `deg` degrees, as the detector draws it.
-    fn skewed(text: &str, cx: f64, cy: f64, len: f64, thick: f64, deg: f64) -> (OcrWord, Bounds) {
+    fn skewed(text: &str, cx: f64, cy: f64, len: f64, thick: f64, deg: f64) -> (OcrWord, Place) {
         let (sin, cos) = deg.to_radians().sin_cos();
         let (u, n) = ((cos, -sin), (sin, cos));
         let at = |a: f64, b: f64| (cx + u.0 * a + n.0 * b, cy + u.1 * a + n.1 * b);
@@ -1085,8 +1540,11 @@ mod tests {
             angle: Some(angle),
             conf: None,
         };
-        (word, bounds(&quad))
+        (word, place(&quad))
     }
+
+    /// A strip's rows and the words it read, each where it lies.
+    type Strip = (u32, u32, Vec<(OcrWord, Place)>);
 
     #[test]
     fn a_skewed_page_read_in_strips_keeps_every_line_once() {
@@ -1098,7 +1556,7 @@ mod tests {
         let plan = crate::sizing::OcrSizing::default().plan(3400, 4400);
         assert_eq!(plan.passes.len(), 2, "{plan:?}");
         for deg in [0.0, 1.0, 2.0, 3.0, -2.5] {
-            let read: Vec<StripReading> = plan
+            let read: Vec<Strip> = plan
                 .passes
                 .iter()
                 .enumerate()
@@ -1111,16 +1569,16 @@ mod tests {
                             skewed(&format!("line {i}"), 1700.0 + jitter, cy, 2800.0, 40.0, deg)
                         })
                         .filter(|(_, b)| {
-                            (p.top == 0 || b[1] > top + CUT_EDGE)
-                                && (p.bottom == 4400 || b[3] < bottom - CUT_EDGE)
+                            (p.top == 0 || b.bounds[1] > top + CUT_EDGE)
+                                && (p.bottom == 4400 || b.bounds[3] < bottom - CUT_EDGE)
                         })
                         .collect();
                     (p.top, p.bottom, words)
                 })
                 .collect();
-            let got: Vec<String> = merge_strips(read, 4400)
+            let got: Vec<String> = merge_strips(read, 4400, |(_, p)| *p)
                 .into_iter()
-                .map(|w| w.text)
+                .map(|(w, _)| w.text)
                 .collect();
             let want: Vec<String> = (0..75).map(|i| format!("line {i}")).collect();
             assert_eq!(got, want, "at {deg}°");
@@ -1132,9 +1590,9 @@ mod tests {
         let one = skewed("one", 1000.0, 1990.0 + rise, 1400.0, 40.0, 2.0);
         let two = skewed("two", 2400.0, 1990.0 - rise, 1400.0, 40.0, 2.0);
         let read = vec![(0, 2100, vec![whole]), (1800, 4400, vec![one, two])];
-        let got: Vec<String> = merge_strips(read, 4400)
+        let got: Vec<String> = merge_strips(read, 4400, |(_, p)| *p)
             .into_iter()
-            .map(|w| w.text)
+            .map(|(w, _)| w.text)
             .collect();
         assert_eq!(got, ["one", "two"]);
     }
@@ -1156,5 +1614,403 @@ mod tests {
         // A short word set upright is not read turned under the threshold.
         let (_, a) = quad_box([(0.0, 0.0), (20.0, 0.0), (20.0, 25.0), (0.0, 25.0)]);
         assert_eq!(a, 0.0);
+    }
+
+    /// A level line 200 wide and 20 tall at `y`, read with `conf`.
+    fn line(y: f64, conf: f64) -> Line {
+        Line {
+            quad: [(0.0, y), (200.0, y), (200.0, y + 20.0), (0.0, y + 20.0)],
+            text: "Account number".into(),
+            conf: Some(conf),
+        }
+    }
+
+    /// A tall line 20 wide and 200 tall at `x`, read with `conf`: text set
+    /// sideways, as the detector boxes it.
+    fn tall(x: f64, conf: f64) -> Line {
+        Line {
+            quad: [(x, 0.0), (x + 20.0, 0.0), (x + 20.0, 200.0), (x, 200.0)],
+            text: "SKU-60138".into(),
+            conf: Some(conf),
+        }
+    }
+
+    /// Five level lines one under the other, all read with `conf`.
+    fn page(conf: f64) -> Vec<Line> {
+        (0..5).map(|i| line(30.0 * i as f64, conf)).collect()
+    }
+
+    #[test]
+    fn a_page_read_with_little_confidence_is_read_again_turned() {
+        assert!(!worth_turning(&page(0.97)));
+        let noise = page(0.45);
+        assert!(worth_turning(&noise));
+        // Two lines say too little to turn a page for.
+        assert!(!worth_turning(&noise[..2]));
+        // Nor do short lines, which read poorly whichever way up they are.
+        let mut short = page(0.45);
+        short.iter_mut().for_each(|l| l.text = "7".into());
+        assert!(!worth_turning(&short));
+    }
+
+    #[test]
+    fn tall_lines_read_poorly_are_read_again_turned() {
+        // Text running down the page reads well: nothing to do.
+        let down: Vec<_> = (0..4)
+            .map(|i| tall(300.0 + 30.0 * i as f64, 0.95))
+            .collect();
+        assert!(!worth_turning(&down));
+        // Text running up reads as noise, on a page whose level text reads
+        // well: the tall lines alone are reason to read it again.
+        let mut up = page(0.97);
+        up.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.4)));
+        assert!(worth_turning(&up));
+        assert_eq!(run_of(&tall(0.0, 1.0).quad), Run::Tall);
+        assert_eq!(run_of(&line(0.0, 1.0).quad), Run::Level);
+    }
+
+    #[test]
+    fn a_table_of_numbers_does_not_outvote_its_page_s_text() {
+        // `text` lines of text read with `words`, over twelve numbers read
+        // with `numbers`.
+        let page = |text: usize, words: f64, numbers: f64| -> Vec<Line> {
+            let mut p: Vec<Line> = (0..text).map(|i| line(30.0 * i as f64, words)).collect();
+            p.extend((0..12).map(|i| Line {
+                text: "12850".into(),
+                ..line(100.0 + 30.0 * i as f64, numbers)
+            }));
+            p
+        };
+        // A page upside down: its text reads as noise, its numbers as other
+        // numbers, confidently. The numbers make the median; the text alone
+        // decides.
+        assert!(worth_turning(&page(3, 0.62, 0.85)));
+        // Turned, all of it reads right, the numbers hardly more confidently
+        // than upside down: the text still makes the turned reading the
+        // base, so the numbers are taken from it too.
+        let merged = merge(page(3, 0.62, 0.85), page(3, 0.97, 0.95));
+        assert!(merged.iter().all(|l| l.conf >= Some(0.95)));
+        // Two lines of text are too few to tell: the numbers count as before,
+        // and read confidently, the page is not read again.
+        assert!(!worth_turning(&page(2, 0.62, 0.85)));
+        assert!(worth_turning(&page(2, 0.62, 0.5)));
+        // A page of numbers alone is judged on them, as before.
+        assert!(!worth_turning(&page(0, 0.0, 0.85)));
+        assert!(worth_turning(&page(0, 0.0, 0.5)));
+    }
+
+    #[test]
+    fn a_page_upside_down_is_read_turned() {
+        let merged = merge(page(0.45), page(0.96));
+        assert!(merged.iter().all(|l| l.conf == Some(0.96)));
+        // A poor scan read upright reads no better turned: it stays.
+        let merged = merge(page(0.45), page(0.55));
+        assert!(merged.iter().all(|l| l.conf == Some(0.45)));
+        let merged = merge(page(0.97), page(0.45));
+        assert!(merged.iter().all(|l| l.conf == Some(0.97)));
+    }
+
+    #[test]
+    fn a_table_running_up_on_an_upright_page_takes_its_lines_turned() {
+        // Upright text read well, a table running up read as noise; turned,
+        // the other way round.
+        let mut given = page(0.97);
+        given.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.4)));
+        let mut turned = page(0.3);
+        turned.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.95)));
+        let merged = merge(given, turned);
+        assert_eq!(merged.len(), 9, "one reading of each line");
+        for l in &merged {
+            let want = if run_of(&l.quad) == Run::Tall {
+                0.95
+            } else {
+                0.97
+            };
+            assert_eq!(l.conf, Some(want));
+        }
+    }
+
+    #[test]
+    fn a_tall_line_takes_the_more_confident_reading() {
+        // A table running up on an upright page: the given reading has one
+        // cell cut short but fairly confident, the turned one reads it whole
+        // and a little more confident. Both read it turned a quarter, so
+        // neither is the likelier: no margin to beat.
+        let mut given = page(0.97);
+        given.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.4)));
+        given[5].text = "SKU45".into();
+        given[5].conf = Some(0.84);
+        let mut turned = page(0.3);
+        turned.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.95)));
+        let merged = merge(given, turned);
+        assert_eq!(merged[5].text, "SKU-60138");
+        assert_eq!(merged[5].conf, Some(0.95));
+        // A single character reads poorly either way: it stays unless beaten
+        // by the margin.
+        let mut given = page(0.97);
+        given.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.9)));
+        given.iter_mut().skip(5).for_each(|l| l.text = "6".into());
+        let mut turned = page(0.3);
+        turned.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.95)));
+        turned.iter_mut().skip(5).for_each(|l| l.text = "9".into());
+        let merged = merge(given, turned);
+        assert!(merged[5..].iter().all(|l| l.text == "6"));
+    }
+
+    /// The heights of the images `read_upright` has the pipeline read, for
+    /// an image `width` × `height` under a cap of `mpx`, its lines read
+    /// poorly in each.
+    fn heights_read(mpx: f64, width: u32, height: u32) -> Vec<u32> {
+        let plan = OcrSizing::megapixels(mpx).unwrap().plan(width, height);
+        let mut read = Vec::new();
+        let mut pipeline = |_: &Pass, img: image::RgbImage| {
+            read.push(img.height());
+            let poorly = lines(150, 12.0).into_iter().map(|l| Line {
+                conf: Some(0.3),
+                ..l
+            });
+            Ok((poorly.collect(), std::sync::Arc::new(img)))
+        };
+        assert!(
+            !read_upright(&plan, &mut pipeline, image::RgbImage::new(width, height))
+                .unwrap()
+                .is_empty()
+        );
+        read
+    }
+
+    #[test]
+    fn a_capture_read_poorly_is_read_turned_as_it_was_planned() {
+        // Within the cap: whole, either way up.
+        assert_eq!(heights_read(12.5, 1000, 2600), [2600, 2600]);
+        // Over it: in the same strips either way up.
+        let h = heights_read(1.0, 800, 5000);
+        assert!(h.len() > 4 && h.len().is_multiple_of(2), "{h:?}");
+        let (given, turned) = h.split_at(h.len() / 2);
+        assert_eq!(given, turned);
+        assert!(given.iter().all(|&r| r < 5000));
+    }
+
+    #[test]
+    fn lines_over_the_same_place_overlap() {
+        let a = line(0.0, 1.0).quad;
+        assert_eq!(overlap(&a, &a), 1.0);
+        assert_eq!(overlap(&a, &line(100.0, 1.0).quad), 0.0);
+        assert!(overlap(&a, &line(5.0, 1.0).quad) > SAME_LINE);
+        // A line read in pieces meets the whole line, as does its neighbour
+        // a box's edge reaches over by more than a tenth.
+        let whole = tall(300.0, 1.0).quad;
+        let piece = [(300.0, 0.0), (320.0, 0.0), (320.0, 90.0), (300.0, 90.0)];
+        assert!(overlap(&whole, &piece) < SAME_LINE && meets(&whole, &piece));
+        assert!(meets(&a, &line(17.0, 1.0).quad));
+        assert!(!meets(&a, &line(19.0, 1.0).quad));
+        assert!(!meets(&a, &line(20.0, 1.0).quad));
+    }
+
+    /// `lines` as the reading of their image turned a half gives them,
+    /// mapped back onto the image as given, as `read_upright` maps them:
+    /// the turned image's top left of each line is its bottom right here,
+    /// so its quad starts there, upside down.
+    fn turned_back(lines: Vec<Line>) -> Vec<Line> {
+        lines
+            .into_iter()
+            .map(|l| Line {
+                quad: [l.quad[2], l.quad[3], l.quad[0], l.quad[1]],
+                ..l
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_upright_page_read_poorly_keeps_its_numbers() {
+        // An upright fax read with little confidence, so it is read again
+        // turned a half: its words read as noise turned, its numbers as
+        // other numbers, more confidently than upright.
+        let mut given = page(0.75);
+        given
+            .iter_mut()
+            .for_each(|l| l.text = "Invoice total due".into());
+        let mut turned = page(0.4);
+        turned
+            .iter_mut()
+            .for_each(|l| l.text = "anp lelol aoionuI".into());
+        for (i, (up, down)) in [("1068", "8901"), ("1689", "6891"), ("806", "908")]
+            .into_iter()
+            .enumerate()
+        {
+            let y = 200.0 + 30.0 * i as f64;
+            given.push(Line {
+                text: up.into(),
+                ..line(y, 0.8)
+            });
+            turned.push(Line {
+                text: down.into(),
+                ..line(y, 0.99)
+            });
+        }
+        // A lone digit, boxed about square.
+        let square = |text: &str, conf: f64| Line {
+            quad: [
+                (400.0, 400.0),
+                (418.0, 400.0),
+                (418.0, 420.0),
+                (400.0, 420.0),
+            ],
+            text: text.into(),
+            conf: Some(conf),
+        };
+        given.push(square("6", 0.8));
+        turned.push(square("9", 0.99));
+        assert!(worth_turning(&given));
+        let merged = merge(given, turned_back(turned));
+        let texts: Vec<&str> = merged.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            texts[5..],
+            ["1068", "1689", "806", "6"],
+            "the numbers as read upright"
+        );
+        // No line is taken turned: nothing upside down to turn the page for.
+        for l in &merged {
+            assert_eq!(quad_box(l.quad).1, 0.0, "{}", l.text);
+        }
+        // The page turned is read turned, numbers and all.
+        let mut given = page(0.4);
+        given.push(Line {
+            text: "8901".into(),
+            ..line(200.0, 0.99)
+        });
+        let mut turned = page(0.97);
+        turned.push(Line {
+            text: "1068".into(),
+            ..line(200.0, 0.8)
+        });
+        let merged = merge(given, turned);
+        assert_eq!(merged[5].text, "1068");
+    }
+
+    #[test]
+    fn digits_follow_the_lines_that_tell_which_way_up_they_read() {
+        // A table running up on an upright page: its cells of words read
+        // better turned, so its cells of numbers are taken turned too, the
+        // upright reading's more confident though they are.
+        let mut given = page(0.97);
+        given.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.4)));
+        given.push(Line {
+            text: "88109".into(),
+            ..tall(500.0, 0.99)
+        });
+        let mut turned = page(0.3);
+        turned.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.95)));
+        turned.push(Line {
+            text: "60138".into(),
+            ..tall(500.0, 0.9)
+        });
+        let merged = merge(given, turned);
+        assert_eq!(merged[9].text, "60138");
+        // A table of numbers alone running up: nothing tells, so each is
+        // taken from the reading that reads it more confidently, as a cell
+        // of words would be; and the turned reading reads them better.
+        let numbers = |conf: f64, text: &str| -> Vec<Line> {
+            (0..4)
+                .map(|i| Line {
+                    text: text.into(),
+                    ..tall(300.0 + 30.0 * i as f64, conf)
+                })
+                .collect()
+        };
+        let mut given = page(0.97);
+        given.extend(numbers(0.9, "88109"));
+        let mut turned = page(0.3);
+        turned.extend(numbers(0.95, "60138"));
+        let merged = merge(given, turned);
+        assert!(merged[5..].iter().all(|l| l.text == "60138"));
+    }
+
+    #[test]
+    fn a_line_only_the_other_reading_has_is_kept_where_it_reads_better() {
+        // A table running up on an upright page. The upright reading boxes
+        // one of its cells in two pieces of noise, each under half of the
+        // cell read whole turned; the turned reading also finds a cell of
+        // numbers and a stamp the upright one missed, and a line of noise
+        // over the page's text, boxed apart from it.
+        let piece = |y0: f64, y1: f64| Line {
+            quad: [(300.0, y0), (320.0, y0), (320.0, y1), (300.0, y1)],
+            text: "8E109-OS".into(),
+            conf: Some(0.4),
+        };
+        let mut given = page(0.97);
+        given.extend([piece(0.0, 90.0), piece(110.0, 200.0)]);
+        given.extend((1..5).map(|i| tall(300.0 + 30.0 * i as f64, 0.4)));
+        let mut turned = page(0.3);
+        turned.extend((0..5).map(|i| tall(300.0 + 30.0 * i as f64, 0.95)));
+        turned.push(Line {
+            text: "60138".into(),
+            ..tall(600.0, 0.97)
+        });
+        turned.push(Line {
+            text: "Stamped".into(),
+            ..line(600.0, 0.9)
+        });
+        turned.push(Line {
+            text: "Faint".into(),
+            ..line(700.0, 0.7)
+        });
+        turned.push(Line {
+            text: "Account".into(),
+            ..line(12.0, 0.9)
+        });
+        let merged = merge(given, turned);
+        let texts: Vec<&str> = merged.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "Account number",
+                "Account number",
+                "Account number",
+                "Account number",
+                "Account number",
+                "SKU-60138",
+                "SKU-60138",
+                "SKU-60138",
+                "SKU-60138",
+                "SKU-60138",
+                "60138",
+                "Stamped",
+            ]
+        );
+        assert!(merged[..5].iter().all(|l| l.conf == Some(0.97)));
+        assert_eq!(merged[5].quad[0], (300.0, 0.0), "the cell read whole");
+    }
+
+    #[test]
+    fn only_letters_that_change_turned_tell_which_way_up_a_line_reads() {
+        for tells in ["Invoice", "SKU-60138", "total", "Échéance", "数量合计"] {
+            assert!(tells_its_way_up(tells), "{tells}");
+        }
+        for not in ["1068", "6", "No", "sun now", "806 / 908", "Ab 12"] {
+            assert!(!tells_its_way_up(not), "{not}");
+        }
+    }
+
+    #[test]
+    fn a_page_read_again_is_turned_where_it_lies() {
+        // Read whole: the second reading is given the image the first one
+        // was, turned in its own buffer, not a copy made beside it.
+        let plan = OcrSizing::default().plan(1000, 2600);
+        let mut img = image::RgbImage::new(1000, 2600);
+        img.put_pixel(0, 0, image::Rgb([255, 0, 0]));
+        let mut seen = Vec::new();
+        let mut pipeline = |_: &Pass, img: image::RgbImage| {
+            seen.push((img.as_raw().as_ptr() as usize, *img.get_pixel(999, 2599)));
+            let poorly = lines(150, 12.0).into_iter().map(|l| Line {
+                conf: Some(0.3),
+                ..l
+            });
+            Ok((poorly.collect(), std::sync::Arc::new(img)))
+        };
+        read_upright(&plan, &mut pipeline, img).unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].0, seen[1].0, "the same buffer");
+        assert_eq!(seen[1].1, image::Rgb([255, 0, 0]), "turned a half");
     }
 }

@@ -1556,11 +1556,15 @@ fn ocr_image(
     let sizes = doc
         .pages
         .iter()
-        .map(|p| fluree_doc_model::PageSize {
-            index: p.index,
-            width: p.width,
-            height: p.height,
-            folio: None,
+        .map(|p| {
+            // A page OCR turned a quarter to read is still the image as shown.
+            let (width, height) = p.display_size();
+            fluree_doc_model::PageSize {
+                index: p.index,
+                width,
+                height,
+                folio: None,
+            }
         })
         .collect();
     // Given on its own, an image is read once OCR took a word in it, however

@@ -94,6 +94,80 @@ are converted without OCR, an image file is not converted, and the run ends
 with status 2. Name it in the [config](config.md#ocr)
 and `--ocr` is no longer needed.
 
+PP-OCRv6 small has no page orientation model, and the pipeline turns every
+line at least 1.5 times as tall as wide a quarter counter-clockwise before
+reading it. A sheet scanned upside down, or turned so its text runs up the
+page, with no `/Rotate` to say so, reads as noise its recognizer is not
+confident of. When the median confidence of a reading's level lines, or of
+its tall ones, is under 0.8 (three lines at least, and only the lines
+holding a letter when three of them do), the engine reads the image again
+turned a half, where both read right. The reading more
+confident by over 0.15 on average is kept. A line of words (three letters
+or more, one of them a capital, one of `b d f h k l t` or a letter of
+another script) is taken from the other reading when that one reads it
+more confidently by that much, over the same place; a tall one, read
+turned a quarter in both, when it reads it more confidently at all.
+Numbers and shorter words read as something else turned a half, often
+confidently (`1068` as `8901` at 0.99): they follow the lines of words
+running their way, taken from the other reading only where most of those
+were, so an upright page read poorly keeps its numbers as read upright; a
+tall one with no line of words running its way (a table of numbers alone,
+set sideways) is taken as a tall line of words is. A line only the other
+reading has, or reads whole where the kept one reads it in pieces, is
+added in place of the lines it covers when it would have been taken over
+each of them (a line of words must also read over 0.8). An upright page
+holding a table whose text runs up keeps its text and takes the table's.
+When two thirds of the
+text, counted in characters, runs one way sideways and less than a quarter
+of it is level, or two thirds of it runs upside down, or more of it upside
+down than level with the two together a quarter of it and 20 characters or
+more upside down (a sheet fed upside down under the upright header a fax
+machine stamps, or carrying a table set sideways, not a stamp or a word
+read the wrong way up), the page is read in
+the frame where it runs upright, and every box is still placed on the page
+as displayed. Words of one or two characters do not count: a digit is boxed
+about as tall as wide and read at any angle. A page read upright, or with its text running down,
+pays nothing; one read again costs a second reading (on synthetic letters,
+forms and tables, 0.6 to 0.8 s more per page).
+
+Limits: a page with upright text of its own, a quarter of its text or more,
+keeps its frame, and the lines set sideways on it are laid along their
+angle where they are, after the text above them, a table's cells not set
+as a table. Their order is the order they lie in across the page, not the
+order they read in: the lines of a block running down come out last first,
+those of a block running up may come out shuffled, and a sideways table's
+cells mixed with its header. A sheet fed sideways under an upright fax
+header is such a page when the header is a quarter of its text (a sheet of
+three lines or so): its lines come out last first, or shuffled. A page
+whose text runs up and down in about equal parts, with no two thirds of it
+either way, is not turned.
+A page upside down with fewer than three level lines of two characters or
+more is not read again. A number read the wrong way up reads as another
+number, often confidently (`2024` at 0.92 where the words around it read
+under 0.7), which is why only the lines holding a letter decide when there
+are three of them: a page that is mostly a table of numbers is read again
+on its text. With fewer, the numbers decide: a table of numbers with less
+text than that, upside down or running up, is read again only if its
+numbers read poorly, and otherwise comes out as wrong numbers with no
+warning. Numbers written with the digits 0, 1, 6, 8 and 9 alone read as
+other numbers turned a half with a confidence of about 1 (806 as 908): a
+table of such numbers alone set sideways, with no line of words running its
+way, may come out as other numbers. A page is read again turned on the median
+confidence of its tall lines: text running up next to more tall lines of
+words read well (a block running down beside it) is not read again and
+comes out as noise, and neither is a single line running up (a label set
+up a form's margin). A word of a character or two set sideways may be
+misread. A page turned a quarter reads fewer of its headings: the detector
+boxes a long line of sideways text a few pixels thicker than the same
+line upright, and a short heading's box no thicker, so a heading comes out
+nearer the size of its text and is read as text, and a line of text can
+come out larger than it and read as a heading.
+Only the built-in engine reads a page again turned: [`fdoc dev render-routed`](dev.md) writes the
+crops as the page shows them, an outside engine or a model (`--escalate`)
+reads them unturned, and the manifest says nothing of the page's
+orientation. Words an outside engine wrote with their `angle` are laid as
+[sidecar formats](../integration/sidecar-formats.md) describes.
+
 **Any other engine**, through files: render the crops, read them with your
 engine (or with [`fdoc ocr`](ocr.md)), then convert with the words:
 

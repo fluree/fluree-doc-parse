@@ -21,6 +21,14 @@ fn scan_of(lines: &[&str]) -> Vec<u8> {
 /// As [`scan_of`], the image `scale` pixels per point of the page (2 is
 /// 144 ppi).
 fn scan_at(lines: &[&str], scale: f32) -> Vec<u8> {
+    scan_image(lines, scale, 0)
+}
+
+/// As [`scan_at`], the image turned `quarters` quarter turns
+/// counter-clockwise: a sheet fed into the scanner sideways or the wrong
+/// way round, with no `/Rotate` to say so. The page is square, so the image
+/// still covers it.
+fn scan_image(lines: &[&str], scale: f32, quarters: u8) -> Vec<u8> {
     let text = pdf(
         &lines
             .iter()
@@ -47,6 +55,16 @@ fn scan_at(lines: &[&str], scale: f32) -> Vec<u8> {
             gray = c.pixels.data.chunks_exact(4).map(|p| p[0]).collect();
         },
     );
+    for _ in 0..quarters {
+        // A quarter counter-clockwise: the new row y is the old column
+        // w - 1 - y, read top to bottom.
+        let turned: Vec<u8> = (0..w)
+            .flat_map(|y| (0..h).map(move |x| (x, y)))
+            .map(|(x, y)| gray[(x * w + (w - 1 - y)) as usize])
+            .collect();
+        gray = turned;
+        (w, h) = (h, w);
+    }
     let image = [
         format!(
             "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray \
@@ -144,6 +162,168 @@ fn a_scanned_page_reads_as_text() {
         .join("\n");
     assert!(text.contains("4417-0093-21"), "{text}");
     assert!(text.contains("15-OCT-1997"), "{text}");
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn an_upside_down_scan_reads_upright_where_its_text_is() {
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let lines = [
+        "Account number 4417-0093-21",
+        "Date of birth 15-OCT-1997",
+        "Policy holder Margaret Holloway",
+        "Premium due on the first of March",
+    ];
+    let bytes = scan_image(&lines, 2.0, 2);
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+    let mut doc = fluree_doc_pdf::extract_bytes(bytes).unwrap();
+    let pass = fluree_doc_pdf::ocr::read_pages(
+        &mut doc,
+        &raw,
+        &engine,
+        None,
+        fluree_doc_pdf::escalate::CropScale::Stored,
+        0,
+    );
+    assert!(pass.failed.is_empty(), "{:?}", pass.failed);
+    let analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
+    let text: String = analysis
+        .elements
+        .iter()
+        .map(|e| e.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for want in ["4417-0093-21", "15-OCT-1997", "Margaret Holloway"] {
+        assert!(text.contains(want), "{want} in {text}");
+    }
+    // The first line is drawn 100 pt from the top of the upright sheet:
+    // on the page as stored, upside down, it sits 100 pt from the bottom,
+    // and that is where its box is, for a highlight to land on it.
+    let first = analysis
+        .elements
+        .iter()
+        .find(|e| e.text.contains("4417-0093-21"))
+        .unwrap();
+    let b = first.bbox.unwrap();
+    let mid = (b.y0 + b.y1) / 2.0;
+    assert!(mid > 285.0 && mid < 320.0, "{b:?}");
+    assert!(b.x1 > 340.0, "the line ends near the right edge: {b:?}");
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn a_scan_whose_text_runs_up_reads_upright_where_its_text_is() {
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let lines = [
+        "Account number 4417-0093-21",
+        "Date of birth 15-OCT-1997",
+        "Policy holder Margaret Holloway",
+        "Premium due on the first of March",
+    ];
+    // A quarter counter-clockwise: the text runs up the page, which the
+    // pipeline alone reads as noise.
+    let bytes = scan_image(&lines, 2.0, 1);
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+    let mut doc = fluree_doc_pdf::extract_bytes(bytes).unwrap();
+    let pass = fluree_doc_pdf::ocr::read_pages(
+        &mut doc,
+        &raw,
+        &engine,
+        None,
+        fluree_doc_pdf::escalate::CropScale::Stored,
+        0,
+    );
+    assert!(pass.failed.is_empty(), "{:?}", pass.failed);
+    let analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
+    let texts: Vec<&str> = analysis.elements.iter().map(|e| e.text.as_str()).collect();
+    let text = texts.join("\n");
+    for want in ["4417-0093-21", "15-OCT-1997", "Margaret Holloway"] {
+        assert!(text.contains(want), "{want} in {text}");
+    }
+    // Read in the frame where it runs upright: the first line comes first.
+    assert!(texts[0].contains("4417-0093-21"), "{text}");
+    // The first line is drawn 100 pt from the top of the upright sheet:
+    // turned, it runs up the page 100 pt from its left edge, and that is
+    // where its box is.
+    let first = analysis
+        .elements
+        .iter()
+        .find(|e| e.text.contains("4417-0093-21"))
+        .unwrap();
+    let b = first.bbox.unwrap();
+    let mid = (b.x0 + b.x1) / 2.0;
+    assert!(mid > 80.0 && mid < 120.0, "{b:?}");
+    assert!(
+        b.y1 > 340.0 && b.y1 - b.y0 > 200.0,
+        "runs up from near the bottom: {b:?}"
+    );
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn an_upright_scan_reads_as_it_stands() {
+    // An upright page of words and numbers written with the digits that
+    // read as other digits turned a half (1068 as 8901), read clean and
+    // degraded (a scan at 25 ppi under heavy noise) until the reading is
+    // poor enough to be read again turned. Neither takes a line from the
+    // turned reading: every line is read level, so nothing turns the page,
+    // and the clean page reads as written.
+    use fluree_doc_vision::OcrEngine;
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let lines = [
+        "Invoice number 1068",
+        "Account holder Margaret",
+        "Quantity 6",
+        "1068",
+        "8691",
+        "Policy holder Holloway",
+    ];
+    for (scale, noise) in [(2.0, 0), (0.35, 110)] {
+        let bytes = scan_image(&lines, scale, 0);
+        let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        let mut image = None;
+        fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| image = Some(c.pixels));
+        let image = noisy(image.unwrap(), noise);
+        let reading = engine.read(&image).unwrap();
+        let read: Vec<&str> = reading.words.iter().map(|w| w.text.as_str()).collect();
+        for w in &reading.words {
+            assert!(w.angle.unwrap().abs() < 5.0, "{scale}: {w:?}");
+        }
+        if noise == 0 {
+            assert_eq!(read, lines);
+            continue;
+        }
+        // Its lines holding a letter read under 0.8 on the median: the
+        // reading the engine read again turned.
+        let mut words: Vec<f64> = reading
+            .words
+            .iter()
+            .filter(|w| w.text.chars().any(char::is_alphabetic))
+            .map(|w| w.conf.unwrap())
+            .collect();
+        words.sort_by(f64::total_cmp);
+        assert!(
+            words.len() >= 3 && words[words.len() / 2] < 0.8,
+            "{read:?} {words:?}"
+        );
+    }
+}
+
+/// `image`, grey, each pixel moved up to `noise` levels lighter or darker,
+/// the same way on every run.
+fn noisy(mut image: fluree_doc_vision::Pixels, noise: u32) -> fluree_doc_vision::Pixels {
+    assert_eq!(image.layout, fluree_doc_vision::Layout::Rgba8);
+    let mut seed = 12345u32;
+    for px in image.data.chunks_exact_mut(4) {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        let n = ((seed >> 16) % (2 * noise + 1)) as i32 - noise as i32;
+        let v = (i32::from(px[0]) + n).clamp(0, 255) as u8;
+        px[..3].fill(v);
+    }
+    image
 }
 
 /// A scratch directory for one test.
