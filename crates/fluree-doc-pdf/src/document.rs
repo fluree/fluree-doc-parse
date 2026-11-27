@@ -10563,6 +10563,58 @@ mod tests {
     }
 
     #[test]
+    fn a_later_page_repeating_the_tables_header_is_headed_by_it() {
+        // A labour table over three pages: its header on the first; the
+        // second carries the rows on, then a new period's band and the
+        // header set again; the third opens on the header.
+        let (a, fa) = part(
+            "elem-00001",
+            0,
+            &[
+                &["Labor Category", "Hours", "Rate"],
+                &["Expert 8", "0", "$407.51"],
+            ],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        let (mut b, fb) = part(
+            "elem-00002",
+            1,
+            &[
+                &["Expert 7", "14", "$378.34"],
+                &["Base Period: Months 13-24", "", ""],
+                &["Labor Category", "Hours", "Rate"],
+                &["Expert 8", "0", "$416.07"],
+            ],
+            0,
+            &XS,
+            false,
+            false,
+        );
+        b.sub_headers = Some(vec![1]);
+        let (c, fc) = part(
+            "elem-00003",
+            2,
+            &[
+                &["Labor Category", "Hours", "Rate"],
+                &["Expert 6", "3", "$297.83"],
+            ],
+            0,
+            &XS,
+            false,
+            false,
+        );
+        let mut els = vec![a, b, c];
+        link_continued_tables(&mut els, &[fa, fb, fc]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[1].restated_headers, Some(vec![2]));
+        assert_eq!(els[2].continues.as_deref(), Some("elem-00002"));
+        assert_eq!(els[2].header_rows, Some(1));
+    }
+
+    #[test]
     fn a_header_boxed_over_its_rows_is_folded_into_them() {
         // A header filled in a box of its own, its rows ruled in another a
         // few points below, on the same columns.
