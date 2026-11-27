@@ -1459,11 +1459,19 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             em.nodes[cell_idx]
                                 .insert("doc:rowIndex".into(), json!(rows_before + r - n_header));
                             em.nodes[cell_idx].insert("doc:columnIndex".into(), json!(c));
+                            // A cell set across every column of its row, a
+                            // band or a note closing the table, is no one
+                            // column's value: the first column's header
+                            // does not name it.
+                            let whole_row = c == 0
+                                && ncols > 1
+                                && (subs.contains(&r)
+                                    || (1..ncols).all(|k| own_left[r * ncols + k]));
                             if let Some(h) = spread
                                 .heads
                                 .get(&(r, c))
                                 .or(header.get(c))
-                                .filter(|h| !h.is_empty())
+                                .filter(|h| !h.is_empty() && !whole_row)
                             {
                                 em.nodes[cell_idx]
                                     .insert("doc:columnHeader".into(), Value::String(h.clone()));
@@ -1957,10 +1965,71 @@ mod tests {
             .expect("the closing band is a cell");
         assert_eq!(notes["doc:columnIndex"], json!(0));
         assert!(notes.get("doc:sectionLabel").is_none());
+        // Across every column, it is no one column's value.
+        assert!(notes.get("doc:columnHeader").is_none());
         // A band with data under it is no cell of its own.
         assert!(!cells
             .iter()
             .any(|c| c["doc:cellValue"] == "Power Management"));
+    }
+
+    #[test]
+    fn a_note_merged_across_every_column_has_no_column_header() {
+        // A settings table closed by a note in one cell across the table,
+        // its columns' rules not drawn through it.
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            [
+                ["Time (min)", "Ions", "Gain"],
+                ["0 - 2.6", "29 - 45", "5"],
+                ["2.6 - 4", "29 - 65", "1"],
+                ["Ions 78 and 51 are read in SIM mode.", "", ""],
+            ]
+            .iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect(),
+        );
+        t.header_rows = Some(1);
+        let mut left = vec![false; 12];
+        left[10] = true;
+        left[11] = true;
+        t.merged_left = Some(left);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let note = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "Ions 78 and 51 are read in SIM mode.")
+            .expect("the note is a cell");
+        assert!(note.get("doc:columnHeader").is_none());
+        let time = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "2.6 - 4")
+            .unwrap();
+        assert_eq!(time["doc:columnHeader"], "Time (min)");
+
+        // Merged across two of three columns, a value stays the first's.
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            [
+                ["Time (min)", "Ions", "Gain"],
+                ["0 - 2.6", "29 - 45", "5"],
+                ["Not read", "", "1"],
+            ]
+            .iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect(),
+        );
+        t.header_rows = Some(1);
+        let mut left = vec![false; 9];
+        left[7] = true;
+        t.merged_left = Some(left);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let part = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "Not read")
+            .unwrap();
+        assert_eq!(part["doc:columnHeader"], "Time (min)");
     }
 
     fn row_header_of<'a>(cells: &'a [Value], value: &str) -> &'a Value {
