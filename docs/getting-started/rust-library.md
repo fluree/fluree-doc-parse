@@ -194,6 +194,12 @@ let els = fluree_doc_html::parse(&src);           // &str
 let els = fluree_doc_docx::parse(&bytes)?;        // &[u8]
 let els = fluree_doc_pptx::parse(&bytes)?;        // &[u8]
 let els = fluree_doc_xlsx::parse(&bytes)?;        // &[u8]
+let els = fluree_doc_doc::parse(&bytes)?;         // &[u8], Word 97-2003
+let els = fluree_doc_ppt::parse(&bytes)?;         // &[u8], PowerPoint 97-2003
+let els = fluree_doc_xls::parse(&bytes)?;         // &[u8], Excel 97-2003
+let els = fluree_doc_odf::parse(&bytes)?;         // &[u8], .odt, .ods or .odp
+let els = fluree_doc_rtf::parse(&bytes)?;         // &[u8], RTF
+let els = fluree_doc_csv::parse(&bytes)?;         // &[u8], delimiter sniffed
 let els = fluree_doc_transcript::parse(&bytes)?;  // &[u8], WebVTT or SubRip
 let email = fluree_doc_email::parse(&bytes)?;     // &[u8], .eml or .msg
 let els = &email.elements;                        //   plus email.info, email.attachments
@@ -201,6 +207,17 @@ let els = &email.elements;                        //   plus email.info, email.at
 
 Those elements have `bbox: None` — see [Measured vs declared
 structure](../concepts/geometry-vs-declared.md).
+
+A reader counts what it makes against one budget per document
+(`fluree_doc_model::budget`), at the costs of the largest output, DoCO,
+which writes each table cell as a node of its own. A caller converting to
+Markdown, XHTML, JSON or the text says so around the reading, and a table
+too large for DoCO still reads:
+
+```rust
+use fluree_doc_model::budget::{converting_to, Output};
+let els = converting_to(Output::Flat, || fluree_doc_xlsx::parse(&bytes))?;
+```
 
 A text file may be Markdown under another name; `fluree_doc_text::is_markdown`
 tells, as `fdoc` asks before choosing a reader. The HTML and plain-text

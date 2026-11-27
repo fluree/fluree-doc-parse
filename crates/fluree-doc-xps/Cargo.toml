@@ -1,0 +1,16 @@
+[package]
+name = "fluree-doc-xps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "XPS and OpenXPS documents as positioned glyphs and images, for the PDF layout pipeline"
+
+[dependencies]
+fluree-doc-model.workspace = true
+fluree-doc-ooxml.workspace = true
+fluree-doc-pdf.workspace = true
+quick-xml = "0.36"
+encoding_rs = "0.8"
+
+[dev-dependencies]
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }

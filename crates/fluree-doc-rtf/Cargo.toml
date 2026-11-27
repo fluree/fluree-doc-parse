@@ -1,0 +1,10 @@
+[package]
+name = "fluree-doc-rtf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rich Text Format (.rtf) to Fluree document elements (DoCO-typed)"
+
+[dependencies]
+fluree-doc-model.workspace = true
+encoding_rs = "0.8"

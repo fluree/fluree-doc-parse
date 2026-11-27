@@ -1,0 +1,24 @@
+[package]
+name = "fluree-doc-xls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Excel 97-2003 (.xls, BIFF8) and binary (.xlsb) workbooks to Fluree document elements (DoCO-typed), laid out as the XLSX reader lays out a sheet"
+
+[dependencies]
+fluree-doc-model.workspace = true
+fluree-doc-xlsx.workspace = true
+# The BIFF reader. Pinned: its parser runs on untrusted input, behind the
+# bounds `scan` checks first, and a new version is reviewed against them.
+calamine = { version = "=0.38.0", default-features = false }
+# The compound file is opened and its chains checked here before calamine,
+# whose own reader follows a sector chain without looking for a loop.
+cfb = "0.15"
+fluree-doc-ooxml.workspace = true
+# The `.xlsb` package is inflated once against bounds, then its records
+# read here.
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+cfb = "0.15"
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }

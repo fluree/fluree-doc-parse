@@ -1260,12 +1260,22 @@ pub(crate) fn render_routed(
             SourceKind::Docx => Some(docx_crops),
             SourceKind::Xlsx => Some(xlsx_crops),
             SourceKind::Email => Some(email_crops),
+            SourceKind::Xps => Some(xps_crops),
+            SourceKind::Ppt => Some(ppt_crops),
             _ => None,
         };
         if let Some(crops) = crops {
             match crops(&bytes, stem, outdir) {
                 Ok(recs) => {
-                    n_media += recs.len();
+                    // An XPS page's crops are pages and regions, as a
+                    // PDF's are; the rest are images placed in a flow.
+                    for rec in &recs {
+                        match rec["kind"].as_str() {
+                            Some("page") => n_pages += 1,
+                            Some("region") => n_crops += 1,
+                            _ => n_media += 1,
+                        }
+                    }
                     for rec in recs {
                         writeln!(manifest, "{rec}").unwrap();
                     }
@@ -1594,6 +1604,15 @@ fn docx_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json:
     )
 }
 
+/// A PowerPoint 97-2003 deck's crops ([`media_crops`]): each picture on a
+/// slide, `<stem>_m<n>.png` for the figure `figure-<slide>-<n>`, with its
+/// store entry as its part, read from the deck, opened once.
+fn ppt_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let (_, media) = fluree_doc_ppt::parse_with_media(bytes).map_err(|e| e.to_string())?;
+    let deck = fluree_doc_ppt::MediaReader::open(bytes).map_err(|e| e.to_string())?;
+    media_crops(media, &mut |part| deck.read(part), stem, outdir)
+}
+
 /// An XLSX's crops ([`media_crops`]): each picture anchored to a sheet's
 /// cells, `<stem>_m<n>.png` for the figure `figure-<sheet>-<n>`, with its
 /// package part, read from its package, opened once.
@@ -1755,6 +1774,41 @@ fn write_png(path: &Path, pixels: &mut fluree_doc_vision::Pixels) -> Result<(), 
     enc.write_header()
         .and_then(|mut w| w.write_image_data(&pixels.data))
         .map_err(|e| e.to_string())
+}
+
+/// An XPS document's crops (`common::xps_crops`): each page that is only a
+/// picture (a screen printed to XPS), the picture decoded upright at its own
+/// resolution, as `<stem>_p<N>_full.png`; and on a page of text, the part
+/// of a picture under each raster region, as `<stem>_p<N>_r<i>.png`. The
+/// names its words and readings are looked up by. Each is written as it is
+/// cut, a page's pictures at a time, and its record carries the box on the
+/// page it shows, whole picture or part: a picture rarely fills its page.
+fn xps_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let xps = fluree_doc_xps::parse(bytes).map_err(|e| e.to_string())?;
+    let plans = crate::commands::common::xps_crop_plans(&xps, None);
+    let mut out = Vec::new();
+    let mut written = Ok(());
+    let failed = crate::commands::common::xps_crops(bytes, &plans, &mut |mut c| {
+        if written.is_err() {
+            return;
+        }
+        let name = format!("{stem}_p{}_{}.png", c.page, c.crop.tag());
+        written = write_png(&outdir.join(&name), &mut c.pixels);
+        let b = c.bbox;
+        let kind = match c.crop {
+            fluree_doc_pdf::ocr::Crop::Page => "page",
+            fluree_doc_pdf::ocr::Crop::Region(_) => "region",
+        };
+        out.push(serde_json::json!({
+            "doc": stem, "page": c.page, "kind": kind, "png": name,
+            "bbox": [b.x0, b.y0, b.x1, b.y1], "reason": c.reason, "scale": 1.0,
+        }));
+    });
+    for e in failed {
+        eprintln!("warning: {stem}: {e}");
+    }
+    written?;
+    Ok(out)
 }
 
 /// A bare image's one crop: the image decoded upright, over white where it

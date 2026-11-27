@@ -834,6 +834,258 @@ fn a_page_scanned_sideways_at_300_dpi_is_read_whole() {
     assert_eq!(read.len(), 15, "{read:?}");
 }
 
+/// `lines` drawn as a grey image of text at 4 px a point, a 400 × 160 pt
+/// strip, as PNG: what a screen printed to XPS, or a screenshot pasted
+/// into a page, holds.
+fn text_png(lines: &[&str]) -> Vec<u8> {
+    let text = pdf(
+        &lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| format!("BT /F1 18 Tf 40 {} Td ({l}) Tj ET", 360 - 40 * i as i32))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+        None,
+    );
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(text)).unwrap();
+    let (mut w, mut h, mut gray) = (0, 0, Vec::new());
+    fluree_doc_pdf::escalate::for_each_crop_scaled(
+        &raw,
+        &vec![(0, None)],
+        |_, _| 4.0,
+        |c| {
+            w = c.pixels.width;
+            h = c.pixels.height;
+            let n = c.pixels.layout.channels();
+            gray = c.pixels.data.chunks_exact(n).map(|p| p[0]).collect();
+        },
+    );
+    // The top 160 pt of the 400 pt page, where the lines are.
+    let keep = (h as usize) * 160 / 400;
+    gray.truncate(keep * w as usize);
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, w, keep as u32);
+    enc.set_color(png::ColorType::Grayscale);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header().unwrap().write_image_data(&gray).unwrap();
+    out
+}
+
+/// An XPS package of `pages` (FixedPage bodies, 400 × 400 pt) and the
+/// images they name, by part.
+fn xps_of(pages: &[String], images: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    use std::io::Write;
+    let ns = "http://schemas.microsoft.com/xps/2005/06";
+    let mut parts: Vec<(String, Vec<u8>)> = vec![
+        (
+            "_rels/.rels".into(),
+            format!("<Relationships><Relationship Id=\"R0\" Type=\"{ns}/fixedrepresentation\" Target=\"/s.fdseq\"/></Relationships>").into_bytes(),
+        ),
+        (
+            "s.fdseq".into(),
+            format!("<FixedDocumentSequence xmlns=\"{ns}\"><DocumentReference Source=\"d.fdoc\"/></FixedDocumentSequence>").into_bytes(),
+        ),
+    ];
+    let refs: String = (0..pages.len())
+        .map(|i| format!("<PageContent Source=\"p{i}.fpage\"/>"))
+        .collect();
+    parts.push((
+        "d.fdoc".into(),
+        format!("<FixedDocument xmlns=\"{ns}\">{refs}</FixedDocument>").into_bytes(),
+    ));
+    for (i, body) in pages.iter().enumerate() {
+        parts.push((
+            format!("p{i}.fpage"),
+            format!("<FixedPage Width=\"533.3333\" Height=\"533.3333\" xmlns=\"{ns}\">{body}</FixedPage>")
+                .into_bytes(),
+        ));
+    }
+    for (name, data) in images {
+        parts.push((name.to_string(), data.clone()));
+    }
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    for (name, data) in &parts {
+        z.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(data).unwrap();
+    }
+    z.finish().unwrap();
+    buf.into_inner()
+}
+
+/// A picture of `part` filling `x, y, w, h` (XPS units) on a page.
+fn picture(part: &str, x: f64, y: f64, w: f64, h: f64) -> String {
+    format!(
+        "<Path Data=\"M {x},{y} L {},{y} {},{} {x},{} Z\"><Path.Fill>\
+         <ImageBrush ImageSource=\"/{part}\" Viewport=\"{x},{y},{w},{h}\" ViewportUnits=\"Absolute\" \
+         Viewbox=\"0,0,1,1\" ViewboxUnits=\"RelativeToBoundingBox\"/></Path.Fill></Path>",
+        x + w,
+        x + w,
+        y + h,
+        y + h
+    )
+}
+
+/// A run of text at `(x, y)` (XPS units), `em` high.
+fn glyphs(x: f64, y: f64, em: f64, text: &str) -> String {
+    let indices: Vec<&str> = text
+        .chars()
+        .map(|c| if c == ' ' { ",25" } else { ",55" })
+        .collect();
+    format!(
+        "<Glyphs OriginX=\"{x}\" OriginY=\"{y}\" FontRenderingEmSize=\"{em}\" UnicodeString=\"{text}\" Indices=\"{}\"/>",
+        indices.join(";")
+    )
+}
+
+/// The value of `key` on the graph's document node, as written.
+fn doc_value(doco: &serde_json::Value, key: &str) -> Option<serde_json::Value> {
+    doco["@graph"]
+        .as_array()?
+        .iter()
+        .find_map(|n| n.get(key).cloned())
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn an_xps_scan_and_a_pasted_screenshot_read_as_text_where_they_are() {
+    let models = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let dir = scratch("xps");
+    // Page 1: a screen printed to XPS, one picture and no text. Page 2: a
+    // heading and a paragraph in glyphs, a screenshot pasted under them.
+    let scan = text_png(&["Account number 4417-0093-21", "Date of birth 15-OCT-1997"]);
+    let shot = text_png(&["Invoice INV-20931 paid", "Total due 1,250.00"]);
+    let pages = [
+        picture("img/scan.png", 0.0, 0.0, 533.3333, 213.3333),
+        format!(
+            "{}{}{}",
+            glyphs(50.0, 60.0, 24.0, "Quarterly report"),
+            glyphs(
+                50.0,
+                100.0,
+                14.0,
+                "Alex Sample signed the orders on Monday."
+            ),
+            picture("img/shot.png", 50.0, 160.0, 400.0, 160.0)
+        ),
+    ];
+    let input = dir.join("printed.xps");
+    std::fs::write(
+        &input,
+        xps_of(&pages, &[("img/scan.png", scan), ("img/shot.png", shot)]),
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        let out = fdoc(&dir).args(args).arg(&input).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let m = models.to_str().unwrap();
+    let doco: serde_json::Value = serde_json::from_str(&run(&[
+        "convert", "-f", "doco", "--ocr", "oar-ocr", "--models", m,
+    ]))
+    .unwrap();
+    let text = run(&["convert", "-f", "text", "--ocr", "oar-ocr", "--models", m]);
+    for fact in [
+        "4417-0093-21",
+        "15-OCT-1997",
+        "Quarterly report",
+        "INV-20931",
+        "1,250.00",
+    ] {
+        assert!(text.contains(fact), "{fact}: {text}");
+    }
+    // Reading order: the glyphs, then the screenshot under them.
+    let at = |s: &str| text.find(s).unwrap();
+    assert!(at("4417-0093-21") < at("Quarterly report"));
+    assert!(at("Alex Sample") < at("INV-20931"));
+    assert!(doc_value(&doco, "doc:unreadPages").is_none(), "{doco}");
+    assert!(doc_value(&doco, "doc:unreadRegions").is_none(), "{doco}");
+    let readings = doc_value(&doco, "doc:ocrReadings").expect("OCR readings");
+    let readings = readings["@value"].as_array().unwrap().clone();
+    assert!(
+        readings
+            .iter()
+            .any(|r| r["pageIndex"] == 0 && r["crop"] == "full"),
+        "{readings:?}"
+    );
+    assert!(
+        readings
+            .iter()
+            .any(|r| r["pageIndex"] == 1 && r["crop"] == "r0"),
+        "{readings:?}"
+    );
+    // Each read line sits on its page where its picture is drawn.
+    let json: serde_json::Value = serde_json::from_str(&run(&[
+        "convert", "-f", "json", "--ocr", "oar-ocr", "--models", m,
+    ]))
+    .unwrap();
+    for e in json.as_array().unwrap() {
+        let t = e["text"].as_str().unwrap_or("");
+        let b: Vec<f64> = ["x0", "y0", "x1", "y1"]
+            .iter()
+            .map(|k| e["bbox"][*k].as_f64().unwrap())
+            .collect();
+        if t.contains("4417-0093-21") {
+            assert_eq!(e["page"], 0);
+            assert!(b[1] >= 0.0 && b[3] <= 160.0 + 1.0, "{e}");
+        }
+        if t.contains("INV-20931") {
+            assert_eq!(e["page"], 1);
+            // The screenshot is drawn from 120 pt down, 37.5 pt in.
+            assert!(b[1] >= 119.0 && b[0] >= 37.0, "{e}");
+            assert_eq!(e["provenance"], "ocr");
+        }
+    }
+
+    // The three steps read the same crops the same way.
+    let crops = dir.join("crops");
+    let words = dir.join("words");
+    let status = fdoc(&dir)
+        .args([
+            "dev",
+            "render-routed",
+            "--ocr-regions",
+            "--stored-resolution",
+        ])
+        .arg(&input)
+        .arg(&crops)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(crops.join("printed_p0_full.png").is_file());
+    assert!(crops.join("printed_p1_r0.png").is_file());
+    let out = fdoc(&dir)
+        .arg("ocr")
+        .arg(&crops)
+        .arg("--out")
+        .arg(&words)
+        .arg("--models")
+        .arg(&models)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let three = run(&[
+        "convert",
+        "-f",
+        "text",
+        "--ocr-words",
+        words.to_str().unwrap(),
+    ]);
+    assert_eq!(text, three);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 #[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
 fn fdoc_ocr_names_the_image_it_shrinks() {

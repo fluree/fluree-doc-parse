@@ -1,0 +1,11 @@
+[package]
+name = "fluree-doc-ppt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PowerPoint 97-2003 (.ppt) slide text to Fluree document elements (DoCO-typed)"
+
+[dependencies]
+fluree-doc-model.workspace = true
+cfb = "0.15"
+encoding_rs = "0.8"

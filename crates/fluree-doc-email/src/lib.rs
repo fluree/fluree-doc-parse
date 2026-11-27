@@ -19,7 +19,9 @@
 //! in.
 //!
 //! Attachments are not read here. Each is a document of its own for its
-//! own reader, so they come back beside the elements as bytes, described.
+//! own reader, so they come back beside the elements as bytes, described;
+//! [`parse_attachments`] hands each, down through attached messages and
+//! within bounds, to a reader the caller supplies.
 //! There is no geometry: `bbox` is `None` and `page` is 0 throughout.
 //!
 //! An image the message shows in its body (an inline image, by its
@@ -33,6 +35,7 @@
 //! their words.
 
 mod address;
+mod children;
 mod date;
 mod eml;
 mod markup;
@@ -42,6 +45,7 @@ mod signature;
 mod text;
 mod thread;
 
+pub use children::{parse_attachments, AttachmentLimits, Child, Outcome, ReadAttachment};
 use fluree_doc_model::{
     Attachment, DocumentInfo, Element, Mailbox, Media, MediaSource, Message, Notes,
 };

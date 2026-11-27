@@ -72,6 +72,24 @@ last laid the file out on, whichever that was, so its field contributes
 nothing: `Page 3 of 7` reads `Page of`. A picture in a header is its logo, and is
 left out.
 
+**Footnotes, endnotes and comments.** A citation is often only in a
+footnote, and a reviewer's question only in a comment. Each footnote and
+endnote the body cites is read after the body, in the order the body first
+cites it, its paragraphs marked `evidence` `footnote` or `endnote` and its
+first one opening with the label Word shows for it: `1`, `2`, … for
+footnotes and `i`, `ii`, … for endnotes, or the format the document sets
+(`w:footnotePr`, `w:endnotePr`). The reference mark in the body adds nothing
+to the body's text, so the body reads as it did. A note no reference cites,
+or cited only inside a tracked deletion, is not shown by Word and is not
+read; Word's separator lines are no notes. Comments are read only when
+asked for (`--comments`; `fluree_doc_docx::Options::comments` in a
+library), since Word does not print them, and come last, after the footer:
+in the order the body anchors them,
+then any anchored elsewhere, each `evidence` `comment` and opening with its
+author (`Sam Example: Source?`). A heading inside a note is read as a
+paragraph, and a picture in one is left out. Footnote reference marks set
+as custom symbols, and comment replies' threading, are not read.
+
 **Line breaks.** A line break (Shift+Enter) ends a line, and the line stays
 one: `4.1 Equipment` and `4.2 Materials` are two lines of one paragraph. Two in a row leave a blank line, which parts the
 paragraph as an empty paragraph would, so a numbered heading, a blank line and
@@ -195,6 +213,77 @@ boundaries exist only once something lays it out.
 
 Returns `DocxError` for a malformed or non-archive file.
 
+### Word 97-2003 (`.doc`)
+
+```bash
+fdoc convert old-memo.doc -f doco
+```
+
+A `.doc` (or `.dot`) is read for its text, through its piece table: the
+`WordDocument` stream holds the text in pieces, anywhere and in any order
+after a fast save, one byte a character (Windows-1252) or two (UTF-16), and
+the piece table says which run of the document each holds. What is read:
+
+- The main text, as paragraphs at Word's paragraph marks, and at the
+  section marks ending its sections (a section break ends a paragraph, as
+  in Word); a line break keeps its line, and a page break inside a
+  paragraph parts lines.
+- **Tables**, by each paragraph's own properties (in a table; the end of a
+  row), as `doco:Table`s of their cells, a cell's paragraphs joined.
+- A field shows its result (`PAGE` its last page number), not its code;
+  a footnote reference in the body adds nothing to it.
+- Text a tracked change deleted, and hidden text, are left out, as Word
+  shows the document (by the characters' own properties; text a character
+  style hides is still read). A character past the first plane, an emoji,
+  is read as itself.
+- The **title and author** the summary information declares go on the
+  document node.
+- **Footnotes, endnotes and comments** after the body, marked by `evidence`
+  `footnote`, `endnote` and `comment` as in a DOCX; a note opens with its
+  number (`1`, `2`, … and `i`, `ii`, … for endnotes). `fdoc convert` keeps
+  the comments only with `--comments`, as a DOCX's.
+- **Headers and footers**, as a DOCX's: those Word shows, each section's
+  first page's where the section has a title page, its odd pages' (or only
+  one), and its even pages' where the document sets them apart, each story
+  read once and a line two of them share kept once. The headers come before
+  the body and the footers after the notes, their `evidence` `header` and
+  `footer`. The notes' separators are not read.
+- **Text boxes**, the body's and the headers', each after the paragraph
+  holding the shape it is drawn in, with that paragraph's `evidence`; a box
+  whose shape is not found comes after the body (or the headers). A box
+  Word keeps for reuse after it was deleted is not read. A DOCX's text box
+  is read in its anchor paragraph, its first line run on to the anchor
+  paragraph's text; here the box's paragraphs stay its own.
+
+What this round leaves out, and says so here rather than guessing: styles
+(so no heading, title or list is told apart from a paragraph, and list
+numbers Word computes are absent), comment authors, a table's header row
+(`header_rows` is left undetected), merged cells, pictures, and the summary
+information's dates. Headers, footers or text boxes whose list in the table
+stream does not read (it is missing, lies outside the stream, or its
+positions go backwards) are left out and named in a warning
+(`not read: headers and footers, text boxes`;
+`fluree_doc_doc::parse_with_info` lists them in `left_out`), so what they
+say is not lost without a word. Word 95 and earlier and encrypted files
+are refused. Provenance is `doc`, and so is the body's evidence.
+
+A file is recognised as a Word document by its content, a compound file
+holding a `WordDocument` stream, whatever its name. As for any compound
+file, the container is opened by the `cfb` crate, which refuses a sector
+chain that loops or runs past the file; the `WordDocument` stream is read
+to at most 256 MiB and the table stream to 64 MiB, and at most a million
+pieces and 64 million characters, a piece table whose positions go
+backwards (pieces that overlap, reading the same characters again) failing
+as malformed. Each page of paragraph properties is read once however many
+times the bin table names it, at most about four million runs of them, and
+a paragraph finds its own by a binary search, as a run of characters (a
+header's story, a text box's) finds its first piece. The header stories and
+the text boxes are read only where their positions never go backwards, so
+none is read twice, each held to its story; the sections' properties are
+looked through once each, at most 16 MiB of them, past which the headers are
+left out and said to be. Returns `DocError`
+(`fluree_doc_doc::parse`) otherwise.
+
 ## PPTX
 
 ```bash
@@ -229,6 +318,74 @@ level next to the plot is read.
 
 Returns `PptxError` for a malformed or non-archive file.
 
+### PowerPoint 97-2003 (`.ppt`)
+
+```bash
+fdoc convert old-deck.ppt -f doco
+```
+
+A `.ppt` (or `.pps`, `.pot`) is read for its slides' text. Its `PowerPoint
+Document` stream is a tree of records saved edit after edit: the `Current
+User` stream names the last edit, each edit the one before it and a persist
+directory of where each object is, the newest saying where an object is
+now. Through it, the slide list gives the slides in order, each a page; each
+slide's shapes hold its text in text atoms (UTF-16 or one byte a
+character). A title placeholder's text, by the shape's placeholder or by
+the text's own header, is a level-1 heading; every other text is a
+paragraph a paragraph mark, a line break kept as a line. A paragraph whose
+properties (`StyleTextPropAtom`) give it a bullet or an indent level past the
+first is a list item, as a PPTX paragraph is; where they say nothing, a body
+placeholder's paragraph, which the master bullets, is one. Its indent
+level is its `depth`, so a point under a point nests inside it. PowerPoint
+keeps a placeholder's text (the title, the body) in the slide list, the
+placeholder naming it there (`OutlineTextRefAtom`): it is read where the
+placeholder stands, among the slide's pictures, tables and text boxes. A
+slide whose shapes show nothing and name nothing, as an older writer keeps
+it, is read from the slide list. A slide's **speaker notes** (the
+notes slide its own atom names) follow its content on its page, as
+paragraphs whose `evidence` is `notes`: what the presenter said, kept apart
+from what the audience saw.
+
+**Tables** are drawn in a `.ppt` as a group of shapes whose first shape says
+it is a table: each other shape is a cell, placed in the group, holding its
+text. The grid is rebuilt from the cells' edges, a cell spanning several
+columns or rows making the cells it covers continuations (`merged_left`,
+`merged_down`); border lines are no cells. PowerPoint declares no header
+row, so `header_rows` is left undetected. A table of more than 10,000 cells,
+or whose grid would pass a million, or whose cells overlap to cover more
+than a million, is read as its cells' text; which it is is decided from
+the cells' positions before any text is read, so a group is read once.
+
+**Pictures** on a slide are each a `doco:Figure` where they stand, its text
+the picture's alternative text where it has one, numbered across the deck
+(`figure-<slide>-<n>`). Their bytes are in the deck's picture store (the
+`Pictures` stream, or the store entry itself), and are read by the rules a
+[DOCX picture](#docx) is read by: OCR (`--ocr`, `--ocr-words`
+`<stem>_m<n>.json`), a reading supplied (`--tier-results`), or the
+configured model, the text placed after the figure; `render-routed` writes
+`<stem>_m<n>.png`; one nothing read is listed in `doc:unreadImages`. A
+drawing (EMF, WMF, PICT) is listed but not read, as in a DOCX. In a
+library, `fluree_doc_ppt::parse_with_media`, and `MediaReader` to read
+their bytes, the deck opened once for all of them (`read_media` opens it
+for one).
+
+Not read: the masters' placeholder prompts, charts, embedded objects and summary information.
+An encrypted file is refused. A file is recognised by its content, a
+compound file holding a `PowerPoint Document` stream, whatever its name and
+on stdin. The container is opened by the `cfb` crate, which refuses a
+looping sector chain; the stream is read to at most 256 MiB, records nest
+at most 64 deep, at most 4,096 edits are followed (each once, so an edit
+chain that loops ends), each persist directory read once and about four
+million of their entries in all, and 10,000 slides read. A slide listed
+twice, or a notes slide named by two slides, is read once; the text read,
+however many slides name one place in the stream, is at most 256 MiB.
+Each text a placeholder names is a copy, counted each time against the
+document's budget, and each record a slide's walk visits is a step of its
+work, so slides laid inside each other's records are not walked without
+end.
+Provenance and evidence are `ppt`. Returns `PptError`
+(`fluree_doc_ppt::parse`) otherwise.
+
 ## XLSX
 
 ```bash
@@ -260,7 +417,19 @@ flattened out of it. So this reader measures after all, but only shape.
 - **Merges** read as Excel shows them: a merged range displays its top-left
   cell and hides the rest, stale values included. The hidden cells become
   `merged_left` / `merged_down` continuations, and a merged cell across the
-  full width inside a table is a `sub_headers` band.
+  full width inside a table is a `sub_headers` band. A merge is laid out
+  only as far as the sheet's cells reach, and a sheet's merges cover at most
+  about a million cells, those past it read unmerged, so a range declared
+  over the whole grid costs no more than the cells under it. A block whose
+  grid would pass about four million cells in all (cells set down a
+  diagonal, touching each other, span the square of their number) is read
+  as its cells' text, a paragraph each.
+- **Size.** A workbook's cells and their text are counted against the
+  memory one document may take, at what the output makes of each: a cell
+  that holds text is a node of its own in DoCO (4 KiB), a cell of its row in
+  Markdown, XHTML, JSON and the text (512 bytes). So a sheet of 50,000 rows
+  by 12 columns converts to Markdown, and is refused as DoCO. The same holds
+  for `.xls`, `.xlsb` and `.ods`, laid out alike.
 - **Values are the cached ones.** A formula's last computed value is what
   the file holds and what Excel shows; nothing is recalculated.
 - **A cell's text is what Excel shows.** A number is rendered through its
@@ -310,6 +479,64 @@ elements after it numbered one further, and the graph lists it in
 `parse_with_media` and `read_media` list and read the pictures as DOCX's do.
 
 Returns `XlsxError` for a malformed or non-archive file.
+
+### Excel 97-2003 (`.xls`)
+
+```bash
+fdoc convert old-book.xls -f doco
+```
+
+A BIFF8 workbook (`.xls`, `.xlt`) is read by
+[calamine](https://crates.io/crates/calamine) and laid out by the same code
+as an XLSX one: each sheet a page opened by its name, blocks of cells tables
+with their titles and notes, merges as continuations, rows frozen by a pane
+a table's header, a bold first row a header. One thing reads differently:
+calamine types a number as a date by its format and gives no other format,
+so a number reads as Excel's General format shows it (`0.125`, not `12.5%`;
+`1234.5`, not `1,234.50`), while a date reads as an ISO date. What each cell
+stores rides beside it typed (`datums`, `doc:cellDatum`) as an XLSX cell's
+does, and the workbook's summary information gives its title, author and
+dates. A file is recognised as a workbook by its content, a compound file
+holding a `Workbook` stream, whatever its name. Provenance and evidence are
+`xls`. Pictures are not read.
+
+calamine is not given the file. It reads a compound file with a reader of
+its own, which follows a looping sector chain; it reserves what a sheet's
+`DIMENSIONS` record declares, lays each sheet out as a grid from its first
+used cell to its last, copies a shared string into every cell naming it,
+and indexes record data without checking its length. So the file is read
+first: its compound file opened by the `cfb` crate, which refuses a sector
+chain that loops or runs past the file; its workbook stream at most
+256 MiB; and its records walked as calamine would walk them, each one
+calamine reads checked against what calamine indexes in it. A workbook
+whose cells, sheets' grids or merged ranges pass about four million in all
+(a sheet named twice counting twice), whose cells would copy more than
+64 million characters of text, which lists more than 65,536 sheet records,
+or whose sheets' walks cover more than twice the stream (sheets laid inside
+each other, each walked to the end), fails as too large; one whose records are
+cut short, or whose sheet offsets point at no sheet, fails as malformed.
+calamine then reads a compound file written for it, holding a workbook
+stream of only the records it needs, each sheet once and its formulas
+emptied to their cached values, and the summary information where it is
+under 32 KiB.
+
+### Excel binary workbooks (`.xlsb`)
+
+A `.xlsb` is a workbook saved as binary records in a zip. Its records are
+read here, each checked against its length, rather than by calamine, which
+indexes them unchecked; a sheet's cells are laid out the same way as an
+`.xls`'s, and provenance and evidence are `xlsb`. Numbers read as General,
+dates as ISO dates, as for `.xls`; bold cells (a font of weight 700 or
+more) and merged ranges are read as an `.xls`'s are, frozen rows are not. Every part is first inflated to nowhere against 64 MiB each and
+256 MiB in all (and at most 10,000 parts); at most about four million cells
+are read, and a shared string's text, copied for each cell that names it,
+is counted each time against 256 MiB. A file is
+recognised by its content, a zip holding `xl/workbook.bin`, whatever its
+name and on stdin. `.ods` is read by its own reader
+([OpenDocument](opendocument.md)).
+
+Returns `XlsError` (from `fluree_doc_xls::parse` or `parse_xlsb`) for a file
+that is not a workbook, is malformed, or is past a bound.
 
 ## HTML
 

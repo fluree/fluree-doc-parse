@@ -65,24 +65,54 @@ pub fn remove_faux_bold(glyphs: &mut Vec<Glyph>, window: usize) -> usize {
 /// `RReeccoorrdd tthhee`. Two identical glyphs at one position print as one, so the
 /// second is dropped wherever it comes. Found by baseline, the copies of one
 /// line are all that is compared.
+///
+/// Within a baseline, the glyphs of one text are kept ordered by where they
+/// stand, and a glyph is compared with the [`REDRAWN_CANDIDATES`] nearest it
+/// on each side, no more: a file that stacks a million `A`s on one baseline
+/// (a font a millionth of a point high) would otherwise have each compared
+/// with all those before it. A copy is drawn where the first stands, so it is
+/// the nearest.
 fn remove_redrawn(glyphs: &mut Vec<Glyph>) -> usize {
+    remove_redrawn_by(glyphs, is_overprint)
+}
+
+/// [`remove_redrawn`], `overprints` saying whether a glyph is a copy of one
+/// before it.
+fn remove_redrawn_by(
+    glyphs: &mut Vec<Glyph>,
+    mut overprints: impl FnMut(&Glyph, &Glyph) -> bool,
+) -> usize {
+    use std::collections::BTreeMap;
     let band = |y: f64| (y / 2.0).floor() as i64;
-    let mut seen: rustc_hash::FxHashMap<(&str, i64), Vec<usize>> = Default::default();
+    // Each text's glyphs on each band, by where they start.
+    let mut seen: rustc_hash::FxHashMap<(&str, i64), BTreeMap<OrderedX, Vec<usize>>> =
+        Default::default();
     let mut keep = vec![true; glyphs.len()];
     for i in 0..glyphs.len() {
         let g = &glyphs[i];
-        if g.bbox.is_none() || g.text.trim().is_empty() {
+        let Some(bbox) = g.bbox.filter(|_| !g.text.trim().is_empty()) else {
             continue;
-        }
+        };
         let b = band(g.origin.1);
+        let x = OrderedX::of(bbox.x0);
         let redrawn = (b - 1..=b + 1).any(|k| {
-            seen.get(&(g.text.as_str(), k))
-                .is_some_and(|js| js.iter().any(|&j| is_overprint(&glyphs[j], g)))
+            seen.get(&(g.text.as_str(), k)).is_some_and(|row| {
+                let before = row.range(..=x).rev().flat_map(|(_, js)| js.iter().rev());
+                let after = row.range(x..).flat_map(|(_, js)| js.iter());
+                before
+                    .take(REDRAWN_CANDIDATES)
+                    .chain(after.take(REDRAWN_CANDIDATES))
+                    .any(|&j| overprints(&glyphs[j], g))
+            })
         });
         if redrawn {
             keep[i] = false;
         } else {
-            seen.entry((g.text.as_str(), b)).or_default().push(i);
+            seen.entry((g.text.as_str(), b))
+                .or_default()
+                .entry(x)
+                .or_default()
+                .push(i);
         }
     }
     let removed = keep.iter().filter(|k| !**k).count();
@@ -91,6 +121,22 @@ fn remove_redrawn(glyphs: &mut Vec<Glyph>) -> usize {
         glyphs.retain(|_| *it.next().unwrap());
     }
     removed
+}
+
+/// How many glyphs of the same text on each side of a glyph, nearest
+/// first, [`remove_redrawn`] compares it with.
+const REDRAWN_CANDIDATES: usize = 8;
+
+/// A coordinate ordered as `f64::total_cmp` orders it, to key a map by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct OrderedX(i64);
+
+impl OrderedX {
+    fn of(x: f64) -> Self {
+        let bits = x.to_bits() as i64;
+        // Negative numbers' bits order backwards: flip all but the sign.
+        OrderedX(bits ^ (((bits >> 63) as u64) >> 1) as i64)
+    }
 }
 
 /// Drop underscores struck over text: how a line printer underlines.
@@ -305,6 +351,28 @@ mod tests {
         // not a whole one.
         let mut v = vec![narrow("l", 0.0, 0), narrow("l", 0.12, 1)];
         assert_eq!(remove_faux_bold(&mut v, 8), 1);
+    }
+
+    #[test]
+    fn glyphs_stacked_on_one_baseline_are_compared_with_their_neighbours_only() {
+        // Forty thousand `A`s a thousandth of a point apart, none a copy of
+        // another: each is compared with a few of its neighbours, not with
+        // every one before it.
+        let n = 40_000;
+        let mut v: Vec<Glyph> = (0..n).map(|i| narrow("A", i as f64 * 1e-3, i)).collect();
+        let mut compared = 0usize;
+        let removed = remove_redrawn_by(&mut v, |_, _| {
+            compared += 1;
+            false
+        });
+        assert_eq!(removed, 0);
+        assert!(compared <= 2 * REDRAWN_CANDIDATES * n, "{compared}");
+        // Copies still found among them: each drawn again where it stood.
+        let mut v: Vec<Glyph> = (0..n)
+            .chain(0..n)
+            .map(|i| narrow("A", i as f64 * 10.0, i))
+            .collect();
+        assert_eq!(remove_redrawn(&mut v), n);
     }
 
     #[test]

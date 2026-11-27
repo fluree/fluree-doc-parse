@@ -14,9 +14,29 @@ pub(crate) enum SourceKind {
     Docx,
     Pptx,
     Xlsx,
+    /// A delimited file: CSV, or TSV by its extension.
+    Csv,
+    /// An Excel 97-2003 workbook (BIFF8).
+    Xls,
+    /// An XPS or OpenXPS document.
+    Xps,
+    /// A Word 97-2003 document.
+    Doc,
+    /// An OpenDocument text, spreadsheet or presentation.
+    Odf,
+    /// An Excel binary workbook.
+    Xlsb,
+    /// A PowerPoint 97-2003 presentation.
+    Ppt,
+    /// A Rich Text Format document.
+    Rtf,
     Transcript,
     Email,
     Image,
+    /// A format recognised, by its extension or its content, that no reader
+    /// reads yet ([`unsupported`]): refused by name rather than handed to the
+    /// PDF reader, whose `parse: Invalid` would read as a corrupt PDF.
+    Unsupported,
 }
 
 /// Every extension `convert` reads, by the reader it goes to. Conversion
@@ -35,30 +55,260 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
         &["pptx", "pptm", "potx", "potm", "ppsx", "ppsm"],
     ),
     (SourceKind::Xlsx, &["xlsx", "xlsm", "xltx", "xltm"]),
+    (SourceKind::Csv, &["csv", "tsv"]),
+    (SourceKind::Xls, &["xls", "xlt"]),
+    (SourceKind::Xps, &["xps", "oxps"]),
+    (SourceKind::Doc, &["doc", "dot"]),
+    (SourceKind::Odf, &["odt", "ott", "ods", "ots", "odp", "otp"]),
+    (SourceKind::Xlsb, &["xlsb"]),
+    (SourceKind::Ppt, &["ppt", "pps", "pot"]),
+    (SourceKind::Rtf, &["rtf"]),
     (SourceKind::Transcript, &["vtt", "srt"]),
     (SourceKind::Email, &["eml", "msg"]),
     (SourceKind::Image, fluree_doc_pdf::image::EXTENSIONS),
 ];
 
-/// The reader a file's extension names, if it names one.
+/// Document formats with no reader yet, by extension, with what each is.
+///
+/// Listed so that a file of one is refused by name, and counted as such in
+/// a batch, rather than read as a PDF and failing as a corrupt one. A format
+/// leaves this list when its reader lands.
+const UNSUPPORTED: &[(&str, &str)] = &[
+    ("wpd", "WordPerfect document"),
+    ("pages", "Apple Pages document"),
+    ("numbers", "Apple Numbers spreadsheet"),
+    ("key", "Apple Keynote presentation"),
+];
+
+/// The reader a file's extension names, if it names one; [`SourceKind::Unsupported`]
+/// for a format no reader reads yet.
 pub(crate) fn source_kind(path: &Path) -> Option<SourceKind> {
     let ext = path.extension()?.to_str()?;
+    if UNSUPPORTED.iter().any(|(e, _)| ext.eq_ignore_ascii_case(e)) {
+        return Some(SourceKind::Unsupported);
+    }
     SOURCE_EXTENSIONS
         .iter()
         .find(|(_, exts)| exts.iter().any(|e| ext.eq_ignore_ascii_case(e)))
         .map(|(kind, _)| *kind)
 }
 
-/// The reader a file goes to, by its content where that says, else by its
-/// extension: what `convert` reads it as, and `render-routed` crops it as.
+/// An OLE compound file's signature: Word, Excel and PowerPoint 97-2003
+/// files, and Outlook's `.msg`, all start with it.
+const COMPOUND_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+/// Why `convert` refuses a file it has no reader for, naming the format: by
+/// its extension where that names one ([`UNSUPPORTED`]), else by its content.
+/// `None` for a file some reader takes.
 ///
-/// A transcript and an email by their content first: `.vtt` has no
-/// registered type on most systems, and a saved message is `.eml`, `.mht`,
-/// `.txt` or nothing at all, so either arrives renamed as often as not. Then
-/// the formats an extension names (Markdown, plain text, HTML and the Office
-/// packages); then an image by its first bytes; anything else is read as a
-/// PDF.
+/// Only called for an input [`input_kind`] found unsupported, or for one read
+/// as a PDF: a compound file that is not an Outlook message (the e-mail
+/// reader takes those first) is an Office 97-2003 file, never a PDF.
+pub(crate) fn unsupported(path: Option<&Path>, data: &[u8]) -> Option<String> {
+    let ext = path
+        .and_then(|p| p.extension())
+        .and_then(|e| e.to_str())
+        .and_then(|ext| {
+            UNSUPPORTED
+                .iter()
+                .find(|(e, _)| ext.eq_ignore_ascii_case(e))
+        });
+    match ext {
+        Some((e, what)) => Some(format!(
+            "unsupported format (.{e}, {what}): no reader for it yet"
+        )),
+        None if is_spreadsheet_xml(data) => Some(
+            "unsupported format (an Excel 2003 XML spreadsheet): no reader for it yet; save it \
+             as .xlsx"
+                .into(),
+        ),
+        None if data.starts_with(&COMPOUND_MAGIC) => Some(
+            "unsupported format (an OLE compound file that is no Word, Excel or PowerPoint 97-2003 \
+             document nor Outlook message): no reader for it yet"
+                .into(),
+        ),
+        None => None,
+    }
+}
+
+/// Whether `data` is a PDF whose header may come after a prefix: the header
+/// within the first kilobyte, where a reader finds it, and what a PDF holds
+/// that text quoting a header does not, either the comment line of binary
+/// bytes a writer puts after the header (`%âãÏÓ`) or the end-of-file marker
+/// within the last kilobyte. A header alone is no PDF: a list of file
+/// signatures, one a line, holds one.
+///
+/// Where the file is named as a table (`table`), a list of signatures may
+/// hold the marker too, so the marker counts only beside a NUL, which a
+/// PDF's compressed streams hold and text does not: the CSV reader refuses
+/// it.
+fn is_pdf(data: &[u8], table: bool) -> bool {
+    let Some(at) = data[..data.len().min(1024)]
+        .windows(5)
+        .position(|w| w == b"%PDF-")
+    else {
+        return false;
+    };
+    let binary_line = data[at..]
+        .split(|&b| b == b'\n' || b == b'\r')
+        .filter(|l| !l.is_empty())
+        .nth(1)
+        .is_some_and(|l| {
+            let l = &l[..l.len().min(64)];
+            l.starts_with(b"%") && l.iter().filter(|&&b| b >= 0x80).count() >= 4
+        });
+    let tail = &data[data.len().saturating_sub(1024)..];
+    binary_line || (tail.windows(5).any(|w| w == b"%%EOF") && (!table || data.contains(&0)))
+}
+
+/// The reader a file's signature names: the bytes it opens with, which no
+/// file of another format shares, so they win over any name. A PDF; an
+/// image; an OLE compound file by the stream that makes it an Outlook
+/// message, an Excel, Word or PowerPoint 97-2003 file; a zip by the part
+/// that makes it an XPS document, an OpenDocument file, an Excel binary
+/// workbook or an Office package; RTF by `{\rtf`. `None` for anything
+/// else, a compound file or a zip none of them included.
+fn by_signature(data: &[u8]) -> Option<SourceKind> {
+    if data.starts_with(b"%PDF-") {
+        return Some(SourceKind::Pdf);
+    }
+    if fluree_doc_pdf::image::Format::sniff(data).is_some() {
+        return Some(SourceKind::Image);
+    }
+    if data.starts_with(&COMPOUND_MAGIC) {
+        return if fluree_doc_email::Format::sniff(data).is_some() {
+            Some(SourceKind::Email)
+        } else if fluree_doc_xls::is_xls(data) {
+            Some(SourceKind::Xls)
+        } else if fluree_doc_doc::is_doc(data) {
+            Some(SourceKind::Doc)
+        } else if fluree_doc_ppt::is_ppt(data) {
+            Some(SourceKind::Ppt)
+        } else {
+            None
+        };
+    }
+    if data.starts_with(b"PK") {
+        if fluree_doc_odf::Format::sniff(data).is_some() {
+            return Some(SourceKind::Odf);
+        }
+        if fluree_doc_xls::is_xlsb(data) {
+            return Some(SourceKind::Xlsb);
+        }
+        return by_content(data, false);
+    }
+    fluree_doc_rtf::is_rtf(data).then_some(SourceKind::Rtf)
+}
+
+/// The reader a file's content names, where its name does not: an XPS
+/// document, or an Office package by the part its root relationship names
+/// as the document (`word/`, `ppt/`, `xl/`); a web page; and, where
+/// `delimited` (a file named as an Office 97-2003 one, which spreadsheet
+/// exports are, or named as nothing), comma-, semicolon- or tab-separated
+/// text.
+fn by_content(data: &[u8], delimited: bool) -> Option<SourceKind> {
+    // Excel 2003's XML workbook holds `<Table>`, which is no web page.
+    if is_spreadsheet_xml(data) {
+        return Some(SourceKind::Unsupported);
+    }
+    if data.starts_with(b"PK") {
+        if fluree_doc_xps::is_xps(data) {
+            return Some(SourceKind::Xps);
+        }
+        let main = fluree_doc_ooxml::Package::open(data)
+            .ok()?
+            .root("officeDocument")?;
+        return match main.split('/').next()? {
+            "word" => Some(SourceKind::Docx),
+            "ppt" => Some(SourceKind::Pptx),
+            "xl" => Some(SourceKind::Xlsx),
+            _ => None,
+        };
+    }
+    if is_html(data) {
+        return Some(SourceKind::Html);
+    }
+    (delimited && is_delimited(data)).then_some(SourceKind::Csv)
+}
+
+/// Whether `data` is an Excel 2003 XML workbook (SpreadsheetML), by the
+/// processing instruction Excel writes or the namespace of its root, within
+/// its first kilobyte. No reader reads one yet.
+fn is_spreadsheet_xml(data: &[u8]) -> bool {
+    let head = data[..data.len().min(1024)].to_ascii_lowercase();
+    let has = |s: &[u8]| head.windows(s.len()).any(|w| w == s);
+    has(b"progid=\"excel.sheet\"")
+        || (has(b"<workbook") && has(b"urn:schemas-microsoft-com:office:spreadsheet"))
+}
+
+/// Whether `data` opens as a web page: past a byte-order mark and
+/// whitespace, a doctype or an `html` element, or markup holding one, or a
+/// table, within its first kilobyte.
+fn is_html(data: &[u8]) -> bool {
+    let data = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
+    let start = data
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(data.len());
+    let head = data[start..data.len().min(start + 1024)].to_ascii_lowercase();
+    let has = |s: &[u8]| head.windows(s.len()).any(|w| w == s);
+    head.starts_with(b"<!doctype html")
+        || head.starts_with(b"<html")
+        || (head.starts_with(b"<") && (has(b"<html") || has(b"<table")))
+}
+
+/// Whether `data` reads as delimited text: no NUL in the text of its first
+/// 64 KiB, decoded as the CSV reader decodes it (UTF-16 is half zero bytes,
+/// and no NUL), and its first lines (two at least, twenty at most) each
+/// separated into the same number of fields, more than one, by the
+/// delimiter the CSV reader finds.
+fn is_delimited(data: &[u8]) -> bool {
+    let head = &data[..data.len().min(64 << 10)];
+    let text = fluree_doc_csv::decode(head);
+    if text.contains('\0') {
+        return false;
+    }
+    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    // The last line of a file cut at 64 KiB may be cut too.
+    if head.len() < data.len() {
+        lines.pop();
+    }
+    lines.truncate(20);
+    if lines.len() < 2 {
+        return false;
+    }
+    let d = fluree_doc_csv::sniff(&lines.join("\n"));
+    let fields = |l: &str| l.matches(d).count();
+    let first = fields(lines[0]);
+    first > 0 && lines.iter().all(|l| fields(l) == first)
+}
+
+/// The reader a file goes to, by its content first, its extension only
+/// where the content cannot tell: what `convert` reads it as, and
+/// `render-routed` crops it as.
+///
+/// A file's signature first ([`by_signature`]): a PDF named `.doc`, a
+/// screenshot named `.csv` or a workbook named `.csv` is what it holds, and
+/// its name is a mistake. Then text formats by their content: a transcript
+/// and an email, since `.vtt` has no registered type on most systems and a
+/// saved message is `.eml`, `.mht`, `.txt` or nothing at all, so either
+/// arrives renamed as often as not; a PDF by a header further in, within
+/// the first kilobyte, with a line of binary bytes after it or an
+/// end-of-file marker (beside a NUL, for a file named as a table), unless
+/// the file is named as text or reads as a web page or a table; and, for a file named as an Office 97-2003 one or named
+/// as nothing, a web page or (named as an Office 97-2003 one, which
+/// spreadsheet exports are) delimited text, an Excel 2003 XML workbook
+/// being neither. Then the
+/// formats an extension names, each to its own reader, which says what is
+/// wrong with a file that is not what its name says: never to the PDF
+/// reader, whose `parse: Invalid` would read as a corrupt PDF. A format no
+/// reader reads yet, by its extension or as a compound file that is not a
+/// message, is [`SourceKind::Unsupported`]; anything else is read as a PDF,
+/// whose header may come anywhere in its first kilobyte.
 pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
+    if let Some(k) = by_signature(data) {
+        return k;
+    }
     let kind = source_kind(path);
     if fluree_doc_transcript::Format::sniff(data).is_some() || kind == Some(SourceKind::Transcript)
     {
@@ -67,18 +317,357 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
     if fluree_doc_email::Format::sniff(data).is_some() || kind == Some(SourceKind::Email) {
         return SourceKind::Email;
     }
+    // A PDF whose header comes a few bytes in (a mail gateway's or a
+    // download's prefix) has no signature, but the PDF reader finds the
+    // header within the first kilobyte, so it is one whatever its name, when
+    // it holds what a PDF does past its header ([`is_pdf`]): except a text
+    // format's, and text that reads as a table or a page, which may well
+    // quote `%PDF-`; a file named as a table needs more than the end-of-file
+    // marker, since a one-column list of signatures is not delimited.
+    if is_pdf(data, kind == Some(SourceKind::Csv))
+        && !matches!(kind, Some(SourceKind::Markdown | SourceKind::Html))
+        && !is_html(data)
+        && !is_delimited(data)
+    {
+        return SourceKind::Pdf;
+    }
+    let office_97 = matches!(
+        kind,
+        Some(SourceKind::Xls | SourceKind::Doc | SourceKind::Ppt)
+    );
+    // Delimited text is told by its content where the name is an Office
+    // 97-2003 one, which spreadsheet exports are, or says nothing (stdin, a
+    // file with no extension): read as a PDF, it would fail as a corrupt
+    // one.
+    if (office_97 || kind.is_none()) && !data.starts_with(&COMPOUND_MAGIC) {
+        if let Some(k) = by_content(data, true) {
+            return k;
+        }
+    }
     match kind {
-        Some(
-            k @ (SourceKind::Markdown
-            | SourceKind::Text
-            | SourceKind::Html
-            | SourceKind::Docx
-            | SourceKind::Pptx
-            | SourceKind::Xlsx),
-        ) => k,
-        _ if fluree_doc_pdf::image::Format::sniff(data).is_some() => SourceKind::Image,
+        Some(SourceKind::Pdf | SourceKind::Unsupported) | None => {}
+        Some(k) => return k,
+    }
+    match kind {
+        _ if is_pdf(data, false) => SourceKind::Pdf,
+        Some(SourceKind::Unsupported) => SourceKind::Unsupported,
+        _ if data.starts_with(&COMPOUND_MAGIC) => SourceKind::Unsupported,
         _ => SourceKind::Pdf,
     }
+}
+
+/// What an XPS page is read through by OCR: the picture of a page that is
+/// only a picture, whole, or the part of a picture under each raster region
+/// the router lists on a page of text, its pixels decoded upright, and the
+/// box on the page they show. The crop is named as a PDF's is (`p<N>_full`,
+/// `p<N>_r<i>`), so its words and its readings go by the same names.
+pub(crate) struct XpsCrop {
+    pub page: usize,
+    pub crop: fluree_doc_pdf::ocr::Crop,
+    pub pixels: fluree_doc_vision::Pixels,
+    pub bbox: fluree_doc_pdf::geom::BBox,
+    /// The manifest's reason: why the router sends it to a reader.
+    pub reason: &'static str,
+}
+
+/// A crop of an XPS page before its picture is decoded: the picture, and
+/// the region of it the crop shows (`None`: all of it).
+pub(crate) struct XpsCropPlan<'x> {
+    pub page: usize,
+    pub crop: fluree_doc_pdf::ocr::Crop,
+    pub image: &'x fluree_doc_xps::PageImage,
+    region: Option<fluree_doc_pdf::geom::BBox>,
+    pub reason: &'static str,
+}
+
+impl XpsCropPlan<'_> {
+    /// The pixels of its picture, `width` × `height` upright, the crop
+    /// shows (`[x0, y0, x1, y1)`), and the box on the page they show.
+    pub(crate) fn rect(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Option<([u32; 4], fluree_doc_pdf::geom::BBox)> {
+        match &self.region {
+            None => (width > 0 && height > 0).then_some(([0, 0, width, height], self.image.bbox)),
+            Some(region) => crop_rect(width, height, &self.image.bbox, region),
+        }
+    }
+
+    /// The box on the page the crop shows, by its picture's size alone:
+    /// what words read from its pixels are placed by.
+    pub(crate) fn bbox(&self, data: &[u8]) -> Result<fluree_doc_pdf::geom::BBox, String> {
+        let bytes = fluree_doc_xps::read_image(data, &self.image.part)?;
+        let (w, h) = fluree_doc_image::upright_size(&bytes)?;
+        self.rect(w, h)
+            .map(|(_, b)| b)
+            .ok_or_else(|| format!("{}: shows nothing of its picture", self.image.part))
+    }
+}
+
+/// The crops of an XPS document's pages (all, or those `pages` keeps), in
+/// page order, before any picture is decoded.
+pub(crate) fn xps_crop_plans<'x>(
+    xps: &'x fluree_doc_xps::Xps,
+    pages: Option<&[usize]>,
+) -> Vec<XpsCropPlan<'x>> {
+    use fluree_doc_pdf::escalate::CropReason;
+    use fluree_doc_pdf::ocr::Crop;
+    use fluree_doc_pdf::route::{decide, ocr_regions, Route};
+    let mut out = Vec::new();
+    for p in &xps.doc.pages {
+        if pages.is_some_and(|keep| !keep.contains(&p.index)) {
+            continue;
+        }
+        match decide(p).0 {
+            Route::Vlm(reason) => {
+                if let Some(image) = xps.page_image(p.index) {
+                    out.push(XpsCropPlan {
+                        page: p.index,
+                        crop: Crop::Page,
+                        image,
+                        region: None,
+                        reason: CropReason::from(reason).as_str(),
+                    });
+                }
+            }
+            Route::VlmRegions(routed) => {
+                for (i, region) in ocr_regions(p).into_iter().enumerate() {
+                    let area = |b: &fluree_doc_pdf::geom::BBox| {
+                        (b.x1.min(region.x1) - b.x0.max(region.x0)).max(0.0)
+                            * (b.y1.min(region.y1) - b.y0.max(region.y0)).max(0.0)
+                    };
+                    let Some(image) = xps
+                        .images
+                        .iter()
+                        .filter(|im| im.page == p.index && area(&im.bbox) > 0.0)
+                        .max_by(|a, b| area(&a.bbox).total_cmp(&area(&b.bbox)))
+                    else {
+                        continue;
+                    };
+                    out.push(XpsCropPlan {
+                        page: p.index,
+                        crop: Crop::Region(i),
+                        image,
+                        region: Some(region),
+                        reason: if i < routed.len() {
+                            CropReason::Region.as_str()
+                        } else {
+                            CropReason::SmallRegion.as_str()
+                        },
+                    });
+                }
+            }
+            Route::Deterministic => {}
+        }
+    }
+    out
+}
+
+/// The most pixels the pictures one page of an XPS document's crops are cut
+/// from may hold, decoded: 512 million, two gigabytes of RGBA. A page's
+/// pictures are held while its crops are cut, and let go at the next.
+pub(crate) const MAX_XPS_PAGE_CROP_PIXELS: u64 = 1 << 29;
+
+/// The most pixels all of a document's pictures are decoded to, one page
+/// at a time: 8 billion, the time decoding takes. A scan at 300 dpi is
+/// about 8.4 million pixels a page, so about 950 such pages are read, where
+/// a bound on the whole document as on one page read about 60.
+pub(crate) const MAX_XPS_CROP_PIXELS: u64 = 1 << 33;
+
+/// The crops `plans` lists, each handed to `each` as soon as it is cut: a
+/// page's pictures are decoded when it is reached and let go when the next
+/// is, so a document's pictures are never held at once. Each picture's size
+/// is checked against what is left of [`MAX_XPS_PAGE_CROP_PIXELS`] for its
+/// page, and of [`MAX_XPS_CROP_PIXELS`] for the document, before it is
+/// decoded: past the page's, the picture is not read; past the document's,
+/// no more are. Returns a message for each picture that does not decode or
+/// is past its page's bound, and one for those past the document's.
+pub(crate) fn xps_crops(
+    data: &[u8],
+    plans: &[XpsCropPlan<'_>],
+    each: &mut dyn FnMut(XpsCrop),
+) -> Vec<String> {
+    xps_crops_within(
+        data,
+        plans,
+        (MAX_XPS_PAGE_CROP_PIXELS, MAX_XPS_CROP_PIXELS),
+        each,
+    )
+}
+
+fn xps_crops_within(
+    data: &[u8],
+    plans: &[XpsCropPlan<'_>],
+    (page_pixels, max_pixels): (u64, u64),
+    each: &mut dyn FnMut(XpsCrop),
+) -> Vec<String> {
+    let mut failed = Vec::new();
+    let mut left = max_pixels;
+    let mut page_left = page_pixels;
+    // The first picture past the budget, and how many more were not read.
+    let mut past: Option<(&str, usize)> = None;
+    // This page's pictures, decoded: a page may cut several regions from
+    // one.
+    let mut page = None;
+    let mut decoded: std::collections::HashMap<
+        &str,
+        Option<std::rc::Rc<fluree_doc_vision::Pixels>>,
+    > = Default::default();
+    for plan in plans {
+        if page != Some(plan.page) {
+            decoded.clear();
+            page = Some(plan.page);
+            page_left = page_pixels;
+        }
+        let part = plan.image.part.as_str();
+        let pixels = match decoded.get(part) {
+            Some(p) => p.clone(),
+            None if past.is_some() => {
+                if let Some((_, more)) = past.as_mut() {
+                    *more += 1;
+                }
+                continue;
+            }
+            None => {
+                let (mut over, mut page_over) = (false, false);
+                let read = fluree_doc_xps::read_image(data, part).and_then(|bytes| {
+                    let (w, h) = fluree_doc_image::upright_size(&bytes)?;
+                    let n = u64::from(w) * u64::from(h);
+                    if n > page_left {
+                        page_over = true;
+                        return Err(format!(
+                            "not read, past the {page_pixels} pixels a page's pictures are read to"
+                        ));
+                    }
+                    if n > left {
+                        over = true;
+                        return Err(String::new());
+                    }
+                    left -= n;
+                    page_left -= n;
+                    fluree_doc_image::decode(&bytes).map(|d| d.pixels)
+                });
+                let p = match read {
+                    Ok(p) => Some(std::rc::Rc::new(p)),
+                    Err(_) if over => {
+                        past = Some((part, 0));
+                        continue;
+                    }
+                    Err(e) if page_over => {
+                        failed.push(format!("{part}: {e}"));
+                        None
+                    }
+                    Err(e) => {
+                        failed.push(format!("{part}: {e}"));
+                        None
+                    }
+                };
+                decoded.insert(part, p.clone());
+                p
+            }
+        };
+        let Some(pixels) = pixels else {
+            continue;
+        };
+        let Some((rect, bbox)) = plan.rect(pixels.width, pixels.height) else {
+            continue;
+        };
+        let pixels = if rect == [0, 0, pixels.width, pixels.height] {
+            // The whole picture: handed over, not copied, where nothing
+            // else on the page is cut from it.
+            drop(decoded.remove(part));
+            std::rc::Rc::try_unwrap(pixels).unwrap_or_else(|p| (*p).clone())
+        } else {
+            let Some(p) = cut(&pixels, rect) else {
+                continue;
+            };
+            p
+        };
+        each(XpsCrop {
+            page: plan.page,
+            crop: plan.crop,
+            pixels,
+            bbox,
+            reason: plan.reason,
+        });
+    }
+    if let Some((part, more)) = past {
+        let and = match more {
+            0 => String::new(),
+            1 => " and the crop after it".into(),
+            n => format!(" and the {n} crops after it"),
+        };
+        failed.push(format!(
+            "{part}{and}: not read, past the {max_pixels} pixels a document's pictures are read to"
+        ));
+    }
+    failed
+}
+
+/// The part of a picture `width` × `height` drawn at `drawn` that `region`
+/// covers: its pixels (`[x0, y0, x1, y1)`), and the box on the page they
+/// show.
+fn crop_rect(
+    width: u32,
+    height: u32,
+    drawn: &fluree_doc_pdf::geom::BBox,
+    region: &fluree_doc_pdf::geom::BBox,
+) -> Option<([u32; 4], fluree_doc_pdf::geom::BBox)> {
+    let (w, h) = (f64::from(width), f64::from(height));
+    let (sx, sy) = (w / drawn.width(), h / drawn.height());
+    if !(sx.is_finite() && sy.is_finite()) {
+        return None;
+    }
+    let x0 = ((region.x0.max(drawn.x0) - drawn.x0) * sx)
+        .floor()
+        .clamp(0.0, w) as u32;
+    let y0 = ((region.y0.max(drawn.y0) - drawn.y0) * sy)
+        .floor()
+        .clamp(0.0, h) as u32;
+    let x1 = ((region.x1.min(drawn.x1) - drawn.x0) * sx)
+        .ceil()
+        .clamp(0.0, w) as u32;
+    let y1 = ((region.y1.min(drawn.y1) - drawn.y0) * sy)
+        .ceil()
+        .clamp(0.0, h) as u32;
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let bbox = fluree_doc_pdf::geom::BBox {
+        x0: drawn.x0 + f64::from(x0) / sx,
+        y0: drawn.y0 + f64::from(y0) / sy,
+        x1: drawn.x0 + f64::from(x1) / sx,
+        y1: drawn.y0 + f64::from(y1) / sy,
+    };
+    Some(([x0, y0, x1, y1], bbox))
+}
+
+/// The pixels `[x0, y0, x1, y1)` of a picture.
+fn cut(
+    pixels: &fluree_doc_vision::Pixels,
+    [x0, y0, x1, y1]: [u32; 4],
+) -> Option<fluree_doc_vision::Pixels> {
+    let (cw, ch) = (x1 - x0, y1 - y0);
+    let n = pixels.layout.channels();
+    let mut data = Vec::with_capacity(cw as usize * ch as usize * n);
+    for y in y0..y1 {
+        let row = (y as usize * pixels.width as usize + x0 as usize) * n;
+        data.extend_from_slice(pixels.data.get(row..row + cw as usize * n)?);
+    }
+    fluree_doc_vision::Pixels::new(cw, ch, pixels.layout, data)
+}
+
+/// The part of a picture drawn at `drawn` that `region` covers: its pixels,
+/// and the box on the page they show.
+#[cfg(test)]
+fn crop_pixels(
+    pixels: &fluree_doc_vision::Pixels,
+    drawn: &fluree_doc_pdf::geom::BBox,
+    region: &fluree_doc_pdf::geom::BBox,
+) -> Option<(fluree_doc_vision::Pixels, fluree_doc_pdf::geom::BBox)> {
+    let (rect, bbox) = crop_rect(pixels.width, pixels.height, drawn, region)?;
+    Some((cut(pixels, rect)?, bbox))
 }
 
 /// The files in a directory `convert` reads, in name order.
@@ -797,6 +1386,389 @@ mod tests {
         );
         let texts: Vec<&str> = elements.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, ["Balance of p0_r0", "# Balance of p0_r1"]);
+    }
+
+    #[test]
+    fn an_xps_documents_pictures_are_read_within_a_pixel_budget() {
+        use std::io::Write;
+        // Three pages, each only a picture of 10 × 10 pixels.
+        let mut png = Vec::new();
+        image::GrayImage::from_pixel(10, 10, image::Luma([255u8]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let page = |n: usize| {
+            format!(
+                "<FixedPage Width=\"816\" Height=\"1056\"><Path Data=\"M 0,0 L 816,0 816,1056 0,1056 Z\">\
+                 <Path.Fill><ImageBrush ImageSource=\"/i{n}.png\" Viewport=\"0,0,816,1056\"/></Path.Fill></Path></FixedPage>"
+            )
+        };
+        let mut parts: Vec<(String, Vec<u8>)> = vec![
+            (
+                "_rels/.rels".into(),
+                b"<Relationships><Relationship Id=\"R0\" Type=\"http://schemas.microsoft.com/xps/2005/06/fixedrepresentation\" Target=\"/s.fdseq\"/></Relationships>".to_vec(),
+            ),
+            (
+                "s.fdseq".into(),
+                b"<FixedDocumentSequence><DocumentReference Source=\"/d.fdoc\"/></FixedDocumentSequence>".to_vec(),
+            ),
+            (
+                "d.fdoc".into(),
+                b"<FixedDocument><PageContent Source=\"/p0.fpage\"/><PageContent Source=\"/p1.fpage\"/><PageContent Source=\"/p2.fpage\"/></FixedDocument>".to_vec(),
+            ),
+        ];
+        for n in 0..3 {
+            parts.push((format!("p{n}.fpage"), page(n).into_bytes()));
+            parts.push((format!("i{n}.png"), png.clone()));
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        for (name, body) in &parts {
+            z.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(body).unwrap();
+        }
+        z.finish().unwrap();
+        let data = buf.into_inner();
+        let xps = fluree_doc_xps::parse(&data).unwrap();
+        let plans = xps_crop_plans(&xps, None);
+        assert_eq!(plans.len(), 3);
+        // Room for two pictures' pixels in the document: the third is not
+        // decoded.
+        let mut read = Vec::new();
+        let failed = xps_crops_within(&data, &plans, (100, 250), &mut |c| read.push(c.page));
+        assert_eq!(read, [0, 1]);
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert!(
+            failed[0].starts_with("i2.png: not read, past"),
+            "{failed:?}"
+        );
+        let mut read = Vec::new();
+        let failed = xps_crops_within(&data, &plans, (100, 150), &mut |c| read.push(c.page));
+        assert_eq!(read, [0]);
+        assert!(
+            failed[0].starts_with("i1.png and the crop after it: not read"),
+            "{failed:?}"
+        );
+        // The page's bound is a page's: each page's picture fits it, and
+        // all are read, however many pages there are.
+        let mut read = Vec::new();
+        let failed = xps_crops_within(&data, &plans, (100, 1_000), &mut |c| read.push(c.page));
+        assert_eq!(read, [0, 1, 2]);
+        assert!(failed.is_empty(), "{failed:?}");
+        // A picture past its page's bound is not read; the next page's is.
+        let mut read = Vec::new();
+        let failed = xps_crops_within(&data, &plans, (99, 1_000), &mut |c| read.push(c.page));
+        assert!(read.is_empty());
+        assert_eq!(failed.len(), 3, "{failed:?}");
+        assert!(failed[0].contains("a page's pictures"), "{failed:?}");
+        // A page crop records the box its picture is drawn in.
+        let b = plans[0].bbox(&data).unwrap();
+        assert_eq!((b.x0, b.y0, b.x1, b.y1), (0.0, 0.0, 612.0, 792.0));
+    }
+
+    #[test]
+    fn a_region_crops_the_part_of_the_picture_under_it() {
+        use fluree_doc_pdf::geom::BBox;
+        // 4 × 2 pixels drawn over 40 × 20 units, each pixel its own value.
+        let rgba: Vec<u8> = (0u8..8).flat_map(|v| [v, v, v, 255]).collect();
+        let pixels =
+            fluree_doc_vision::Pixels::new(4, 2, fluree_doc_vision::Layout::Rgba8, rgba).unwrap();
+        let drawn = BBox {
+            x0: 100.0,
+            y0: 50.0,
+            x1: 140.0,
+            y1: 70.0,
+        };
+        // The region runs past the picture's right edge: cut to it.
+        let region = BBox {
+            x0: 110.0,
+            y0: 50.0,
+            x1: 160.0,
+            y1: 60.0,
+        };
+        let (crop, bbox) = crop_pixels(&pixels, &drawn, &region).unwrap();
+        assert_eq!((crop.width, crop.height), (3, 1));
+        assert_eq!(
+            crop.data.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            (bbox.x0, bbox.y0, bbox.x1, bbox.y1),
+            (110.0, 50.0, 140.0, 60.0)
+        );
+        // A region beside the picture covers none of it.
+        let beside = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 50.0,
+            y1: 50.0,
+        };
+        assert!(crop_pixels(&pixels, &drawn, &beside).is_none());
+    }
+
+    #[test]
+    fn a_format_with_no_reader_is_refused_by_name_not_read_as_a_pdf() {
+        let compound = [&COMPOUND_MAGIC[..], &[0u8; 504]].concat();
+        let zip = b"PK\x03\x04 an Apple package".to_vec();
+        for (name, data) in [
+            ("letter.wpd", &compound),
+            ("Letter.PAGES", &compound),
+            ("slides.key", &zip),
+            ("notes.numbers", &zip),
+        ] {
+            let path = Path::new(name);
+            assert_eq!(input_kind(path, data), SourceKind::Unsupported, "{name}");
+            let why = unsupported(Some(path), data).unwrap();
+            let ext = path.extension().unwrap().to_str().unwrap().to_lowercase();
+            assert!(
+                why.starts_with(&format!("unsupported format (.{ext}, ")),
+                "{why}"
+            );
+        }
+        // Discovery lists them, so a batch counts them.
+        assert_eq!(
+            source_kind(Path::new("a.wpd")),
+            Some(SourceKind::Unsupported)
+        );
+        // A compound file by its content alone, renamed or from stdin.
+        assert_eq!(
+            input_kind(Path::new("scan"), &compound),
+            SourceKind::Unsupported
+        );
+        assert!(unsupported(None, &compound)
+            .unwrap()
+            .contains("compound file"));
+        // Content that is a PDF or an image is read as one, whatever its name.
+        let pdf = b"%PDF-1.4\n%junk".to_vec();
+        assert_eq!(input_kind(Path::new("x.pages"), &pdf), SourceKind::Pdf);
+        assert_eq!(input_kind(Path::new("x.dat"), &pdf), SourceKind::Pdf);
+        assert_eq!(unsupported(None, &pdf), None);
+        let png = b"\x89PNG\r\n\x1a\n....".to_vec();
+        assert_eq!(input_kind(Path::new("x.wpd"), &png), SourceKind::Image);
+        // Anything else still goes to the PDF reader, as before.
+        assert_eq!(input_kind(Path::new("x.bin"), b"junk"), SourceKind::Pdf);
+    }
+
+    #[test]
+    fn content_with_a_signature_is_read_as_what_it_is_whatever_its_name() {
+        use std::io::Write;
+        let pdf = b"%PDF-1.7\n1 0 obj\n<< >>\nendobj\n".to_vec();
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        z.start_file("_rels/.rels", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(
+            b"<Relationships><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/\
+              officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/>\
+              </Relationships>",
+        )
+        .unwrap();
+        z.finish().unwrap();
+        let xlsx = buf.into_inner();
+        for (name, data, kind) in [
+            ("scan.doc", &pdf, SourceKind::Pdf),
+            ("report.xls", &pdf, SourceKind::Pdf),
+            ("report.ppt", &pdf, SourceKind::Pdf),
+            ("report.rtf", &pdf, SourceKind::Pdf),
+            ("report.csv", &pdf, SourceKind::Pdf),
+            ("report.docx", &pdf, SourceKind::Pdf),
+            ("report.odt", &pdf, SourceKind::Pdf),
+            ("report.xps", &pdf, SourceKind::Pdf),
+            ("report.md", &pdf, SourceKind::Pdf),
+            ("shot.doc", &png, SourceKind::Image),
+            ("shot.csv", &png, SourceKind::Image),
+            ("shot.key", &png, SourceKind::Image),
+            ("book.csv", &xlsx, SourceKind::Xlsx),
+            ("book.doc", &xlsx, SourceKind::Xlsx),
+            ("-", &pdf, SourceKind::Pdf),
+            ("-", &png, SourceKind::Image),
+        ] {
+            assert_eq!(input_kind(Path::new(name), data), kind, "{name}");
+        }
+        // A PDF a few bytes in, as a gateway's prefix leaves it, is one
+        // whatever its name, by the binary line after its header or by its
+        // end-of-file marker, but for text that may quote a header.
+        let prefix = &b"\r\n\r\n\0\x01junk"[..];
+        let binary = [
+            prefix,
+            b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n1 0 obj\n<< >>\nendobj\n",
+        ]
+        .concat();
+        let ended = [prefix, &pdf, b"trailer\n<< >>\n%%EOF\n"].concat();
+        for late in [&binary, &ended] {
+            for name in ["scan.doc", "report.csv", "report.xls", "report.docx", "-"] {
+                assert_eq!(input_kind(Path::new(name), late), SourceKind::Pdf, "{name}");
+            }
+        }
+        // Delimited text from stdin, or a file named as nothing, is a table.
+        for name in ["-", "export"] {
+            assert_eq!(
+                input_kind(Path::new(name), b"Customer;Amount\nAlex;12,50\nSam;7\n"),
+                SourceKind::Csv,
+                "{name}"
+            );
+        }
+        let quoting = b"Header,Note\nfile 1,starts with %PDF-1.7\nfile 2,ok\n";
+        assert_eq!(input_kind(Path::new("list.csv"), quoting), SourceKind::Csv);
+        // A header alone is no PDF: a list of signatures, one column, one
+        // a line, is the table it is named as.
+        let signatures = b"Signature\n%PDF-1.7\n%PNG\nGIF89a\n";
+        assert_eq!(
+            input_kind(Path::new("magic.csv"), signatures),
+            SourceKind::Csv
+        );
+        // Nor with the end-of-file marker listed too, in one column, or in
+        // two whose quoted commas hide the delimiter: named as a table, the
+        // marker counts only beside a byte no text holds.
+        for (name, list) in [
+            ("one.csv", &b"marker\n%PDF-1.7\n%%EOF\nstartxref\n"[..]),
+            ("magic.tsv", b"Signature\n%PDF-\nPK\nGIF89a\n%%EOF\n"),
+            (
+                "two.csv",
+                b"Signature,Note\n%PDF-,\"opens, a PDF\"\n%%EOF,\"ends, it\"\n",
+            ),
+        ] {
+            assert_eq!(input_kind(Path::new(name), list), SourceKind::Csv, "{name}");
+        }
+        // The same list named as nothing in particular is still taken for
+        // the PDF its marker says.
+        assert_eq!(
+            input_kind(Path::new("-"), b"marker\n%PDF-1.7\n%%EOF\n"),
+            SourceKind::Pdf
+        );
+        let late = ended;
+        let page = b"<html><body><p>A PDF opens with %PDF-1.7.</p></body></html>";
+        assert_eq!(input_kind(Path::new("page.doc"), page), SourceKind::Html);
+        assert_eq!(
+            input_kind(Path::new("notes.md"), &late),
+            SourceKind::Markdown
+        );
+        // RTF by its opening, whatever its name.
+        assert_eq!(
+            input_kind(Path::new("memo.csv"), b"{\\rtf1\\ansi Hello}"),
+            SourceKind::Rtf
+        );
+    }
+
+    #[test]
+    fn a_file_named_as_an_office_97_one_is_read_as_what_it_holds() {
+        use std::io::Write;
+        let package = |main: &str| {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            let mut z = zip::ZipWriter::new(&mut buf);
+            z.start_file("_rels/.rels", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            write!(
+                z,
+                "<Relationships><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/\
+                 officeDocument/2006/relationships/officeDocument\" Target=\"{main}\"/></Relationships>"
+            )
+            .unwrap();
+            z.finish().unwrap();
+            buf.into_inner()
+        };
+        let html = b"\xEF\xBB\xBF\n<html><body><table><tr><td>a</td></tr></table></body></html>";
+        for (name, data, kind) in [
+            ("export.xls", &html[..], SourceKind::Html),
+            (
+                "webpage.doc",
+                b"<!DOCTYPE html><p>Saved as doc</p>",
+                SourceKind::Html,
+            ),
+            ("tab.xls", b"col1\tcol2\n1\t2\n", SourceKind::Csv),
+            ("semi.xls", b"a;b;c\r\n1;2;3\r\n", SourceKind::Csv),
+            (
+                "renamed.doc",
+                &package("word/document.xml")[..],
+                SourceKind::Docx,
+            ),
+            (
+                "renamed.ppt",
+                &package("ppt/presentation.xml")[..],
+                SourceKind::Pptx,
+            ),
+            (
+                "renamed.xls",
+                &package("xl/workbook.xml")[..],
+                SourceKind::Xlsx,
+            ),
+            // Named as nothing, as stdin is: a package and a web page by
+            // their content, but plain text is no table for it.
+            ("stdin", &package("word/document.xml")[..], SourceKind::Docx),
+            ("stdin", b"<html><p>Hi</p></html>", SourceKind::Html),
+        ] {
+            assert_eq!(input_kind(Path::new(name), data), kind, "{name}");
+        }
+        // What none of them is still goes to the reader its name says,
+        // which says what it is not, never to the PDF reader.
+        for (name, kind) in [
+            ("notes.xls", SourceKind::Xls),
+            ("notes.doc", SourceKind::Doc),
+            ("notes.ppt", SourceKind::Ppt),
+            ("notes.docx", SourceKind::Docx),
+            ("notes.xps", SourceKind::Xps),
+            ("photo.png", SourceKind::Image),
+        ] {
+            assert_eq!(
+                input_kind(Path::new(name), b"just some words"),
+                kind,
+                "{name}"
+            );
+        }
+        assert_eq!(input_kind(Path::new("one.xls"), b"a\tb\n"), SourceKind::Xls);
+        assert_eq!(
+            input_kind(Path::new("ragged.xls"), b"a\tb\nc d e\n"),
+            SourceKind::Xls
+        );
+        // Named as nothing, delimited text is a table too: read as a PDF,
+        // it failed as a corrupt one.
+        assert_eq!(
+            input_kind(Path::new("stdin"), b"a\tb\n1\t2\n"),
+            SourceKind::Csv
+        );
+    }
+
+    #[test]
+    fn an_excel_2003_xml_workbook_is_refused_by_name_not_read_as_a_page() {
+        // Its `<Table>` read as a web page's table ran its cells together.
+        let xml = b"<?xml version=\"1.0\"?>\n<?mso-application progid=\"Excel.Sheet\"?>\n\
+            <Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\" \
+            xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\">\
+            <Worksheet ss:Name=\"S\"><Table><Row><Cell><Data ss:Type=\"String\">Name</Data></Cell>\
+            </Row></Table></Worksheet></Workbook>";
+        for name in ["export.xls", "export.xml", "-"] {
+            let path = Path::new(name);
+            assert_eq!(input_kind(path, xml), SourceKind::Unsupported, "{name}");
+            let why = unsupported(Some(path), xml).unwrap();
+            assert!(why.contains("Excel 2003 XML"), "{why}");
+        }
+        // Without the instruction, by its root's namespace.
+        let bare =
+            b"<Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\"><Table/></Workbook>";
+        assert_eq!(
+            input_kind(Path::new("a.xls"), bare),
+            SourceKind::Unsupported
+        );
+        // Excel's HTML export, which names Excel's namespaces too, is a page.
+        let html = b"<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><body>\
+            <table><tr><td>1</td></tr></table></body></html>";
+        assert_eq!(input_kind(Path::new("a.xls"), html), SourceKind::Html);
+    }
+
+    #[test]
+    fn unicode_text_named_xls_is_delimited_text() {
+        // Excel's "Unicode Text" export: UTF-16 with no byte-order mark,
+        // tab-separated, which it names `.txt` and users rename `.xls`.
+        let tsv: Vec<u8> = "Name\tAmount\nAlex\t12\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(input_kind(Path::new("export.xls"), &tsv), SourceKind::Csv);
+        assert_eq!(
+            input_kind(Path::new("export.xls"), b"a\tb\0\n1\t2\n"),
+            SourceKind::Xls
+        );
     }
 
     #[test]

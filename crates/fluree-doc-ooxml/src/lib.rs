@@ -12,6 +12,7 @@
 use fluree_doc_model::{
     xsd_date_time, Allowance, DocumentInfo, Media, MediaSource, PictureReader, PictureReads,
 };
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::HashMap;
@@ -47,6 +48,11 @@ impl Relationship {
 /// The most bytes one image part is read to: 64 MiB, more than any picture
 /// a document pastes in.
 pub const MAX_MEDIA_BYTES: u64 = 64 << 20;
+
+/// The most bytes an XML part read beside a document's main one (its
+/// relationships, its core properties, its notes, comments and settings)
+/// is inflated to: 64 MiB, far more than any holds.
+pub const MAX_XML_BYTES: u64 = 64 << 20;
 
 /// The bytes of an image part of an opened package, at most
 /// [`MAX_MEDIA_BYTES`] of them. The package is opened once for all of a
@@ -170,6 +176,28 @@ impl<'a> Package<'a> {
         Some(s)
     }
 
+    /// A part's text, at most `max` bytes of it, checked as it inflates:
+    /// `Ok(None)` where the package has no such part, or it does not read
+    /// (a broken entry, text that is not UTF-8), and refused, naming the
+    /// part, where it holds more.
+    pub fn read_capped(&mut self, part: &str, max: u64) -> Result<Option<String>, String> {
+        let Ok(entry) = self.zip.by_name(part) else {
+            return Ok(None);
+        };
+        let too_large = || format!("{part}: more than the {max} bytes read");
+        if entry.size() > max {
+            return Err(too_large());
+        }
+        let mut v = Vec::new();
+        if entry.take(max + 1).read_to_end(&mut v).is_err() {
+            return Ok(None);
+        }
+        if v.len() as u64 > max {
+            return Err(too_large());
+        }
+        Ok(String::from_utf8(v).ok())
+    }
+
     /// A part's bytes, for a binary part such as an image, at most `max` of
     /// them. Refused, naming the part, where the package has no such part or
     /// it holds more: a few kilobytes of archive can inflate to gigabytes, and
@@ -203,17 +231,23 @@ impl<'a> Package<'a> {
     }
 
     /// A part's relationships, each internal target resolved to a part name.
-    /// Empty where the part has none.
+    /// Empty where the part has none, or its relationships part holds more
+    /// than [`MAX_XML_BYTES`].
     pub fn relationships(&mut self, part: &str) -> Vec<Relationship> {
-        self.read(&rels_part(part))
+        self.read_capped(&rels_part(part), MAX_XML_BYTES)
+            .ok()
+            .flatten()
             .map(|xml| relationships(&xml, part))
             .unwrap_or_default()
     }
 
     /// The package's own relationship of type `name` (`officeDocument`,
-    /// `core-properties`), from its root relationships part.
-    fn root(&mut self, name: &str) -> Option<String> {
-        self.read("_rels/.rels")
+    /// `core-properties`), from its root relationships part; none where that
+    /// part holds more than [`MAX_XML_BYTES`].
+    pub fn root(&mut self, name: &str) -> Option<String> {
+        self.read_capped("_rels/.rels", MAX_XML_BYTES)
+            .ok()
+            .flatten()
             .map(|xml| relationships(&xml, ""))
             .unwrap_or_default()
             .into_iter()
@@ -240,12 +274,15 @@ impl<'a> Package<'a> {
     }
 
     /// What the file declares about itself in its core properties: title,
-    /// author, and when it was made and last saved.
+    /// author, and when it was made and last saved; nothing where the part
+    /// holds more than [`MAX_XML_BYTES`].
     pub fn info(&mut self) -> DocumentInfo {
         let part = self
             .root("core-properties")
             .unwrap_or_else(|| "docProps/core.xml".to_string());
-        self.read(&part)
+        self.read_capped(&part, MAX_XML_BYTES)
+            .ok()
+            .flatten()
             .map(|xml| core_properties(&xml))
             .unwrap_or_default()
     }
@@ -391,10 +428,25 @@ pub fn local(qname: &[u8]) -> &str {
     s.rsplit(':').next().unwrap_or(s)
 }
 
+/// The most attributes of one element read. An element carries a few; a
+/// part's root, a few dozen namespace declarations.
+pub const MAX_ATTRIBUTES: usize = 1024;
+
+/// An element's attributes, the first [`MAX_ATTRIBUTES`] of them, those that
+/// do not parse left out. Read without quick-xml's check for a name given
+/// twice, which compares each attribute with every one before it: an
+/// element of 300,000 attributes would cost their square before a reader
+/// saw the first. A name given twice is found at its first.
+pub fn attributes<'a>(e: &'a BytesStart<'_>) -> impl Iterator<Item = Attribute<'a>> {
+    let mut all = e.attributes();
+    all.with_checks(false);
+    all.take(MAX_ATTRIBUTES).flatten()
+}
+
 /// An attribute's value by local name, its entities unescaped: a sheet
 /// named `R&D` is written `name="R&amp;D"`, and is `R&D`.
 pub fn attr(e: &BytesStart<'_>, want: &str) -> Option<String> {
-    e.attributes().flatten().find_map(|a| {
+    attributes(e).find_map(|a| {
         (local(a.key.as_ref()) == want).then(|| {
             a.unescape_value()
                 .map(|v| v.into_owned())
@@ -422,6 +474,35 @@ mod tests {
     }
 
     const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    /// The first element of `xml`, and what `f` makes of it.
+    fn first<T>(xml: &str, f: impl Fn(&BytesStart<'_>) -> T) -> T {
+        let mut r = Reader::from_str(xml);
+        loop {
+            match r.read_event().unwrap() {
+                Event::Start(e) | Event::Empty(e) => return f(&e),
+                Event::Eof => panic!("no element"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn attributes_are_read_unchecked_and_at_most_max() {
+        // Checked, the name given twice would be an error, and the
+        // attributes after it would cost a comparison with each before.
+        let twice = r#"<a x="1" x="2" y="3"/>"#;
+        assert_eq!(first(twice, |e| attributes(e).count()), 3);
+        assert_eq!(first(twice, |e| attr(e, "x")).as_deref(), Some("1"));
+        let many: String = (0..MAX_ATTRIBUTES + 10)
+            .map(|i| format!(" a{i}=\"{i}\""))
+            .collect();
+        let many = format!("<a{many}/>");
+        assert_eq!(first(&many, |e| attributes(e).count()), MAX_ATTRIBUTES);
+        assert_eq!(first(&many, |e| attr(e, "a0")).as_deref(), Some("0"));
+        let past = format!("a{MAX_ATTRIBUTES}");
+        assert_eq!(first(&many, |e| attr(e, &past)), None);
+    }
 
     #[test]
     fn only_the_head_of_an_image_part_is_read_for_its_format() {
@@ -519,6 +600,87 @@ mod tests {
         assert_eq!(p.main_part("word/document.xml"), "word/document.xml");
         assert_eq!(p.info().creators, ["Ada"]);
         assert!(info(b"not a zip").is_empty());
+    }
+
+    /// A package of these parts, deflated, as a hostile one holds a part
+    /// of gigabytes in a few kilobytes.
+    fn deflated(parts: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        for (name, body) in parts {
+            z.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(body).unwrap();
+        }
+        z.finish().unwrap();
+        buf.into_inner()
+    }
+
+    /// `head`, padded with spaces to one byte past `max`.
+    fn past(head: &str, max: u64) -> Vec<u8> {
+        let mut v = head.as_bytes().to_vec();
+        v.resize(max as usize + 1, b' ');
+        v
+    }
+
+    #[test]
+    fn a_part_past_its_bound_is_refused_as_it_inflates() {
+        let notes = "<w:notes/>";
+        let bytes = package(&[("word/notes.xml", notes)]);
+        let mut p = Package::open(&bytes).unwrap();
+        assert!(p.read_capped("word/notes.xml", 9).is_err());
+        assert_eq!(
+            p.read_capped("word/notes.xml", 10).unwrap().as_deref(),
+            Some(notes)
+        );
+        assert_eq!(p.read_capped("word/none.xml", 9), Ok(None));
+        // A part's relationships and the core properties, each past the
+        // bound: refused, and the package reads as one that does not say.
+        let rels = format!(
+            "<Relationships><Relationship Id=\"rId1\" Type=\"{REL}/styles\" Target=\"styles.xml\"/></Relationships>"
+        );
+        let bytes = deflated(&[
+            ("word/_rels/document.xml.rels", &past(&rels, MAX_XML_BYTES)),
+            (
+                "docProps/core.xml",
+                &past(
+                    "<cp:coreProperties><dc:title>Unread</dc:title>",
+                    MAX_XML_BYTES,
+                ),
+            ),
+        ]);
+        let mut p = Package::open(&bytes).unwrap();
+        assert!(p.read_capped("docProps/core.xml", MAX_XML_BYTES).is_err());
+        assert!(p.relationships("word/document.xml").is_empty());
+        assert!(p.info().is_empty());
+        // Its size declared as a few bytes: no more than those are read.
+        let mut bytes = deflated(&[("big.xml", &past("<a/>", 1 << 20))]);
+        for (sig, at) in [(b"PK\x03\x04", 22), (b"PK\x01\x02", 24)] {
+            let h = bytes.windows(4).position(|w| w == sig).unwrap();
+            bytes[h + at..h + at + 4].copy_from_slice(&16u32.to_le_bytes());
+        }
+        let mut p = Package::open(&bytes).unwrap();
+        let read = p.read_capped("big.xml", 1 << 20);
+        assert!(read.is_err() || read.unwrap().is_none_or(|s| s.len() <= 16));
+    }
+
+    #[test]
+    fn the_root_relationships_are_read_within_their_bound() {
+        // A root relationships part past the bound, naming the main part
+        // in its first bytes: refused, so it names none.
+        let rels = format!(
+            "<Relationships><Relationship Id=\"rId1\" Type=\"{REL}/officeDocument\" \
+             Target=\"word/document.xml\"/></Relationships>"
+        );
+        let bytes = deflated(&[("_rels/.rels", &past(&rels, MAX_XML_BYTES))]);
+        let mut p = Package::open(&bytes).unwrap();
+        assert_eq!(p.root("officeDocument"), None);
+        let bytes = package(&[("_rels/.rels", &rels)]);
+        let mut p = Package::open(&bytes).unwrap();
+        assert_eq!(
+            p.root("officeDocument").as_deref(),
+            Some("word/document.xml")
+        );
     }
 
     #[test]

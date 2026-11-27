@@ -1,0 +1,10 @@
+[package]
+name = "fluree-doc-csv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CSV and TSV to Fluree document elements (DoCO-typed): one table with a header row"
+
+[dependencies]
+fluree-doc-model.workspace = true
+encoding_rs = "0.8"

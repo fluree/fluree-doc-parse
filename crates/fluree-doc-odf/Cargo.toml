@@ -1,0 +1,15 @@
+[package]
+name = "fluree-doc-odf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OpenDocument text, spreadsheets and presentations (.odt, .ods, .odp) to Fluree document elements (DoCO-typed)"
+
+[dependencies]
+fluree-doc-model.workspace = true
+fluree-doc-ooxml.workspace = true
+fluree-doc-xlsx.workspace = true
+quick-xml = "0.36"
+
+[dev-dependencies]
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }

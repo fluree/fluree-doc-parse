@@ -64,6 +64,12 @@ const MIN_COLUMN_FRACTION: f64 = 0.15;
 /// Row height for the occupancy grid, as a multiple of median font size.
 const ROW_FACTOR: f64 = 1.0;
 
+/// The most cells the occupancy grid may have. A page is a few hundred
+/// bins by a few hundred rows; glyphs boxed across millions of units (a
+/// font size or a transform no page has) would otherwise ask for a grid no
+/// memory holds, and such a page is not a page of columns.
+const MAX_GRID_CELLS: f64 = 16_777_216.0;
+
 /// Most rows of the occupancy grid one glyph fills: the height of type
 /// twice the body's size. A glyph taller than that fills this much about
 /// its middle, so a display line across a gutter counts as the heading
@@ -124,12 +130,19 @@ impl Projection {
         let mut sizes: Vec<f64> = boxed.iter().map(|g| g.font_size as f64).collect();
         sizes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let row_h = (sizes[sizes.len() / 2] * ROW_FACTOR).max(1.0);
-        let n_rows = (((max_y - min_y) / row_h).ceil() as usize).max(1);
+        // Sized as floats and checked before any is allocated: a cast of a
+        // size past `usize` saturates, and a grid of it cannot be made.
+        let (rows_f, bins_f) = (((max_y - min_y) / row_h).ceil(), (width / BIN).ceil());
+        let cells = rows_f.max(1.0) * bins_f.max(1.0);
+        if cells.is_nan() || cells > MAX_GRID_CELLS {
+            return None;
+        }
+        let n_rows = (rows_f as usize).max(1);
         if n_rows < MIN_ROWS {
             return None;
         }
 
-        let n_bins = ((width / BIN).ceil() as usize).max(1);
+        let n_bins = (bins_f as usize).max(1);
         let mut occupied = vec![vec![false; n_rows]; n_bins];
         for g in boxed {
             let b = g.bbox.unwrap();
@@ -843,6 +856,32 @@ mod tests {
             cols[0].x1 > 250.0 && cols[0].x1 < 285.0,
             "cut in the gutter: {cols:?}"
         );
+    }
+
+    #[test]
+    fn a_glyph_boxed_past_any_page_asks_for_no_grid() {
+        // A page of text and one glyph a million million units across, as a
+        // giant font size or transform draws it: no grid that wide is made,
+        // and the page reads as one column.
+        let mut page = two_column_page();
+        let mut huge = g(50.0, 0.0, 9.0);
+        huge.bbox = Some(BBox {
+            x0: 50.0,
+            y0: -1e12,
+            x1: 1e12,
+            y1: 500.0,
+        });
+        page.push(huge);
+        assert_eq!(detect(&page).len(), 1);
+        let mut nan = g(50.0, 0.0, 9.0);
+        nan.bbox = Some(BBox {
+            x0: f64::NAN,
+            y0: 0.0,
+            x1: f64::NAN,
+            y1: 10.0,
+        });
+        page.push(nan);
+        assert_eq!(detect(&page).len(), 1);
     }
 
     #[test]

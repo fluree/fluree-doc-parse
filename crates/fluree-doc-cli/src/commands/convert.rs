@@ -24,6 +24,10 @@ struct Source<'a> {
     name: Option<String>,
     /// The input's bytes as lowercase hex SHA-256.
     sha256: String,
+    /// A file an e-mail carries, converted by `--parse-attachments`: the
+    /// files it carries in turn are followed, or not, by that run, not
+    /// saved by it.
+    carried: bool,
 }
 
 impl<'a> Source<'a> {
@@ -35,6 +39,7 @@ impl<'a> Source<'a> {
             named: true,
             name: args.source_name.clone().or(name),
             sha256: fluree_doc_model::sha256_hex(data),
+            carried: false,
         }
     }
 
@@ -45,6 +50,7 @@ impl<'a> Source<'a> {
             named: false,
             name: args.source_name.clone(),
             sha256: fluree_doc_model::sha256_hex(data),
+            carried: false,
         }
     }
 }
@@ -137,14 +143,18 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
             return 1;
         }
         let src = Source::stdin(&data, args);
-        // By its content, as a file is (`input_kind`): with no name to go
-        // by, a transcript, an e-mail, an image, else a PDF.
-        let converted = match common::input_kind(Path::new("-"), &data) {
-            common::SourceKind::Transcript => convert_transcript(&data, &src, args, quiet),
-            common::SourceKind::Email => convert_email(&data, &src, cfg, args, quiet),
-            common::SourceKind::Image => convert_image(data, &src, cfg, args, quiet),
-            _ => convert_bytes(data, &src, cfg, args, pages.as_deref(), quiet),
-        };
+        // Named as nothing: read by what its content is, through the one
+        // dispatch every input takes (`input_kind`), so a format told by
+        // its content is read from stdin as from a file.
+        let converted = convert_source(
+            Path::new("-"),
+            data,
+            &src,
+            cfg,
+            args,
+            pages.as_deref(),
+            quiet,
+        );
         return match converted {
             Ok(out) => write_out(&out, args.output.as_deref()),
             Err(e) => {
@@ -285,17 +295,63 @@ fn convert_path(
     pages: Option<&[usize]>,
     quiet: bool,
 ) -> Result<String, String> {
-    use common::SourceKind;
     // What the OCR engine says about an image it reads names this file.
     let _doc = super::ocr::Reading::of(path);
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     let src = Source::file(path, slot, &data, args);
+    convert_source(path, data, &src, cfg, args, pages, quiet)
+}
+
+/// Convert `data`, named by `path` (whose extension may say what it is),
+/// as the input `src`.
+///
+/// Every input is read through here, so here the readers are told the
+/// output: a document's budget counts what that output writes of it
+/// (`fluree_doc_model::budget::Output`), so a table too large for DoCO,
+/// which writes each cell as a node, still converts to Markdown.
+fn convert_source(
+    path: &Path,
+    data: Vec<u8>,
+    src: &Source,
+    cfg: &TierConfig,
+    args: &ConvertArgs,
+    pages: Option<&[usize]>,
+    quiet: bool,
+) -> Result<String, String> {
+    use fluree_doc_model::budget::{converting_to, Output};
+    let output = match args.format {
+        Format::Doco => Output::Doco,
+        Format::Text => Output::Text,
+        // Conformance writes Markdown and XHTML from the elements.
+        Format::Md | Format::Xhtml | Format::Json | Format::Conform => Output::Flat,
+    };
+    converting_to(output, || {
+        read_source(path, data, src, cfg, args, pages, quiet)
+    })
+}
+
+/// [`convert_source`], within its output's budget.
+fn read_source(
+    path: &Path,
+    data: Vec<u8>,
+    src: &Source,
+    cfg: &TierConfig,
+    args: &ConvertArgs,
+    pages: Option<&[usize]>,
+    quiet: bool,
+) -> Result<String, String> {
+    use common::SourceKind;
     // By its content where that says, else by its name (`input_kind`).
     let kind = common::input_kind(path, &data);
     match kind {
-        SourceKind::Transcript => return convert_transcript(&data, &src, args, quiet),
-        SourceKind::Email => return convert_email(&data, &src, cfg, args, quiet),
-        SourceKind::Image => return convert_image(data, &src, cfg, args, quiet),
+        SourceKind::Transcript => return convert_transcript(&data, src, args, quiet),
+        SourceKind::Email => return convert_email(&data, src, cfg, args, quiet),
+        SourceKind::Image => return convert_image(data, src, cfg, args, quiet),
+        SourceKind::Xps => return convert_xps(&data, src, cfg, args, pages, quiet),
+        SourceKind::Unsupported => {
+            return Err(common::unsupported(Some(path), &data)
+                .unwrap_or_else(|| "unsupported format".into()))
+        }
         _ => {}
     }
     // What a file declares about itself: its title, author and dates.
@@ -333,10 +389,14 @@ fn convert_path(
             )
         }
         SourceKind::Docx => {
+            let options = fluree_doc_docx::Options {
+                comments: args.comments,
+            };
             let mut pkg = fluree_doc_docx::Package::open(&data)
                 .map_err(|e| fluree_doc_docx::DocxError::Zip(e).to_string())?;
             let (mut elements, info, media) =
-                fluree_doc_docx::parse_package(&mut pkg).map_err(|e| e.to_string())?;
+                fluree_doc_docx::parse_package_options(&mut pkg, &options)
+                    .map_err(|e| e.to_string())?;
             // The images placed in the flow: a pasted screenshot's text
             // follows its figure, read by OCR. Their bytes are only read
             // when something is there to read them, from the package opened
@@ -410,9 +470,108 @@ fn convert_path(
                 },
             )
         }
-        _ => return convert_bytes(data, &src, cfg, args, pages, quiet),
+        // A delimited file: one table under its header row. A `.tsv` is
+        // tab-separated; a `.csv`'s delimiter is sniffed.
+        SourceKind::Csv => {
+            let tsv = path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("tsv"));
+            let elements = fluree_doc_csv::parse_with(&data, tsv.then_some('\t'))
+                .map_err(|e| e.to_string())?;
+            (elements, fluree_doc_model::Notes::default())
+        }
+        // An OpenDocument text, spreadsheet or presentation, by its
+        // `mimetype`.
+        SourceKind::Odf => {
+            let (elements, info, _) =
+                fluree_doc_odf::parse_with_info(&data).map_err(|e| e.to_string())?;
+            (elements, declared(info))
+        }
+        // An Excel binary workbook, laid out as an XLSX one is.
+        SourceKind::Xlsb => {
+            let (elements, info) = fluree_doc_xls::parse_xlsb(&data).map_err(|e| e.to_string())?;
+            (elements, declared(info))
+        }
+        // A Rich Text Format document, mapped as a Word file is.
+        SourceKind::Rtf => {
+            let (elements, info) =
+                fluree_doc_rtf::parse_with_info(&data).map_err(|e| e.to_string())?;
+            (elements, declared(info))
+        }
+        // A PowerPoint 97-2003 deck, a slide a page. A picture on a slide is
+        // read as a DOCX's is, its text placed after its figure.
+        SourceKind::Ppt => {
+            let (mut elements, media) =
+                fluree_doc_ppt::parse_with_media(&data).map_err(|e| e.to_string())?;
+            // The deck opened once, when the first picture is read. A
+            // picture is held whole in the deck's stream, so its first bytes
+            // are cut from the picture read.
+            let deck = std::cell::OnceCell::new();
+            let read = |part: &str| {
+                deck.get_or_init(|| {
+                    fluree_doc_ppt::MediaReader::open(&data).map_err(|e| e.to_string())
+                })
+                .as_ref()
+                .map_err(Clone::clone)?
+                .read(part)
+            };
+            let sniffed = fluree_doc_pdf::image::Format::SNIFFED;
+            let media = read_media_with(
+                src.stem,
+                media,
+                &mut |part| {
+                    read(part).map(|mut b| {
+                        b.truncate(sniffed);
+                        b
+                    })
+                },
+                &mut |part| read(part),
+                cfg,
+                quiet,
+            );
+            fluree_doc_image::place_after_figures(&mut elements, media.read);
+            (
+                elements,
+                fluree_doc_model::Notes {
+                    unread_images: media.unread,
+                    ocr: media.ocr,
+                    ..Default::default()
+                },
+            )
+        }
+        // A Word 97-2003 document's text, through its piece table, and
+        // what its summary information declares. What it holds and this
+        // reader leaves out (headers and footers, or text boxes, whose list
+        // of stories does not read) is said, rather than lost without a
+        // word.
+        SourceKind::Doc => {
+            let read = fluree_doc_doc::parse_with_info(&data).map_err(|e| e.to_string())?;
+            if !read.left_out.is_empty() && !quiet {
+                eprintln!(
+                    "warning: {}: not read: {}",
+                    src.stem,
+                    read.left_out.join(", ")
+                );
+            }
+            (read.elements, declared(read.info))
+        }
+        // An Excel 97-2003 workbook, laid out as an XLSX one is.
+        SourceKind::Xls => {
+            let (elements, info) =
+                fluree_doc_xls::parse_with_info(&data).map_err(|e| e.to_string())?;
+            (elements, declared(info))
+        }
+        _ => return convert_bytes(data, src, cfg, args, pages, quiet),
     };
-    Ok(render(&elements, &src, args, Vec::new(), &notes))
+    // The comments an OpenDocument, RTF or Word 97-2003 document carries,
+    // read with it, are left out unless asked for (`--comments`), as a
+    // DOCX's are. The ids around them are kept, so an element is named
+    // alike with and without them.
+    let mut elements = elements;
+    if !args.comments {
+        elements.retain(|e| e.evidence != "comment");
+    }
+    Ok(render(&elements, src, args, Vec::new(), &notes))
 }
 
 /// A meeting transcript or a caption file: one paragraph per speaker turn.
@@ -467,7 +626,54 @@ fn convert_email(
         cfg,
         quiet,
     );
-    let count = email.attachments.len();
+    // An image the body shows, read into the body where it is shown, is
+    // converted with the message; any other file is a document of its own,
+    // and this output does not hold it. So is an image read with no text in
+    // it: the body holds nothing of it.
+    let read: std::collections::HashSet<usize> = email
+        .media
+        .iter()
+        .filter(|m| (media.read.iter()).any(|(figure, els)| *figure == m.figure && !els.is_empty()))
+        .filter_map(|m| email.media_attachment(m.source.part()?))
+        .collect();
+    let files: Vec<(&fluree_doc_model::Attachment, &[u8])> = email
+        .attachments
+        .iter()
+        .map(|a| (&a.info, a.bytes.as_slice()))
+        .collect();
+    let read: Vec<usize> = read.into_iter().collect();
+    save_attachments(&files, src, args, &read, "attachment", quiet)?;
+    if args.parse_attachments {
+        convert_attachments(&email, src, cfg, args, quiet)?;
+    }
+    let notes = fluree_doc_model::Notes {
+        unread_images: media.unread,
+        ocr: media.ocr,
+        ..email.notes()
+    };
+    let mut elements = email.elements;
+    fluree_doc_image::place_after_figures(&mut elements, media.read);
+    Ok(render(&elements, src, args, Vec::new(), &notes))
+}
+
+/// Save the files a document carries (an e-mail's attachments, a PDF's
+/// embedded files, `what` names them) under `--attachments DIR`, in the
+/// input's own directory; without it, say on stderr what was left out. The
+/// files at `read` (images read into the body) were converted with it and
+/// are not counted as left out. A carried file's files are not saved: an
+/// attached message's are converted by the run that carries it, and of any
+/// other's, what is left out is said without asking for a directory the run
+/// was given.
+fn save_attachments(
+    files: &[(&fluree_doc_model::Attachment, &[u8])],
+    src: &Source,
+    args: &ConvertArgs,
+    read: &[usize],
+    what: &str,
+    quiet: bool,
+) -> Result<(), String> {
+    let stem = src.stem;
+    let count = files.len();
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     match &args.attachments {
         Some(dir) if count > 0 => {
@@ -477,42 +683,29 @@ fn convert_email(
             std::fs::create_dir_all(&dir)
                 .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
             let mut taken = std::collections::HashSet::new();
-            for (i, a) in email.attachments.iter().enumerate() {
-                let path = dir.join(file_name(a.info.filename.as_deref(), i, &mut taken));
-                std::fs::write(&path, &a.bytes)
+            for (i, (info, bytes)) in files.iter().enumerate() {
+                let path = dir.join(file_name(info.filename.as_deref(), i, &mut taken));
+                std::fs::write(&path, bytes)
                     .map_err(|e| format!("writing {}: {e}", path.display()))?;
             }
             if !quiet {
                 eprintln!(
-                    "note: {stem}: {count} attachment{} saved to {}",
+                    "note: {stem}: {count} {what}{} saved to {}",
                     plural(count),
                     dir.display()
                 );
             }
         }
+        None if src.carried && what == "attachment" => {}
         None if count > 0 && !quiet => {
-            // An image the body shows, read into the body where it is shown,
-            // is converted with the message; any other file is a document
-            // of its own, and this output does not hold it. So is an image
-            // read with no text in it: the body holds nothing of it.
-            let read: std::collections::HashSet<usize> = email
-                .media
-                .iter()
-                .filter(|m| {
-                    (media.read.iter()).any(|(figure, els)| *figure == m.figure && !els.is_empty())
-                })
-                .filter_map(|m| email.media_attachment(m.source.part()?))
-                .collect();
-            let names: Vec<String> = email
-                .attachments
+            let names: Vec<String> = files
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| !read.contains(i))
-                .map(|(_, a)| {
-                    a.info
-                        .filename
+                .map(|(_, (info, _))| {
+                    info.filename
                         .clone()
-                        .unwrap_or_else(|| a.info.content_type.clone())
+                        .unwrap_or_else(|| info.content_type.clone())
                 })
                 .collect();
             let left = names.len();
@@ -525,10 +718,14 @@ fn convert_email(
                     plural(read.len())
                 )
             };
+            let hint = if src.carried {
+                "; the files a carried file holds are not saved"
+            } else {
+                "; pass --attachments DIR to save them"
+            };
             if left > 0 {
                 eprintln!(
-                    "note: {stem}: {left} attachment{} not converted ({}){images}; \
-                     pass --attachments DIR to save them",
+                    "note: {stem}: {left} {what}{} not converted ({}){images}{hint}",
                     plural(left),
                     names.join(", ")
                 );
@@ -536,18 +733,122 @@ fn convert_email(
         }
         _ => {}
     }
-    let notes = fluree_doc_model::Notes {
-        unread_images: media.unread,
-        ocr: media.ocr,
-        ..email.notes()
+    Ok(())
+}
+
+/// Convert the files an e-mail carries, down through attached messages
+/// (`fluree_doc_email::parse_attachments`, its default bounds), each into
+/// `DIR/<slot>/<sha256>.<format>` beside the saved files: one output per
+/// file, by its bytes, however often and under whatever names it was sent.
+///
+/// A file is converted as `convert` would convert it on its own, by its
+/// content and the extension of its name, but as a document of its own: the
+/// flags naming the e-mail's document (`--doc-iri`, `--base-iri`,
+/// `--source-name`) are not its, and it saves no files of its own (the
+/// attachments of a message attached are followed here). An image the body
+/// shows is converted with the body, not again; another image only when
+/// something is configured to read it.
+fn convert_attachments(
+    email: &fluree_doc_email::Email,
+    src: &Source,
+    cfg: &TierConfig,
+    args: &ConvertArgs,
+    quiet: bool,
+) -> Result<(), String> {
+    use fluree_doc_email::Outcome;
+    let Some(dir) = args.attachments.as_ref().map(|d| d.join(&src.slot)) else {
+        return Ok(());
     };
-    let mut elements = email.elements;
-    fluree_doc_image::place_after_figures(&mut elements, media.read);
-    Ok(render(&elements, src, args, Vec::new(), &notes))
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let child_args = ConvertArgs {
+        doc_iri: None,
+        base_iri: None,
+        source_name: None,
+        attachments: None,
+        parse_attachments: false,
+        ..args.clone()
+    };
+    let readable_images =
+        cfg.ocr.is_some() || cfg.ocr_words.is_some() || cfg.tier_results.is_some() || cfg.escalate;
+    let mut read = |f: &fluree_doc_email::AttachedFile, _depth: usize| {
+        let name = f
+            .info
+            .filename
+            .clone()
+            .unwrap_or_else(|| f.info.sha256.clone());
+        let path = Path::new(&name);
+        match common::input_kind(path, &f.bytes) {
+            common::SourceKind::Unsupported => return None,
+            common::SourceKind::Image if f.info.inline || !readable_images => return None,
+            _ => {}
+        }
+        let child = Source {
+            stem: common::stem_of(path),
+            slot: f.info.sha256.clone(),
+            named: true,
+            name: Some(name.clone()),
+            sha256: f.info.sha256.clone(),
+            carried: true,
+        };
+        Some(convert_source(
+            path,
+            f.bytes.clone(),
+            &child,
+            cfg,
+            &child_args,
+            None,
+            quiet,
+        ))
+    };
+    let children = fluree_doc_email::parse_attachments(email, &Default::default(), &mut read);
+    let mut converted = 0usize;
+    let mut left: Vec<String> = Vec::new();
+    for c in &children {
+        let name = c
+            .info
+            .filename
+            .clone()
+            .unwrap_or_else(|| c.info.content_type.clone());
+        match &c.outcome {
+            Outcome::Read(out) => {
+                let path = dir.join(format!("{}.{}", c.info.sha256, ext(args.format)));
+                std::fs::write(&path, out)
+                    .map_err(|e| format!("writing {}: {e}", path.display()))?;
+                converted += 1;
+            }
+            Outcome::NoReader => left.push(format!("{name}: no reader")),
+            Outcome::Failed(e) => left.push(format!("{name}: {e}")),
+            Outcome::Skipped(why) => left.push(format!("{name}: {why}")),
+        }
+    }
+    if !quiet && !children.is_empty() {
+        let tail = if left.is_empty() {
+            String::new()
+        } else {
+            format!("; not converted: {}", left.join("; "))
+        };
+        eprintln!(
+            "note: {}: {converted} of {} attached file(s) converted to {}{tail}",
+            src.stem,
+            children.len(),
+            dir.display()
+        );
+    }
+    Ok(())
 }
 
 /// A safe, unique file name for an attachment: its own name with any path
 /// taken off, or a numbered stand-in, and unique within its email.
+///
+/// A name is the sender's bytes: a control character (a NUL, which no file
+/// system takes, a line break) is written `_`, and a name is cut to
+/// [`MAX_FILE_NAME_BYTES`], its extension kept, so that one file's name
+/// cannot fail the whole input when it is saved.
+///
+/// A name of the form `--parse-attachments` writes a conversion under
+/// (`<sha256>.<format>`, beside the saved files) is the sender's to choose,
+/// and would pass a file of theirs off as another's conversion: it is saved
+/// with a `_` before it, which no conversion's name has.
 fn file_name(
     name: Option<&str>,
     index: usize,
@@ -555,9 +856,20 @@ fn file_name(
 ) -> String {
     let base = name
         .and_then(|n| n.rsplit(['/', '\\']).next())
-        .map(|n| n.trim().trim_start_matches('.').to_string())
+        .map(|n| {
+            let n: String = n
+                .chars()
+                .map(|c| if c.is_control() { '_' } else { c })
+                .collect();
+            shortened(n.trim().trim_start_matches('.'))
+        })
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("attachment-{}", index + 1));
+    let base = if names_a_conversion(&base) {
+        format!("_{base}")
+    } else {
+        base
+    };
     let mut candidate = base.clone();
     let mut n = 2;
     while !taken.insert(candidate.clone()) {
@@ -568,6 +880,41 @@ fn file_name(
         n += 1;
     }
     candidate
+}
+
+/// The most bytes of an attachment's name kept: most file systems take 255,
+/// and a name made unique (`name (2).pdf`) is a few bytes longer.
+const MAX_FILE_NAME_BYTES: usize = 200;
+
+/// `name`, at most [`MAX_FILE_NAME_BYTES`] of it, cut on a character and
+/// keeping a short extension (`.pdf`).
+fn shortened(name: &str) -> String {
+    if name.len() <= MAX_FILE_NAME_BYTES {
+        return name.to_string();
+    }
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e)
+        .filter(|e| !e.is_empty() && e.len() <= 16)
+        .map_or(String::new(), |e| format!(".{e}"));
+    let mut stem = String::new();
+    for c in name.chars() {
+        if stem.len() + c.len_utf8() + ext.len() > MAX_FILE_NAME_BYTES {
+            break;
+        }
+        stem.push(c);
+    }
+    stem + &ext
+}
+
+/// Whether `name` is one a conversion's output could take: 64 hexadecimal
+/// digits, in either case (a file system may not tell them apart), alone or
+/// before a `.`.
+fn names_a_conversion(name: &str) -> bool {
+    let b = name.as_bytes();
+    b.len() >= 64
+        && b[..64].iter().all(u8::is_ascii_hexdigit)
+        && matches!(b.get(64), None | Some(b'.'))
 }
 
 /// A bare image: one page of pixels, read by an OCR engine or a model.
@@ -1959,6 +2306,42 @@ fn convert_bytes(
         &fluree_doc_pdf::link::extract(&raw),
         &doc.pages,
     );
+    // The notes a reader left on the pages, when asked for (`--comments`),
+    // after each page's own text, within what one document may make: past
+    // it, the page's text is still read, and the notes are left out with a
+    // warning rather than failing the document. A markup quoting the text
+    // it marks would say that text twice, and is left out.
+    if args.comments {
+        let mut budget = fluree_doc_model::budget::Budget::default();
+        match fluree_doc_pdf::annot::annotations(&raw, &mut budget) {
+            Ok(mut annotations) => {
+                fluree_doc_pdf::annot::drop_quoting_markups(&mut annotations, &doc.pages);
+                fluree_doc_pdf::annot::place(
+                    &mut a.elements,
+                    fluree_doc_pdf::annot::elements(&annotations),
+                );
+            }
+            Err(e) if !quiet => eprintln!("warning: {stem}: notes left out: {e}"),
+            Err(_) => {}
+        }
+    }
+    // The files it embeds, described as an e-mail's attachments are, and
+    // saved with them under `--attachments`.
+    let (embedded, skipped) = fluree_doc_pdf::annot::embedded_files(&raw);
+    if !quiet {
+        for s in &skipped {
+            eprintln!(
+                "warning: {stem}: embedded file {} not taken out ({})",
+                s.name.as_deref().unwrap_or("(unnamed)"),
+                s.reason
+            );
+        }
+    }
+    let files: Vec<(&fluree_doc_model::Attachment, &[u8])> = embedded
+        .iter()
+        .map(|f| (&f.info, f.bytes.as_slice()))
+        .collect();
+    save_attachments(&files, src, args, &[], "embedded file", quiet)?;
     if let Some(keep) = pages {
         a.elements.retain(|e: &Element| keep.contains(&e.page));
     }
@@ -2017,6 +2400,266 @@ fn convert_bytes(
             .collect(),
         info: fluree_doc_pdf::info::read(&raw),
         ocr,
+        attachments: embedded.iter().map(|f| f.info.clone()).collect(),
+        ..Default::default()
+    };
+    if let (Some(note), false) = (notes.summary(), quiet) {
+        eprintln!("warning: {stem}: {note}");
+    }
+    if !quiet {
+        for line in parse_warning_lines(&notes.warnings) {
+            eprintln!("warning: {stem}: {line}");
+        }
+    }
+    let asked_pages = doc.pages.iter().filter(|p| asked(p.index)).count();
+    if let Some(why) = read_nothing(doc.pages.len(), asked_pages, &a.elements, &notes) {
+        if args.strict {
+            return Err(why);
+        }
+        if !quiet {
+            eprintln!("warning: {stem}: {why}");
+        }
+    }
+    Ok(render(&a.elements, src, args, sizes, &notes))
+}
+
+/// An XPS or OpenXPS document: its pages' glyphs laid out by the PDF
+/// pipeline, as a PDF's are, with their geometry.
+///
+/// A page that is only a picture (a screen printed to XPS) routes as a
+/// scanned PDF page does, and is read the ways one is: by OCR (`--ocr`,
+/// which reads the picture's own pixels; `--ocr-words`,
+/// `<stem>_p<N>_full.json`), by a reading someone already has
+/// (`--tier-results`, `<stem>_p<N>_full.json`), or by the configured model,
+/// sent the picture's bytes. A page nothing read is listed unread.
+fn convert_xps(
+    data: &[u8],
+    src: &Source,
+    cfg: &TierConfig,
+    args: &ConvertArgs,
+    pages: Option<&[usize]>,
+    quiet: bool,
+) -> Result<String, String> {
+    use fluree_doc_pdf::ocr::{Crop, WordReading};
+    let stem = src.stem;
+    let xps = fluree_doc_xps::parse(data).map_err(|e| e.to_string())?;
+    let mut doc = xps.doc.clone();
+    let asked = |page: usize| pages.is_none_or(|keep| keep.contains(&page));
+    // The pages that are pictures nothing else on them reads: the router
+    // sends them to a reader as it would a scan.
+    let pictured: Vec<(usize, &fluree_doc_xps::PageImage)> = doc
+        .pages
+        .iter()
+        .filter(|p| asked(p.index))
+        .filter(|p| {
+            matches!(
+                fluree_doc_pdf::route::decide(p).0,
+                fluree_doc_pdf::route::Route::Vlm(_)
+            )
+        })
+        .filter_map(|p| Some((p.index, xps.page_image(p.index)?)))
+        .collect();
+    let image = |img: &fluree_doc_xps::PageImage| fluree_doc_xps::read_image(data, &img.part);
+    let plans = common::xps_crop_plans(&xps, pages);
+    let injected = if let Some(engine) = &cfg.ocr {
+        // The picture's own pixels, whole for a page that is a picture, in
+        // part under each raster region of a page of text, its words placed
+        // where it is drawn; each crop read as it is cut, a page's pictures
+        // at a time.
+        let mut readings = Vec::new();
+        let failed = common::xps_crops(data, &plans, &mut |c| {
+            let name = format!("{stem}_p{}_{}", c.page, c.crop.tag());
+            match engine.0.read(&c.pixels) {
+                Ok(r) => {
+                    let r = fluree_doc_xps::reading_on_page(
+                        r,
+                        &c.bbox,
+                        c.pixels.width,
+                        c.pixels.height,
+                    );
+                    readings.push((c.page, c.crop, r));
+                }
+                Err(e) => {
+                    if !quiet {
+                        eprintln!("warning: --ocr: {name}: {e}");
+                    }
+                }
+            }
+        });
+        for e in failed {
+            if !quiet {
+                eprintln!("warning: --ocr: {stem}: {e}");
+            }
+        }
+        let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
+        report_ocr(stem, "--ocr", &injected, cfg.verbose, quiet);
+        injected
+    } else if let Some(dir) = cfg.ocr_words.as_deref() {
+        let mut readings: Vec<(usize, Crop, WordReading)> =
+            common::ocr_readings(dir, stem, &doc, quiet);
+        readings.retain(|(page, _, _)| asked(*page));
+        // A crop is of the picture's own pixels, not of the page: its words
+        // are placed by the box it shows, as `--ocr` places them, so the
+        // three steps read what `--ocr` reads. A reading of no crop this
+        // document has is placed as a PDF page's is.
+        let readings: Vec<(usize, Crop, WordReading)> = readings
+            .into_iter()
+            .map(|(page, crop, reading)| {
+                let plan = plans.iter().find(|p| p.page == page && p.crop == crop);
+                let (Some(plan), Some(w), Some(h)) = (plan, reading.width, reading.height) else {
+                    return (page, crop, reading);
+                };
+                match plan.bbox(data) {
+                    Ok(b) => {
+                        let (w, h) = (w.round() as u32, h.round() as u32);
+                        (
+                            page,
+                            crop,
+                            fluree_doc_xps::reading_on_page(reading, &b, w, h),
+                        )
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            eprintln!("warning: --ocr-words: {stem}_p{page}_{}: {e}", crop.tag());
+                        }
+                        (page, crop, reading)
+                    }
+                }
+            })
+            .collect();
+        let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
+        report_ocr(stem, "--ocr-words", &injected, cfg.verbose, quiet);
+        injected
+    } else {
+        Vec::new()
+    };
+    let opts = cfg.options_for(stem);
+    let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &opts);
+    let page_text: Vec<Vec<String>> = doc
+        .pages
+        .iter()
+        .map(|p| fluree_doc_pdf::fidelity::page_lines(&p.glyphs))
+        .collect();
+    // The regions a screen pasted into a page of text fills, as a PDF's.
+    let screens = common::pasted_regions(&a.elements, &doc.pages);
+    common::apply_tiers(
+        cfg.tier_results.as_deref(),
+        cfg.structure_results.as_deref(),
+        cfg.emit_anchors,
+        stem,
+        &mut a.elements,
+        &page_text,
+        &a.furniture,
+        &screens,
+    );
+    // The configured model, for a pictured page nothing read yet, sent the
+    // picture as it is, within the document's `escalation.max_crops`.
+    if cfg.escalate && cfg.tier_results.is_none() {
+        let unread: Vec<usize> = fluree_doc_pdf::unread_pages(&doc, &a.elements)
+            .iter()
+            .map(|u| u.index)
+            .collect();
+        let max = cfg.config.escalation.max_crops;
+        let mut sent: Vec<(String, Vec<u8>, &'static str)> = Vec::new();
+        for (page, img) in pictured.iter().filter(|(p, _)| unread.contains(p)) {
+            if max != 0 && sent.len() >= max {
+                break;
+            }
+            match image(img) {
+                Ok(b) => match fluree_doc_pdf::image::Format::sniff(&b) {
+                    Some(f) => sent.push((format!("p{page}_full"), b, f.mime())),
+                    None => {
+                        if !quiet {
+                            eprintln!(
+                                "warning: {stem}_p{page}_full: not a PNG, JPEG or TIFF image"
+                            );
+                        }
+                    }
+                },
+                Err(e) => {
+                    if !quiet {
+                        eprintln!("warning: {stem}_p{page}_full: {e}");
+                    }
+                }
+            }
+        }
+        if !sent.is_empty() {
+            let crops: Vec<(&str, &str)> = sent.iter().map(|(c, _, m)| (c.as_str(), *m)).collect();
+            match crate::escalate::read_images(
+                Path::new(stem),
+                &crops,
+                &mut |i| Ok(std::borrow::Cow::Borrowed(sent[i].1.as_slice())),
+                &cfg.config,
+                cfg.verbose,
+            ) {
+                // A picture read and found to hold no text leaves its page
+                // unread, as a page of a PDF is left.
+                Ok(read) => {
+                    for (crop, e) in &read.failures {
+                        if !quiet {
+                            eprintln!("warning: {stem}_{crop}: the configured model: {e}");
+                        }
+                    }
+                    fluree_doc_pdf::arbiter::splice_with_page(
+                        &mut a.elements,
+                        stem,
+                        &read.readings,
+                        None,
+                        &page_text,
+                    );
+                }
+                Err(e) => {
+                    if !quiet {
+                        eprintln!("warning: {stem}: the configured model: {e}");
+                    }
+                }
+            }
+        }
+    }
+    let (first, last) = match pages {
+        Some(keep) => (
+            keep.iter().copied().min().unwrap_or(0),
+            keep.iter().copied().max().unwrap_or(0),
+        ),
+        None => (0, doc.pages.len().saturating_sub(1)),
+    };
+    fluree_doc_pdf::furniture::keep_running(&mut a.elements, &a.running, first, last);
+    fluree_doc_pdf::ocr::mark_provenance(&mut a.elements, &injected);
+    if pages.is_some() {
+        a.elements.retain(|e: &Element| asked(e.page));
+    }
+    let sizes = doc
+        .pages
+        .iter()
+        .filter(|p| asked(p.index))
+        .map(|p| fluree_doc_model::PageSize {
+            index: p.index,
+            width: p.width,
+            height: p.height,
+            folio: a.folios.get(p.index).cloned().flatten(),
+        })
+        .collect();
+    let mut unread = fluree_doc_pdf::unread_pages(&doc, &a.elements);
+    unread.retain(|u| asked(u.index));
+    let mut unread_regions = fluree_doc_pdf::unread_regions(&doc, &a.elements);
+    unread_regions.retain(|u| asked(u.page));
+    let mut ocr = fluree_doc_pdf::ocr::readings(&injected, &a.elements);
+    ocr.retain(|r| r.page.is_none_or(asked));
+    // A page part that would not read, read as blank.
+    let mut warnings = fluree_doc_pdf::parse_warnings(&doc);
+    warnings.retain(|w| asked(w.page));
+    let notes = fluree_doc_model::Notes {
+        unread,
+        unread_regions,
+        running_text: a
+            .furniture
+            .iter()
+            .filter(|(text, _)| fluree_doc_pdf::furniture::names_something(text))
+            .map(|(text, _)| text.clone())
+            .collect(),
+        info: xps.info.clone(),
+        ocr,
+        warnings,
         ..Default::default()
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
@@ -2067,6 +2710,7 @@ fn parse_warning_lines(warnings: &[fluree_doc_model::ParseWarning]) -> Vec<Strin
             }
             let what = match kind {
                 "ImageDecodeFailure" => "an image could not be decoded; what it shows is missing",
+                "MissingPagePart" => "the page's part is missing or unreadable; read as blank",
                 // Any other kind the interpreter may name (it declares
                 // `UnsupportedFont`, but never reports it).
                 _ => "the parser reported a problem",
@@ -2283,6 +2927,49 @@ fn parse_page(s: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_attachment_cannot_take_a_conversions_name() {
+        let sha = fluree_doc_model::sha256_hex(b"invoice");
+        let mut taken = std::collections::HashSet::new();
+        for (name, saved) in [
+            (format!("{sha}.md"), format!("_{sha}.md")),
+            (
+                format!("{}.json", sha.to_uppercase()),
+                format!("_{}.json", sha.to_uppercase()),
+            ),
+            (sha.clone(), format!("_{sha}")),
+            (format!("x/{sha}.md"), format!("_{sha} (2).md")),
+            // Not 64 digits before the dot: the sender's name, as given.
+            (format!("{}.md", &sha[..63]), format!("{}.md", &sha[..63])),
+            (format!("{sha}0.md"), format!("{sha}0.md")),
+            ("invoice.pdf".into(), "invoice.pdf".into()),
+        ] {
+            assert_eq!(file_name(Some(&name), 0, &mut taken), saved, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_attachments_name_is_one_a_file_system_takes() {
+        let mut taken = std::collections::HashSet::new();
+        // A NUL, which no file system takes, failed the whole input.
+        assert_eq!(
+            file_name(Some("orders\0.csv"), 0, &mut taken),
+            "orders_.csv"
+        );
+        assert_eq!(file_name(Some("a\nb.txt"), 1, &mut taken), "a_b.txt");
+        // A name past what a file system takes is cut, its extension kept.
+        let long = format!("{}.pdf", "é".repeat(400));
+        let saved = file_name(Some(&long), 2, &mut taken);
+        assert!(saved.len() <= MAX_FILE_NAME_BYTES, "{}", saved.len());
+        assert!(saved.ends_with("é.pdf"), "{saved}");
+        let dir = std::env::temp_dir().join(format!("fdoc-names-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["orders_.csv", "a_b.txt", saved.as_str()] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn parser_warnings_read_as_one_line_a_kind() {

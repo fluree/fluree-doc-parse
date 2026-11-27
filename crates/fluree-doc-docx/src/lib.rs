@@ -19,6 +19,7 @@
 
 mod numbering;
 
+use fluree_doc_model::budget::Budget;
 use fluree_doc_model::{symbols, DocumentInfo, Element};
 use fluree_doc_ooxml::{attr, local};
 use numbering::Numbering;
@@ -31,6 +32,8 @@ pub enum DocxError {
     Zip(String),
     Xml(String),
     NoDocument,
+    /// Past what one document may make ([`Budget`]), naming it.
+    TooLarge(String),
 }
 
 impl std::fmt::Display for DocxError {
@@ -39,6 +42,7 @@ impl std::fmt::Display for DocxError {
             Self::Zip(e) => write!(f, "not a readable .docx: {e}"),
             Self::Xml(e) => write!(f, "malformed document.xml: {e}"),
             Self::NoDocument => write!(f, "package has no main document part"),
+            Self::TooLarge(e) => write!(f, "DOCX document too large: {e}"),
         }
     }
 }
@@ -120,22 +124,51 @@ pub fn parse_with_ocr(
     })
 }
 
+/// What a document is read with beyond its printed text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Options {
+    /// Read the comments reviewers left (`word/comments.xml`), each after
+    /// the footer, `evidence` `comment`, opening with its author. Off by
+    /// default: Word does not print them, and they are not the document's
+    /// text.
+    pub comments: bool,
+}
+
 /// [`parse_with_info`], with the images of each figure in the body that has
 /// any, in reading order: what an OCR engine or a model can read, and the
 /// figure its text belongs after. Only where they are is read here; their
 /// bytes are read by [`read_pictures`], each image once, or one at a time
-/// by [`read_media`].
+/// by [`read_media`]. Read with the default [`Options`]: no comments.
 pub fn parse_with_media(
     bytes: &[u8],
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
-    parse_package(&mut Package::open(bytes).map_err(DocxError::Zip)?)
+    parse_with_media_options(bytes, &Options::default())
+}
+
+/// [`parse_with_media`], with what is read beyond the printed text as
+/// `options` says.
+pub fn parse_with_media_options(
+    bytes: &[u8],
+    options: &Options,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
+    parse_package_options(&mut Package::open(bytes).map_err(DocxError::Zip)?, options)
 }
 
 /// [`parse_with_media`] from a package already opened, for a caller that
 /// goes on to read the images' bytes from it ([`read_media`]): opening it
-/// reads the archive's whole directory, once.
+/// reads the archive's whole directory, once. Read with the default
+/// [`Options`]: no comments.
 pub fn parse_package(
     pkg: &mut Package<'_>,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
+    parse_package_options(pkg, &Options::default())
+}
+
+/// [`parse_package`], with what is read beyond the printed text as
+/// `options` says.
+pub fn parse_package_options(
+    pkg: &mut Package<'_>,
+    options: &Options,
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
     let main = pkg.main_part("word/document.xml");
     let xml = pkg.read(&main).ok_or(DocxError::NoDocument)?;
@@ -157,10 +190,17 @@ pub fn parse_package(
     // number, revision and title, which its body never repeats. Each is
     // read once, the header before the body and the footer after it, and
     // marked as what it is.
+    // The parts read beside the document, each within the bound an XML part
+    // of its kind has: a few kilobytes of archive can inflate to gigabytes.
+    let aside = |pkg: &mut Package<'_>, part: &str| {
+        pkg.read_capped(part, fluree_doc_ooxml::MAX_XML_BYTES)
+            .map_err(DocxError::Zip)
+    };
     let settings = pkg.related(&main, "settings", "word/settings.xml");
-    let even_odd = pkg
-        .read(&settings)
-        .is_some_and(|x| toggled_on(&x, "evenAndOddHeaders"));
+    let settings_xml = aside(pkg, &settings)?;
+    let even_odd = settings_xml
+        .as_deref()
+        .is_some_and(|x| toggled_on(x, "evenAndOddHeaders"));
     let rels = pkg.relationships(&main);
     let mut read_parts = |kind: &str, evidence: &'static str| -> Vec<Element> {
         let mut out: Vec<Element> = Vec::new();
@@ -201,9 +241,36 @@ pub fn parse_package(
     };
     let header = read_parts("header", "header");
     let footer = read_parts("footer", "footer");
+    // Footnotes and endnotes, after the body, each labelled with the
+    // number Word shows it by; then the footer; then the comments, which
+    // Word does not print, when asked for. Each marked as what it is, so a
+    // consumer that wants the body alone leaves them out.
+    let mut notes = Vec::new();
+    let mut budget = Budget::default();
+    let kinds = [&FOOTNOTES, &ENDNOTES, &COMMENTS];
+    for kind in kinds
+        .into_iter()
+        .filter(|k| options.comments || k.item != "comment")
+    {
+        let part = pkg.related(&main, kind.rel, kind.fallback);
+        let Some(part_xml) = aside(pkg, &part)? else {
+            continue;
+        };
+        notes.extend(read_notes(
+            kind,
+            &part_xml,
+            &xml,
+            settings_xml.as_deref(),
+            &header_styles,
+            &title_styles,
+            &mut budget,
+        )?);
+    }
     let mut elements = header;
     elements.extend(body);
+    elements.extend(notes.iter().filter(|e| e.evidence != "comment").cloned());
     elements.extend(footer);
+    elements.extend(notes.into_iter().filter(|e| e.evidence == "comment"));
     for (i, e) in elements.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
@@ -228,6 +295,231 @@ pub fn parse_package(
         })
         .collect();
     Ok((elements, pkg.info(), media))
+}
+
+/// What a note part's notes, or the comments part's comments, are read as:
+/// the part's relationship type, its conventional name, the element each
+/// note is, the body's reference to one, and the `evidence` they carry.
+struct NoteKind {
+    rel: &'static str,
+    fallback: &'static str,
+    item: &'static str,
+    reference: &'static str,
+    evidence: &'static str,
+}
+
+const FOOTNOTES: NoteKind = NoteKind {
+    rel: "footnotes",
+    fallback: "word/footnotes.xml",
+    item: "footnote",
+    reference: "footnoteReference",
+    evidence: "footnote",
+};
+
+const ENDNOTES: NoteKind = NoteKind {
+    rel: "endnotes",
+    fallback: "word/endnotes.xml",
+    item: "endnote",
+    reference: "endnoteReference",
+    evidence: "endnote",
+};
+
+const COMMENTS: NoteKind = NoteKind {
+    rel: "comments",
+    fallback: "word/comments.xml",
+    item: "comment",
+    reference: "commentReference",
+    evidence: "comment",
+};
+
+/// The ids the body cites notes of `kind` by, in the order it cites them,
+/// each once. A reference inside a tracked deletion is not the document's.
+fn cited(document_xml: &str, reference: &str) -> Vec<String> {
+    let mut r = Reader::from_str(document_xml);
+    let mut buf = Vec::new();
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut deleted = 0usize;
+    loop {
+        match r.read_event_into(&mut buf) {
+            Err(_) | Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) if matches!(local(e.name().as_ref()), "del" | "moveFrom") => {
+                deleted += 1
+            }
+            Ok(Event::End(e)) if matches!(local(e.name().as_ref()), "del" | "moveFrom") => {
+                deleted = deleted.saturating_sub(1)
+            }
+            Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                if deleted == 0 && local(e.name().as_ref()) == reference =>
+            {
+                if let Some(id) = attr(&e, "id").filter(|id| seen.insert(id.clone())) {
+                    out.push(id);
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+/// Each note of a note or comments part: its id, its attributes' `author`,
+/// and its XML, in the part's order. Separators (`w:type`) are no notes.
+fn note_bodies<'x>(xml: &'x str, item: &str) -> Vec<(String, Option<String>, &'x str)> {
+    let mut r = Reader::from_str(xml);
+    r.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    let mut out = Vec::new();
+    // The note being read: id, author, where it starts, nesting depth.
+    let mut open: Option<(String, Option<String>, usize, usize)> = None;
+    loop {
+        let before = r.buffer_position() as usize;
+        let event = r.read_event_into(&mut buf);
+        match event {
+            Err(_) | Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) if local(e.name().as_ref()) == item => match &mut open {
+                Some(o) => o.3 += 1,
+                None if attr(&e, "type").is_some_and(|t| t != "normal") => {
+                    open = Some((String::new(), None, usize::MAX, 1));
+                }
+                None => {
+                    let id = attr(&e, "id").unwrap_or_default();
+                    open = Some((id, attr(&e, "author"), before, 1));
+                }
+            },
+            Ok(Event::End(e)) if local(e.name().as_ref()) == item => {
+                if let Some(o) = &mut open {
+                    o.3 -= 1;
+                    if o.3 == 0 {
+                        let (id, author, start, _) = open.take().unwrap();
+                        let end = r.buffer_position() as usize;
+                        if start != usize::MAX {
+                            if let Some(slice) = xml.get(start..end) {
+                                out.push((id, author, slice));
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+/// The number format Word labels notes of `item` with, as the settings or
+/// the document's last section set it, else Word's default: decimal for
+/// footnotes, lower-case roman for endnotes.
+fn note_format(settings: Option<&str>, document_xml: &str, item: &str) -> String {
+    let want = format!("{item}Pr");
+    let find = |xml: &str| -> Option<String> {
+        let mut r = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        let mut inside = false;
+        let mut found = None;
+        loop {
+            match r.read_event_into(&mut buf) {
+                Err(_) | Ok(Event::Eof) => break,
+                Ok(Event::Start(e)) if local(e.name().as_ref()) == want => inside = true,
+                Ok(Event::End(e)) if local(e.name().as_ref()) == want => inside = false,
+                Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                    if inside && local(e.name().as_ref()) == "numFmt" =>
+                {
+                    found = attr(&e, "val").or(found);
+                }
+                _ => {}
+            }
+            buf.clear();
+        }
+        found
+    };
+    find(document_xml)
+        .or_else(|| settings.and_then(find))
+        .unwrap_or_else(|| {
+            if item == "endnote" {
+                "lowerRoman"
+            } else {
+                "decimal"
+            }
+            .into()
+        })
+}
+
+/// The notes of one note or comments part, as elements in the order the body
+/// cites them, each labelled: a footnote or an endnote by the number Word
+/// shows it by, in the format the document sets (decimal footnotes and
+/// lower-case roman endnotes by default), a comment by its author. A note the
+/// body does not cite is not shown, and not read; a comment the body does not
+/// anchor (one on a header, say) follows those it does, in the part's order.
+///
+/// Each element a note makes is spent from `budget`, with its text, before
+/// it is kept: a part of a few megabytes can hold a million notes.
+fn read_notes(
+    kind: &NoteKind,
+    part_xml: &str,
+    document_xml: &str,
+    settings: Option<&str>,
+    header_styles: &HashSet<String>,
+    title_styles: &TitleStyles,
+    budget: &mut Budget,
+) -> Result<Vec<Element>, DocxError> {
+    let bodies = note_bodies(part_xml, kind.item);
+    // Each note by its id, the first of the part's where two share one:
+    // looked up once per citation, not searched for.
+    let mut by_id: HashMap<&str, (Option<&String>, &str)> = HashMap::new();
+    for (id, author, xml) in &bodies {
+        by_id.entry(id.as_str()).or_insert((author.as_ref(), xml));
+    }
+    let mut order = cited(document_xml, kind.reference);
+    if kind.item == "comment" {
+        let mut listed: HashSet<String> = order.iter().cloned().collect();
+        for (id, _, _) in &bodies {
+            if listed.insert(id.clone()) {
+                order.push(id.clone());
+            }
+        }
+    }
+    let format = note_format(settings, document_xml, kind.item);
+    let mut out = Vec::new();
+    let mut n = 0u32;
+    for id in order {
+        let Some(&(author, xml)) = by_id.get(id.as_str()) else {
+            continue;
+        };
+        n += 1;
+        let label = match (kind.item, author) {
+            ("comment", Some(a)) if !a.trim().is_empty() => format!("{}:", a.trim()),
+            ("comment", _) => String::new(),
+            _ => numbering::format_number(n, &format),
+        };
+        let Ok(found) = parse_with_styles(xml, header_styles, title_styles, Numbering::default())
+        else {
+            continue;
+        };
+        let mut first = true;
+        for mut e in found {
+            if e.kind == "doco:Figure" {
+                continue;
+            }
+            // A heading set in a note heads no section of the document.
+            if e.kind != "doco:Table" {
+                e.kind = "doco:Paragraph".into();
+                e.level = None;
+                if first && !label.is_empty() {
+                    e.text = format!("{label} {}", e.text.trim_start());
+                }
+            }
+            first = false;
+            e.evidence = kind.evidence;
+            budget
+                .spend_elements(1)
+                .and_then(|()| budget.spend_text(&e.text))
+                .map_err(|e| DocxError::TooLarge(e.to_string()))?;
+            out.push(e);
+        }
+    }
+    Ok(out)
 }
 
 /// A toggle element in a part, present and not switched off.
@@ -2511,6 +2803,196 @@ mod tests {
             row(&["3", "4"])
         ));
         assert_eq!(one.iter().filter(|e| e.kind == "doco:Table").count(), 1);
+    }
+
+    #[test]
+    fn notes_and_comments_follow_the_body_as_what_they_are() {
+        use std::io::Write;
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let fref = |id: &str| format!("<w:r><w:footnoteReference w:id=\"{id}\"/></w:r>");
+        // The body cites footnote 7, then 3, then 7 again; an endnote; and
+        // anchors a comment. A deleted reference cites nothing.
+        let body = doc(&format!(
+            "<w:p><w:commentRangeStart w:id=\"0\"/><w:r><w:t>Yield rose</w:t></w:r>{}\
+             <w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>\
+             <w:p><w:r><w:t>Costs fell</w:t></w:r>{}{}<w:r><w:endnoteReference w:id=\"2\"/></w:r>\
+             <w:del><w:r><w:footnoteReference w:id=\"9\"/></w:r></w:del></w:p>",
+            fref("7"),
+            fref("3"),
+            fref("7")
+        ));
+        let note = |tag: &str, id: &str, attrs: &str, text: &str| {
+            format!(
+                "<w:{tag} w:id=\"{id}\"{attrs}><w:p><w:r><w:{tag}Ref/></w:r>\
+                 <w:r><w:t xml:space=\"preserve\"> {text}</w:t></w:r></w:p></w:{tag}>"
+            )
+        };
+        let footnotes = format!(
+            "<w:footnotes {NS}>{}{}{}{}{}</w:footnotes>",
+            "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>",
+            note("footnote", "3", "", "Annual report, p. 4."),
+            note("footnote", "7", "", "Survey of Alex Sample, 2026."),
+            note("footnote", "8", "", "Never cited."),
+            note("footnote", "9", "", "Cited only where deleted."),
+        );
+        let endnotes = format!(
+            "<w:endnotes {NS}>{}</w:endnotes>",
+            note("endnote", "2", "", "Method in the annex.")
+        );
+        let comments = format!(
+            "<w:comments {NS}>{}{}</w:comments>",
+            note("comment", "0", " w:author=\"Sam Example\"", "Source?"),
+            note(
+                "comment",
+                "5",
+                " w:author=\"Alex Sample\"",
+                "On the header."
+            )
+        );
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, xml) in [
+            ("word/document.xml", body),
+            (
+                "word/_rels/document.xml.rels",
+                format!(
+                    "<Relationships><Relationship Id=\"rId1\" Type=\"{rel}/footnotes\" Target=\"footnotes.xml\"/>\
+                     <Relationship Id=\"rId2\" Type=\"{rel}/endnotes\" Target=\"endnotes.xml\"/>\
+                     <Relationship Id=\"rId3\" Type=\"{rel}/comments\" Target=\"comments.xml\"/></Relationships>"
+                ),
+            ),
+            ("word/footnotes.xml", footnotes),
+            ("word/endnotes.xml", endnotes),
+            ("word/comments.xml", comments),
+        ] {
+            z.start_file(name, opts).unwrap();
+            z.write_all(xml.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+        let bytes = buf.into_inner();
+        let els = with_comments(&bytes).unwrap();
+        let got: Vec<(&str, &str)> = els.iter().map(|e| (e.text.as_str(), e.evidence)).collect();
+        let printed = [
+            ("Yield rose", "docx"),
+            ("Costs fell", "docx"),
+            ("1 Survey of Alex Sample, 2026.", "footnote"),
+            ("2 Annual report, p. 4.", "footnote"),
+            ("i Method in the annex.", "endnote"),
+        ];
+        let comments = [
+            ("Sam Example: Source?", "comment"),
+            ("Alex Sample: On the header.", "comment"),
+        ];
+        assert_eq!(got, [&printed[..], &comments[..]].concat());
+        assert!(els.iter().all(|e| e.kind == "doco:Paragraph"));
+        // Not asked for, the comments are not read: what Word prints is,
+        // under the same ids.
+        let els = parse(&bytes).unwrap();
+        let got: Vec<(&str, &str)> = els.iter().map(|e| (e.text.as_str(), e.evidence)).collect();
+        assert_eq!(got, printed);
+        assert_eq!(els.last().unwrap().id, "elem-00005");
+    }
+
+    /// The elements of `bytes`, its comments read.
+    fn with_comments(bytes: &[u8]) -> Result<Vec<Element>, DocxError> {
+        parse_with_media_options(bytes, &Options { comments: true }).map(|(els, ..)| els)
+    }
+
+    #[test]
+    fn notes_are_found_by_id_and_a_note_part_past_its_bound_is_refused() {
+        // A comment cited twice, two comments under one id (the first is
+        // the one read), and one the body does not anchor.
+        let body = doc("<w:p><w:r><w:t>Body</w:t></w:r>\
+             <w:r><w:commentReference w:id=\"4\"/></w:r><w:r><w:commentReference w:id=\"4\"/></w:r></w:p>");
+        let comment = |id: &str, text: &str| {
+            format!("<w:comment w:id=\"{id}\"><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:comment>")
+        };
+        let comments = format!(
+            "<w:comments {NS}>{}{}{}</w:comments>",
+            comment("4", "First"),
+            comment("4", "Second"),
+            comment("6", "Unanchored")
+        );
+        let docx = |comments: Vec<u8>| {
+            zipped(&[
+                ("word/document.xml".into(), body.clone().into_bytes()),
+                ("word/comments.xml".into(), comments),
+            ])
+        };
+        let els = with_comments(&docx(comments.into_bytes())).unwrap();
+        let got: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(got, ["Body", "First", "Unanchored"]);
+        // Past the bound by a byte, deflated to a few kilobytes: refused as
+        // it inflates, not read whole; not asked for, not read at all.
+        let mut big = b"<w:comments>".to_vec();
+        big.resize(fluree_doc_ooxml::MAX_XML_BYTES as usize + 1, b' ');
+        let err = with_comments(&docx(big.clone())).unwrap_err().to_string();
+        assert!(err.contains("word/comments.xml"), "{err}");
+        assert!(parse(&docx(big)).is_ok());
+    }
+
+    #[test]
+    fn a_label_stays_short_however_large_its_number() {
+        use numbering::format_number;
+        assert_eq!(format_number(28, "lowerLetter"), "bb");
+        assert_eq!(format_number(16 * 26, "upperLetter"), "Z".repeat(16));
+        assert_eq!(format_number(16 * 26 + 1, "lowerLetter"), "417");
+        assert_eq!(format_number(3_999, "upperRoman"), "MMMCMXCIX");
+        assert_eq!(format_number(4_000, "lowerRoman"), "4000");
+        assert_eq!(format_number(u32::MAX, "lowerLetter"), u32::MAX.to_string());
+    }
+
+    #[test]
+    fn each_note_spends_the_documents_budget_before_it_is_kept() {
+        let cite = |id: usize| format!("<w:r><w:footnoteReference w:id=\"{id}\"/></w:r>");
+        let body = doc(&format!("<w:p>{}{}{}</w:p>", cite(1), cite(2), cite(3)));
+        let notes: String = (1..=3)
+            .map(|id| {
+                format!(
+                    "<w:footnote w:id=\"{id}\"><w:p><w:r><w:t>Note</w:t></w:r></w:p></w:footnote>"
+                )
+            })
+            .collect();
+        let part = format!("<w:footnotes {NS}>{notes}</w:footnotes>");
+        let read = |budget: &mut Budget| {
+            read_notes(
+                &FOOTNOTES,
+                &part,
+                &body,
+                None,
+                &HashSet::new(),
+                &TitleStyles::new(),
+                budget,
+            )
+        };
+        assert_eq!(read(&mut Budget::default()).unwrap().len(), 3);
+        // Three elements and their text, `1 Note` and so on.
+        let need = 3 * fluree_doc_model::budget::ELEMENT_BYTES
+            + 3 * 6 * fluree_doc_model::budget::TEXT_BYTES;
+        assert_eq!(read(&mut Budget::new(need, 0)).unwrap().len(), 3);
+        let err = read(&mut Budget::new(need - 1, 0)).unwrap_err();
+        assert!(matches!(err, DocxError::TooLarge(_)), "{err}");
+    }
+
+    #[test]
+    fn a_documents_note_format_is_the_one_its_labels_take() {
+        let settings = format!(
+            "<w:settings {NS}><w:footnotePr><w:numFmt w:val=\"lowerLetter\"/></w:footnotePr></w:settings>"
+        );
+        assert_eq!(
+            note_format(Some(&settings), &doc(""), "footnote"),
+            "lowerLetter"
+        );
+        assert_eq!(
+            note_format(Some(&settings), &doc(""), "endnote"),
+            "lowerRoman"
+        );
+        let sect =
+            doc("<w:sectPr><w:endnotePr><w:numFmt w:val=\"decimal\"/></w:endnotePr></w:sectPr>");
+        assert_eq!(note_format(None, &sect, "endnote"), "decimal");
+        assert_eq!(note_format(None, &doc(""), "footnote"), "decimal");
     }
 
     #[test]

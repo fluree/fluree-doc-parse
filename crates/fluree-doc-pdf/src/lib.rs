@@ -33,6 +33,8 @@
 //! - [`forms::fields`] — AcroForm values
 //! - [`outline::extract`] — the PDF bookmark tree
 //! - [`link::extract`] / [`link::attach`] — link annotations and their anchors
+//! - [`annot::annotations`] / [`annot::embedded_files`] — notes left on the
+//!   pages, and the files the document embeds
 //! - [`arbiter::TierBackend`] and [`arbiter::splice`] — the model-tier contract
 //! - [`ocr::inject`] and [`ocr::mark_provenance`] — OCR words as glyphs
 //! - [`overlay::rects_for_glyph_range`] — glyph span → highlight rectangles
@@ -50,6 +52,7 @@
 //! is the same promise `fdoc dev` makes about its output.
 
 pub(crate) mod accent;
+pub mod annot;
 pub mod arbiter;
 pub mod block;
 pub(crate) mod cells;
@@ -104,11 +107,13 @@ pub fn unread_pages(
     const NEARLY_EMPTY: usize = 40;
     let mut out = Vec::new();
     for p in &doc.pages {
-        // A running header kept once says nothing about whether the page
-        // under it was read.
+        // A running header kept once, or a note left on the page, says
+        // nothing about whether the page under it was read.
         let text: usize = elements
             .iter()
-            .filter(|e| e.page == p.index && !matches!(e.evidence, "header" | "footer"))
+            .filter(|e| {
+                e.page == p.index && !matches!(e.evidence, "header" | "footer" | "annotation")
+            })
             .map(|e| e.text.trim().chars().count())
             .sum();
         // A page a model's page reading read whole was read, however little
@@ -291,7 +296,8 @@ pub mod watermark;
 
 pub use block::Block;
 pub use extract::{
-    extract_bytes, extract_bytes_with, extract_file, Document, ExtractError, ExtractOptions, Page,
+    extract_bytes, extract_bytes_with, extract_file, Document, ExtractError, ExtractOptions,
+    ImagePlacement, Page,
 };
 pub use furniture::Furniture;
 pub use geom::BBox;

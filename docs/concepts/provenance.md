@@ -16,7 +16,7 @@ configure it — not in the sense that you cannot audit it.
 | `rust` | the deterministic PDF engine |
 | `vlm` | spliced in from a model tier |
 | `ocr` | assembled by the deterministic engine from [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words) |
-| `markdown` / `html` / `docx` / `pptx` / `xlsx` / `vtt` / `srt` / `eml` / `msg` | the corresponding reader |
+| `markdown` / `html` / `docx` / `pptx` / `xlsx` / `xls` / `xlsb` / `doc` / `ppt` / `odt` / `ods` / `odp` / `rtf` / `csv` / `vtt` / `srt` / `eml` / `msg` | the corresponding reader |
 
 So `provenance` answers "which reader", and for PDF specifically it
 distinguishes deterministic output from escalated output. An `ocr` element
@@ -75,8 +75,11 @@ From the escalation path:
 | `table-missing` | a detector found a table where the grid pass found none |
 | `layout-demoted` | a detector corroborated demoting this heading to prose |
 
-And from the declared formats: `markdown`, `text`, `html`, `docx`, `pptx`, `xlsx`, and
-`header` and `footer` for what a Word file's page header and footer hold. These are
+And from the declared formats: `markdown`, `text`, `html`, `docx`, `pptx`, `xlsx`, `xls`, `xlsb`, `doc`, `ppt`, `odt`, `ods`, `odp`, `rtf`, `csv`, and
+`header` and `footer` for what a Word file's page header and footer hold,
+and `footnote`, `endnote` and `comment` for its notes and comments.
+A PDF's annotations carry `annotation`, and a `.ppt` slide's speaker notes
+`notes`. These are
 the honest ones — an element marked `docx` was not inferred at all, and no
 amount of escalation would improve it. `vtt` and `srt` are nearly so: the
 file declares the words, the times and usually the speaker, and what the

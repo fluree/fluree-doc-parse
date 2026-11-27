@@ -158,7 +158,7 @@ fn decode_uri(bytes: &[u8]) -> String {
 ///
 /// `/Rect` is any two opposite corners, in either order, so both axes are
 /// normalized rather than assumed.
-fn rect_of(annot: &Dict<'_>, page_height: f64) -> Option<BBox> {
+pub(crate) fn rect_of(annot: &Dict<'_>, page_height: f64) -> Option<BBox> {
     let r = annot.get::<Array<'_>>(b"Rect")?;
     let v: Vec<f64> = r.iter::<Number>().map(|n| n.as_f64()).collect();
     if v.len() != 4 {

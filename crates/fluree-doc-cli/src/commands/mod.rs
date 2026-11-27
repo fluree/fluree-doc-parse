@@ -70,7 +70,9 @@ pub(crate) fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         // change it.
         no_escalate: true,
         strict: false,
+        comments: false,
         attachments: None,
+        parse_attachments: false,
     }
 }
 

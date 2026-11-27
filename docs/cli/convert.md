@@ -32,7 +32,9 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--base-iri <IRI>` | what every node IRI minted by `-f doco` starts with (`<IRI>-element-3`). Default: `--doc-iri`, else `urn:fluree-doc-parse:<stem>-<first 12 hex digits of the SHA-256>`. One input only |
 | `--doc-iri <IRI>` | stamp `-f doco` nodes with `doc:sourceDocument`, the tag a re-extraction retracts by. One input only |
 | `--source-name <NAME>` | what `-f doco` records as the input's name, `doc:sourceName`. Default: the input's file name; none from stdin. One input only |
-| `--attachments <DIR>` | save each email's attachments under `DIR/<email name>/`, to convert on their own. See [Email](../inputs/email.md#attachments) |
+| `--comments` | also read the notes reviewers left: a PDF's annotations, and the comments of a Word, OpenDocument or RTF document. Off by default. See [PDF](../inputs/pdf.md#annotations-and-embedded-files) |
+| `--attachments <DIR>` | save each email's attachments, and each PDF's embedded files, under `DIR/<input name>/`, to convert on their own. See [Email](../inputs/email.md#attachments) and [PDF](../inputs/pdf.md#annotations-and-embedded-files) |
+| `--parse-attachments` | with `--attachments`, also convert each email's attachments, and those of attached messages, into `DIR/<email name>/<sha256>.<format>`. See [Email](../inputs/email.md#reading-the-attachments-too) |
 | `--layout-boxes <DIR>` | layout-detector sidecars. Env: `FDOC_TITLE_BOXES` |
 | `--tier-results <DIR>` | model-tier readings to splice. Env: `FDOC_TIER_RESULTS` |
 | `--structure-results <DIR>` | table-structure readings, for the [three-way veto](../concepts/escalation.md#the-three-way-veto) on a table reading from `--tier-results` or from a model called in the run; no table crop it vetoes is sent to the model. Env: `FDOC_STRUCTURE_RESULTS` |
@@ -241,14 +243,22 @@ whatever the page's layout.
 ## Inputs
 
 Files, directories, or `-` for stdin. **Stdin is read as a PDF, an email, a
-transcript or an image** (PNG, JPEG, TIFF), which are told apart by their
-content; Markdown, HTML and the Office formats are known only by their
-extension, so they are read from a file.
+transcript, an image** (PNG, JPEG, TIFF), **a Word, Excel or PowerPoint
+97-2003 file, an Excel binary workbook, an OpenDocument file, RTF, a DOCX,
+PPTX or XLSX package, an XPS document, a web page or delimited text (CSV,
+TSV)**, which are told apart by their content; the other readers (Markdown,
+plain text) identify the format by extension, so they are read from a
+file.
 
 Directories are scanned for every extension `convert` reads, including
 Word, PowerPoint and Excel's macro-enabled, template and show variants
 (`.docm`, `.dotx`, `.potx`, `.ppsx`, `.xltx`, …). Multiple inputs are
 allowed; with more than one you need `--out-dir` rather than `--output`.
+
+A format no reader reads yet (`.wpd`, Apple's `.pages`, a compound file no
+reader here reads, …) fails with `unsupported format (…)`, naming it, rather than
+as a corrupt PDF; directory scans list such files, so a batch counts them
+among its failures. See [Detection](../inputs/README.md#detection).
 
 ## Output naming
 
@@ -258,7 +268,7 @@ where inputs share a stem, the source extension joins it (`report.pdf.md`,
 `report.docx.md`), and where that still repeats — `a/report.md` and
 `b/report.md` — later ones are numbered (`report.md (2).md`). Names are
 compared without case, as a case-insensitive file system would.
-`--attachments` names each email's directory the same way.
+`--attachments` names each input's directory the same way.
 
 ## Batch and parallelism
 

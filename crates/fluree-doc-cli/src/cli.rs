@@ -40,9 +40,10 @@ pub enum OcrEngineName {
 pub enum Commands {
     /// Convert documents to Markdown, XHTML, DoCO JSON-LD, JSON or text
     ///
-    /// Reads PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, WebVTT and
-    /// SubRip transcripts, and email (.eml, .msg). PDF structure is inferred
-    /// from layout; the others declare theirs and carry no geometry.
+    /// Reads PDF and XPS, Markdown, plain text, HTML, DOCX and DOC, PPTX and PPT, XLSX, XLS and XLSB,
+    /// ODT, ODS and ODP, RTF, CSV and TSV, WebVTT and SubRip transcripts, email (.eml, .msg) and
+    /// images. PDF and XPS structure is inferred from layout; the others
+    /// declare theirs and carry no geometry.
     ///
     /// Examples:
     ///   fdoc convert report.pdf
@@ -189,10 +190,12 @@ impl From<MdLinks> for fluree_doc_model::MdLinks {
     }
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct ConvertArgs {
     /// Input documents: files, directories, or `-` for stdin (a PDF, a
-    /// transcript, an email or a PNG, JPEG or TIFF image)
+    /// transcript, an email, a PNG, JPEG or TIFF image, a Word, Excel or
+    /// PowerPoint 97-2003 file, an Excel binary workbook, an OpenDocument
+    /// file or RTF)
     #[arg(required = true, value_name = "FILE|DIR|-")]
     pub inputs: Vec<PathBuf>,
 
@@ -323,13 +326,33 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub strict: bool,
 
-    /// Save each email's attachments under DIR/<email stem>/, to convert
-    /// on their own
+    /// Also read the notes reviewers left: a PDF's annotations (sticky
+    /// notes, free text, the comments on highlights) and the comments of a
+    /// Word, OpenDocument or RTF document
+    ///
+    /// Each is marked as what it is (`evidence` `annotation` or `comment`):
+    /// a PDF's after its page's text, a document's comments after the rest.
+    /// Off by default: they are not the document's own text, and a
+    /// highlight's note often repeats the text it marks.
+    #[arg(long)]
+    pub comments: bool,
+
+    /// Save each email's attachments, and the files each PDF embeds, under
+    /// DIR/<input stem>/, to convert on their own
     ///
     /// An attachment is a document of its own. Without this flag the
     /// output describes the attachments and does not include them.
     #[arg(long, value_name = "DIR")]
     pub attachments: Option<PathBuf>,
+
+    /// Also convert each email's attachments, and those of the messages
+    /// attached to it, into DIR/<email stem>/<sha256>.<format>
+    ///
+    /// Each file once, by the SHA-256 of its bytes, in the format asked
+    /// for; three levels of attached messages deep, at most 200 files of
+    /// 64 MiB each and 256 MiB in all. Needs --attachments.
+    #[arg(long, requires = "attachments")]
+    pub parse_attachments: bool,
 }
 
 #[derive(Args, Debug)]
