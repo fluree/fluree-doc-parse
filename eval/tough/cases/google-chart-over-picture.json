@@ -6,7 +6,8 @@
     "about": "Google 2024 Environmental Report (86 pages, InDesign). Figure 17 on page 34 draws its bars as vector shapes over a raster image of the chart, and sets its legend, years and percentages as text around and on it."
   },
   "notes": [
-    "2026-11-24 (#81): a guard. A drawing over a picture is a photograph's callouts only when all it says is callout marks; a chart drawn over a picture sets values and years in it, and keeps reaching for its legend and axis labels as charts do."
+    "2026-11-24 (#81): a guard. A drawing over a picture is a photograph's callouts only when all it says is callout marks; a chart drawn over a picture sets values and years in it, and keeps reaching for its legend and axis labels as charts do.",
+    "2026-11-27 (#526): the percentages on the bars (`37%` …) are text drawn under the bars, which are opaque; what shows is the chart's picture, laid over everything with an alpha mask (MuPDF and hayro agree on the order). Read as text they were hidden copies, so the value checked is `25.3`, set as text over the last bar, where it shows."
   ],
   "checks": [
     {
@@ -30,8 +31,8 @@
     {
       "id": "value-in-figure",
       "found": "2026-11-24",
-      "issue": "A guard: a value on the bars stays the chart's label.",
-      "element": {"type": "doco:Figure", "text": "37%"}
+      "issue": "A guard: a value set over the bars stays the chart's label.",
+      "element": {"type": "doco:Figure", "text": "25.3"}
     }
   ]
 }
