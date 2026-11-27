@@ -231,6 +231,64 @@ fn table_title(
 /// The table goes on from the row under it, its layout moved up a row: its
 /// spans, the labels set down its rows and its row bands with it. The
 /// header the reading found under the band stays the header.
+/// A first row [`table_title`] reads as the table's title is the first of
+/// the table's section bands: one label across the row, as each band further
+/// down is (`Carrier Gas Settings (helium)` over `Injection parameters`,
+/// `GC parameters`; a continued table's `Gastrointestinal disorders` over
+/// `Eye disorders`). Each band names the rows under it, and read out as a
+/// title, the first named none.
+///
+/// It is the first band where a later row of the table, taken without it,
+/// is a band (the ruling leaves it open across, or it is a group's label),
+/// set as the first row is ([`table::Grid::rows_set_alike`]: size, weight,
+/// shading, drawn edges), and the row under the first names itself in its
+/// first column and does not head the table ([`table::Grid::heads_its_rows`],
+/// the test a row under a title must pass). A title set apart from the
+/// bands, or over a header, stays a title.
+fn opens_first_section(
+    g: &table::Grid,
+    trimmed: &table::Grid,
+    page: &crate::extract::Page,
+) -> bool {
+    if g.layout.is_some() || trimmed.rows() < 2 || g.rows() != trimmed.rows() + 1 {
+        return false;
+    }
+    let cols = trimmed.cols();
+    let rows: Vec<Vec<String>> = trimmed
+        .cell_texts(&page.glyphs)
+        .chunks(cols)
+        .map(<[String]>::to_vec)
+        .collect();
+    // The row under a band names itself in its first column, as the rows
+    // under every band do. A row of column names under a title leaves that
+    // corner empty (`· | · | 2024 | 2023` under `Expressed in years`).
+    if rows[0].first().is_none_or(|t| t.trim().is_empty()) {
+        return false;
+    }
+    let header = trimmed.header_rows(&rows, &page.glyphs, &page.rules, &page.fills);
+    if trimmed.heads_its_rows(header, &rows, &page.glyphs, &page.rules, &page.fills) {
+        return false;
+    }
+    let mut merges = trimmed.merges(&page.rules, &page.fills);
+    trimmed.text_merges(&page.glyphs, &page.rules, &mut merges);
+    (1..rows.len()).any(|r| {
+        section_band(&rows, &merges, r)
+            && g.rows_set_alike(&page.glyphs, &page.rules, &page.fills, 0, r + 1)
+    })
+}
+
+/// Row `r` of a ruled table is a band over a section of its rows, labelling
+/// them rather than the columns: a row the ruling leaves open across every
+/// column, set as one, with text; or a group's label ([`group_label`]).
+fn section_band(rows: &[Vec<String>], merges: &table::CellMerges, r: usize) -> bool {
+    let cols = rows.first().map_or(0, Vec::len);
+    let spans = (1..cols).all(|c| merges.continues_left.get(r * cols + c) == Some(&true));
+    (merges.full_width_row.get(r) == Some(&true)
+        && spans
+        && rows[r].iter().any(|t| !t.trim().is_empty()))
+        || group_label(rows, r)
+}
+
 fn layout_title(
     g: &table::Grid,
     lay: &table::TableLayout,
@@ -6429,6 +6487,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 &scrub_texts,
                 layout.spanning_rows[gi].contains(&0),
             );
+            // Unless the band is set as the table's later bands are, over a
+            // row that does not head it: then it is the first of them, and
+            // stays in the table to label the rows under it.
+            let first_band = titled
+                .as_ref()
+                .is_some_and(|(_, trimmed)| opens_first_section(g, trimmed, &raw.pages[pi]));
+            let titled = if first_band { None } else { titled };
             let below_title;
             let (g, shift) = match &titled {
                 Some((text, trimmed)) => {
@@ -6737,6 +6802,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             if header_rows == 0 {
                 header_rows = parameter_rows(&rows);
             }
+            // A table opening on its first section's band has no header row.
+            if first_band {
+                header_rows = 0;
+            }
             // A merged cell is read whole, into its top-left cell. Its words
             // were dealt out by the grid's cuts through it, which split a
             // centred header across the row boundary under it (`time` above,
@@ -6957,11 +7026,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .full_width_row
                     .iter()
                     .enumerate()
-                    .filter(|(r, full)| {
-                        let spans = (1..cols).all(|c| merges.continues_left[*r * cols + c]);
-                        (**full && spans && rows[*r].iter().any(|c| !c.trim().is_empty())
-                            || group_label(&rows, *r))
-                            && *r >= header_rows
+                    .filter(|(r, _)| {
+                        (first_band && *r == 0)
+                            || section_band(&rows, &merges, *r) && *r >= header_rows
                     })
                     .map(|(r, _)| r)
                     .collect(),
