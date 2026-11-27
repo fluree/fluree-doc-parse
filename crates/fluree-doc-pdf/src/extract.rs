@@ -21,20 +21,29 @@ use std::sync::Arc;
 /// four lines, closed.
 fn is_rect(p: &kurbo::BezPath) -> bool {
     use kurbo::PathEl;
-    let mut pts: Vec<kurbo::Point> = Vec::new();
+    // At most five corners, the last the first again: a longer path is no
+    // rectangle, and is not walked to its end.
+    let mut pts = [kurbo::Point::ZERO; 5];
+    let mut n = 0;
     for el in p.elements() {
         match el {
-            PathEl::MoveTo(q) if pts.is_empty() => pts.push(*q),
-            PathEl::LineTo(q) => pts.push(*q),
+            PathEl::MoveTo(q) if n == 0 => {
+                pts[0] = *q;
+                n = 1;
+            }
+            PathEl::LineTo(q) if n < 5 => {
+                pts[n] = *q;
+                n += 1;
+            }
             PathEl::ClosePath => {}
             _ => return false,
         }
     }
-    if pts.len() == 5 && pts[0].distance(pts[4]) < 0.01 {
-        pts.pop();
+    if n == 5 && pts[0].distance(pts[4]) < 0.01 {
+        n = 4;
     }
     let near = |a: f64, b: f64| (a - b).abs() < 0.01;
-    pts.len() == 4
+    n == 4
         && (0..4).all(|i| {
             let (a, b) = (pts[i], pts[(i + 1) % 4]);
             near(a.x, b.x) || near(a.y, b.y)
@@ -699,7 +708,9 @@ impl<'a> Collector<'a> {
         let hayro_interpret::Paint::Color(c) = paint else {
             return;
         };
-        if c.to_rgba().to_rgba8()[3] < u8::MAX || !is_rect(path) {
+        // The shape first: it costs nothing to ask, and the colour is
+        // converted only for a rectangle.
+        if !is_rect(path) || c.to_rgba().to_rgba8()[3] < u8::MAX {
             return;
         }
         let b = crate::geom::from_kurbo(path.bounding_box());
