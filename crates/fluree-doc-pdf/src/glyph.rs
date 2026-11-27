@@ -53,13 +53,11 @@ pub struct Glyph {
 /// Where an OCR engine read a glyph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrSource {
-    /// The page's text: a page read whole (a scan, or a page whose text is
-    /// drawn as shapes), or a scan stored as a region that, with the images
-    /// it abuts, covers half its page or more.
+    /// A page read whole: a scan, or a page whose text is drawn as shapes.
+    /// Its words are the page's text.
     Page,
-    /// A picture's text: read in a picture pasted into its page, one under
-    /// half of it (a screenshot, a logo), whether its region's crop or the
-    /// whole page was read ([`crate::route::pasted_set`]).
+    /// A region routed out of a page that has text of its own: a picture
+    /// set on the page. Its words are the picture's.
     Region,
 }
 
