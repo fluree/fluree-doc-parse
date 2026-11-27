@@ -544,10 +544,16 @@ fn sets_transfer(pdf: &Pdf) -> bool {
                 Object::Dict(d) => d,
                 Object::Stream(s) => s.dict().clone(),
                 Object::Array(a) => {
-                    open.extend(a.raw_iter().filter_map(|m| match m {
-                        MaybeRef::NotRef(v) => Some(v),
-                        MaybeRef::Ref(_) => None,
-                    }));
+                    // Read entry by entry ([`crate::array_entries`]): an
+                    // array that skips but does not read back (`[+ ]`)
+                    // panics in `raw_iter`.
+                    let entries: Vec<_> = crate::array_entries(&a)
+                        .filter_map(|m| match m {
+                            MaybeRef::NotRef(v) => Some(v),
+                            MaybeRef::Ref(_) => None,
+                        })
+                        .collect();
+                    open.extend(entries);
                     continue;
                 }
                 _ => continue,
@@ -4243,6 +4249,18 @@ mod transfer_tests {
         assert!(sets_transfer(&with_state("/TR /Identity")));
         assert!(sets_transfer(&with_state("/TR2 [/Default]")));
         assert!(!sets_transfer(&with_state("/CA 0.5 /ca 0.5")));
+    }
+
+    #[test]
+    fn an_array_that_does_not_read_back_is_looked_through_up_to_where_it_stops() {
+        // `[+ ]` skips as an array but its entry does not read: looked
+        // through entry by entry, it ends there, and what follows it is
+        // still searched.
+        assert!(!sets_transfer(&with_state("/Junk [+ ] /CA 0.5")));
+        assert!(sets_transfer(&with_state("/Junk [+ ] /TR /Identity")));
+        assert!(sets_transfer(&with_state(
+            "/Junk [[+ ] << /TR /Identity >>]"
+        )));
     }
 }
 
