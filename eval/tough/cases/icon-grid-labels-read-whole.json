@@ -1,0 +1,34 @@
+{
+  "document": {
+    "file": "ready-iowa-emergency-kit.pdf",
+    "url": "https://ready.iowa.gov/es/media/108/download",
+    "sha256": "758c6c9340cc64eb31a372566396a174c33652d14b8f04eb9747694c5e771924",
+    "about": "Ready Iowa emergency supply kit checklist, 2 pages, made in Canva. Page 1 sets rows of round photo icons, four or three to a row, a label of one to three lines under each, a heading set sideways beside each group of rows."
+  },
+  "checks": [
+    {
+      "id": "label-whole",
+      "found": "2026-11-27",
+      "issue": "The labels' lines were read row by row across the icons: `Pet food and`, `AM/FM radio`, `supplies`; `Weather`, `Sleeping bag`, `appropriate`, `or blankets`, `clothing`.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Weather appropriate clothing"
+      }
+    },
+    {
+      "id": "label-whole-2",
+      "found": "2026-11-27",
+      "issue": "As above.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Pet food and supplies"
+      }
+    },
+    {
+      "id": "row-in-order",
+      "found": "2026-11-27",
+      "issue": "As above: the row's labels read left to right.",
+      "text": "Small tools Sleeping bag or blankets Weather appropriate clothing Chargers and charging cables"
+    }
+  ]
+}
