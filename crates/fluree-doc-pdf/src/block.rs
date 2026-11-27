@@ -522,6 +522,19 @@ fn is_marker(l: &Line, before: Option<&Line>, after: Option<&Line>, left_edge: f
     if worded && (l.bbox.y1.min(nb.bbox.y1) - l.bbox.y0.max(nb.bbox.y0)) < -fs * 0.5 {
         return false;
     }
+    // A number set larger than its item shares the item's baseline, so its
+    // middle falls within the item's first line. One whose middle stands
+    // above that line, its foot only reaching down into it, is a panel's
+    // number over the panel's text: a poster's `8`, at twice the text's
+    // size, over `When you re-use…`. Read as the item's number it was
+    // taken out of the text, and the panel read as a bullet.
+    let mid = (l.bbox.y0 + l.bbox.y1) * 0.5;
+    if worded
+        && l.font_size as f64 > nb.font_size as f64 * STACK_SIZE_RATIO
+        && (mid < nb.bbox.y0 || mid > nb.bbox.y1)
+    {
+        return false;
+    }
     // Nor does it mark another such: a chart's tick labels set side by side,
     // `2.4−` beside `2.6−`, are no number and its item.
     if l.text.chars().any(says_something) && marker_shaped(&nb.text) {
@@ -5465,6 +5478,27 @@ mod tests {
         number.bbox.x1 = 56.0;
         let item = l("Check the seal before each use", 62.0, 80.0, 7.0);
         assert!(is_marker(&number, None, Some(&item), 50.0));
+    }
+
+    #[test]
+    fn a_large_number_over_its_panels_text_is_no_list_number() {
+        // A poster's numbered panel: the number at under twice the text's
+        // size, standing over the text, its foot reaching into the text's
+        // first line.
+        let mut number = l("8", 934.0, 1517.7, 37.7);
+        number.bbox.x1 = 973.6;
+        number.bbox.y1 = 1557.3;
+        let item = l(
+            "When you re-use portions of someone else's work",
+            1061.7,
+            1547.4,
+            19.8,
+        );
+        assert!(!is_marker(&number, None, Some(&item), 924.0));
+        // The same number on its item's baseline still marks it.
+        let mut number = l("8", 1020.0, item.bbox.y1 - 37.7, 37.7);
+        number.bbox.x1 = 1050.0;
+        assert!(is_marker(&number, None, Some(&item), 1020.0));
     }
 
     #[test]

@@ -307,7 +307,11 @@ margin. Only a box read at its own gutter sets its own measure. Side heads
 are paired over whole page columns, consecutive groups of one column taken
 together, as before. A list marker must also stand within five of its
 item's sizes of the text it marks; a number farther off is a label of its
-own, a drawing's callout beside another.
+own, a drawing's callout beside another. A number set larger than its item
+shares the item's baseline, its middle within the item's first line; one
+standing over the text, only its foot reaching into that line, is a
+numbered panel's number (a poster's `8` over the panel's text) and stays
+in the text as a paragraph of its own.
 
 ## Missing spaces
 
