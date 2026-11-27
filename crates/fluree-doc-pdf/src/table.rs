@@ -14554,6 +14554,60 @@ mod tests {
     }
 
     #[test]
+    fn a_field_grids_last_value_wrapped_under_it_is_its_own() {
+        // The grid's last row's value wraps onto a line under it; the next
+        // block starts a blank line further down.
+        let pairs = |r: usize, cells: [&str; 4], gl: &mut Vec<crate::glyph::Glyph>| {
+            for (k, t) in cells.iter().enumerate() {
+                gl.push(word([0.0, 120.0, 300.0, 420.0][k], r, t, None));
+            }
+        };
+        let mut gl = Vec::new();
+        pairs(
+            0,
+            ["Record name:", "Davis Trust", "Record ID:", "BR2558"],
+            &mut gl,
+        );
+        pairs(
+            1,
+            ["Tax ID:", "XX-1527", "Source system:", "Brokerage"],
+            &mut gl,
+        );
+        pairs(
+            2,
+            ["Address:", "2874 ELM BLVD", "Account:", "A8642"],
+            &mut gl,
+        );
+        gl.push(word(120.0, 3, "GAINESVILLE, FL", None));
+        let (rows, cells) = aligned_rows(&gl);
+        let grids = aligned_runs(&rows, &cells, 0);
+        assert_eq!(grids.len(), 1);
+        let texts = grids[0].cell_texts(&gl);
+        assert_eq!(texts[2 * 4 + 1], "2874 ELM BLVD GAINESVILLE, FL");
+        // A line a row's pitch and more under the grid is the next block's.
+        let mut gl = Vec::new();
+        pairs(
+            0,
+            ["Record name:", "Davis Trust", "Record ID:", "BR2558"],
+            &mut gl,
+        );
+        pairs(
+            1,
+            ["Tax ID:", "XX-1527", "Source system:", "Brokerage"],
+            &mut gl,
+        );
+        pairs(
+            2,
+            ["Address:", "2874 ELM BLVD", "Account:", "A8642"],
+            &mut gl,
+        );
+        gl.push(word(120.0, 5, "GAINESVILLE, FL", None));
+        let (rows, cells) = aligned_rows(&gl);
+        let texts = aligned_runs(&rows, &cells, 0)[0].cell_texts(&gl);
+        assert_eq!(texts[2 * 4 + 1], "2874 ELM BLVD");
+    }
+
+    #[test]
     fn a_field_grid_goes_on_past_a_wrapped_value() {
         // Two label:value pairs a row; one value wraps onto a line of its
         // own under its first line; the grid goes on under it.
