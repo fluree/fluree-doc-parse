@@ -91,7 +91,10 @@ pub struct OcrParse {
     pub errors: Vec<(String, String)>,
     /// Images of more than one page (a multi-page TIFF), of which only the
     /// first was read.
-    pub first_page_only: Vec<Picture>,
+    pub first_page_only: Vec<fluree_doc_model::Picture>,
+    /// The readings taken, with the engine's confidence, as
+    /// `doc:ocrReadings` lists them: by the name each picture goes by (`m1`).
+    pub ocr: Vec<fluree_doc_model::OcrReading>,
 }
 
 /// [`parse_with_info`], with the text in the document's pictures read by
@@ -113,6 +116,7 @@ pub fn parse_with_ocr(
         unread: r.unread,
         errors: r.errors,
         first_page_only: r.first_page_only,
+        ocr: r.ocr,
     })
 }
 
@@ -1762,6 +1766,20 @@ mod tests {
         z.finish().unwrap();
         let read = parse_with_ocr(&buf.into_inner(), &OneLine).unwrap();
         assert!(read.unread.is_empty(), "{:?}", read.unread);
+        // Its reading, by the picture's name, as the CLI lists it.
+        assert_eq!(
+            read.ocr,
+            [fluree_doc_model::OcrReading {
+                page: None,
+                image: Some("m1".into()),
+                crop: "full".into(),
+                engine: None,
+                words: 1,
+                mean_confidence: Some(0.9),
+                min_confidence: Some(0.9),
+                set_aside: None,
+            }]
+        );
         let els = read.elements;
         let got: Vec<(&str, &str)> = els
             .iter()

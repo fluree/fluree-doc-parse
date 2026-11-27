@@ -656,6 +656,100 @@ fn a_model_reading_supplied_for_the_image_is_placed_where_it_is() {
 }
 
 #[test]
+fn an_inline_image_whose_reading_lands_off_it_is_listed_failed() {
+    // Words that all land off the image, as a wrong origin or scale puts
+    // them: the image is not read, and the output says so.
+    let dir = scratch("astray");
+    let input = dir.join("mail.eml");
+    std::fs::write(&input, eml()).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = serde_json::json!({
+        "width": 300, "height": 100,
+        "words": [{ "text": "Total", "box": [1000, 20, 1080, 50], "conf": 0.9 }]
+    });
+    std::fs::write(words.join("mail_m1.json"), reading.to_string()).unwrap();
+    let out = convert(
+        &dir,
+        &input,
+        &[
+            "-f".as_ref(),
+            "doco".as_ref(),
+            "--ocr-words".as_ref(),
+            words.as_os_str(),
+        ],
+    );
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("warning: mail_m1: none of the reading could be placed"),
+        "{err}"
+    );
+    assert!(err.contains("mail: 1 of 1 image(s)"), "{err}");
+    let doc = document(&out.stdout);
+    assert_eq!(
+        doc["doc:unreadImages"]["@value"][0]["reason"], "Failed",
+        "{doc}"
+    );
+    assert!(doc.get("doc:ocrReadings").is_none(), "{doc}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_confidence_of_an_inline_images_reading_is_in_the_output() {
+    let dir = scratch("confidence");
+    let input = dir.join("mail.eml");
+    std::fs::write(&input, eml()).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = serde_json::json!({
+        "width": 300, "height": 100, "engine": "some-engine",
+        "words": [
+            { "text": "Account", "box": [20, 30, 120, 50], "conf": 0.9 },
+            { "text": "4417", "box": [130, 30, 200, 50], "conf": 0.6 }
+        ]
+    });
+    std::fs::write(words.join("mail_m1.json"), reading.to_string()).unwrap();
+    let doco = |extra: &[&std::ffi::OsStr]| {
+        let mut args: Vec<&std::ffi::OsStr> = vec![
+            "-f".as_ref(),
+            "doco".as_ref(),
+            "--ocr-words".as_ref(),
+            words.as_os_str(),
+        ];
+        args.extend(extra);
+        let out = convert(&dir, &input, &args);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        document(&out.stdout)
+    };
+    // Named by the picture, as a page has no meaning in a message.
+    let doc = doco(&[]);
+    assert_eq!(
+        doc["doc:ocrReadings"]["@value"],
+        serde_json::json!([{
+            "image": "m1", "crop": "full", "engine": "some-engine", "words": 2,
+            "meanConfidence": 0.75, "minConfidence": 0.6
+        }]),
+        "{doc}"
+    );
+    // A model's reading of the picture replaces OCR's, and its reading is
+    // no longer listed.
+    let tiers = dir.join("tiers");
+    std::fs::create_dir_all(&tiers).unwrap();
+    let model = serde_json::json!([{ "parsing_res_list": [
+        { "block_label": "text", "block_content": "Account 4417", "block_order": 0 }
+    ]}]);
+    std::fs::write(tiers.join("mail_m1.json"), model.to_string()).unwrap();
+    let doc = doco(&["--tier-results".as_ref(), tiers.as_os_str()]);
+    assert!(doc.get("doc:ocrReadings").is_none(), "{doc}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn an_inline_image_read_into_the_body_is_not_an_attachment_left_out() {
     let dir = scratch("note");
     let input = dir.join("mail.eml");

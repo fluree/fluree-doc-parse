@@ -45,10 +45,12 @@ in [the scoreboard](scoreboard.md#rules).
 ## Corpus gaps
 
 Tracked in TEST_PLAN §2.3 and worth knowing before trusting a routing number.
-The most important: **there is no scanned / image-only PDF in the corpus**,
-which is the router's single most important signal. Also missing: broken CID
-fonts, Korean, forms, multi-column newspapers, financial statements with
-nested tables.
+The most important: **there is no scanned / image-only PDF in the
+benchmark**, which is the router's single most important signal. A generated
+set covers it and the OCR tier, in `eval/scanned/`: synthetic pages under
+nine scan profiles, with their gold facts, scored by recall. See [Scanned
+PDFs](../benchmarks/scanned.md). Also missing: broken CID fonts, Korean,
+forms, multi-column newspapers, financial statements with nested tables.
 
 ## Baseline discipline
 

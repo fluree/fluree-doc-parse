@@ -95,6 +95,10 @@ pub struct DocoOptions {
     /// document node as `doc:unreadImages`, so a pasted screenshot nothing
     /// read is not mistaken for a picture with no text in it.
     pub unread_images: Vec<crate::element::UnreadImage>,
+    /// The OCR readings taken into the output, with the engine's own
+    /// confidence. Emitted on the document node as `doc:ocrReadings`, so a
+    /// caller can spot a reading that failed as a whole.
+    pub ocr_readings: Vec<crate::element::OcrReading>,
     /// Page sizes, in PDF user units, for sources that have pages.
     ///
     /// Emitted on the document node as `doc:pages`. A `doc:bbox` cannot be
@@ -1023,6 +1027,14 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         em.nodes[doc_idx].insert(
             "doc:unreadImages".into(),
             json!({ "@type": "@json", "@value": opts.unread_images }),
+        );
+    }
+    if !opts.ocr_readings.is_empty() {
+        // A JSON literal, as the unread pages are: facts about how the
+        // document was read, not things a graph should grow edges to.
+        em.nodes[doc_idx].insert(
+            "doc:ocrReadings".into(),
+            json!({ "@type": "@json", "@value": opts.ocr_readings }),
         );
     }
     if !opts.pages.is_empty() {
@@ -3403,6 +3415,50 @@ mod tests {
         assert_eq!(
             doc["doc:attachments"]["@value"][0]["sha256"],
             "c35b21d6ca39aa7cc3b79a705d989f1a6e88b99ab43988d74048799e3db926a3"
+        );
+    }
+
+    #[test]
+    fn the_document_node_lists_its_ocr_readings_with_their_confidence() {
+        use crate::element::OcrReading;
+        // None read: nothing is said.
+        let v: Value = serde_json::from_str(&to_doco(&[], &opts())).unwrap();
+        assert!(v["@graph"][0].get("doc:ocrReadings").is_none());
+        let o = DocoOptions {
+            ocr_readings: vec![
+                OcrReading {
+                    page: Some(0),
+                    image: None,
+                    crop: "r1".into(),
+                    engine: Some("oar-ocr".into()),
+                    words: 12,
+                    mean_confidence: Some(0.9812),
+                    min_confidence: Some(0.4),
+                    set_aside: None,
+                },
+                OcrReading {
+                    page: None,
+                    image: Some("m2".into()),
+                    crop: "full".into(),
+                    engine: None,
+                    words: 3,
+                    mean_confidence: None,
+                    min_confidence: None,
+                    set_aside: Some("noise".into()),
+                },
+            ],
+            ..opts()
+        };
+        let v: Value = serde_json::from_str(&to_doco(&[], &o)).unwrap();
+        let r = &v["@graph"][0]["doc:ocrReadings"];
+        assert_eq!(r["@type"], "@json");
+        assert_eq!(
+            r["@value"],
+            json!([
+                {"pageIndex": 0, "crop": "r1", "engine": "oar-ocr", "words": 12,
+                 "meanConfidence": 0.9812, "minConfidence": 0.4},
+                {"image": "m2", "crop": "full", "words": 3, "setAside": "noise"}
+            ])
         );
     }
 

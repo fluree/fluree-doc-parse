@@ -154,8 +154,10 @@ State these whenever the scores are quoted.
   against this ground truth.
 - **There is no scanned or image-only PDF in the corpus** — which is the
   router's single most important signal, and therefore the least evidenced
-  part of what the OCR and VLM configurations decide. Also absent: broken CID fonts, Korean, filled forms,
-  multi-column newspapers, and financial statements with nested tables.
+  part of what the OCR and VLM configurations decide. A generated set of our
+  own covers that and the OCR tier: see [Scanned PDFs](scanned.md). Also
+  absent: broken CID fonts, Korean, filled forms, multi-column newspapers,
+  and financial statements with nested tables.
 - **MHS does not measure heading depth.** Its evaluator flattens the tree, so
   every ground-truth heading is a top-level one.
 - **It is one project's curation.** "Every customer throws different documents

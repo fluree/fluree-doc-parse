@@ -90,6 +90,7 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:unreadRegions` | `foaf:Document` | JSON literal: `[{pageIndex, bbox, reason}]` — raster regions of otherwise read pages nothing transcribed; `bbox` as `doc:bbox`; `reason` `Region` (routed), `Small` or `NotTexty` (declined by the router), `Unprobed` (not examined: the run decoded no image, or none that small) |
 | `doc:parseWarnings` | `foaf:Document` | JSON literal: `[{pageIndex, kind, count}]` — what the PDF interpreter reported, once per page and kind: `ImageDecodeFailure` |
 | `doc:unreadImages` | `foaf:Document` | JSON literal: `[{figure, image, part, reason}]` — images placed in the flow whose text nothing read |
+| `doc:ocrReadings` | `foaf:Document` | JSON literal: `[{pageIndex or image, crop, engine?, words, meanConfidence?, minConfidence?, setAside?}]` — the [OCR readings taken](../formats/doco.md#ocr-readings), with the engine's own confidence: information, not a routing signal |
 | `doc:runningText` | `foaf:Document` | JSON literal: the header/footer text stripped from the body |
 | `doc:attachments` | `foaf:Document` | JSON literal: `[{filename?, contentType, size, sha256, inline?}]`, the files the document carries |
 | `dcterms:title` | `foaf:Document` | the title the file declares: a PDF's `/Title`, an Office file's `dc:title`, an HTML `<title>`, an email's subject |
@@ -124,6 +125,19 @@ region that is noise leaves it listed under its own reason). In
 (`--ocr`) reads a placed picture whatever the probe makes of it, and a
 reading supplied for it is taken, so `NotTexty` is also a picture in which
 OCR read only noise.
+
+A reading that found no text does not clear the three lists alike, and one
+rule says which. `doc:unreadPages` and `doc:unreadRegions` list what the
+router took for content (a scan, a raster region the text layer does not
+cover) that the output does not hold: a reading, by OCR or by a model, that
+came back with no text leaves it listed, since nothing in the output stands
+for it. A bare image is read as such a page, so a photograph with no text in
+it stays listed (`Scanned`), and warned of. `doc:unreadImages` lists the
+pictures a document places that nothing read: no router sends a reader to
+them as content (the pixel probe only keeps any reader from those it does
+not take for text), and most are logos and screenshots, so any reading
+clears the entry, an empty one too, except an OCR reading set aside
+(`NotTexty` for noise, `Failed` for words that could not be placed on it).
 
 **Transcript turns**
 

@@ -162,7 +162,9 @@ The pictures of a DOCX, their text after each figure (`fluree-doc-docx`'s
 let read = fluree_doc_docx::parse_with_ocr(&bytes, &engine)?;
 // read.elements, read.info; read.unread: each picture not read, with why, as
 // doc:unreadImages lists it (read.errors: what went wrong, by picture);
-// read.first_page_only: multi-page images of which only the first page was read
+// read.first_page_only: multi-page images of which only the first page was read;
+// read.ocr: each reading taken, with its confidence, as doc:ocrReadings lists it
+// (a fluree_doc_model::OcrReading, new, as is the `ocr` field of each parse)
 ```
 
 Each image is read once however many figures draw it, and a document has at
@@ -379,6 +381,31 @@ build them.
     `fluree_doc_model::UnreadImage`, the graph's own entries, where it held
     `(Picture, Unread)` pairs, and `OcrParse` gains `errors`.
     `fluree_doc_image::ImageElements` gains `not_texty` and `noise`.
+
+### OCR readings and their confidence
+
+- `DocoOptions` and `Notes` gain `ocr_readings` (`ocr`, on `Notes`), listed
+  as `doc:ocrReadings`. A literal that names every field of either no
+  longer compiles: add the field, or end it with `..Default::default()`,
+  which both implement and which keeps a literal compiling through later
+  additions.
+- New in this release, nothing to change from main; listed for a caller
+  of this work's earlier pull requests:
+  - The OCR parses of `fluree_doc_docx`, `fluree_doc_xlsx` and
+    `fluree_doc_image` (`ImageElements`, `PlacedRead`) gain `ocr`, and
+    `ImageElements` gains `refused`.
+  - `ocr::Injected` gains `min_conf`, `engine`, `regions` and `noise`
+    (an `ocr::Noise`: the words a region's reading held when it was set
+    aside as noise, and their confidence; `ocr::noise_of` gives it for a
+    picture's reading); `ocr::readings` lists the readings an output holds,
+    and `fluree_doc_model::OcrReading` is one of them, its `set_aside`
+    saying why a reading's words are not in the output (`noise`);
+    `WordReading::scores_out_of_range` and `words_with_text` count the
+    scores outside 0-1 a warning names.
+  - A reading none of whose words land on what it read, or a region's most
+    of whose words land off its crop, is refused, where it was taken as a
+    reading that came back blank; a placed picture whose reading is
+    refused so is `Failed` in `doc:unreadImages`.
 
 ## Errors
 

@@ -86,6 +86,13 @@ x-axis and looks for a band that stays empty over vertical extent. That is a
 different measurement from any single gap, and it is why the pass runs before
 lines rather than trying to repair them after.
 
+Rows are the body's height, and a heading straddling the gutter is allowed
+for: a row or two that is not empty does not veto it. A line of display type
+is still one line, however many body rows its height would fill, so a glyph
+fills at most two rows, about its middle. Counted by its height, a poster's
+title and the word set huge under it took 21 of its 78 rows, and the two
+columns of numbered panels below read as one, line across line.
+
 ## Columns a rank of rules states
 
 Decks, brochures and datasheets set panels side by side under a rule each,
@@ -336,7 +343,11 @@ margin. Only a box read at its own gutter sets its own measure. Side heads
 are paired over whole page columns, consecutive groups of one column taken
 together, as before. A list marker must also stand within five of its
 item's sizes of the text it marks; a number farther off is a label of its
-own, a drawing's callout beside another.
+own, a drawing's callout beside another. A number set larger than its item
+shares the item's baseline, its middle within the item's first line; one
+standing over the text, only its foot reaching into that line, is a
+numbered panel's number (a poster's `8` over the panel's text) and stays
+in the text as a paragraph of its own.
 
 ## Missing spaces
 

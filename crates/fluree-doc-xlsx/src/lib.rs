@@ -111,6 +111,9 @@ pub struct OcrParse {
     /// Images of more than one page (a multi-page TIFF), of which only the
     /// first was read.
     pub first_page_only: Vec<fluree_doc_model::Picture>,
+    /// The readings taken, with the engine's confidence, as
+    /// `doc:ocrReadings` lists them: by the name each picture goes by (`m1`).
+    pub ocr: Vec<fluree_doc_model::OcrReading>,
 }
 
 /// [`parse_with_info`], with the text in the sheets' pictures read by
@@ -131,6 +134,7 @@ pub fn parse_with_ocr(
         unread: r.unread,
         errors: r.errors,
         first_page_only: r.first_page_only,
+        ocr: r.ocr,
     })
 }
 
@@ -3237,6 +3241,21 @@ mod tests {
             ]
         );
         assert_eq!(read.elements[3].provenance, "ocr");
+        // Its reading, by the picture's name, as the CLI lists it; the
+        // picture not read has none.
+        assert_eq!(
+            read.ocr,
+            [fluree_doc_model::OcrReading {
+                page: None,
+                image: Some("m1".into()),
+                crop: "full".into(),
+                engine: None,
+                words: 1,
+                mean_confidence: Some(0.9),
+                min_confidence: Some(0.9),
+                set_aside: None,
+            }]
+        );
         // The second picture's part is not in the package: named, it fails
         // to read.
         assert_eq!(read.unread.len(), 1);

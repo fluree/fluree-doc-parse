@@ -172,6 +172,96 @@ fn a_pictures_words_follow_its_figure() {
 }
 
 #[test]
+fn a_pictures_reading_is_reported_by_its_name() {
+    let dir = scratch("confidence");
+    let input = dir.join("report.docx");
+    std::fs::write(&input, docx()).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = serde_json::json!({
+        "width": 300, "height": 100,
+        "words": [
+            { "text": "Account 4417-0093-21", "box": [20, 30, 200, 50], "conf": 0.9 },
+            // Tesseract's row of a block, with no text: no word of it.
+            { "text": "", "box": [20, 30, 200, 50], "conf": -1 }
+        ]
+    });
+    std::fs::write(words.join("report_m1.json"), reading.to_string()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .arg("convert")
+        .arg(&input)
+        .args(["-f", "doco", "--ocr-words"])
+        .arg(&words)
+        .env("FDOC_HOME", dir.join("home"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let doc = v["@graph"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["@type"] == "foaf:Document")
+        .unwrap();
+    // A DOCX has no pages: the picture goes by the name its words do.
+    assert_eq!(
+        doc["doc:ocrReadings"]["@value"],
+        serde_json::json!([{ "image": "m1", "crop": "full", "words": 1, "meanConfidence": 0.9, "minConfidence": 0.9 }]),
+        "{doc}"
+    );
+    // Scored 0-100, as Tesseract scores: no confidence, and a word of why.
+    let reading = reading.to_string().replace("0.9", "90");
+    std::fs::write(words.join("report_m1.json"), reading).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .arg("convert")
+        .arg(&input)
+        .args(["-f", "doco", "--ocr-words"])
+        .arg(&words)
+        .env("FDOC_HOME", dir.join("home"))
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("report_m1.json: 1 of 1 word score(s) outside 0-1, so no confidence"),
+        "{err}"
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let doc = v["@graph"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["@type"] == "foaf:Document")
+        .unwrap();
+    assert_eq!(
+        doc["doc:ocrReadings"]["@value"],
+        serde_json::json!([{ "image": "m1", "crop": "full", "words": 1 }]),
+        "{doc}"
+    );
+    // A reading set aside, most of its words off the picture: not listed,
+    // and its scores not warned of.
+    let word =
+        |x: u32| serde_json::json!({ "text": "Account", "box": [x, 30, x + 80, 50], "conf": 90 });
+    let reading = serde_json::json!({
+        "width": 300, "height": 100,
+        "words": [word(20), word(1000), word(2000)]
+    });
+    std::fs::write(words.join("report_m1.json"), reading.to_string()).unwrap();
+    let (doco, err) = run(
+        &input,
+        &dir.join("home"),
+        "doco",
+        &["--ocr-words".as_ref(), words.as_os_str()],
+    );
+    assert!(document(&doco).get("doc:ocrReadings").is_none(), "{doco}");
+    assert!(!err.contains("outside 0-1"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_picture_read_with_no_text_is_not_counted_unread() {
     let dir = scratch("empty-reading");
     let input = dir.join("report.docx");
@@ -518,13 +608,14 @@ fn a_model_reading_replaces_what_ocr_read_unless_it_lost_it() {
     std::fs::write(&input, docx()).unwrap();
     let words = dir.join("words");
     std::fs::create_dir_all(&words).unwrap();
-    // Enough letters for a reading to be judged against them.
+    // Enough letters for a reading to be judged against them. Scored
+    // 0-100: warned of only where OCR's reading is the one taken.
     let line = "Statement of account for the period ending in March with balances carried forward";
     let reading = serde_json::json!({
         "width": 300, "height": 100,
         "words": [
-            { "text": line, "box": [10, 20, 290, 40] },
-            { "text": "Reference 4417-0093-21 opened by the branch office", "box": [10, 50, 290, 70] }
+            { "text": line, "box": [10, 20, 290, 40], "conf": 95 },
+            { "text": "Reference 4417-0093-21 opened by the branch office", "box": [10, 50, 290, 70], "conf": 90 }
         ]
     });
     std::fs::write(words.join("report_m1.json"), reading.to_string()).unwrap();
@@ -544,12 +635,27 @@ fn a_model_reading_replaces_what_ocr_read_unless_it_lost_it() {
     let (text, _) = run(&input, &dir.join("home"), "text", &args);
     assert!(text.contains("on 14 MAR 1987"), "{text}");
     assert_eq!(text.matches("4417-0093-21").count(), 1, "{text}");
+    // OCR's words are not in the output, so its reading is not reported,
+    // nor its scores warned of.
+    let (doco, err) = run(&input, &dir.join("home"), "doco", &args);
+    assert!(document(&doco).get("doc:ocrReadings").is_none(), "{doco}");
+    assert!(!err.contains("outside 0-1"), "{err}");
     // A reading that lost what OCR read is a truncated one: OCR's stays.
     tier_reading(&tiers, "report_m1", "Statement");
     let (text, _) = run(&input, &dir.join("home"), "text", &args);
     assert!(
         text.contains("4417-0093-21") && !text.contains("14 MAR"),
         "{text}"
+    );
+    let (doco, err) = run(&input, &dir.join("home"), "doco", &args);
+    assert_eq!(
+        document(&doco)["doc:ocrReadings"]["@value"][0]["image"],
+        "m1",
+        "{doco}"
+    );
+    assert!(
+        err.contains("report_m1.json: 2 of 2 word score(s) outside 0-1"),
+        "{err}"
     );
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -709,13 +815,35 @@ fn a_pictures_reading_that_is_noise_leaves_it_unread() {
             { "text": "—", "box": [150, 40, 200, 60], "conf": 0.1 }
         ]),
         serde_json::json!([{ "text": "7", "box": [0, 0, 300, 100], "conf": 0.66 }]),
+        // Scored 0-100: judged by its boxes alone, and warned of.
+        serde_json::json!([{ "text": "7", "box": [0, 0, 300, 100], "conf": 66 }]),
     ] {
+        let hundred = read[0]["conf"] == 66;
         let reading = serde_json::json!({ "width": 300, "height": 100, "words": read });
         std::fs::write(words.join("report_m1.json"), reading.to_string()).unwrap();
         let ocr_words = ["--ocr-words".as_ref(), words.as_os_str()];
         let (doco, err) = run(&input, &dir.join("home"), "doco", &ocr_words);
         assert_eq!(reasons(&doco), ["NotTexty"], "{doco}");
         assert!(!err.contains("were not read"), "{err}");
+        let warned = "report_m1.json: 1 of 1 word score(s) outside 0-1";
+        assert_eq!(err.contains(warned), hundred, "{err}");
+        // Its reading is listed, set aside as noise, with the words it held
+        // and the engine's confidence in them (none, scored 0-100).
+        let listed = &document(&doco)["doc:ocrReadings"]["@value"][0];
+        let words = read.as_array().unwrap().len();
+        assert_eq!(
+            (&listed["image"], &listed["words"], &listed["setAside"]),
+            (&"m1".into(), &words.into(), &"noise".into()),
+            "{doco}"
+        );
+        let mean = (!hundred).then(|| {
+            let confs: Vec<f64> = (read.as_array().unwrap().iter())
+                .map(|w| w["conf"].as_f64().unwrap())
+                .collect();
+            // To four decimals, as listed.
+            (confs.iter().sum::<f64>() / confs.len() as f64 * 1e4).round() / 1e4
+        });
+        assert_eq!(listed["meanConfidence"].as_f64(), mean, "{doco}");
         let (text, _) = run(&input, &dir.join("home"), "text", &ocr_words);
         assert_eq!(
             text.trim(),
@@ -725,6 +853,39 @@ fn a_pictures_reading_that_is_noise_leaves_it_unread() {
         // A model may still read what OCR read no text in.
         let (_, err) = run(&input, &model_home(&dir, 0), "text", &ocr_words);
         assert!(err.contains("the configured model"), "{err}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_pictures_reading_that_lands_off_it_leaves_it_failed() {
+    // A sidecar whose words all land off the picture, as a converter that
+    // took the wrong origin or scale writes them: set aside, so the picture
+    // is listed, warned of and counted, not taken for one with no text.
+    // Unsure, it is refused all the same, before it could be judged noise.
+    let dir = scratch("astray");
+    let input = dir.join("report.docx");
+    std::fs::write(&input, docx()).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    for conf in [0.9, 0.3] {
+        let reading = serde_json::json!({
+            "width": 300, "height": 100,
+            "words": [
+                { "text": "Total", "box": [1000, 20, 1080, 50], "conf": conf },
+                { "text": "4471", "box": [1100, 20, 1160, 50], "conf": conf }
+            ]
+        });
+        std::fs::write(words.join("report_m1.json"), reading.to_string()).unwrap();
+        let ocr_words = ["--ocr-words".as_ref(), words.as_os_str()];
+        let (doco, err) = run(&input, &dir.join("home"), "doco", &ocr_words);
+        assert_eq!(reasons(&doco), ["Failed"], "{conf} {doco}");
+        assert!(
+            err.contains("warning: report_m1: none of the reading could be placed"),
+            "{conf} {err}"
+        );
+        assert!(err.contains("1 of 1 image(s)"), "{conf} {err}");
+        assert!(document(&doco).get("doc:ocrReadings").is_none(), "{doco}");
     }
     let _ = std::fs::remove_dir_all(dir);
 }

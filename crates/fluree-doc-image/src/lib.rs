@@ -400,8 +400,15 @@ pub struct ImageElements {
     /// read for text it does not hold. Its words are set aside, so
     /// `elements` is empty, and the image is not read.
     pub noise: bool,
+    /// Why the reading was set aside where [`ocr::inject`] refused it: its
+    /// words could not be placed on the image (an origin or a scale not the
+    /// image's). `elements` is then empty, and the image is not read.
+    pub refused: Option<&'static str>,
     /// Pages of the file not read (a multi-page TIFF's after the first).
     pub more_pages: bool,
+    /// The reading taken, with the engine's confidence, as
+    /// [`ocr::readings`] reports it: on page 0, the image.
+    pub ocr: Vec<fluree_doc_model::OcrReading>,
 }
 
 /// Decode an image, read it and analyse it: an image the pixel probe does
@@ -438,7 +445,9 @@ fn not_texty(image: &Decoded) -> ImageElements {
         },
         not_texty: true,
         noise: false,
+        refused: None,
         more_pages: image.more_pages,
+        ocr: Vec::new(),
     }
 }
 
@@ -466,11 +475,25 @@ pub fn without_noise(
     doc: &Document,
     reading: fluree_doc_vision::WordReading,
 ) -> (fluree_doc_vision::WordReading, bool) {
-    if ocr::is_noise(&doc.pages[0], &reading) {
-        let words = Vec::new();
-        (fluree_doc_vision::WordReading { words, ..reading }, true)
-    } else {
-        (reading, false)
+    let (reading, noise) = set_aside_noise(doc, reading);
+    (reading, noise.is_some())
+}
+
+/// As [`without_noise`], with the words set aside and the engine's
+/// confidence in them, for the reading to be listed as one set aside.
+fn set_aside_noise(
+    doc: &Document,
+    reading: fluree_doc_vision::WordReading,
+) -> (fluree_doc_vision::WordReading, Option<ocr::Noise>) {
+    match ocr::noise_of(&doc.pages[0], &reading) {
+        Some(noise) => {
+            let words = Vec::new();
+            (
+                fluree_doc_vision::WordReading { words, ..reading },
+                Some(noise),
+            )
+        }
+        None => (reading, None),
     }
 }
 
@@ -479,8 +502,14 @@ fn analysed(
     more_pages: bool,
     reading: fluree_doc_vision::WordReading,
 ) -> ImageElements {
-    let (reading, noise) = without_noise(&doc, reading);
-    let injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
+    let (reading, noise) = set_aside_noise(&doc, reading);
+    let mut injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
+    // Listed as set aside, with what it held: the confidence of a reading
+    // that came back as noise is what tells it apart from one of a blank
+    // picture.
+    if let (Some(r), Some(_)) = (injected.first_mut(), noise) {
+        r.noise = noise;
+    }
     let page = &doc.pages[0];
     let size = fluree_doc_model::PageSize {
         index: 0,
@@ -490,12 +519,15 @@ fn analysed(
     };
     let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
     ocr::mark_provenance(&mut analysis.elements, &injected);
+    let ocr = ocr::readings(&injected, &analysis.elements);
     ImageElements {
         elements: analysis.elements,
         size,
         not_texty: false,
-        noise,
+        noise: noise.is_some(),
+        refused: injected.first().and_then(|r| r.refused),
         more_pages,
+        ocr,
     }
 }
 
@@ -510,8 +542,10 @@ pub struct PlacedRead {
     /// `UnsupportedFormat` (not a PNG, JPEG or TIFF: a drawing kept as EMF or
     /// WMF, a GIF), `PastAllowance` (past what one document may have read,
     /// [`fluree_doc_model::Allowance::DOCUMENT`]), `Failed` (its bytes or its
-    /// reading failed) or `NotTexty` (its reading was noise:
-    /// [`ImageElements::noise`]). Never `NotRead`: each image held is read.
+    /// reading failed, or was set aside as one whose words could not be
+    /// placed: [`ImageElements::refused`]) or `NotTexty` (its reading was
+    /// noise: [`ImageElements::noise`]). Never `NotRead`: each image held
+    /// is read.
     pub unread: Vec<fluree_doc_model::UnreadImage>,
     /// What went wrong with each image `UnsupportedFormat` or `Failed`, by
     /// the name it goes by (`m1`).
@@ -519,6 +553,9 @@ pub struct PlacedRead {
     /// Images of more than one page (a multi-page TIFF), of which only the
     /// first was read.
     pub first_page_only: Vec<fluree_doc_model::Picture>,
+    /// The readings taken, with the engine's confidence, as
+    /// `doc:ocrReadings` lists them: by the name each image goes by (`m1`).
+    pub ocr: Vec<fluree_doc_model::OcrReading>,
 }
 
 /// Read the images a document places in its flow with `engine`
@@ -591,14 +628,36 @@ pub fn read_placed(
     let mut out = PlacedRead::default();
     let mut unread: Vec<(fluree_doc_model::Picture, &str)> = Vec::new();
     for (picture, r) in reads.read {
-        // An image whose reading was noise is read by nothing.
+        let tag = picture.tag();
+        // A picture has no page of the document's: its reading goes by its
+        // name, as its words do.
+        let listed = |ocr: Vec<fluree_doc_model::OcrReading>| {
+            ocr.into_iter().map(|o| fluree_doc_model::OcrReading {
+                page: None,
+                image: Some(tag.clone()),
+                ..o
+            })
+        };
+        // A reading that is noise is set aside: listed all the same, with
+        // the words it held and the engine's confidence in them.
         if r.noise {
+            out.ocr.extend(listed(r.ocr));
             unread.push((picture, "NotTexty"));
+            continue;
+        }
+        // A reading set aside because its words could not be placed on the
+        // image (an origin or a scale not the image's) read nothing of it:
+        // listed as failed, as a PDF page it is refused on stays unread, not
+        // taken for a picture with no text in it.
+        if let Some(why) = r.refused {
+            out.errors.push((tag.clone(), why.to_string()));
+            unread.push((picture, "Failed"));
             continue;
         }
         if r.more_pages {
             out.first_page_only.push(picture.clone());
         }
+        out.ocr.extend(listed(r.ocr));
         out.read.extend(picture.after_each_figure(r.elements));
     }
     for (picture, why) in reads.unread {
@@ -888,12 +947,20 @@ mod tests {
             size,
             not_texty,
             noise,
+            refused,
             more_pages,
+            ocr,
         } = elements(&png(600, 400), &TwoLines).unwrap();
         assert_eq!((size.width, size.height), (600.0, 400.0));
         assert!(!not_texty);
         assert!(!noise);
+        assert_eq!(refused, None);
         assert!(!more_pages);
+        // The reading, with the engine that made it and its confidence.
+        assert_eq!(ocr.len(), 1, "{ocr:?}");
+        assert_eq!(ocr[0].engine.as_deref(), Some("two-lines"));
+        assert_eq!(ocr[0].words, 2);
+        assert_eq!(ocr[0].mean_confidence, Some(0.95));
         let text: String = elements
             .iter()
             .map(|e| e.text.as_str())
@@ -1006,6 +1073,74 @@ mod tests {
         let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
         assert_eq!(reasons, ["NotTexty"]);
         assert!(r.errors.is_empty());
+        // Its reading is listed all the same, set aside as noise, with the
+        // word it held and the engine's confidence in it: what tells it
+        // apart from a reading of a blank picture.
+        assert_eq!(
+            r.ocr,
+            [fluree_doc_model::OcrReading {
+                page: None,
+                image: Some("m1".into()),
+                crop: "full".into(),
+                engine: None,
+                words: 1,
+                mean_confidence: Some(0.2),
+                min_confidence: Some(0.2),
+                set_aside: Some("noise".into()),
+            }]
+        );
+    }
+
+    /// An engine whose words land off the picture it read, as an origin or
+    /// a scale not the picture's puts them, all of them or all but one
+    /// (`one_on`), scored `conf`.
+    struct Astray {
+        conf: f64,
+        one_on: bool,
+    }
+
+    impl OcrEngine for Astray {
+        fn name(&self) -> &str {
+            "astray"
+        }
+        fn read(&self, _: &Pixels) -> Result<WordReading, String> {
+            let mut words = vec![
+                ("Total", [1000.0, 20.0, 1080.0, 50.0]),
+                ("4471", [1100.0, 20.0, 1160.0, 50.0]),
+                ("0093", [1200.0, 20.0, 1260.0, 50.0]),
+            ];
+            if self.one_on {
+                words.push(("Account", [20.0, 20.0, 100.0, 50.0]));
+            }
+            Ok(reading(&words, Some(self.conf)))
+        }
+    }
+
+    #[test]
+    fn a_placed_picture_whose_reading_lands_off_it_is_listed_failed() {
+        // Unsure or not, a reading that lands off the picture is refused
+        // before it is judged noise: the picture failed, it is not one with
+        // no text in it.
+        let none = "none of the reading could be placed";
+        let most = "most of the reading could not be placed";
+        for (conf, one_on, why) in [(0.9, false, none), (0.3, false, none), (0.3, true, most)] {
+            let engine = Astray { conf, one_on };
+            let media = fluree_doc_model::Media {
+                figure: "figure-0-1".into(),
+                source: fluree_doc_model::MediaSource::Part("word/media/image1.png".into()),
+                index: 0,
+            };
+            let read = elements(&png(600, 400), &engine).unwrap();
+            assert_eq!((read.refused, read.noise), (Some(why), false), "{conf}");
+            assert!(read.elements.is_empty() && read.ocr.is_empty(), "{conf}");
+            // Not taken for a picture with no text in it: listed, with why.
+            let r = read_placed(vec![media], &mut |_| Ok(png(600, 400)), &engine);
+            assert!(r.read.is_empty(), "{:?}", r.read);
+            let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
+            assert_eq!(reasons, ["Failed"], "{conf} {one_on}");
+            assert_eq!(r.errors, [("m1".to_string(), why.to_string())]);
+            assert!(r.ocr.is_empty(), "{:?}", r.ocr);
+        }
     }
 
     #[test]

@@ -306,6 +306,19 @@ GPU.
 
 ## Operational notes
 
+- **OCR confidence is reported, not routed on.** The DoCO output lists each
+  OCR reading taken with the engine's mean and lowest word confidence
+  ([`doc:ocrReadings`](../formats/doco.md#ocr-readings)). The built-in
+  engine's scores (PP-OCRv6 small) are packed near 1 and fall on a reading
+  that failed as a whole, not on one misread digit: in the measurements of
+  [issue #4](https://github.com/fluree/fluree-doc-parse/issues/4) they told
+  bad pages from good ones poorly. Another engine's, given through
+  `--ocr-words`, may tell them apart better: Tesseract's did, and the
+  cascade measured there routed on it (Tesseract first, the other engine on
+  low confidence). Nothing here escalates on any of them. Use them to spot a
+  failed reading; to find where OCR may be wrong, disagreement between two
+  engines is the better signal.
+
 - **Per-crop timeouts are mandatory.** A VLM under load can fall into a
   repetition loop and run several times its normal latency. A crop that will
   not terminate must be abandoned, not waited on.

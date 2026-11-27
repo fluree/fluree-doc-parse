@@ -235,6 +235,49 @@ fn a_model_reading_supplied_for_the_image_is_placed_where_it_is() {
 }
 
 #[test]
+fn a_pictures_ocr_reading_is_reported_with_its_confidence() {
+    let dir = scratch("confidence");
+    let input = dir.join("book.xlsx");
+    std::fs::write(&input, xlsx()).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = serde_json::json!({
+        "width": 300, "height": 100,
+        "words": [{ "text": "Account 4417-0093-21", "box": [20, 30, 200, 50], "conf": 0.9 }]
+    });
+    std::fs::write(words.join("book_m1.json"), reading.to_string()).unwrap();
+    let out = convert(
+        &dir,
+        &input,
+        &[
+            "-f".as_ref(),
+            "doco".as_ref(),
+            "--ocr-words".as_ref(),
+            words.as_os_str(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let doc = v["@graph"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["@type"] == "foaf:Document")
+        .unwrap();
+    // A sheet's picture goes by its name too, as a DOCX's does.
+    assert_eq!(
+        doc["doc:ocrReadings"]["@value"],
+        serde_json::json!([{ "image": "m1", "crop": "full", "words": 1, "meanConfidence": 0.9, "minConfidence": 0.9 }]),
+        "{doc}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn with_no_escalate_no_picture_is_sent_to_the_configured_model() {
     // A capture over the floor a model is sent, and a model configured
     // whose key it cannot use: sent (and refused) by default, kept on the

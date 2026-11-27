@@ -129,7 +129,9 @@ pub struct OcrWord {
     /// than wide and holds several characters: that is text set sideways.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<f64>,
-    /// The engine's confidence in the reading, 0-1, when it gives one.
+    /// The engine's confidence in the reading, 0-1, when it gives one. A
+    /// score outside 0-1 says the reading is on another scale: none of its
+    /// words' scores is then used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conf: Option<f64>,
 }
@@ -185,6 +187,29 @@ impl WordReading {
         Ok(r)
     }
 
+    /// How many words carry a confidence outside 0-1: a Tesseract reading
+    /// converted without dividing its 0-100 scores by 100, say. One is
+    /// enough for the reading to report no confidence at all. A word with
+    /// no text is not counted: it is never placed, and Tesseract scores the
+    /// rows of its blocks and lines, which hold none, -1 on any scale.
+    pub fn scores_out_of_range(&self) -> usize {
+        self.with_text()
+            .filter(|w| w.conf.is_some_and(|c| !(0.0..=1.0).contains(&c)))
+            .count()
+    }
+
+    /// How many words hold text: those [`scores_out_of_range`] counts
+    /// among, the total its count is of.
+    ///
+    /// [`scores_out_of_range`]: WordReading::scores_out_of_range
+    pub fn words_with_text(&self) -> usize {
+        self.with_text().count()
+    }
+
+    fn with_text(&self) -> impl Iterator<Item = &OcrWord> {
+        self.words.iter().filter(|w| !w.text.trim().is_empty())
+    }
+
     /// Write the sidecar format, as [`WordReading::from_json`] reads it.
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("a reading is plain data")
@@ -194,6 +219,23 @@ impl WordReading {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scores_outside_zero_to_one_are_counted() {
+        let r = WordReading::from_json(
+            r#"{"coords": "page", "words": [
+                {"text": "a", "box": [0, 0, 1, 1], "conf": 96},
+                {"text": "b", "box": [0, 0, 1, 1], "conf": 1},
+                {"text": "c", "box": [0, 0, 1, 1], "conf": 0},
+                {"text": "d", "box": [0, 0, 1, 1], "conf": -1},
+                {"text": "e", "box": [0, 0, 1, 1]},
+                {"text": " ", "box": [0, 0, 1, 1], "conf": -1}
+            ]}"#,
+        )
+        .unwrap();
+        // Not the row with no text, which no word is placed from.
+        assert_eq!((r.scores_out_of_range(), r.words_with_text()), (2, 5));
+    }
 
     #[test]
     fn a_box_reads_back_as_the_number_written() {

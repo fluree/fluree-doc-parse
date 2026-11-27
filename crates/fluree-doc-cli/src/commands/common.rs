@@ -445,6 +445,8 @@ pub(crate) fn arbitrate_layout_titles(
 /// Unlike the model-tier sidecars, a file that does not parse is reported
 /// (unless `--quiet`): a word reading is produced by the embedder's own
 /// pipeline, and one it cannot read is a defect in it, not a partial batch.
+/// Scores out of range are not: [`warn_scores_out_of_range`] says so of the
+/// readings the caller takes, once it has chosen them.
 pub(crate) fn ocr_readings(
     dir: &Path,
     stem: &str,
@@ -486,6 +488,25 @@ pub(crate) fn ocr_readings(
         }
     }
     out
+}
+
+/// Say (unless `--quiet`) that `name` reports no confidence, `n` of its
+/// `words` scores being outside 0-1
+/// ([`WordReading::scores_out_of_range`](fluree_doc_pdf::ocr::WordReading::scores_out_of_range)).
+/// The sidecar's `conf` is 0-1: a reading scored 0-100, as Tesseract
+/// scores, would otherwise lose its confidence without a word of why, and
+/// with it the noise rule's judgement by confidence of a reading of a
+/// region or of a picture
+/// ([`MIN_PICTURE_CONFIDENCE`](fluree_doc_pdf::ocr::MIN_PICTURE_CONFIDENCE)):
+/// only its boxes are judged, as those of a reading scored not at all are.
+/// A reading of a whole page, or of an image read as a file, is not judged
+/// noise at all.
+pub(crate) fn warn_scores_out_of_range(name: &str, n: usize, words: usize, quiet: bool) {
+    if n > 0 && !quiet {
+        eprintln!(
+            "warning: --ocr-words: {name}: {n} of {words} word score(s) outside 0-1, so no confidence is reported for it, nor, for a region or a picture, is it judged noise by its confidence (`conf` is 0-1)"
+        );
+    }
 }
 
 /// Splice model-tier readings (VLM crops, and optionally table-structure

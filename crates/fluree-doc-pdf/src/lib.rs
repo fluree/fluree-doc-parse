@@ -264,7 +264,7 @@ pub fn parse_warnings(doc: &Document) -> Vec<fluree_doc_model::ParseWarning> {
 
 /// Two boxes for the same region, computed the same way: equal but for
 /// floating-point noise.
-fn same_box(a: &BBox, b: &BBox) -> bool {
+pub(crate) fn same_box(a: &BBox, b: &BBox) -> bool {
     const EPS: f64 = 0.01;
     (a.x0 - b.x0).abs() < EPS
         && (a.y0 - b.y0).abs() < EPS
