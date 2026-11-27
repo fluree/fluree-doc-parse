@@ -558,7 +558,14 @@ fn read_upright(
     // The pipeline hands the image back: a page read once is not copied.
     let (mut lines, img) = read_plan(plan, read, img)?;
     if worth_turning(&lines) {
-        let (mut turned, _) = read_plan(plan, read, image::imageops::rotate180(&*img))?;
+        // Turned where it lies, not copied: the pipeline keeps no hold on
+        // the image it hands back, nor `read_plan` on the one it cuts its
+        // canvases from, so the second reading holds no more pixels than
+        // the first. A copy made alongside it would be a whole image more
+        // than the memory budget counts.
+        let mut img = std::sync::Arc::unwrap_or_clone(img);
+        image::imageops::rotate180_in_place(&mut img);
+        let (mut turned, _) = read_plan(plan, read, img)?;
         for l in &mut turned {
             l.quad = l.quad.map(|(x, y)| (w - x, h - y));
         }
@@ -1983,5 +1990,27 @@ mod tests {
         for not in ["1068", "6", "No", "sun now", "806 / 908", "Ab 12"] {
             assert!(!tells_its_way_up(not), "{not}");
         }
+    }
+
+    #[test]
+    fn a_page_read_again_is_turned_where_it_lies() {
+        // Read whole: the second reading is given the image the first one
+        // was, turned in its own buffer, not a copy made beside it.
+        let plan = OcrSizing::default().plan(1000, 2600);
+        let mut img = image::RgbImage::new(1000, 2600);
+        img.put_pixel(0, 0, image::Rgb([255, 0, 0]));
+        let mut seen = Vec::new();
+        let mut pipeline = |_: &Pass, img: image::RgbImage| {
+            seen.push((img.as_raw().as_ptr() as usize, *img.get_pixel(999, 2599)));
+            let poorly = lines(150, 12.0).into_iter().map(|l| Line {
+                conf: Some(0.3),
+                ..l
+            });
+            Ok((poorly.collect(), std::sync::Arc::new(img)))
+        };
+        read_upright(&plan, &mut pipeline, img).unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].0, seen[1].0, "the same buffer");
+        assert_eq!(seen[1].1, image::Rgb([255, 0, 0]), "turned a half");
     }
 }
