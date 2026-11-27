@@ -873,6 +873,21 @@ Content-Type: text/html; charset=utf-8\r\n\
     }
 
     #[test]
+    fn a_short_html_body_is_read_past_the_charset_it_declares() {
+        // Mail clients open their HTML with a `<meta>` naming its charset;
+        // a body this short is in the parser's first chunk whole.
+        let src = b"From: Lena Holt <lena@example.com>\r\n\
+Subject: Kickoff\r\n\
+Date: Tue, 1 Sep 2026 08:00:00 +0000\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"></head>\
+<body><p>Tuesday works.</p></body></html>\r\n";
+        let email = parse(src).unwrap();
+        assert_eq!(texts(&email)[1..], ["Tuesday works."]);
+    }
+
+    #[test]
     fn a_plain_part_left_with_markup_gives_way_to_the_html() {
         // A billing system's converter stripped the tags and stopped: the
         // style sheet and the character references are still in it.

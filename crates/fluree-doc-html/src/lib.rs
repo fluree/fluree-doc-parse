@@ -478,7 +478,13 @@ fn build(src: &str, mut budget: Budget) -> Result<(RcDom, Budget), TooLarge> {
             at += 1;
         }
         input.push_back(StrTendril::from_slice(&rest[..at]));
-        while let TokenizerResult::Script(_) = tokenizer.feed(&input) {}
+        // The tokenizer pauses on a `<script>` it has closed and on a
+        // charset a `<meta>` declares, with the rest of the chunk still
+        // queued: the page is decoded already, so neither changes what is
+        // read, and it is fed again until it has read all it was given.
+        // Stopped at a charset, a short page lost everything after its
+        // `<meta charset>`, its whole body.
+        while !matches!(tokenizer.feed(&input), TokenizerResult::Done) {}
         rest = &rest[at..];
     }
     tokenizer.end();
@@ -2603,6 +2609,27 @@ mod tests {
         // A drawing's title is not the page's.
         let bare = super::info("<p>Text</p><svg><title>a chart</title></svg>");
         assert_eq!(bare.title, None);
+    }
+
+    #[test]
+    fn a_short_page_is_read_past_the_charset_it_declares() {
+        // All of it in the parser's first chunk: the tokenizer pauses at
+        // each declared charset with the rest of the chunk still queued.
+        for meta in [
+            "<meta charset=\"utf-8\">",
+            "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">",
+        ] {
+            let src = format!(
+                "<!DOCTYPE html><html><head>{meta}<title>X</title></head>\
+                 <body><h1>Head</h1><p>Hello world</p></body></html>"
+            );
+            assert!(src.len() < FEED_BYTES);
+            let els = parse(&src);
+            let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+            assert_eq!(texts, ["Head", "Hello world"], "{meta}");
+            let (els, _, _) = super::parse_message(&src).unwrap();
+            assert_eq!(els.len(), 2, "{meta}");
+        }
     }
 
     #[test]
