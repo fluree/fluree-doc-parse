@@ -5113,10 +5113,11 @@ pub fn analyze(raw: &mut RawDoc, outline: &[OutlineItem]) -> Analysis {
 }
 
 /// Each page's route as [`analyze_with`] decides it: once glyphs drawn twice
-/// at one spot (faux bold) are one, and a watermark laid over the text is
-/// taken out, and before any other cleaning. Those two take glyphs off an
-/// image: a label in faux bold or a watermark over a capture covers it as
-/// drawn, and not once cleaned.
+/// at one spot (faux bold) are one, an accent drawn over its letter is
+/// part of it, and a watermark laid over the text is taken out, and before
+/// any other cleaning. Those take glyphs off an image: a label in faux
+/// bold or a watermark over a capture covers it as drawn, and not once
+/// cleaned.
 ///
 /// A region is named by its place in its page's route (`r0`, `r1`, …), and
 /// an OCR reading is matched to its region by that name before the analysis
@@ -5131,13 +5132,21 @@ pub fn region_routes(doc: &RawDoc) -> Vec<crate::route::Route> {
 }
 
 /// A copy of the document's pages as [`analyze_with`] routes them: faux
-/// bold counted once, a watermark laid over the text taken out. What an
-/// OCR engine's regions are found on ([`crate::route::ocr_regions`]), so
-/// they are numbered as the analysis's anchors are ([`region_routes`]).
+/// bold counted once, an accent drawn over its letter composed with it, a
+/// watermark laid over the text taken out. What an OCR engine's regions
+/// are found on ([`crate::route::ocr_regions`]), so they are numbered as
+/// the analysis's anchors are ([`region_routes`]).
+///
+/// The cleanings are [`analyze_with`]'s, in its order: one left out here
+/// changes how many glyphs stand over an image (`e` and `´` are two as
+/// drawn, `é` one once composed), and a caption near the handful that
+/// makes a glyph void would route its capture one way here and the other
+/// way in the analysis.
 pub fn routing_pages(doc: &RawDoc) -> Vec<crate::extract::Page> {
     let mut pages = doc.pages.clone();
     for p in pages.iter_mut() {
         dedup::remove_faux_bold(&mut p.glyphs, 8);
+        crate::accent::compose(&mut p.glyphs);
     }
     crate::watermark::strip_overlaid(&mut pages);
     pages
@@ -5164,11 +5173,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     timed(&mut timings.furniture, || {
         crate::watermark::strip_overlaid(&mut raw.pages)
     });
-    // Routed here, after the two cleanings that take glyphs off an image and
-    // before any other, and kept on the page for whatever reads it after
-    // this: the page an OCR reading numbers its regions on
-    // ([`routing_pages`]), which kept its routing first when it read one, so
-    // a region's anchor, its crop, its reading and its report carry one name.
+    // Routed here, after the cleanings that take glyphs off an image (faux
+    // bold, accents, a watermark) and before any other, and kept on the page
+    // for whatever reads it after this: the page an OCR reading numbers its
+    // regions on ([`routing_pages`], which makes the same cleanings), which
+    // kept its routing first when it read one, so a region's anchor, its
+    // crop, its reading and its report carry one name.
     for p in raw.pages.iter_mut() {
         timed(&mut timings.routing, || p.keep_routing());
     }
@@ -9286,6 +9296,70 @@ mod tests {
         // Analysed again, the page keeps its routing.
         analyze_with(&mut raw, &[], &opts);
         assert_eq!(raw.pages[0].routing().route, both);
+    }
+
+    #[test]
+    fn a_caption_of_accents_set_over_their_letters_is_one_caption_to_every_reader() {
+        // Prose, then a capture with a caption over it whose ten letters
+        // each carry an acute drawn as a glyph of its own: 20 glyphs as
+        // drawn, enough to say the text layer covers it; 10 once each
+        // accent is composed with its letter, a glyph void. Routed for an
+        // OCR reading as the analysis routes it, the capture is r0 for both.
+        let a = BBox {
+            x0: 56.0,
+            y0: 262.0,
+            x1: 556.0,
+            y1: 412.0,
+        };
+        let mut glyphs = Vec::new();
+        for line in 0..4 {
+            for (k, c) in "The account review and the record".chars().enumerate() {
+                let i = glyphs.len();
+                glyphs.push(letter(
+                    c,
+                    56.0 + 6.0 * k as f64,
+                    40.0 + 14.0 * line as f64,
+                    i,
+                ));
+            }
+        }
+        for k in 0..10 {
+            let x = 100.0 + 8.0 * k as f64;
+            let i = glyphs.len();
+            glyphs.push(letter('e', x, 342.0, i));
+            // The acute over the `e`, its ink just above the letter's top.
+            let mut acute = letter('\u{00B4}', x + 1.5, 342.0, i + 1);
+            acute.bbox = Some(BBox {
+                x0: x + 1.5,
+                y0: 331.0,
+                x1: x + 4.5,
+                y1: 333.0,
+            });
+            glyphs.push(acute);
+        }
+        let mut page = crate::image::page_of(612, 792, false).pages.remove(0);
+        page.glyphs = glyphs;
+        page.images = vec![crate::extract::ImagePlacement {
+            bbox: a,
+            texty: Some(true),
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+            key: None,
+        }];
+        assert_eq!(
+            crate::route::decide(&page).0,
+            crate::route::Route::Deterministic,
+            "as drawn, the caption covers the capture"
+        );
+        let mut raw = RawDoc {
+            pages: vec![page],
+            title: None,
+        };
+        let routed = crate::route::Route::VlmRegions(vec![a]);
+        assert_eq!(region_routes(&raw), vec![routed.clone()]);
+        analyze_with(&mut raw, &[], &AnalyzeOptions::default());
+        assert_eq!(raw.pages[0].routing().route, routed);
     }
 
     #[test]

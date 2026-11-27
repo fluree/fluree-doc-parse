@@ -101,8 +101,10 @@ from a capture, and what an engine reads in a photograph is noise.
 
 What an engine reads in a region, routed or small, is still held to a noise
 rule, a net behind the probe for a photograph or a gradient it took for
-text: a mean confidence under 0.5, or under 0.8 with most of its words
-fragments of one or two letters or figures, or one fragment, or one word
+text: a mean confidence under 0.5, or, in a small region only, under 0.8
+with most of its words fragments of one or two letters or figures (a
+routed one may be a raster table of one- and two-digit cells), or one
+fragment, or one word
 read under 0.8, boxed over nearly all of the region
 (`ocr::MIN_PICTURE_CONFIDENCE`, `MIN_FRAGMENTS_CONFIDENCE`,
 `NOISE_BOX_SHARE`); the region stays unread. A reading of a whole page is
@@ -118,8 +120,8 @@ image costs: extraction probes them only when something acts on the verdict
 anchors, the layout sidecars or `--probe-images`). Unprobed, an image's
 `texty` is `None`: the router routes none, no engine is offered any, and
 each one the text layer does not cover, half an inch or more on its longer
-side, is listed as `Unprobed`, at any share of the page, with one warning
-that says how many and on which pages. A texty one under half an
+side, is listed as `Unprobed`, at any share of the page, without a warning: a
+run that reads no image has nothing to say about what one holds. A texty one under half an
 inch on its longer side (`MIN_SMALL_REGION_SIDE`, 36 units: a checkbox, an
 icon) is not listed, though an OCR engine is still offered it when its own
 pixels hold a line of text: a stencil reads as text whatever it draws, and a

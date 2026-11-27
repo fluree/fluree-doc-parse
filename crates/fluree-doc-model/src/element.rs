@@ -473,10 +473,13 @@ pub struct UnreadRegion {
     /// enough for the router to send a model. Or one the router declined,
     /// listed so a caller can decide: `Small`, whose pixels look like text
     /// but which covers under a tenth of the page, half an inch or more on
-    /// its longer side;
-    /// `NotTexty`, a tenth of the page or more whose pixels the probe did
-    /// not take for text (a photograph, a chart). An OCR engine reads the
-    /// first, nothing reads the second. Only `Region` is warned about.
+    /// its longer side; `NotTexty`, a tenth of the page or more whose
+    /// pixels the probe did not take for text (a photograph, a chart). An
+    /// OCR engine reads the first, nothing reads the second. Or
+    /// `Unprobed`, an image nothing examined, half an inch or more on its
+    /// longer side: the parse decoded no image (a plain run), or none under
+    /// a tenth of the page (a run without OCR), so nothing tells a capture
+    /// of text from a photograph. Only `Region` is warned about.
     pub reason: String,
 }
 
@@ -740,7 +743,11 @@ impl Notes {
         }
         // Only the regions the router sent a reader to: one it declined is a
         // logo or a photograph as often as content, listed in
-        // `doc:unreadRegions` for a caller to judge, not warned about.
+        // `doc:unreadRegions` for a caller to judge, not warned about. So is
+        // an image no pixel of which was looked at (`Unprobed`): a plain run
+        // examines none, and saying so in every document with a logo would
+        // put a comment in most of them for what a parse that reads nothing
+        // never meant to read.
         let mut regions: Vec<&UnreadRegion> = self
             .unread_regions
             .iter()
@@ -783,40 +790,12 @@ impl Notes {
                 at.join("; ")
             ));
         }
-        // Images no pixel of which was looked at: a capture of text and a
-        // logo alike. Said once, by page, not each with its box: they are
-        // as often decoration as content, and the boxes are in
-        // `doc:unreadRegions`.
-        let mut unprobed: Vec<usize> = self
-            .unread_regions
-            .iter()
-            .filter(|r| r.reason == "Unprobed")
-            .map(|r| r.page + 1)
-            .collect();
-        let images = unprobed.len();
-        unprobed.sort_unstable();
-        unprobed.dedup();
-        let unexamined = (images > 0).then(|| {
+        (!said.is_empty()).then(|| {
             format!(
-                "{images} image{} on page{} {} {} not examined: a parse that \
-                 probes images (--probe-images, or OCR) can tell whether {} text",
-                if images == 1 { "" } else { "s" },
-                if unprobed.len() == 1 { "" } else { "s" },
-                page_runs(&unprobed),
-                if images == 1 { "was" } else { "were" },
-                if images == 1 { "it holds" } else { "they hold" },
+                "fluree-doc-parse: {}. This output is missing it.",
+                said.join(". ")
             )
-        });
-        match (said.is_empty(), unexamined) {
-            (true, None) => None,
-            (true, Some(u)) => Some(format!("fluree-doc-parse: {u}.")),
-            (false, u) => Some(format!(
-                "fluree-doc-parse: {}. This output is missing it.{}",
-                said.join(". "),
-                u.map(|u| format!(" {}{}.", u[..1].to_uppercase(), &u[1..]))
-                    .unwrap_or_default()
-            )),
-        }
+        })
     }
 }
 

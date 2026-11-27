@@ -236,13 +236,17 @@ what the router made of it:
 | `Region` | its pixels look like text or a table, and it covers a tenth of the page or more | a model (`r{i}`), an OCR engine | yes |
 | `Small` | its pixels look like text, but it covers under a tenth of the page; half an inch (36 units) or more on its longer side | an OCR engine only (`small_region`) | no |
 | `NotTexty` | a tenth of the page or more, but the pixel probe does not take it for text: a photograph, a chart, an illustration | nothing | no |
-| `Unprobed` | not examined: a plain run decodes no image, and a run without OCR none under a tenth of the page, so nothing tells a capture of text from a photograph; half an inch or more on its longer side, at any share of the page | nothing in this run | once, by page |
+| `Unprobed` | not examined: a plain run decodes no image, and a run without OCR none under a tenth of the page, so nothing tells a capture of text from a photograph; half an inch or more on its longer side, at any share of the page | nothing in this run | no |
 
 The images are probed only by a run that acts on the verdict: escalation,
 OCR (`--ocr`, `--ocr-words`), the anchors or the layout sidecars, or
 `--probe-images`. The decode is most of what an image costs, so a plain run
 skips it and lists each image the text layer does not cover as `Unprobed`;
 a run that probes lists the same images as `Region`, `Small` or `NotTexty`.
+A run that probes and reads no image (escalation without OCR) leaves the
+images under a tenth of the page unexamined in the same way. `Unprobed` is
+listed here only: a plain run reads no image by design, so it warns about
+none, and the Markdown and XHTML carry no comment for them.
 
 The router sends a model only to `Region`; it declines `Small` and
 `NotTexty`. An
@@ -258,11 +262,14 @@ screen among them.
 What an engine reads in any region (`r{i}`, routed or small) is held to a
 noise rule all the same, a net behind the probe for a photograph or a
 gradient it took for text: the reading is set aside when its words' mean
-confidence is under 0.5; or it is under 0.8 and more than two thirds of
-them are fragments of one or two letters or figures (`1`, `I`, `J`), as an
-engine reads foliage, whose noise it may score as surely as a date stamped
-in a landscape; or one word is boxed over nine tenths of the region or
-more and is a fragment or read under 0.8. A crop of one line of text, or a
+confidence is under 0.5; or, in a small region only, it is under 0.8 and
+more than two thirds of them are fragments of one or two letters or
+figures (`1`, `I`, `J`), as an engine reads foliage, whose noise it may
+score as surely as a date stamped in a landscape; or one word is boxed
+over nine tenths of the region or more and is a fragment or read under
+0.8. A routed region is not judged by its fragments: a raster table of
+one- and two-digit cells is mostly fragments, and is kept however surely
+it is read over 0.5. A crop of one line of text, or a
 sign whose one word fills it, read surely, is kept. A reading scored on no
 scale, or with a score outside 0-1, is judged by its boxes alone. The
 region then stays listed. A reading of the whole page (`full`) is not
@@ -273,7 +280,8 @@ under 0.8 in the mean, such text can be set aside.
 Unread, the declined regions are listed anyway so a caller can decide: crop
 and read them, or take them for the logo, photograph or ornament they are as
 often as not. For the same reason only `Region` is in the stderr warning and
-the Markdown and XHTML comment, so a letterhead or a photograph never warns.
+the Markdown and XHTML comment, so a letterhead or a photograph, examined or
+not, never warns.
 An image under a tenth of the page that does not look like text either (an
 icon, a bullet, a small photograph) is not listed at all, nor any image the
 page's own text covers. Nor is a texty one under half an inch on its longer

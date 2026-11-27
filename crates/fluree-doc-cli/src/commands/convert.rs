@@ -1728,6 +1728,10 @@ fn convert_bytes(
         || opts.emit_anchors
         || opts.layout_prefix.is_some();
     eopts.probe_small_images = ocr || args.probe_images;
+    // What each image shows, so an engine reads an image drawn again once
+    // (`ocr::copies`): read by OCR alone, and a hash of every image's
+    // stream (decrypted, in an encrypted file) a run without it never uses.
+    eopts.key_images = ocr;
     let mut doc = extract_bytes_with(data, &eopts).map_err(|e| format!("extract: {e}"))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer

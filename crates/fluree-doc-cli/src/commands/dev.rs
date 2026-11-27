@@ -1226,9 +1226,11 @@ pub(crate) fn render_routed(
     let mut n_vetoed = 0usize;
     let mut n_columns = 0usize;
 
-    // The images too small to route are probed only for the OCR regions.
+    // The images too small to route are probed, and the images keyed to
+    // crop a copy once, only for the OCR regions.
     let mut eopts = fluree_doc_pdf::ExtractOptions::default();
     eopts.probe_small_images = ocr_regions;
+    eopts.key_images = ocr_regions;
     for f in &files {
         let stem = crate::commands::common::stem_of(f);
         if !stems.insert(stem.to_string()) {

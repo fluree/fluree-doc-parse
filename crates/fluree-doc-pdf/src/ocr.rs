@@ -275,6 +275,10 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
                 shown,
                 area,
                 replaces,
+                routed: match &routes[pi] {
+                    Route::VlmRegions(r) => r.len(),
+                    _ => 0,
+                },
             })
         })
         .collect();
@@ -445,7 +449,8 @@ pub const MIN_PICTURE_CONFIDENCE: f64 = 0.5;
 /// short tokens of a reading boxed word by word (a sidecar from an engine
 /// that boxes words, where a line of prose holds `a`, `of`, `to`) count
 /// as fragments more often than the built-in engine's lines do: read with
-/// a mean under this, such text can be set aside.
+/// a mean under this, such text can be set aside. Judged in a small region
+/// only, not in one the router routes ([`noise`]).
 pub const MIN_FRAGMENTS_CONFIDENCE: f64 = 0.8;
 
 /// Share of a reading's words over which they are mostly fragments
@@ -470,18 +475,32 @@ const NOISE_BOX_SHARE: f64 = 0.9;
 /// Whether `words`, read in a picture of `area` (square PDF units), are an
 /// engine's noise rather than text: their mean confidence is under
 /// [`MIN_PICTURE_CONFIDENCE`], or under [`MIN_FRAGMENTS_CONFIDENCE`] with
-/// more than [`FRAGMENT_SHARE`] of them fragments, or one of them is boxed
-/// over [`NOISE_BOX_SHARE`] of the picture and is a fragment or is read
-/// under [`MIN_FRAGMENTS_CONFIDENCE`]. A reading with no confidence (none
-/// given, or scored outside 0-1) is judged by its boxes alone, a word with
-/// no confidence as one read unsurely. No words are no noise.
-fn noise(words: &[&Placed], area: f64) -> bool {
+/// more than [`FRAGMENT_SHARE`] of them fragments (when `fragments_judged`),
+/// or one of them is boxed over [`NOISE_BOX_SHARE`] of the picture and is a
+/// fragment or is read under [`MIN_FRAGMENTS_CONFIDENCE`]. A reading with no
+/// confidence (none given, or scored outside 0-1) is judged by its boxes
+/// alone, a word with no confidence as one read unsurely. No words are no
+/// noise.
+///
+/// The fragments are judged in a small region only, one the router sends
+/// no model: a region it routes is a tenth of the page or more, and a
+/// raster table of one- and two-digit cells there (a timetable, a grid of
+/// scores) is mostly fragments, which read under
+/// [`MIN_FRAGMENTS_CONFIDENCE`] would set the whole table aside. A routed
+/// region is held to the confidence floor and to the one word boxed over
+/// all of it, which set aside the grass, photographs and gradients
+/// measured. The price: dense foliage a tenth of the page or more that the
+/// probe takes for text (read at a mean of 0.57 to 0.63) is taken, as it
+/// was before the rule; losing a table of figures costs more than a line
+/// of strokes under a picture.
+fn noise(words: &[&Placed], area: f64, fragments_judged: bool) -> bool {
     let confs: Vec<f64> = words.iter().filter_map(|w| w.conf).collect();
     let fragments = words.iter().filter(|w| fragment(&w.text)).count();
     let fragmented = fragments as f64 > FRAGMENT_SHARE * words.len() as f64;
     let unsure = !confs.is_empty() && {
         let mean = confs.iter().sum::<f64>() / (confs.len() as f64);
-        mean < MIN_PICTURE_CONFIDENCE || (fragmented && mean < MIN_FRAGMENTS_CONFIDENCE)
+        mean < MIN_PICTURE_CONFIDENCE
+            || (fragments_judged && fragmented && mean < MIN_FRAGMENTS_CONFIDENCE)
     };
     let over_all = words.iter().any(|w| {
         let (bx, by) = quad_bounds(&w.quad);
@@ -544,7 +563,8 @@ fn noise_in_regions(p: &Page, t: &Target, reading: &WordReading) -> Vec<usize> {
             .filter(|(r, _, _)| r == i)
             .map(|(_, _, w)| *w)
             .collect();
-        if noise(&words, region.width() * region.height()) {
+        let fragments_judged = *i >= t.routed;
+        if noise(&words, region.width() * region.height(), fragments_judged) {
             gone.extend(landed.iter().filter(|(r, _, _)| r == i).map(|(_, k, _)| *k));
         }
     }
@@ -560,6 +580,10 @@ struct Target {
     area: Area,
     /// The page's own glyphs are the thing that is wrong (`BrokenText`).
     replaces: bool,
+    /// How many of the page's regions the router routes: those numbered
+    /// under it are the routed ones, the others the small ones an engine
+    /// alone reads ([`route::ocr_regions`]).
+    routed: usize,
 }
 
 /// Lay one reading the router let in on its page.
@@ -1978,17 +2002,18 @@ pub fn ocr_jobs_within(
     max_crops: usize,
     small_per_page: usize,
 ) -> (OcrJobs, usize, usize) {
+    // Numbered as the analysis's anchors and crops are.
+    let pages = crate::document::routing_pages(doc);
     // A region showing what an earlier one shows is not read again
     // ([`copies`]): it takes the earlier one's reading, and counts against
     // the limit only through it.
     let copied: std::collections::HashMap<(usize, usize), (usize, usize)> =
-        copies(doc, only).into_iter().collect();
+        copies_on(&pages, only).into_iter().collect();
     // Every crop, in page order, with its kind: 0 a page read whole, 1 a
     // routed region, 2 a small one.
     type Ranked = (u8, usize, Option<(usize, BBox)>);
     let mut crops: Vec<Ranked> = Vec::new();
-    // Numbered as the analysis's anchors and crops are.
-    for p in &crate::document::routing_pages(doc) {
+    for p in &pages {
         if only.is_some_and(|keep| !keep.contains(&p.index)) {
             continue;
         }
@@ -2086,11 +2111,24 @@ pub type RegionCopy = ((usize, usize), (usize, usize));
 /// region, or noise. What the margin of each crop shows apart from the
 /// image is not read again: a word an engine would read across the edge of
 /// a copy's region is lost.
+///
+/// The regions are numbered on the pages as the analysis routes them
+/// ([`crate::document::routing_pages`]), as [`ocr_jobs`], [`inject`] and
+/// the anchors number them: numbered on the page as drawn, a capture under
+/// a caption in faux bold would be no region, every region after it would
+/// take its number, and a logo drawn again on the next page would lend
+/// that copy the capture's reading.
 pub fn copies(doc: &Document, only: Option<&[usize]>) -> Vec<RegionCopy> {
+    copies_on(&crate::document::routing_pages(doc), only)
+}
+
+/// [`copies`] on the pages as the analysis routes them, which the caller
+/// already has from [`crate::document::routing_pages`].
+fn copies_on(pages: &[Page], only: Option<&[usize]>) -> Vec<RegionCopy> {
     let mut first: std::collections::HashMap<(u64, i32, [i64; 2]), (usize, usize)> =
         std::collections::HashMap::new();
     let mut out = Vec::new();
-    for p in &doc.pages {
+    for p in pages {
         if only.is_some_and(|keep| !keep.contains(&p.index)) {
             continue;
         }
@@ -3509,6 +3547,47 @@ mod tests {
                 .collect(),
             rules: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_routed_table_of_figures_is_not_set_aside_as_fragments() {
+        // The page of prose with a raster table of one- and two-digit cells
+        // where the photograph was: routed (r0), the capture after it (r1).
+        let mut doc = prose_with_a_photograph();
+        doc.pages[0].images[1].texty = Some(true);
+        let table = doc.pages[0].images[1].bbox;
+        let capture = doc.pages[0].images[0].bbox;
+        assert_eq!(
+            route::ocr_regions(&doc.pages[0]),
+            [table, capture],
+            "the table routed, the capture after it"
+        );
+        // Six rows of four cells, every one a fragment, read at 0.7 in the
+        // mean: under the fragments' floor, over the picture's.
+        let cells: Vec<(String, [f64; 4])> = (0..24)
+            .map(|k| {
+                let (x, y) = (80.0 + 120.0 * (k % 4) as f64, 460.0 + 22.0 * (k / 4) as f64);
+                (format!("{}", 3 + 7 * k % 90), [x, y, x + 14.0, y + 12.0])
+            })
+            .collect();
+        let cells: Vec<(&str, [f64; 4])> = cells.iter().map(|(t, b)| (t.as_str(), *b)).collect();
+        let r = inject(&mut doc, &[(0, Crop::Region(0), scored(&cells, Some(0.7)))]);
+        assert_eq!((r[0].taken, r[0].dropped), (24, 0), "{:?}", r[0]);
+
+        // The same figures read in the small capture are set aside: the
+        // net behind the probe for foliage it took for text.
+        let mut doc = prose_with_a_photograph();
+        doc.pages[0].images[1].texty = Some(true);
+        let figures = [
+            ("12", [60.0, 382.0, 72.0, 398.0]),
+            ("4", [80.0, 382.0, 86.0, 398.0]),
+            ("37", [100.0, 382.0, 112.0, 398.0]),
+        ];
+        let r = inject(
+            &mut doc,
+            &[(0, Crop::Region(1), scored(&figures, Some(0.7)))],
+        );
+        assert_eq!((r[0].taken, r[0].dropped), (0, 3), "{:?}", r[0]);
     }
 
     #[test]
@@ -6138,6 +6217,86 @@ mod tests {
         );
         assert_eq!(own.len(), 3);
         assert_eq!(own[2].2.coords, Coords::Page);
+    }
+
+    #[test]
+    fn a_copy_is_numbered_on_the_page_as_the_analysis_routes_it() {
+        // Page 1: prose, a capture with a caption drawn twice over it (26
+        // glyphs as drawn, enough to say the text layer covers it; 13 once
+        // the bold counts once, a glyph void), then a logo. Page 2: prose
+        // and the logo again. As the analysis routes page 1, the capture is
+        // r0 and the logo r1; as drawn, the logo would be r0, and its copy
+        // on page 2 would take the capture's reading.
+        let small = |x0: f64, x1: f64, key: u64| ImagePlacement {
+            bbox: BBox {
+                x0,
+                y0: 262.0,
+                x1,
+                y1: 322.0,
+            },
+            texty: Some(true),
+            ppi: None,
+            bitonal: false,
+            grid: (400, 120),
+            key: Some(key),
+        };
+        let prose = || -> Vec<Glyph> {
+            (0..4)
+                .flat_map(|l| {
+                    native(
+                        "The account review and the record",
+                        40.0,
+                        40.0 + 14.0 * l as f64,
+                    )
+                })
+                .collect()
+        };
+        let mut first = prose();
+        for _ in 0..2 {
+            first.extend(native("Figure 1 data", 60.0, 300.0));
+        }
+        let mut second = page(prose(), vec![small(300.0, 400.0, 2)]);
+        second.index = 1;
+        let doc = Document {
+            pages: vec![
+                page(first, vec![small(56.0, 256.0, 1), small(300.0, 400.0, 2)]),
+                second,
+            ],
+            title: None,
+        };
+        assert_eq!(route::ocr_regions(&doc.pages[0]).len(), 1, "as drawn");
+        assert_eq!(copies(&doc, None), [((1, 0), (0, 1))]);
+        assert_eq!(
+            crops_of(&doc),
+            [(0, "r0".to_string()), (0, "r1".to_string())]
+        );
+        // The logo's reading, and not the capture's, is lent to its copy.
+        let read = |text: &str| WordReading {
+            coords: Coords::Px,
+            width: Some(100.0),
+            height: Some(100.0),
+            engine: None,
+            words: vec![OcrWord {
+                text: text.into(),
+                bbox: [10.0, 30.0, 90.0, 70.0],
+                angle: None,
+                conf: Some(0.99),
+            }],
+            rules: Vec::new(),
+        };
+        let readings = with_copies(
+            &doc,
+            None,
+            vec![
+                (0, Crop::Region(0), read("Invoice 4417")),
+                (0, Crop::Region(1), read("ACME")),
+            ],
+        );
+        let lent: Vec<&str> = (readings.iter())
+            .filter(|(page, _, _)| *page == 1)
+            .map(|(_, _, r)| r.words[0].text.as_str())
+            .collect();
+        assert_eq!(lent, ["ACME"]);
     }
 
     #[test]
