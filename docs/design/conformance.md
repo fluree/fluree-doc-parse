@@ -123,8 +123,8 @@ Markdown:
   `table.header_rows`.
 - **HTML tables unread.** The Markdown reader does not read the raw HTML
   tables the Markdown writer emits for span and band tables, so each is lost:
-  `table.lost`. The reader parses embedded tables with the HTML reader's
-  table code, which also serves anyone feeding us Markdown with HTML tables.
+  `table.lost`. The reader reads each raw HTML block with the HTML reader,
+  which also serves anyone feeding us Markdown with HTML in it.
 - **Text read as markup.** The writer escapes almost nothing, so text that
   Markdown reads as syntax becomes syntax: a paragraph opening `1. ` or `* `
   reads as a list item, `# ` as a heading, `> ` as a quote, a lone `-` or
