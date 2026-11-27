@@ -1285,11 +1285,30 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     } else {
                         Vec::new()
                     };
+                    // A header restated in a row whose first cell spans down
+                    // the rows under it names those rows alone: a table
+                    // nested in a list of fields, its label set down its rows
+                    // (`Gradient` beside `Time (min) | A% | B%`). The fields
+                    // after the span go back to the table's own names, and
+                    // the label is the rows' own, no column's name.
+                    let stub_span_end = |s: usize| -> Option<usize> {
+                        let m = e.merged_down.as_deref()?;
+                        let at = |r: usize| m.get(r * ncols).copied().unwrap_or(false);
+                        if !at(s + 1) {
+                            return None;
+                        }
+                        let mut end = s + 1;
+                        while end + 1 < rows.len() && at(end + 1) {
+                            end += 1;
+                        }
+                        Some(end)
+                    };
                     let restated_header = |s: usize| -> Vec<String> {
+                        let nested = stub_span_end(s).is_some();
                         (0..ncols)
                             .map(|c| {
                                 let label = rows[s].get(c).map_or("", |t| t.trim());
-                                if label.is_empty() {
+                                if label.is_empty() || (nested && c == 0) {
                                     return header.get(c).cloned().unwrap_or_default();
                                 }
                                 match upper.get(c).map(|u| u.trim()).filter(|u| !u.is_empty()) {
@@ -1326,7 +1345,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         let header = restated_headers
                             .iter()
                             .rev()
-                            .find(|(s, _)| *s < r)
+                            .find(|(s, _)| *s < r && stub_span_end(*s).is_none_or(|end| r <= end))
                             .map_or(&header, |(_, h)| h);
                         // The bands over a row: the nearest above it, and
                         // each band set directly over that one, a group over
@@ -2364,6 +2383,45 @@ mod tests {
         assert!(cell("AOC-5000").get("doc:sectionLabel").is_none());
         assert!(cell("1000 µL").get("doc:sectionLabel").is_none());
         assert!(cell("GC 2010 Plus").get("doc:sectionLabel").is_none());
+    }
+
+    #[test]
+    fn a_header_restated_beside_a_label_set_down_its_rows_names_those_rows_alone() {
+        // A list of conditions, no header row; `Gradient` set down the rows
+        // of a table nested in its value column, that table's header beside
+        // it; a field after it.
+        let mut t = el("doco:Table", "", None);
+        t.id = "elem-00001".into();
+        let row = |a: &str, b: &str, c: &str, d: &str| vec![a.into(), b.into(), c.into(), d.into()];
+        t.cells = Some(vec![
+            row("Flow Rate", "0.5 mL/min", "", ""),
+            row("Gradient", "Time (min)", "A%", "B%"),
+            row("", "0", "95", "5"),
+            row("", "8.0", "10", "90"),
+            row("Injection Volume", "5 µL", "", ""),
+        ]);
+        t.header_rows = Some(0);
+        let mut down = vec![false; 20];
+        down[2 * 4] = true;
+        down[3 * 4] = true;
+        t.merged_down = Some(down);
+        t.restated_headers = Some(vec![1]);
+        let g = graph(&[t]);
+        let cell = |value: &str| -> Value {
+            g.iter()
+                .find(|n| n["doc:cellValue"] == value)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(cell("8.0")["doc:columnHeader"], "Time (min)");
+        assert_eq!(cell("90")["doc:columnHeader"], "B%");
+        assert_eq!(cell("8.0")["doc:rowHeader"], "Gradient");
+        // The field after the span is no time, and the label names no
+        // column.
+        assert!(cell("5 µL").get("doc:columnHeader").is_none());
+        assert!(g
+            .iter()
+            .all(|n| n.get("doc:columnHeader").and_then(Value::as_str) != Some("Gradient")));
     }
 
     #[test]
