@@ -112,7 +112,10 @@ they follow the lines that tell, taken from the other reading only where
 most of the lines running their way were, so an upright page read poorly
 keeps its numbers as read upright; a tall one, where no line running its
 way tells (a table of numbers alone, set sideways), is taken as a tall line
-that tells is. An
+that tells is. A line only the other reading has, or
+reads whole where the kept one reads it in pieces, is added in place of the
+lines it covers when it would have been taken from it and reads them more
+confidently by that much (a line that tells must also read over 0.8). An
 upright page holding a table whose text runs up keeps its text and takes
 the table's. When two thirds of the
 text, counted in characters, runs one way sideways and less than a quarter

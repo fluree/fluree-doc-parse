@@ -949,6 +949,13 @@ fn mean_confidence(lines: &[Line]) -> Option<f64> {
 /// on its confidence as one that tells is: kept as first read, it would be
 /// the wrong way up whenever the other reading is the right one, and taken
 /// either way it runs sideways, so it never turns a page a half.
+///
+/// A line only the other reading has, or whose box differs too much from
+/// the base's to pair (a line read whole in one, in pieces in the other),
+/// is kept when it would have been taken, and beats every base line it
+/// meets ([`meets`]) as it would beat its pair, those lines dropped for it.
+/// A line that tells must also read well, over [`UPRIGHT_CONFIDENCE`]: the
+/// other reading's line alone is all there is to judge it by.
 fn merge(given: Vec<Line>, turned: Vec<Line>) -> Vec<Line> {
     let turned_wins = match (mean_confidence(&turned), mean_confidence(&given)) {
         (Some(t), Some(g)) => t > g + TURNED_MARGIN,
@@ -1003,6 +1010,28 @@ fn merge(given: Vec<Line>, turned: Vec<Line>) -> Vec<Line> {
             base[b] = o;
         }
     }
+    for o in other.into_iter().flatten() {
+        let run = run_of(&o.quad);
+        let may = if tells_its_way_up(&o.text) {
+            o.conf.unwrap_or(0.0) > UPRIGHT_CONFIDENCE
+        } else {
+            decided(run).unwrap_or(run == Run::Tall)
+        };
+        if !may {
+            continue;
+        }
+        let met: Vec<usize> = (0..base.len())
+            .filter(|&b| meets(&o.quad, &base[b].quad))
+            .collect();
+        if !met.iter().all(|&b| beats(&o, &base[b], run)) {
+            continue;
+        }
+        let at = met.first().copied().unwrap_or(base.len());
+        for &b in met.iter().rev() {
+            base.remove(b);
+        }
+        base.insert(at, o);
+    }
     base
 }
 
@@ -1045,6 +1074,16 @@ fn overlap(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> f64 {
     }
 }
 
+/// Whether two quads' bounds share a tenth of the smaller one: a line read
+/// in one reading meets a line read over any part of the same place in the
+/// other, however their boxes were cut. The bounds of a line set askew
+/// reach over its neighbours: it meets them too, and is kept only if it
+/// beats them as well.
+fn meets(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> bool {
+    let (inter, a, b) = intersection(a, b);
+    inter > 0.0 && inter >= MEETS * a.min(b)
+}
+
 /// The area two quads' bounds share, and the area of each.
 fn intersection(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> (f64, f64, f64) {
     let (a, b) = (bounds(a), bounds(b));
@@ -1067,6 +1106,10 @@ const UPRIGHT_CONFIDENCE: f64 = 0.8;
 const TURNED_MARGIN: f64 = 0.15;
 /// How much two lines' bounds overlap, over their union, to be one line.
 const SAME_LINE: f64 = 0.5;
+/// Share of the smaller of two lines' bounds they must share to meet
+/// ([`meets`]): more than a box drawn a pixel or two wide touches its
+/// neighbour by.
+const MEETS: f64 = 0.1;
 
 /// How many times taller than wide a line's crop is for the pipeline to turn
 /// it a quarter before reading it (oar-ocr's `get_rotate_crop_image`, as
@@ -1747,6 +1790,14 @@ mod tests {
         assert_eq!(overlap(&a, &a), 1.0);
         assert_eq!(overlap(&a, &line(100.0, 1.0).quad), 0.0);
         assert!(overlap(&a, &line(5.0, 1.0).quad) > SAME_LINE);
+        // A line read in pieces meets the whole line, as does its neighbour
+        // a box's edge reaches over by more than a tenth.
+        let whole = tall(300.0, 1.0).quad;
+        let piece = [(300.0, 0.0), (320.0, 0.0), (320.0, 90.0), (300.0, 90.0)];
+        assert!(overlap(&whole, &piece) < SAME_LINE && meets(&whole, &piece));
+        assert!(meets(&a, &line(17.0, 1.0).quad));
+        assert!(!meets(&a, &line(19.0, 1.0).quad));
+        assert!(!meets(&a, &line(20.0, 1.0).quad));
     }
 
     /// `lines` as the reading of their image turned a half gives them,
@@ -1866,6 +1917,62 @@ mod tests {
         turned.extend(numbers(0.95, "60138"));
         let merged = merge(given, turned);
         assert!(merged[5..].iter().all(|l| l.text == "60138"));
+    }
+
+    #[test]
+    fn a_line_only_the_other_reading_has_is_kept_where_it_reads_better() {
+        // A table running up on an upright page. The upright reading boxes
+        // one of its cells in two pieces of noise, each under half of the
+        // cell read whole turned; the turned reading also finds a cell of
+        // numbers and a stamp the upright one missed, and a line of noise
+        // over the page's text, boxed apart from it.
+        let piece = |y0: f64, y1: f64| Line {
+            quad: [(300.0, y0), (320.0, y0), (320.0, y1), (300.0, y1)],
+            text: "8E109-OS".into(),
+            conf: Some(0.4),
+        };
+        let mut given = page(0.97);
+        given.extend([piece(0.0, 90.0), piece(110.0, 200.0)]);
+        given.extend((1..5).map(|i| tall(300.0 + 30.0 * i as f64, 0.4)));
+        let mut turned = page(0.3);
+        turned.extend((0..5).map(|i| tall(300.0 + 30.0 * i as f64, 0.95)));
+        turned.push(Line {
+            text: "60138".into(),
+            ..tall(600.0, 0.97)
+        });
+        turned.push(Line {
+            text: "Stamped".into(),
+            ..line(600.0, 0.9)
+        });
+        turned.push(Line {
+            text: "Faint".into(),
+            ..line(700.0, 0.7)
+        });
+        turned.push(Line {
+            text: "Account".into(),
+            ..line(12.0, 0.9)
+        });
+        let merged = merge(given, turned);
+        let texts: Vec<&str> = merged.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "Account number",
+                "Account number",
+                "Account number",
+                "Account number",
+                "Account number",
+                "SKU-60138",
+                "SKU-60138",
+                "SKU-60138",
+                "SKU-60138",
+                "SKU-60138",
+                "60138",
+                "Stamped",
+            ]
+        );
+        assert!(merged[..5].iter().all(|l| l.conf == Some(0.97)));
+        assert_eq!(merged[5].quad[0], (300.0, 0.0), "the cell read whole");
     }
 
     #[test]
