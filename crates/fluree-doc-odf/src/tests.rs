@@ -426,3 +426,15 @@ fn a_texts_tables_and_paragraphs_spend_the_documents_budget() {
     assert!(text_within(&paras, Budget::new(100 * ELEMENT_BYTES + 100 * 12, 0)).is_ok());
     assert!(text_within(&paras, Budget::new(99 * ELEMENT_BYTES, 0)).is_err());
 }
+
+#[test]
+fn a_cells_tabs_spaces_and_line_breaks_part_its_words() {
+    let body = "<office:spreadsheet><table:table table:name=\"S\"><table:table-row>\
+        <table:table-cell office:value-type=\"string\"><text:p>Total<text:tab/>42</text:p></table:table-cell>\
+        <table:table-cell office:value-type=\"string\"><text:p>A<text:s text:c=\"3\"/>B<text:line-break/>C</text:p></table:table-cell>\
+        </table:table-row></table:table></office:spreadsheet>";
+    let els = parse(&package("spreadsheet", body, &[])).unwrap();
+    let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
+    // A cell is one line in a table, as an .xlsx cell's is.
+    assert_eq!(t.cells.as_ref().unwrap()[0], ["Total 42", "A B C"]);
+}
