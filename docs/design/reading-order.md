@@ -319,6 +319,45 @@ a note's mark raised at a word's end says nothing). This holds even where
 lines nearby run across the gap: a paragraph's line keeps one size and
 baseline across its widest space.
 
+**A row of icons and their labels.** A fact sheet sets a row of round
+icons, three or more, a short label centred under each (`FISHERY AND /
+PROTECTED / SPECIES STOCK / ASSESSMENTS` under one, `ECOSYSTEM / MODELING`
+under the next). Read across, alignment lined the labels' lines up into a
+table, and the page read them row by row: `FISHERY AND ECOSYSTEM PROTECTED
+MODELING`. Such a row is found before the page's lines are assembled:
+- the icons are drawn shapes of one size (within 15%), level, side by side
+  and apart, each larger than twice the page's text size, narrower than a
+  quarter of the page, no more than twice as wide as tall, and none inside
+  another;
+- an icon holds no words: a box with words in it is a flowchart's step or a
+  card. A mark set on it, a `$` or a `?`, is its lettering;
+- no text stands level with the icons, between them: an outlined title's
+  round letters are no icons, nor are a chart's plots with the axis numbers
+  between them. This and the last are weighed over all the page's text, a
+  chart's numbers read into a grid among it;
+- each icon has a label: the lines under it in its slot (to halfway to each
+  neighbour), the first within one and a half lines of its foot, each next
+  within a line's leading, five words a line at most, with a word of two
+  letters or more. Lone letters under shapes are a diagram's symbols;
+- across a slot's edge the labels stand an em or more apart: words closing
+  up across it are a line of text running under the row;
+- a label ends under its icon: a line following it in its slot as close as
+  a label stands under its icon makes it the head of a column of text, a
+  list set under each icon. A paragraph running on across the slots' edges,
+  under the whole row, is the page's text after it.
+
+Lines crossing a slot's edge in the labels' band are cut there, and a grid
+read from alignment over the labels alone is no table. The region pass then
+reads the labels whole, a row at a time, left to right: the lines over the
+rows first, then each label, then the rest. A stretch with text level with
+the rows and beside them (another column's lines) is parted into its
+columns first, and the rows read in their own. A mark set aslant in a
+label's box reads apart, before the label.
+
+A label set centred over two lines, its first line the shorter, still reads
+as two paragraphs (`CLIMATE`, `SCIENCE AND ASSESSMENTS`): block assembly
+reads centred lines at body size as ended by hand, as an address's are.
+
 Where the page-wide pass does see the panel's column, the box is read after
 the column's region, and the column's last paragraph, running on under the
 box across the page, was cut by it. A group lying wholly in a panel, three

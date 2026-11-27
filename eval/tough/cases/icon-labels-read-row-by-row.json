@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "nj-sepsis-hcp-fact-sheet.pdf",
+    "url": "https://www.nj.gov/health/cd/documents/topics/sepsis/HCP_fact-sheet_protect-your-patients-from-sepsis-P.pdf",
+    "sha256": "7c48aebebf88b10e8f75bd3b84627b8d62573cad476d2c6a6e67a4206a766c44",
+    "about": "CDC sepsis fact sheet for healthcare professionals, 1 page, two columns. The right column sets two rows of three icons, each with a label of one or two lines centred under it; the left column's text runs on level with them."
+  },
+  "checks": [
+    {
+      "id": "label-whole",
+      "found": "2026-11-27",
+      "issue": "The labels' lines were read row by row across the icons: `CONFUSION OR SHORTNESS OF BREATH`, `DISORIENTATION`, `FEVER, OR SHIVERING,`, `EXTREME PAIN OR`, `CLAMMY OR`.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "CONFUSION OR DISORIENTATION"
+      }
+    },
+    {
+      "id": "second-row-label-whole",
+      "found": "2026-11-27",
+      "issue": "As above, for the second row.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "FEVER, OR SHIVERING, OR FEELING VERY COLD"
+      }
+    },
+    {
+      "id": "rows-in-order",
+      "found": "2026-11-27",
+      "issue": "As above: each row's labels read left to right, the first row before the second.",
+      "text": "CONFUSION OR DISORIENTATION SHORTNESS OF BREATH HIGH HEART RATE FEVER, OR SHIVERING, OR FEELING VERY COLD EXTREME PAIN OR DISCOMFORT CLAMMY OR SWEATY SKIN"
+    },
+    {
+      "id": "column-beside-whole",
+      "found": "2026-11-27",
+      "issue": "The left column, level with the icons, reads whole before the right column; an earlier draft read the column's foot after the labels.",
+      "text": "Children younger than one The most frequently identified pathogens"
+    }
+  ]
+}

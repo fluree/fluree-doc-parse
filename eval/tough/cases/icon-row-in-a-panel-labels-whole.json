@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "doe-wap-fact-sheet-2022.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2022-06/wap-fact-sheet_0622.pdf",
+    "sha256": "2617cdbbde4dd751b41be0604c5c3e46efff6d1ac537af02eb9781c84545846d",
+    "about": "DOE Weatherization Assistance Program fact sheet, 2 pages. Page 1 sets a shaded panel at the foot of the right column, a row of four round icons with a label of one or two lines under each; the last icon holds a `$`. The left column's text runs on level with the panel."
+  },
+  "checks": [
+    {
+      "id": "label-whole",
+      "found": "2026-11-27",
+      "issue": "The labels' lines were read row by row across the icons: `LOWER OUT-OF-POCKET`, `LOWER LOAN INTEREST`, `HEALTH COSTS`, `PAYMENTS`.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "LOWER OUT-OF-POCKET HEALTH COSTS"
+      }
+    },
+    {
+      "id": "marked-icon-label-whole",
+      "found": "2026-11-27",
+      "issue": "As above, for the icon holding a `$`: a mark set on an icon is its lettering, not a box of text.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "LOWER LOAN INTEREST PAYMENTS"
+      }
+    },
+    {
+      "id": "mark-kept",
+      "found": "2026-11-27",
+      "issue": "The `$` reads apart, before the row, as on the reading before the fix.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "$"
+      }
+    }
+  ]
+}
