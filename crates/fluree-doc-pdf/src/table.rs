@@ -7933,8 +7933,16 @@ fn drop_field_line(g: &mut Grid, glyphs: &[crate::glyph::Glyph], rules: &[Rule])
         .filter(|t| !t.is_empty())
         .collect();
     let fields = first.len() >= 2 && first.iter().all(|t| label_colon(t) == Some(false));
-    let over_names = first.iter().any(|t| t.chars().any(|c| c.is_ascii_digit()))
-        && !head_runs(g, glyphs, 1).is_empty();
+    // A line holding an amount of its own (`29.99`) over heads named in
+    // words, figures under them: the heads are the table's top.
+    let figures_under = (2..g.rows()).any(|r| {
+        cells[r * cols..(r + 1) * cols]
+            .iter()
+            .any(|t| is_numeric_cell(t.trim()))
+    });
+    let over_names = first.iter().any(|t| is_numeric_cell(t))
+        && !head_runs(g, glyphs, 1).is_empty()
+        && figures_under;
     if !fields && !over_names {
         return;
     }
@@ -8004,13 +8012,29 @@ fn head_runs(g: &Grid, glyphs: &[crate::glyph::Glyph], r: usize) -> Vec<(f64, f6
     }
 }
 
+/// The median size of the glyphs between `y0` and `y1`: a row's type.
+fn head_size(glyphs: &[crate::glyph::Glyph], y0: f64, y1: f64) -> f64 {
+    let mut sizes: Vec<f64> = glyphs
+        .iter()
+        .filter(|gl| !gl.text.trim().is_empty())
+        .filter(|gl| {
+            let (_, y) = gl.center();
+            y > y0 && y < y1
+        })
+        .map(|gl| f64::from(gl.font_size))
+        .collect();
+    sizes.sort_by(f64::total_cmp);
+    sizes.get(sizes.len() / 2).copied().unwrap_or(1.0).max(1.0)
+}
+
 /// Move an aligned grid's column edges out from under its heads where a
 /// head is set right-aligned over its figures and wider than them (`Montant
 /// EUR HT` over `24.99`): the column starts where its figures do, and the
 /// head reaches back over the gutter, cut through by the edge. Where the
-/// head ends inside the column and nothing else stands between the head's
-/// start and the edge, the edge moves into the gutter before the head,
-/// midway to the text before it.
+/// rows are labelled in a stub, the head ends where the column's figures
+/// end, it reaches back a letter's width or more, and nothing of the column
+/// before stands between its start and the edge, the edge moves into the
+/// gutter before the head, midway to the text before it.
 fn fit_right_aligned_heads(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
     if g.layout.is_some() || g.rows() < 2 || g.cols() < 2 {
         return;
@@ -8018,6 +8042,15 @@ fn fit_right_aligned_heads(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
     let cols = g.cols();
     let runs = head_runs(g, glyphs, 0);
     if runs.is_empty() {
+        return;
+    }
+    // Amounts beside a stub of labels, as an invoice or a statement sets
+    // them: most body rows name themselves in words in the first column.
+    let cells = g.cell_texts(glyphs);
+    let named = (1..g.rows())
+        .filter(|&r| cells[r * cols].chars().any(char::is_alphabetic))
+        .count();
+    if named * 2 < g.rows() - 1 {
         return;
     }
     let (y1, bottom) = (g.ys[1], g.ys[g.rows()]);
@@ -8038,6 +8071,22 @@ fn fit_right_aligned_heads(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
         if b > g.xs[k + 1] {
             continue;
         }
+        // Set right-aligned over the column's figures: the head ends where
+        // they end, within a letter's width. A head centred over them is
+        // another layout's.
+        let fs = head_size(glyphs, g.ys[0], g.ys[1]);
+        // Reaching back over the gutter, not set at the edge a hair before it.
+        if edge - a < fs {
+            continue;
+        }
+        let right = body
+            .iter()
+            .filter(|&&(s, e)| (s + e) / 2.0 >= edge && (s + e) / 2.0 < g.xs[k + 1])
+            .map(|&(_, e)| e)
+            .fold(f64::MIN, f64::max);
+        if right == f64::MIN || (b - right).abs() > fs {
+            continue;
+        }
         // The text before the head: the body's and the head's own.
         let before = body
             .iter()
@@ -8048,7 +8097,9 @@ fn fit_right_aligned_heads(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
         // Nothing of the column before reaches under the head; the
         // column's own figures may start a hair before its edge.
         let clear = !body.iter().any(|&(s, e)| (s + e) / 2.0 < edge && e > a);
-        if clear && before < a {
+        // Into a gutter, as wide as one the columns are parted by: letters
+        // set apart in a word (`D ECIMAL`) leave a narrower gap.
+        if clear && a - before >= fs * ALIGNED_SPLIT_GAP_EMS {
             g.xs[k] = (before + a) / 2.0;
         }
     }
