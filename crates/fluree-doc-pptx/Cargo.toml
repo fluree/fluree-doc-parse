@@ -9,6 +9,7 @@ description = "PPTX (OOXML) to Fluree document elements (DoCO-typed)"
 fluree-doc-model.workspace = true
 quick-xml = "0.36"
 fluree-doc-ooxml.workspace = true
+fluree-doc-xlsx.workspace = true
 
 [dev-dependencies]
 zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
