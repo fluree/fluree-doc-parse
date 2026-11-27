@@ -243,6 +243,28 @@ fn bold_styles(t: &Tree) -> HashSet<String> {
     out
 }
 
+/// A cell paragraph's text as the sheet shows it: a tab (`text:tab`) and a
+/// run of spaces (`text:s`) each a space, a line break a line, a comment
+/// (`office:annotation`) left out. Read node by node as the paragraph's
+/// whole text would be, these written as nothing, `Total` and `42` either
+/// side of a tab read as `Total42`.
+fn shown_text(t: &Tree, id: usize) -> String {
+    let mut s = String::new();
+    let mut stack = vec![id];
+    while let Some(n) = stack.pop() {
+        let node = t.node(n);
+        match node.name.as_str() {
+            "tab" | "s" => s.push(' '),
+            "line-break" => s.push('\n'),
+            "annotation" => continue,
+            _ => {}
+        }
+        s.push_str(&node.text);
+        stack.extend(node.children.iter().rev().copied());
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::package;
@@ -283,26 +305,4 @@ mod tests {
         let els = parse(&sheet(row)).unwrap();
         assert!(els.iter().any(|e| e.text == "x"), "{els:#?}");
     }
-}
-
-/// A cell paragraph's text as the sheet shows it: a tab (`text:tab`) and a
-/// run of spaces (`text:s`) each a space, a line break a line, a comment
-/// (`office:annotation`) left out. Read node by node as the paragraph's
-/// whole text would be, these written as nothing, `Total` and `42` either
-/// side of a tab read as `Total42`.
-fn shown_text(t: &Tree, id: usize) -> String {
-    let mut s = String::new();
-    let mut stack = vec![id];
-    while let Some(n) = stack.pop() {
-        let node = t.node(n);
-        match node.name.as_str() {
-            "tab" | "s" => s.push(' '),
-            "line-break" => s.push('\n'),
-            "annotation" => continue,
-            _ => {}
-        }
-        s.push_str(&node.text);
-        stack.extend(node.children.iter().rev().copied());
-    }
-    s
 }
