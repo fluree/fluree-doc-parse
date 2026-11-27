@@ -344,6 +344,26 @@ rows it is missing from span it. Pieces drawn a few points apart in different
 rows, never two in one row, are one line, because a word processor sizes each
 row's cells on its own.
 
+A rule drawn in one row only is no column of the grid: a form sizes each
+row's boxes on its own. But it still parts the text of the cell it runs
+through. A purchase order's footer sets an ordering office's box beside an
+address box, a rule between them for their height, in one cell of the
+grid. Read as one, their lines took turns (`Ordered on behalf of the
+Secretary of LONDON 102 PETTY FRANCE (MOJ), Ministry of … State for
+Justice:`). A cell a rule parts is read a side at a time: the lines over
+the rule, each side's, left to right, then the lines under it. A label then
+reads with its own value (`3. ORDER NO. 89303421FEM400009`, not both labels
+before both values).
+
+The rule parts the cell only where it stands between two boxes of text:
+- it stands inside the cell, 3 points or more from its edges, where a
+  column's own rule does not;
+- no glyph's ink crosses it within its height: a stroke drawn through a
+  word is a drawing's;
+- each side holds two lines or more, one of three words or more. A small
+  table set in a cell rules its columns of values apart, and reads across
+  its rows.
+
 ## The table's outer edge
 
 A first column of labels that each span several rows (`Ceilings` over four)
