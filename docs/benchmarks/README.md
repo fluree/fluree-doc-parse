@@ -28,9 +28,9 @@ the same.
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse** (VLM) | **0.946972** | 0.9553 | 0.9680 | 0.9140 | 1.371¹ |
-| 2 | **fluree-doc-parse** (OCR) | **0.938328** | 0.9519 | 0.9166 | 0.9015 | 0.356² |
-| 3 | **fluree-doc-parse** (deterministic) | **0.921118** | 0.9337 | 0.9166 | 0.8847 | **0.007**² |
+| 1 | **fluree-doc-parse** (VLM) | **0.951650** | 0.9584 | 0.9678 | 0.9217 | 1.580¹ |
+| 2 | **fluree-doc-parse** (OCR) | **0.947430** | 0.9582 | 0.9619 | 0.9060 | 0.340² |
+| 3 | **fluree-doc-parse** (deterministic) | **0.922007** | 0.9343 | 0.9166 | 0.8866 | **0.0067**² |
 | 4 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463³ |
 | 5 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 6 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
@@ -50,28 +50,25 @@ the same.
 All three configurations place above every other engine. The deterministic
 one needs no model, no GPU and no API key, and is ahead of every other engine
 on its own. Reading the text set as pixels with the built-in OCR engine, still
-on CPU and with no key, adds 0.017. A vision-language model, called only for
-what OCR cannot settle, adds 0.009 more.
+on CPU and with no key, adds 0.025. A vision-language model, called only for
+what OCR cannot settle, adds 0.004 more.
 
 By configuration:
 
 | configuration | adds | overall | s/doc, one process² | documents/s, 8 workers² |
 |---|---|---|---|---|
-| deterministic (`--no-escalate`) | the text layer, its geometry and its drawing | 0.921118 | 0.007 | 571 |
-| OCR (`--ocr oar-ocr --models <dir> --no-escalate`) | the [built-in OCR engine](../cli/ocr.md), on CPU, for text set as pixels | 0.938328 | 0.356 | 9.9 |
-| VLM (OCR, with a [model provider](../cli/config.md#setting-up-google-vertex-ai) configured) | a vision-language model for the pages and regions OCR cannot settle | 0.946972 | 1.371¹ | 2.8 |
+| deterministic (`--no-escalate`) | the text layer, its geometry and its drawing | 0.922007 | 0.0067 | 833 |
+| OCR (`--ocr oar-ocr --models <dir> --no-escalate`) | the [built-in OCR engine](../cli/ocr.md), on CPU, for text set as pixels | 0.947430 | 0.340 | 11.0 |
+| VLM (OCR, with a [model provider](../cli/config.md#setting-up-google-vertex-ai) configured) | a vision-language model for the pages and regions OCR cannot settle | 0.951650 | 1.580¹ | 6.4 |
 
 Boxes from a layout detector, supplied as a sidecar, add nothing measurable
 on this corpus in any of the three configurations.
 
 ¹ The model is Gemini 3 Flash (`gemini-3-flash-preview`) on Google Vertex AI.
-39 of the 200 documents call it, with 42 crops between them: 19 raster regions
-OCR cannot settle, 11 tables whose header is in doubt, 6 pages laid out inside
-their drawings, 5 pages whose headings rest on type size alone, and 1
-near-blank page. Each of those documents takes about 5 s longer than in the
-OCR configuration; the other 161 read as they do there. A model's reading
-varies from run to run: two runs of this configuration scored 0.946972 and
-0.948950, and the lower is quoted.
+35 of the 200 documents call it, with 38 crops between them. Each of those
+documents takes about 7 s longer than in the OCR configuration; the other 165
+read as they do there. A model's reading varies from run to run: two runs of
+this configuration scored 0.951650 and 0.952186, and the lower is quoted.
 
 ² One `fdoc convert <dir> -j 1` process over the 200 documents, its wall time
 divided by 200, on an Apple M4 Max. No process is started per document. The
