@@ -10205,6 +10205,8 @@ fn aligned_runs(rows: &[Vec<&crate::glyph::Glyph>], cells: &[Vec<f64>], page: us
         // own.
         let mut run_rows: Vec<Vec<&crate::glyph::Glyph>> = vec![rows[i].clone()];
         let mut run_cells: Vec<Vec<f64>> = vec![cells[i].clone()];
+        // The foot of a last value wrapped under the last row.
+        let mut wrapped_foot: Option<f64> = None;
         let mut j = i;
         while j + 1 < rows.len() {
             if cells[j + 1].len() >= 2 {
@@ -10229,12 +10231,41 @@ fn aligned_runs(rows: &[Vec<&crate::glyph::Glyph>], cells: &[Vec<f64>], page: us
                 // wrapped line is read into the row above, and the rows'
                 // pitch stays the rows' own.
                 j += 1;
+            } else if j + 1 < rows.len()
+                && run_rows.len() >= 2
+                && run_rows
+                    .iter()
+                    .zip(&run_cells)
+                    .all(|(r, c)| field_row(r, c))
+                && wraps_a_value(
+                    &rows[j + 1],
+                    &run_rows[run_rows.len() - 1],
+                    &run_cells[run_cells.len() - 1],
+                )
+                && within_pitch(&run_rows, &rows[j + 1])
+            {
+                // The grid's last value wrapped, under its last row: the
+                // grid's foot is moved down under the line, so it is read
+                // into the row. The grid is found from the rows alone: a
+                // last band two lines deep, counted as a pitch, made the
+                // rows' pitch two lines, and rows a line apart read as one
+                // row's wrapped lines (`By: Name: Title:`).
+                wrapped_foot = rows[j + 1]
+                    .iter()
+                    .filter_map(|g| g.bbox.map(|b| b.y1))
+                    .reduce(f64::max);
+                j += 1;
+                break;
             } else {
                 break;
             }
         }
         if run_rows.len() >= MIN_ALIGNED_ROWS {
-            if let Some(g) = grid_from_cells(&run_rows, &run_cells, page) {
+            if let Some(mut g) = grid_from_cells(&run_rows, &run_cells, page) {
+                if let (Some(y1), Some(foot)) = (wrapped_foot, g.ys.last_mut()) {
+                    *foot = foot.max(y1 + 1.0);
+                    g.bbox.y1 = *foot;
+                }
                 out.push(g);
             }
         }
@@ -10243,9 +10274,30 @@ fn aligned_runs(rows: &[Vec<&crate::glyph::Glyph>], cells: &[Vec<f64>], page: us
     out
 }
 
+/// Whether `line` stands under the run's last row no farther than the run's
+/// rows stand from each other: a wrapped value's next line, not the next
+/// block's first.
+fn within_pitch(rows: &[Vec<&crate::glyph::Glyph>], line: &[&crate::glyph::Glyph]) -> bool {
+    let base = |r: &[&crate::glyph::Glyph]| r.first().map(|g| g.origin.1);
+    let mut pitches: Vec<f64> = rows
+        .windows(2)
+        .filter_map(|w| Some(base(&w[1])? - base(&w[0])?))
+        .filter(|p| *p > 0.0)
+        .collect();
+    if pitches.is_empty() {
+        return false;
+    }
+    pitches.sort_by(f64::total_cmp);
+    let pitch = pitches[pitches.len() / 2];
+    match (base(line), rows.last().and_then(|r| base(r))) {
+        (Some(y), Some(last)) => y > last && y - last <= pitch * 1.1,
+        _ => false,
+    }
+}
+
 /// Whether a row is a field grid's: label and value pairs across it, each
-/// label ending in a colon (`Ordering account: | A98… | Ordering address: |
-/// 6274 ASPEN CT`). Only such a grid's run goes on past a wrapped value: a
+/// label ending in a colon (`Ordering account: | A10… | Ordering address: |
+/// 12 OAK ST`). Only such a grid's run goes on past a wrapped value: a
 /// run of other rows joined over the line read their pitch from rows that
 /// are not the grid's.
 fn field_row(row: &[&crate::glyph::Glyph], starts: &[f64]) -> bool {
@@ -10269,7 +10321,7 @@ fn field_row(row: &[&crate::glyph::Glyph], starts: &[f64]) -> bool {
 /// Whether a line of one cell is a field's value wrapped from the row
 /// above: set where one of that row's values starts, past its first
 /// column, beside a label that ends in a colon (`Ordering address:` over
-/// `6274 ASPEN CT`, then `ANN ARBOR, MI 48161` under the street), within
+/// `12 OAK ST`, then `SPRINGFIELD, ST 00000` under the street), within
 /// that value's column, and no field of its own. A line that starts a
 /// column of figures, a row's label of its own, or a field, is a row.
 fn wraps_a_value(
@@ -14678,55 +14730,116 @@ mod tests {
     }
 
     #[test]
+    fn a_field_grids_last_value_wrapped_under_it_is_its_own() {
+        // The grid's last row's value wraps onto a line under it; the next
+        // block starts a blank line further down.
+        let pairs = |r: usize, cells: [&str; 4], gl: &mut Vec<crate::glyph::Glyph>| {
+            for (k, t) in cells.iter().enumerate() {
+                gl.push(word([0.0, 120.0, 300.0, 420.0][k], r, t, None));
+            }
+        };
+        let mut gl = Vec::new();
+        pairs(
+            0,
+            ["Record name:", "Oak Trust", "Record ID:", "R1001"],
+            &mut gl,
+        );
+        pairs(
+            1,
+            ["Tax ID:", "XX-0001", "Source system:", "Brokerage"],
+            &mut gl,
+        );
+        pairs(2, ["Address:", "40 PINE RD", "Account:", "A2002"], &mut gl);
+        gl.push(word(120.0, 3, "RIVERTON, ST", None));
+        let (rows, cells) = aligned_rows(&gl);
+        let grids = aligned_runs(&rows, &cells, 0);
+        assert_eq!(grids.len(), 1);
+        let texts = grids[0].cell_texts(&gl);
+        assert_eq!(texts[2 * 4 + 1], "40 PINE RD RIVERTON, ST");
+        // A line a row's pitch and more under the grid is the next block's.
+        let mut gl = Vec::new();
+        pairs(
+            0,
+            ["Record name:", "Oak Trust", "Record ID:", "R1001"],
+            &mut gl,
+        );
+        pairs(
+            1,
+            ["Tax ID:", "XX-0001", "Source system:", "Brokerage"],
+            &mut gl,
+        );
+        pairs(2, ["Address:", "40 PINE RD", "Account:", "A2002"], &mut gl);
+        gl.push(word(120.0, 5, "RIVERTON, ST", None));
+        let (rows, cells) = aligned_rows(&gl);
+        let texts = aligned_runs(&rows, &cells, 0)[0].cell_texts(&gl);
+        assert_eq!(texts[2 * 4 + 1], "40 PINE RD");
+        // A signature block: three fields a line apart, two more a blank
+        // line apart, the last one's value wrapped. The wrapped line deepens
+        // the last row only; the rows a line apart stay rows of their own.
+        let mut gl = Vec::new();
+        for (r, label, value) in [
+            (0, "By:", "____________"),
+            (1, "Name:", "Jordan Lee"),
+            (2, "Title:", "Member"),
+            (4, "Email:", "jl@example.com"),
+            (6, "Address:", "12 Harbor Way"),
+        ] {
+            gl.push(word(0.0, r, label, None));
+            gl.push(word(60.0, r, value, None));
+        }
+        gl.push(word(60.0, 7, "Portland ME 04101", None));
+        let (rows, cells) = aligned_rows(&gl);
+        let grids = aligned_runs(&rows, &cells, 0);
+        assert_eq!(grids.len(), 1);
+        assert_eq!(grids[0].ys.len(), 6);
+        let texts = grids[0].cell_texts(&gl);
+        assert_eq!(texts[1], "____________");
+        assert_eq!(texts[2 * 2], "Title:");
+        assert_eq!(texts[4 * 2 + 1], "12 Harbor Way Portland ME 04101");
+    }
+
+    #[test]
     fn a_field_grid_goes_on_past_a_wrapped_value() {
         // Two label:value pairs a row; one value wraps onto a line of its
         // own under its first line; the grid goes on under it.
         let mut gl = Vec::new();
         for (r, cells) in [
-            (
-                0,
-                ["Message ref:", "MSG39", "Message type:", "Outgoing wire"],
-            ),
-            (1, ["Amount:", "USD 12.60", "Value date:", "11/25/2027"]),
+            (0, ["Message ref:", "REF01", "Message type:", "Outgoing"]),
+            (1, ["Amount:", "USD 10.00", "Value date:", "01/02/2030"]),
             (
                 2,
                 [
                     "Ordering account:",
-                    "A9839",
+                    "A1001",
                     "Ordering address:",
-                    "6274 ASPEN CT",
+                    "12 OAK ST",
                 ],
             ),
             (
                 4,
-                [
-                    "Beneficiary:",
-                    "VELIKOV",
-                    "Beneficiary bank:",
-                    "OSTREVAN BANK",
-                ],
+                ["Beneficiary:", "J. DOE", "Beneficiary bank:", "FIRST BANK"],
             ),
         ] {
             for (k, t) in cells.iter().enumerate() {
                 gl.push(word([0.0, 120.0, 300.0, 420.0][k], r, t, None));
             }
         }
-        gl.push(word(420.0, 3, "ANN ARBOR, MI", None));
+        gl.push(word(420.0, 3, "SPRINGFIELD, ST", None));
         let (rows, cells) = aligned_rows(&gl);
         let grids = aligned_runs(&rows, &cells, 0);
         assert_eq!(grids.len(), 1, "one grid, not two around the wrap");
         let g = &grids[0];
         assert_eq!((g.rows(), g.cols()), (4, 4));
         let texts = g.cell_texts(&gl);
-        assert_eq!(texts[2 * 4 + 3], "6274 ASPEN CT ANN ARBOR, MI");
-        assert_eq!(texts[3 * 4 + 3], "OSTREVAN BANK");
+        assert_eq!(texts[2 * 4 + 3], "12 OAK ST SPRINGFIELD, ST");
+        assert_eq!(texts[3 * 4 + 3], "FIRST BANK");
         // A line set where a value starts, under a row that is no field
         // grid's (a schedule's figures), ends the run as it did.
         let mut gl = Vec::new();
         for (r, cells) in [
-            (0, ["0002", "1", "F2MTN7", "01 Feb 2023"]),
-            (1, ["0003", "1", "F2MTN7", "01 Feb 2023"]),
-            (3, ["0004", "1", "F2MTN7", "01 Feb 2023"]),
+            (0, ["0002", "1", "LN0001", "01 Feb 2023"]),
+            (1, ["0003", "1", "LN0001", "01 Feb 2023"]),
+            (3, ["0004", "1", "LN0001", "01 Feb 2023"]),
         ] {
             for (k, t) in cells.iter().enumerate() {
                 gl.push(word([0.0, 120.0, 300.0, 420.0][k], r, t, None));

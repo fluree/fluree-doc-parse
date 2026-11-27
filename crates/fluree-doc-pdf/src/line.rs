@@ -5066,16 +5066,13 @@ mod tests {
             col(265.0, 343.0),
         ];
         let mut v = vec![
-            vec![ln("ACT-2025-000040", 53.0, 116.2, 48.2, 8.1)],
+            vec![ln("CASE-040", 53.0, 116.2, 48.2, 8.1)],
             vec![ln("4 — supporting scre", 116.2, 196.1, 48.2, 8.1)],
             vec![ln("enshots — page 2", 196.1, 263.5, 48.2, 8.1)],
             vec![],
         ];
         rejoin_spanning_lines(&mut v, &[], &cols);
-        assert_eq!(
-            v[0][0].text,
-            "ACT-2025-0000404 — supporting screenshots — page 2"
-        );
+        assert_eq!(v[0][0].text, "CASE-0404 — supporting screenshots — page 2");
         assert!(v[1].is_empty() && v[2].is_empty());
     }
 
