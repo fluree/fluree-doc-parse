@@ -3330,10 +3330,12 @@ const LABEL_LEVEL_SHARE: f64 = 0.25;
 ///
 /// The label is a field's few words on one line, wholly left of the table,
 /// level with its middle, and nothing else is beside the table on that
-/// side. A field of the same list, over the table or under it, starts at
-/// the label's edge: a label of a few words with its value beside it, or a
-/// list of two columns read as a table. A chart's axis title has no such
-/// neighbour, nor a side head in a margin over prose.
+/// side. Fields of the same list stand over the table and under it, at the
+/// label's edge, their values in the column the table stands in: a label
+/// of a few words with its value beside it, or the list read as a table of
+/// two columns. A chart's axis title has no such neighbours, nor a side
+/// head in a margin over prose, nor a row's label left out of a table
+/// read short of its stub.
 fn label_tables_beside(elements: &mut Vec<Element>) {
     let row_of = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
         let overlap = a.y1.min(b.y1) - a.y0.max(b.y0);
@@ -3395,43 +3397,57 @@ fn label_tables_beside(elements: &mut Vec<Element>) {
         {
             continue;
         }
-        // A field of the list at the label's edge: its own label with a
-        // value beside it, or the list read as a table of two columns.
+        // A field of the list at the label's edge, its value in the column
+        // the table stands in: its own label with a value beside it, the
+        // value starting where the table does or before; or the list read
+        // as a table of two columns, reaching over the table's column.
         let field = |e: &Element| {
             let Some(b) = e.bbox else {
                 return false;
             };
             (b.x0 - lb.x0).abs() <= line
                 && match e.kind.as_str() {
-                    "doco:Table" => e
-                        .cells
-                        .as_ref()
-                        .is_some_and(|r| r.first().is_some_and(|r| r.len() == 2)),
+                    "doco:Table" => {
+                        b.x1 > tb.x0
+                            && e.cells
+                                .as_ref()
+                                .is_some_and(|r| r.first().is_some_and(|r| r.len() == 2))
+                    }
                     "doco:Paragraph" => {
                         few_words(e.text.trim())
                             && elements.iter().filter(on_page).any(|v| {
                                 v.bbox.is_some_and(|vb| {
-                                    vb.x0 > b.x1 && vb.x1 <= tb.x1.max(vb.x1) && row_of(&b, &vb)
+                                    vb.x0 > b.x1 && vb.x0 <= tb.x0 + line && row_of(&b, &vb)
                                 })
                             })
                     }
                     _ => false,
                 }
         };
+        // The nearest over the table and under it, on its left; on one
+        // line, the leftmost: a field's label before its value.
         let left = |e: &&Element| e.bbox.is_some_and(|b| b.x0 < tb.x0);
+        let key = |e: &Element| e.bbox.map_or((0.0, 0.0), |b| (b.y0, b.x0));
         let above = elements
             .iter()
             .filter(on_page)
             .filter(left)
             .filter(|e| e.bbox.is_some_and(|b| b.y1 <= tb.y0))
-            .max_by(|a, b| a.bbox.unwrap().y1.total_cmp(&b.bbox.unwrap().y1));
+            .max_by(|a, b| {
+                let (ka, kb) = (a.bbox.unwrap(), b.bbox.unwrap());
+                ka.y1.total_cmp(&kb.y1).then(kb.x0.total_cmp(&ka.x0))
+            });
         let below = elements
             .iter()
             .filter(on_page)
             .filter(left)
             .filter(|e| e.bbox.is_some_and(|b| b.y0 >= tb.y1))
-            .min_by(|a, b| a.bbox.unwrap().y0.total_cmp(&b.bbox.unwrap().y0));
-        if above.is_some_and(field) || below.is_some_and(field) {
+            .min_by(|a, b| {
+                let (ka, kb) = (key(a), key(b));
+                ka.0.total_cmp(&kb.0).then(ka.1.total_cmp(&kb.1))
+            });
+        // Fields over the table and under it: the table stands in a list.
+        if above.is_some_and(field) && below.is_some_and(field) {
             labelled.push((ti, li));
         }
     }
@@ -9425,6 +9441,11 @@ mod tests {
         let mut els = field_list(("Gradient", at(78.0, 228.0, 117.0, 236.0)));
         label_tables_beside(&mut els);
         assert_eq!(els.len(), 5);
+        // Nor with fields on one side alone: the list ends over the table.
+        let mut els = field_list(("Gradient", at(78.0, 285.0, 117.0, 293.0)));
+        els.truncate(3);
+        label_tables_beside(&mut els);
+        assert_eq!(els.len(), 3);
         // Nor beside a table with no field of a list at its edge: prose
         // over it, nothing under it.
         let mut els = field_list(("Gradient", at(78.0, 285.0, 117.0, 293.0)));

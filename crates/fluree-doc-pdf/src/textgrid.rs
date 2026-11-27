@@ -2039,9 +2039,14 @@ fn read_beside(
             // beside a one-line header do not. Or across the header's one
             // line: a stub's head of two lines centred on it, the first over
             // it and the second under it, each within a line of it
-            // (`Sequence` over `Oxy. | Octo. | …` over `Date`).
+            // (`Sequence` over `Oxy. | Octo. | …` over `Date`). That line
+            // names the columns in words: beside a line of units (`(%)`)
+            // or of periods (`FY25 | FY24`) under the names, a label is the
+            // first section's, or prose run beside a chart's labels.
             let straddles = |l: &Line| {
-                !cur.chunks.iter().any(|c| column_of(&cols0, c) == Some(0))
+                !cur.chunks.is_empty()
+                    && cur.chunks.iter().all(in_words)
+                    && !cur.chunks.iter().any(|c| column_of(&cols0, c) == Some(0))
                     && (first + 1..start).any(|i| {
                         let n = &clipped[i];
                         n.base > cur.base
@@ -2661,6 +2666,15 @@ fn is_unit_head(t: &str) -> bool {
         .is_some_and(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// Whether a column's head is set in words: a word of three letters or
+/// more in it (`Oxy.`, `Criteria`), not a unit (`(%)`), a period (`FY25`)
+/// or a figure alone.
+fn in_words(c: &Chunk) -> bool {
+    c.text
+        .split(|ch: char| !ch.is_alphabetic())
+        .any(|w| w.chars().count() >= 3)
+}
+
 /// Rows, header and bands from the table's lines.
 fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Option<Grid> {
     let fs = lines.iter().map(|l| l.fs).fold(0.0, f64::max).max(1.0);
@@ -2821,6 +2835,8 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         let straddled = head.len() > 2 && !ruled_apart && {
             let p = head[head.len() - 2];
             l.base - p.base <= l.fs * WRAP_LEADING
+                && !p.chunks.is_empty()
+                && p.chunks.iter().all(in_words)
                 && !in_stub(p)
                 && head[..head.len() - 2]
                     .iter()
