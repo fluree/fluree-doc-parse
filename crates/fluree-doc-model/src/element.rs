@@ -571,7 +571,7 @@ pub struct UnreadImage {
     /// Where the file keeps it, as the file names it
     /// ([`crate::MediaSource::name`]).
     pub part: String,
-    /// Why it was not read, one of seven:
+    /// Why it was not read, one of eight:
     ///
     /// - `NotRead`: nothing was asked to read it, no reading of it was
     ///   supplied, or the configured model was not sent it, past the images
@@ -582,6 +582,9 @@ pub struct UnreadImage {
     ///   as EMF or WMF, a GIF);
     /// - `PastAllowance`: past the pictures or pixels one document may have
     ///   read ([`crate::Allowance::DOCUMENT`]);
+    /// - `PastMemoryLimit` ([`PAST_MEMORY_LIMIT`]): read, but what its
+    ///   reading makes is past what the document, and the pictures read
+    ///   before it, left of its budget (`budget::Limits::memory`);
     /// - `Small`: nothing else read it, and it is under the pixels the
     ///   configured model is sent;
     /// - `NotTexty`: nothing else read it, and the pixel probe does not take

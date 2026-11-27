@@ -75,6 +75,11 @@ pub struct Email {
     pub media: Vec<Media>,
     /// For each of `media`, its index in `attachments`.
     media_at: Vec<usize>,
+    /// What reading the message left of its budget, the one its HTML
+    /// versions are read within: a caller that goes on to read the images
+    /// the body shows spends what their readings make from it, so a message
+    /// and its pictures are bounded together.
+    pub budget: Budget,
 }
 
 impl Email {
@@ -413,6 +418,7 @@ fn assemble(mut read: Read) -> Result<Email, EmailError> {
         attachments: read.attachments,
         media,
         media_at,
+        budget: read.budget,
     })
 }
 

@@ -37,8 +37,13 @@ fn screen(w: u32, h: u32) -> Vec<u8> {
 /// own (`word/media/image<i>.png`, alike in their pixels, [`screen`]) and a
 /// paragraph: each read on its own.
 fn docx_distinct(images: usize) -> Vec<u8> {
+    docx_distinct_of(images, screen(600, 200), "See the screens below.")
+}
+
+/// [`docx_distinct`], each image holding `png`, the first paragraph saying
+/// `intro`.
+fn docx_distinct_of(images: usize, png: Vec<u8>, intro: &str) -> Vec<u8> {
     let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-    let png = screen(600, 200);
     let picture = |i: usize| {
         format!(
             "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"{i}\" name=\"Picture {i}\"/><a:graphic><a:graphicData>\
@@ -48,7 +53,7 @@ fn docx_distinct(images: usize) -> Vec<u8> {
     };
     let body = format!(
         "<w:document xmlns:w=\"w\" xmlns:a=\"a\" xmlns:r=\"r\" xmlns:wp=\"wp\" xmlns:pic=\"pic\"><w:body>\
-         <w:p><w:r><w:t>See the screens below.</w:t></w:r></w:p>{}\
+         <w:p><w:r><w:t>{intro}</w:t></w:r></w:p>{}\
          <w:p><w:r><w:t>That is all.</w:t></w:r></w:p></w:body></w:document>",
         (1..=images).map(picture).collect::<String>()
     );
@@ -1152,5 +1157,93 @@ fn a_part_that_cannot_be_read_failed_with_nothing_to_read_it() {
     let (doco, err) = run(&input, &dir.join("home"), "doco", &[]);
     assert_eq!(reasons(&doco), ["Failed"], "{err}");
     assert!(err.contains("warning: report_m1:"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_documents_pictures_are_read_within_what_the_document_left() {
+    // Six pictures, each read as a table of three columns under their
+    // names, forty rows of numbers: well within a document's budget alone,
+    // some 0.6 MiB of DoCO each. Each spent from a budget of its own, all
+    // six were read whatever the document's budget; spent from the
+    // document's, those past what it left are listed unread, and the
+    // document converts.
+    let dir = scratch("document-budget");
+    let input = dir.join("report.docx");
+    let png = screen(1400, 1800);
+    std::fs::write(
+        &input,
+        docx_distinct_of(6, png.clone(), "See the screens below."),
+    )
+    .unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    for i in 1..=6 {
+        let words_of = (0..40).flat_map(|r| {
+            (0..3).map(move |c| {
+                let (x, y) = (100 + 400 * c, 60 + 40 * r);
+                let text = match r {
+                    0 => [format!("Picture{i}"), "Value".into(), "Unit".into()][c].clone(),
+                    _ => format!("{i}.{r:02}{c}"),
+                };
+                serde_json::json!({ "text": text, "box": [x, y, x + 120, y + 24], "conf": 0.95 })
+            })
+        });
+        let reading = serde_json::json!({
+            "width": 1400, "height": 1800, "words": words_of.collect::<Vec<_>>()
+        });
+        std::fs::write(words.join(format!("report_m{i}.json")), reading.to_string()).unwrap();
+    }
+    let convert_file = |input: &std::path::Path, memory: &[&str]| {
+        let o = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .arg("convert")
+            .arg(input)
+            .args(["-f", "doco", "--ocr-words"])
+            .arg(&words)
+            .args(memory)
+            .env("HOME", dir.join("home"))
+            .env("XDG_CONFIG_HOME", dir.join("home"))
+            .env_remove("FDOC_MAX_MEMORY")
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&o.stderr).into_owned();
+        assert!(o.status.success(), "{err}");
+        (String::from_utf8_lossy(&o.stdout).into_owned(), err)
+    };
+    let convert = |memory: &[&str]| convert_file(&input, memory);
+    let read = |doco: &str| -> Vec<usize> {
+        (1..=6)
+            .filter(|i| doco.contains(&format!("\"Picture{i}\"")))
+            .collect()
+    };
+    let (doco, err) = convert(&[]);
+    assert_eq!(read(&doco), [1, 2, 3, 4, 5, 6], "{err}");
+    let (doco, err) = convert(&["--max-memory", "2"]);
+    // The document's own text, and the first pictures, those that fit.
+    assert!(doco.contains("See the screens below.") && doco.contains("That is all."));
+    let kept = read(&doco);
+    let n = kept.len();
+    assert!(n > 0 && n < 6, "{kept:?}: {err}");
+    assert_eq!(kept, (1..=n).collect::<Vec<_>>(), "{err}");
+    // The others, listed by the limit that left them unread, and counted
+    // with the flag that raises it.
+    assert_eq!(doco.matches("PastMemoryLimit").count(), 6 - n, "{doco}");
+    assert!(
+        err.contains(&format!(
+            "note: report: {} image(s) past the memory one document may take, \
+             not read (raise it with --max-memory)",
+            6 - n
+        )),
+        "{err}"
+    );
+    // What the document itself takes is spent first: a body of 60,000
+    // letters, some 0.7 MiB, leaves room for fewer pictures.
+    let long = dir.join("long").join("report.docx");
+    std::fs::create_dir_all(long.parent().unwrap()).unwrap();
+    std::fs::write(&long, docx_distinct_of(6, png, &"y".repeat(60_000))).unwrap();
+    let (doco, err) = convert_file(&long, &["--max-memory", "2"]);
+    let fewer = read(&doco);
+    assert!(fewer.len() < n, "{fewer:?} of {kept:?}: {err}");
+    assert_eq!(fewer, (1..=fewer.len()).collect::<Vec<_>>(), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }

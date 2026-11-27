@@ -186,7 +186,11 @@ cells (`parse_with_ocr`, `parse_with_media`, `read_pictures`, `read_media`),
 and `fluree-doc-email` for the images a message shows in its body
 (`email.media`, `email.media_bytes`), through the same loop
 (`fluree_doc_model::read_pictures`). `fluree_doc_image::read_placed` is the
-reading `parse_with_ocr` runs: each image read by an engine, once.
+reading `parse_with_ocr` runs: each image read by an engine, once, what
+its reading makes spent from the document's budget as the document left it
+(`fluree_doc_docx::parse_package_within`, `fluree_doc_xlsx::parse_package_within`,
+`fluree_doc_ppt::parse_with_media_within`, `Email::budget`): a picture past
+it comes back unread, `PastMemoryLimit`, and the document is kept.
 
 ## Read a non-PDF source
 
@@ -373,7 +377,7 @@ build them.
   figure holds none.
 - `DocoOptions` and `Notes` gain `unread_images`, listed in the graph as
   `doc:unreadImages`: `NotRead`, `Missing`, `UnsupportedFormat`,
-  `PastAllowance`, `Small`, `NotTexty` or `Failed`.
+  `PastAllowance`, `PastMemoryLimit`, `Small`, `NotTexty` or `Failed`.
 - `escalate::CropReason` gains `SmallImage`, an image a document places
   under the pixels a model is sent, which an OCR engine still reads. That
   floor is `fluree_doc_model::under_model_floor` (`MIN_SHORT_SIDE_PX`,
@@ -459,13 +463,37 @@ limits on it changed:
   `unread_pages`. `render::page` draws a page past the render pixels at the
   scale that fits, which `Raster::scale` says. A PDF opened by
   `fluree_doc_pdf::open`, as `extract_bytes` opens one, is refused when its
-  page tree nests or lists past the bounds the parser can walk.
+  page tree nests or lists past the bounds the parser can walk. Converted
+  by `fdoc`, a PDF's, an XPS document's and an OCR reading's tables are
+  spent the copies DoCO writes of their cells (`spend_table_copies`): a
+  PDF or an XPS document past them is read shorter, and an image refused.
+- One budget for a document and the pictures it places:
+  `fluree_doc_image::read_texty`, `elements_from_words` and `read_placed`
+  take the document's `&mut Budget` and spend what each reading makes
+  (`spend_reading`: its elements, their text, a table's cells and their
+  DoCO copies, its tables counted apart, `Budget::apart`). A reading past
+  it is not an `Err`: it comes back `ImageElements::past_budget`, nothing
+  read or spent, and `read_placed` lists its picture `PastMemoryLimit`
+  (`UnreadImage::reason` gains it). `ImageElements` gains `past_budget`,
+  which a literal or an exhaustive pattern needs. `elements`, a bare
+  image, keeps a budget of its own and still returns `Err` past it.
+  `fluree_doc_email::Email` gains `budget`, what reading the message
+  left, for its pictures.
+- Changed behaviour: `fdoc convert --comments` spends a PDF's notes from
+  the document's budget once its pages and their tables are final,
+  where they had one of their own (`PageBudget::spend_whole`): past it,
+  they are left out with a warning, the pages kept.
 - New: `fluree_doc_model::budget::Limits`, `limited_to`, `limits`, `Limit`,
   `MAX_PAGES` and `MAX_RENDER_PIXELS`, `TooLarge::new`, `fixed`, `within`,
   `limit` and `max`; `fluree_doc_model::PAST_PAGE_LIMIT`,
   `PAST_MEMORY_LIMIT`, `PAST_WORK_LIMIT`, `past_limit_reason` and
   `is_past_limit`; `fluree_doc_pdf::open`, `extract_pdf`,
-  `extract_pdf_with`, `past_limit`, `CutShort` and the module `page_tree`;
+  `extract_pdf_with`, `extract_pdf_within`, `PageBudget` (and
+  `PageBudget::spend_whole`), `spend_table_copies`, `past_limit`, `CutShort`
+  and the module `page_tree`; `fluree_doc_model::budget::Budget::apart`;
+  `fluree_doc_image::spend_reading`; `fluree_doc_docx::parse_package_within`,
+  `fluree_doc_xlsx::parse_package_within` and
+  `fluree_doc_ppt::parse_with_media_within`;
   `render::fitted_scale`, `page_scale`, `shrunk_by`, `page_shrunk_by` and
   `MAX_RENDER_SIDE`.
 
@@ -504,7 +532,21 @@ if let Err(fluree_doc_docx::DocxError::TooLarge(e)) = &read {
 
 A PDF past the page limit, or past its memory or work on a page after the
 first, is not refused: it is read short, to the last page that fit, and
-`doc.pages_past_limit` counts the pages after it. Nothing in the elements
+`doc.pages_past_limit` counts the pages after it. The copies DoCO writes of
+its tables' cells are spent from the same budget once the elements are
+final: read it with `extract_pdf_within`, keeping the `PageBudget`, and
+pass that to `fluree_doc_pdf::spend_table_copies` before writing, which
+reads the document shorter where they do not fit (an XPS document or an
+OCR reading spends them from a `PageBudget::default()`):
+
+```rust
+let raw = fluree_doc_pdf::open(bytes)?;
+let mut budget = fluree_doc_pdf::PageBudget::default();
+let mut doc = fluree_doc_pdf::extract_pdf_within(&raw, &Default::default(), &mut budget)?;
+let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
+fluree_doc_pdf::spend_table_copies(&mut doc, &mut analysis.elements, &mut budget)?;
+```
+ Nothing in the elements
 says so, and `to_markdown(&elements)` carries no notes: list the pages
 (`fluree_doc_pdf::unread_pages`, each `PastPageLimit`, `PastMemoryLimit`
 or `PastWorkLimit`, `fluree_doc_model::is_past_limit` telling them apart)
