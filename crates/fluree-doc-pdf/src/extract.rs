@@ -22,24 +22,70 @@ use std::sync::Arc;
 /// four lines, closed.
 fn is_rect(p: &kurbo::BezPath) -> bool {
     use kurbo::PathEl;
-    let mut pts: Vec<kurbo::Point> = Vec::new();
+    // At most five corners, the last the first again: a longer path is no
+    // rectangle, and is not walked to its end.
+    let mut pts = [kurbo::Point::ZERO; 5];
+    let mut n = 0;
     for el in p.elements() {
         match el {
-            PathEl::MoveTo(q) if pts.is_empty() => pts.push(*q),
-            PathEl::LineTo(q) => pts.push(*q),
+            PathEl::MoveTo(q) if n == 0 => {
+                pts[0] = *q;
+                n = 1;
+            }
+            PathEl::LineTo(q) if n < 5 => {
+                pts[n] = *q;
+                n += 1;
+            }
             PathEl::ClosePath => {}
             _ => return false,
         }
     }
-    if pts.len() == 5 && pts[0].distance(pts[4]) < 0.01 {
-        pts.pop();
+    if n == 5 && pts[0].distance(pts[4]) < 0.01 {
+        n = 4;
     }
     let near = |a: f64, b: f64| (a - b).abs() < 0.01;
-    pts.len() == 4
+    n == 4
         && (0..4).all(|i| {
             let (a, b) = (pts[i], pts[(i + 1) % 4]);
             near(a.x, b.x) || near(a.y, b.y)
         })
+}
+
+/// Annotations read from a page for their rectangles, at most: `/Annots` is
+/// an arbitrary array.
+const MAX_APPEARANCES: usize = 10_000;
+
+/// Where the page's annotations draw their appearances, in the space glyphs
+/// are read in. hayro draws an annotation's normal appearance, unless the
+/// annotation is hidden, after the page's own content, cut to the
+/// annotation's rectangle. A fill there is the annotation's, not the page's.
+fn appearance_boxes(page: &hayro_syntax::page::Page<'_>) -> Vec<BBox> {
+    use hayro_syntax::object::{Array, Dict, Number, Stream};
+    let Some(annots) = page.raw().get::<Array<'_>>(b"Annots") else {
+        return Vec::new();
+    };
+    let to_page = page.initial_transform(true).to_kurbo();
+    annots
+        .iter::<Dict<'_>>()
+        .take(MAX_APPEARANCES)
+        .filter(|a| a.get::<u32>(b"F").unwrap_or(0) & 2 == 0)
+        .filter(|a| {
+            a.get::<Dict<'_>>(b"AP")
+                .and_then(|ap| ap.get::<Stream<'_>>(b"N"))
+                .is_some()
+        })
+        .filter_map(|a| {
+            let v: Vec<f64> = a
+                .get::<Array<'_>>(b"Rect")?
+                .iter::<Number>()
+                .map(|n| n.as_f64())
+                .collect();
+            (v.len() == 4).then(|| {
+                let r = Rect::new(v[0], v[1], v[2], v[3]).abs();
+                crate::geom::from_kurbo((to_page * r.to_path(0.1)).bounding_box())
+            })
+        })
+        .collect()
 }
 
 /// Clip box for interpretation. Generous: we want every glyph the page draws,
@@ -411,6 +457,20 @@ struct Collector<'a, 'b> {
     /// that clip's number, whether the glyph shows inside it, and whether
     /// it puts ink down ([`Collector::clipped_out`]).
     clip_votes: Vec<Option<(usize, bool, bool)>>,
+    /// Parallel to `glyphs`: whether the glyph is painted, filled or
+    /// stroked rather than set invisible, with an outline to judge it by.
+    /// Only such a glyph can be hidden ([`Collector::covered`]).
+    painted: Vec<bool>,
+    /// Opaque rectangles filled on the page, each with the number of glyphs
+    /// drawn before it: what it hides was drawn first and lies under it.
+    covers: Vec<(BBox, usize)>,
+    /// Whether the next shape is drawn through a soft mask, or blended other
+    /// than normally: either lets what is under it show.
+    masked: bool,
+    blended: bool,
+    /// The transparency groups open, innermost last: whether each puts its
+    /// content down as drawn, at full opacity, normal blend and no mask.
+    groups: Vec<bool>,
     /// Per-glyph `(font identity, ink ratio)`, parallel to `glyphs`, for the
     /// weight inference in [`infer_weights`]: the font of every outline
     /// glyph, and the ink ratio of a letter. Kept alongside rather than on
@@ -441,7 +501,7 @@ struct Collector<'a, 'b> {
     /// The box of every path painted on the page, whatever it is taken for:
     /// what an image's box may show besides the image
     /// ([`unkey_what_shows_more`]).
-    painted: Vec<BBox>,
+    path_boxes: Vec<BBox>,
     /// ActualText that restates its glyphs in another case only, with the
     /// end of what it covers, held until the page's words are drawn whole;
     /// see [`Collector::read_cased`].
@@ -736,6 +796,140 @@ impl<'a> Collector<'a, '_> {
             .collect()
     }
 
+    /// Note a fill that hides what was drawn under it before: one rectangle,
+    /// painted a solid colour at full opacity, nothing under it showing
+    /// through. The fill's opacity is its paint's alpha, the graphics
+    /// state's `ca` (a stroke's `CA` paints no fill); a soft mask, another
+    /// blend mode or a group less than opaque lets what is under it show,
+    /// and a fill in optional content switched off is never drawn. Only
+    /// under rectangle clips, so the part of it that shows is its box cut
+    /// to the clip. See [`Collector::covered`].
+    fn note_cover(&mut self, path: &kurbo::BezPath, paint: &hayro_interpret::Paint<'_>) {
+        if self.glyphs.is_empty()
+            || self.masked
+            || self.blended
+            || !self.groups.iter().all(|&g| g)
+            || !self.clip_rects.iter().all(|&r| r)
+        {
+            return;
+        }
+        let hayro_interpret::Paint::Color(c) = paint else {
+            return;
+        };
+        // The shape first: it costs nothing to ask, and the colour is
+        // converted only for a rectangle.
+        if !is_rect(path) || c.to_rgba().to_rgba8()[3] < u8::MAX {
+            return;
+        }
+        let b = crate::geom::from_kurbo(path.bounding_box());
+        let clip = self.clips.last().copied().unwrap_or(self.page_box);
+        let b = BBox {
+            x0: b.x0.max(clip.x0).max(self.page_box.x0),
+            y0: b.y0.max(clip.y0).max(self.page_box.y0),
+            x1: b.x1.min(clip.x1).min(self.page_box.x1),
+            y1: b.y1.min(clip.y1).min(self.page_box.y1),
+        };
+        if b.x1 > b.x0 && b.y1 > b.y0 {
+            self.covers.push((b, self.glyphs.len()));
+        }
+    }
+
+    /// The glyphs an opaque fill painted after them hides: a slide's band
+    /// laid over the template's footer and page number, its own title then
+    /// set on the band; read, the hidden footer ran through the title a
+    /// letter at a time. A glyph is hidden when its whole ink box lies under
+    /// a cover drawn later; a space, with no ink, where its pen does. A
+    /// cover whose edge cuts through a glyph drawn before it hides nothing:
+    /// the glyph shows in part, and its word with it. A fill inside an
+    /// annotation's rectangle is the annotation's appearance, drawn after
+    /// the page's content and no part of it, so never a cover.
+    fn covered(&self, annotated: &[BBox]) -> Vec<bool> {
+        // Float noise in a box computed from a transformed outline.
+        const EPS: f64 = 0.1;
+        // Horizontal bands of the page, each listing the painted glyphs
+        // whose ink reaches into it, in draw order.
+        const BANDS: usize = 64;
+        let mut out = vec![false; self.glyphs.len()];
+        let covers: Vec<(BBox, usize)> = self
+            .covers
+            .iter()
+            .copied()
+            .filter(|(c, _)| {
+                !annotated.iter().any(|a| {
+                    c.x0 >= a.x0 - 1.0
+                        && c.x1 <= a.x1 + 1.0
+                        && c.y0 >= a.y0 - 1.0
+                        && c.y1 <= a.y1 + 1.0
+                })
+            })
+            .collect();
+        if covers.is_empty() {
+            return out;
+        }
+        let top = self.page_box.y0;
+        let height = (self.page_box.y1 - self.page_box.y0).max(1.0);
+        let band =
+            |y: f64| (((y - top) / height * BANDS as f64).floor().max(0.0) as usize).min(BANDS - 1);
+        let mut bands: Vec<Vec<usize>> = vec![Vec::new(); BANDS];
+        for (i, g) in self.glyphs.iter().enumerate() {
+            if let (true, Some(b)) = (self.painted[i], g.bbox) {
+                for k in band(b.y0)..=band(b.y1) {
+                    bands[k].push(i);
+                }
+            }
+        }
+        let under = |b: &BBox, c: &BBox| {
+            b.x0 >= c.x0 - EPS && b.x1 <= c.x1 + EPS && b.y0 >= c.y0 - EPS && b.y1 <= c.y1 + EPS
+        };
+        let meets = |b: &BBox, c: &BBox| {
+            b.x0 < c.x1 - EPS && b.x1 > c.x0 + EPS && b.y0 < c.y1 - EPS && b.y1 > c.y0 + EPS
+        };
+        for (c, before) in covers {
+            let (k0, k1) = (band(c.y0), band(c.y1));
+            let mut hid = Vec::new();
+            let mut torn = false;
+            'bands: for k in k0..=k1 {
+                for &i in &bands[k] {
+                    if i >= before {
+                        break;
+                    }
+                    let Some(b) = self.glyphs[i].bbox else {
+                        continue;
+                    };
+                    // Each glyph once: in the first band it shares with the
+                    // cover.
+                    if band(b.y0).max(k0) != k || !meets(&b, &c) {
+                        continue;
+                    }
+                    // A bar narrower across the line than the type is set
+                    // hides no letter: a link's underline drawn over the
+                    // underscores of its URL, a rule over a dash, paints
+                    // the very mark it lies on, and the text still reads.
+                    let g = &self.glyphs[i];
+                    let turned = (g.rotation_deg.rem_euclid(180.0) - 90.0).abs() < 45.0;
+                    let across = if turned { c.x1 - c.x0 } else { c.y1 - c.y0 };
+                    if !under(&b, &c) || across < g.font_size as f64 {
+                        torn = true;
+                        break 'bands;
+                    }
+                    hid.push(i);
+                }
+            }
+            if torn || hid.is_empty() {
+                continue;
+            }
+            for i in hid {
+                out[i] = true;
+            }
+            for (i, g) in self.glyphs[..before].iter().enumerate() {
+                if self.painted[i] && g.bbox.is_none() && c.contains(g.origin.0, g.origin.1) {
+                    out[i] = true;
+                }
+            }
+        }
+        out
+    }
+
     fn speak(&mut self, span: Spoken) {
         let end = self.glyphs.len();
         self.state(span, end, false);
@@ -959,8 +1153,14 @@ fn paint_of(paint: &hayro_interpret::Paint<'_>) -> rule::Paint {
 }
 
 impl<'a> Device<'a> for Collector<'a, '_> {
-    fn set_soft_mask(&mut self, _m: Option<hayro_interpret::SoftMask<'a>>) {}
-    fn set_blend_mode(&mut self, _b: hayro_interpret::BlendMode) {}
+    // hayro states the mask and the blend mode before every shape and glyph
+    // it draws, so these are always the next one's.
+    fn set_soft_mask(&mut self, m: Option<hayro_interpret::SoftMask<'a>>) {
+        self.masked = m.is_some();
+    }
+    fn set_blend_mode(&mut self, b: hayro_interpret::BlendMode) {
+        self.blended = b != hayro_interpret::BlendMode::Normal;
+    }
     fn draw_path(
         &mut self,
         path: &kurbo::BezPath,
@@ -1010,7 +1210,10 @@ impl<'a> Device<'a> for Collector<'a, '_> {
         if !self.page_box.intersects(&drawn) {
             return;
         }
-        self.painted.push(drawn);
+        self.path_boxes.push(drawn);
+        if matches!(mode, hayro_interpret::PathDrawMode::Fill(_)) {
+            self.note_cover(&path, paint);
+        }
         if !matches!(mode, hayro_interpret::PathDrawMode::Fill(_)) {
             if let Some(trace) = trace_of(&path, drawn, self.page) {
                 self.traces.push(trace);
@@ -1123,10 +1326,12 @@ impl<'a> Device<'a> for Collector<'a, '_> {
     }
     fn push_transparency_group(
         &mut self,
-        _o: f32,
-        _m: Option<hayro_interpret::SoftMask<'a>>,
-        _b: hayro_interpret::BlendMode,
+        o: f32,
+        m: Option<hayro_interpret::SoftMask<'a>>,
+        b: hayro_interpret::BlendMode,
     ) {
+        self.groups
+            .push(o >= 1.0 && m.is_none() && b == hayro_interpret::BlendMode::Normal);
     }
     fn draw_image(&mut self, i: hayro_interpret::Image<'a, '_>, t: Affine) {
         // A step for the call, and its placement kept; its probe apart,
@@ -1226,7 +1431,9 @@ impl<'a> Device<'a> for Collector<'a, '_> {
         self.clip_rects.pop();
         self.clip_ids.pop();
     }
-    fn pop_transparency_group(&mut self) {}
+    fn pop_transparency_group(&mut self) {
+        self.groups.pop();
+    }
 
     fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>) {
         let actual = self.marks.begin(tag, mcid);
@@ -1534,6 +1741,10 @@ impl<'a> Device<'a> for Collector<'a, '_> {
         }
         self.ink.push(ink);
         self.clip_votes.push(vote);
+        self.painted.push(
+            !matches!(mode, hayro_interpret::GlyphDrawMode::Invisible)
+                && matches!(glyph, HGlyph::Outline(_)),
+        );
         self.glyphs.push(Glyph {
             text,
             bbox,
@@ -2511,11 +2722,16 @@ pub fn extract_pdf_with(
             symbols: Vec::new(),
             clips: Vec::new(),
             rect_clips: Vec::new(),
-            painted: Vec::new(),
+            path_boxes: Vec::new(),
             clip_rects: Vec::new(),
             clip_ids: Vec::new(),
             clip_seq: 0,
             clip_votes: Vec::new(),
+            painted: Vec::new(),
+            covers: Vec::new(),
+            masked: false,
+            blended: false,
+            groups: Vec::new(),
             cased: Vec::new(),
             faces: std::mem::take(&mut faces),
             weights: std::mem::take(&mut weights),
@@ -2571,7 +2787,13 @@ pub fn extract_pdf_with(
         }
         dev.read_cased();
         dev.read_symbols();
-        let out = dev.clipped_out();
+        let mut out = dev.clipped_out();
+        if !dev.covers.is_empty() {
+            let annotated = appearance_boxes(page);
+            for (o, c) in out.iter_mut().zip(dev.covered(&annotated)) {
+                *o |= c;
+            }
+        }
         if out.iter().any(|&o| o) {
             // Kept glyphs' new places, for the readings that name a glyph by
             // its place.
@@ -2606,7 +2828,7 @@ pub fn extract_pdf_with(
         probes = std::mem::take(&mut dev.probes);
         probes.settle(pdf);
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
-        let painted = std::mem::take(&mut dev.painted);
+        let painted = std::mem::take(&mut dev.path_boxes);
         let warnings = heard
             .lock()
             .map(|mut h| h.drain(..).collect())
@@ -2663,7 +2885,7 @@ pub fn extract_pdf_with(
         pages_past_limit: all.len() - pages.len(),
         pages,
         cut_short,
-        title: crate::info::read(&pdf).title,
+        title: crate::info::read(pdf).title,
     })
 }
 
@@ -3408,6 +3630,11 @@ mod actual_text_tests {
             clip_ids: Vec::new(),
             clip_seq: 0,
             clip_votes: Vec::new(),
+            painted: Vec::new(),
+            covers: Vec::new(),
+            masked: false,
+            blended: false,
+            groups: Vec::new(),
             ink: Vec::new(),
             letters: crate::ligature::Letters::default(),
             largest_page: 0,
@@ -3417,7 +3644,7 @@ mod actual_text_tests {
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
             rect_clips: Vec::new(),
-            painted: Vec::new(),
+            path_boxes: Vec::new(),
             budget: &mut budget,
             over: None,
             cased: Vec::new(),
@@ -3468,6 +3695,11 @@ mod actual_text_tests {
             clip_ids: Vec::new(),
             clip_seq: 0,
             clip_votes: Vec::new(),
+            painted: Vec::new(),
+            covers: Vec::new(),
+            masked: false,
+            blended: false,
+            groups: Vec::new(),
             ink: Vec::new(),
             letters: crate::ligature::Letters::default(),
             unread: Vec::new(),
@@ -3476,7 +3708,7 @@ mod actual_text_tests {
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
             rect_clips: Vec::new(),
-            painted: Vec::new(),
+            path_boxes: Vec::new(),
             cased: Vec::new(),
             largest_page: 0,
             budget: &mut budget,
@@ -3556,6 +3788,11 @@ mod actual_text_tests {
             clip_ids: Vec::new(),
             clip_seq: 0,
             clip_votes: Vec::new(),
+            painted: Vec::new(),
+            covers: Vec::new(),
+            masked: false,
+            blended: false,
+            groups: Vec::new(),
             ink: Vec::new(),
             letters: crate::ligature::Letters::default(),
             unread: Vec::new(),
@@ -3564,7 +3801,7 @@ mod actual_text_tests {
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
             rect_clips: Vec::new(),
-            painted: Vec::new(),
+            path_boxes: Vec::new(),
             cased: Vec::new(),
             largest_page: 0,
             budget,
@@ -4144,7 +4381,12 @@ mod budget_tests {
             clip_seq: 0,
             clip_votes: Vec::new(),
             rect_clips: Vec::new(),
+            path_boxes: Vec::new(),
             painted: Vec::new(),
+            covers: Vec::new(),
+            masked: false,
+            blended: false,
+            groups: Vec::new(),
             dots: Vec::new(),
             traces: Vec::new(),
             ticks: Vec::new(),
@@ -4447,5 +4689,233 @@ mod clip_tests {
              BT 3 Tr /F1 12 Tf 1 0 0 1 200 100 Tm (Layer) Tj ET Q",
         );
         assert!(text.contains("Layer"), "{text:?}");
+    }
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::extract_bytes;
+
+    /// A one-page document, 300 × 200, its font Helvetica as `/F1`; the
+    /// `resources`, `catalog` and `page` entries added to those dictionaries,
+    /// and `extra` objects numbered from 6.
+    fn build(
+        content: &str,
+        resources: &str,
+        catalog: &str,
+        page: &str,
+        extra: &[String],
+    ) -> Vec<u8> {
+        let mut objects: Vec<Vec<u8>> = vec![
+            format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>").into_bytes(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] \
+                 /Resources << /Font << /F1 4 0 R >> {resources} >> /Contents 5 0 R {page} >>"
+            )
+            .into_bytes(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            stream("", content).into_bytes(),
+        ];
+        objects.extend(extra.iter().map(|o| o.clone().into_bytes()));
+        let mut pdf = b"%PDF-1.5\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            pdf.extend_from_slice(body);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer << /Root 1 0 R /Size {} >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
+    fn stream(dict: &str, data: &str) -> String {
+        format!(
+            "<< {dict} /Length {} >>\nstream\n{data}\nendstream",
+            data.len()
+        )
+    }
+
+    fn read_with(
+        content: &str,
+        resources: &str,
+        catalog: &str,
+        page: &str,
+        extra: &[String],
+    ) -> String {
+        let doc = extract_bytes(build(content, resources, catalog, page, extra)).expect("pdf");
+        doc.pages[0]
+            .glyphs
+            .iter()
+            .map(|g| g.text.as_str())
+            .collect()
+    }
+
+    fn read(content: &str) -> String {
+        read_with(content, "", "", "", &[])
+    }
+
+    /// Words set at y 100, a band filled over them, and a line below it.
+    const UNDER: &str = "BT /F1 12 Tf 1 0 0 1 20 100 Tm (Hidden words) Tj ET";
+    const BAND: &str = "0 0 1 rg 10 90 200 30 re f";
+    const SHOWN: &str = "BT /F1 12 Tf 1 0 0 1 20 40 Tm (Shown) Tj ET";
+
+    #[test]
+    fn text_painted_over_by_an_opaque_fill_is_not_read() {
+        // The words and the space between them go; the line below stays.
+        assert_eq!(read(&format!("{UNDER} {BAND} {SHOWN}")), "Shown");
+        // Set on the band, after it, they show.
+        let text = read(&format!("{BAND} {UNDER} {SHOWN}"));
+        assert!(text.contains("Hidden words"), "{text:?}");
+        // A fill is as opaque as its own alpha, `ca`: the stroke's, `CA`,
+        // is no part of it.
+        let text = read_with(
+            &format!("{UNDER} /G1 gs {BAND} {SHOWN}"),
+            "/ExtGState << /G1 << /CA 0.5 >> >>",
+            "",
+            "",
+            &[],
+        );
+        assert_eq!(text, "Shown");
+    }
+
+    #[test]
+    fn a_fill_that_lets_the_text_show_hides_nothing() {
+        // Half opacity, and a highlighter's blend modes, which darken what
+        // is under them and leave it to be read.
+        for gs in ["<< /ca 0.5 >>", "<< /BM /Multiply >>", "<< /BM /Darken >>"] {
+            let text = read_with(
+                &format!("{UNDER} /G1 gs {BAND} {SHOWN}"),
+                &format!("/ExtGState << /G1 {gs} >>"),
+                "",
+                "",
+                &[],
+            );
+            assert!(text.contains("Hidden words"), "{gs}: {text:?}");
+        }
+        // Painted inside a transparency group drawn at half opacity; the
+        // same group drawn opaque hides them.
+        let group = stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 200] /Group << /S /Transparency >>",
+            BAND,
+        );
+        let half = read_with(
+            &format!("{UNDER} q /G1 gs /X Do Q {SHOWN}"),
+            "/XObject << /X 6 0 R >> /ExtGState << /G1 << /ca 0.5 >> >>",
+            "",
+            "",
+            std::slice::from_ref(&group),
+        );
+        assert!(half.contains("Hidden words"), "{half:?}");
+        let whole = read_with(
+            &format!("{UNDER} q /X Do Q {SHOWN}"),
+            "/XObject << /X 6 0 R >>",
+            "",
+            "",
+            &[group],
+        );
+        assert_eq!(whole, "Shown");
+        // Painted through a soft mask, which lets a share of what is under
+        // it through.
+        let mask = stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 200] /Group << /S /Transparency /CS /DeviceGray >>",
+            "0.5 g 0 0 300 200 re f",
+        );
+        let text = read_with(
+            &format!("{UNDER} q /G1 gs {BAND} Q {SHOWN}"),
+            "/ExtGState << /G1 << /SMask << /Type /Mask /S /Luminosity /G 6 0 R >> >> >>",
+            "",
+            "",
+            &[mask],
+        );
+        assert!(text.contains("Hidden words"), "{text:?}");
+        // A picture is no cover: an OCR'd scan's words lie under its image.
+        let text = read(&format!(
+            "{UNDER} q 200 0 0 30 10 90 cm BI /W 1 /H 1 /CS /RGB /BPC 8 /F /AHx ID 0000FF> EI Q {SHOWN}"
+        ));
+        assert!(text.contains("Hidden words"), "{text:?}");
+    }
+
+    #[test]
+    fn a_fill_in_optional_content_switched_off_hides_nothing() {
+        let layer = "<< /Type /OCG /Name (Band) >>".to_string();
+        let content = format!("{UNDER} /OC /L1 BDC {BAND} EMC {SHOWN}");
+        let off = read_with(
+            &content,
+            "/Properties << /L1 6 0 R >>",
+            "/OCProperties << /OCGs [6 0 R] /D << /OFF [6 0 R] >> >>",
+            "",
+            std::slice::from_ref(&layer),
+        );
+        assert!(off.contains("Hidden words"), "{off:?}");
+        let on = read_with(
+            &content,
+            "/Properties << /L1 6 0 R >>",
+            "/OCProperties << /OCGs [6 0 R] /D << /ON [6 0 R] >> >>",
+            "",
+            &[layer],
+        );
+        assert_eq!(on, "Shown");
+    }
+
+    #[test]
+    fn invisible_text_under_a_fill_is_still_read() {
+        // An OCR'd scan's words, set invisible.
+        let text = read(&format!(
+            "BT 3 Tr /F1 12 Tf 1 0 0 1 20 100 Tm (Hidden words) Tj ET {BAND} {SHOWN}"
+        ));
+        assert!(text.contains("Hidden words"), "{text:?}");
+    }
+
+    #[test]
+    fn a_fill_whose_edge_cuts_a_glyph_hides_nothing() {
+        // The band ends inside the `e`: the letter shows in part, and its
+        // word with it, so the band takes none of the line.
+        let text = read(&format!("{UNDER} 0 0 1 rg 10 90 40 30 re f {SHOWN}"));
+        assert!(text.contains("Hidden words"), "{text:?}");
+    }
+
+    #[test]
+    fn a_bar_thinner_than_the_type_hides_nothing() {
+        // A link's underline, drawn after its URL, over the underscore it
+        // lies on: the underscore still reads.
+        let text = read(&format!(
+            "BT /F1 12 Tf 1 0 0 1 20 100 Tm (a_b) Tj ET 0 0 1 rg 15 98 40 1.4 re f {SHOWN}"
+        ));
+        assert!(text.contains("a_b"), "{text:?}");
+    }
+
+    #[test]
+    fn an_annotations_appearance_is_no_cover() {
+        // A square annotation's appearance, an opaque box, drawn over the
+        // words after the page's own content.
+        let annot = "<< /Type /Annot /Subtype /Square /Rect [10 90 210 120] /AP << /N 7 0 R >> >>"
+            .to_string();
+        let look = stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 200 30]",
+            "0 0 1 rg 0 0 200 30 re f",
+        );
+        let text = read_with(
+            &format!("{UNDER} {SHOWN}"),
+            "",
+            "",
+            "/Annots [6 0 R]",
+            &[annot, look],
+        );
+        assert!(text.contains("Hidden words"), "{text:?}");
     }
 }

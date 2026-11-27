@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "odl-bench-01030000000130.pdf",
+    "url": "https://raw.githubusercontent.com/opendataloader-project/opendataloader-bench/main/pdfs/01030000000130.pdf",
+    "sha256": "95f808815969717e4ef6390b2b789a8ea552a000a2b936c3c9371f695a71bd9e",
+    "about": "opendataloader-bench 01030000000130: a page of a finance textbook. Table 15.6 sets a year column and two columns of percentages under heads stacked over two lines, each centred over its column and wider than its figures."
+  },
+  "notes": [
+    "2026-11-27: the alignment reading set each column's edges where its figures start, so the stacked heads were cut through and their lines read across the row: `Observed returns Time t portfolio | on the fi p rm’s Observed returns on a over time rt for the | …`. The edges now stand in the gutters between each head with its figures and the next."
+  ],
+  "checks": [
+    {
+      "id": "year-column-named-by-its-head",
+      "found": "2026-11-27",
+      "issue": "The year column's head took the first words of the next column's head: `Observed returns Time t portfolio`.",
+      "cell": {
+        "value": "2014",
+        "column": "Time t"
+      }
+    },
+    {
+      "id": "heads-not-read-across",
+      "found": "2026-11-27",
+      "issue": "Guard: the stacked heads' lines are not read across the row.",
+      "no_text": "Observed returns Time t portfolio"
+    }
+  ]
+}

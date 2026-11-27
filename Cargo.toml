@@ -22,6 +22,7 @@ members = [
     "crates/fluree-doc-image",
     "crates/fluree-doc-pdf",
     "crates/fluree-doc-cli",
+    "crates/fluree-doc-conform",
 ]
 # Standalone exploration probe: keeps its own deps (incl. the renderer) and is
 # not part of the shipped workspace.
@@ -53,6 +54,7 @@ fluree-doc-email = { path = "crates/fluree-doc-email" }
 fluree-doc-vision = { path = "crates/fluree-doc-vision" }
 fluree-doc-image = { path = "crates/fluree-doc-image" }
 fluree-doc-pdf = { path = "crates/fluree-doc-pdf" }
+fluree-doc-conform = { path = "crates/fluree-doc-conform" }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 clap_complete = "4"
 hayro = "0.7"

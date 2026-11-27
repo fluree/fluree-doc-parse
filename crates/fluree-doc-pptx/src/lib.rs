@@ -21,17 +21,22 @@
 //! **Charts carry their data.** A chart in a deck is not ink: `c:cat` and
 //! `c:val` hold the categories and values outright, cached beside the
 //! formula that produced them. So a pie of employees by region yields
-//! `EMEA -> 28.0` as a fact, where the same chart printed to PDF is vector
+//! `EMEA -> 28` as a fact, where the same chart printed to PDF is vector
 //! strokes from which the pairing cannot be recovered. Each chart becomes a
 //! table — categories down, one column per series — so its numbers are
-//! queryable like any other table's.
+//! queryable like any other table's. A cache of numbers is read as a
+//! workbook's cells are, through its format code: each cell shows what the
+//! chart shows and keeps what the cache stores (`datums`), and a series
+//! whose cells were deleted since (`#REF!`) is no column.
 
 use fluree_doc_model::budget::{Budget, TooLarge};
-use fluree_doc_model::{DocumentInfo, Element};
+use fluree_doc_model::{Datum, DocumentInfo, Element};
 use fluree_doc_ooxml::{attr, local, Package, Relations};
+use fluree_doc_xlsx::{custom_fmt, NumFmt};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum PptxError {
@@ -91,7 +96,7 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
     let mut out = Vec::new();
     // Each chart part read once, by its name, however many slides or
     // frames name it: `None` where it holds no series.
-    let mut parsed: HashMap<String, Option<ChartData>> = HashMap::new();
+    let mut parsed: HashMap<String, Option<Chart>> = HashMap::new();
     // Each slide's charts by relationship id, the first of an id that
     // names a chart with series, resolved once for its part however many
     // times the deck lists it, and spent once: read again for each
@@ -213,6 +218,32 @@ struct Chart {
     title: String,
     categories: Vec<String>,
     series: Vec<Series>,
+    /// What each category and each series' point stores, typed, beside
+    /// what it shows: see `Element::datums`.
+    category_datums: Vec<Option<Datum>>,
+    series_datums: Vec<Vec<Option<Datum>>>,
+}
+
+/// A cached number as the chart shows it, and what it stores, through the
+/// cache's format code, as a workbook's cell is read: `0.062432` for
+/// `6.2432000000000015E-2` under `General`, `2000-01-01` for the serial
+/// `36526` under `mmm-yy` (see `fluree_doc_xlsx::format_general` for the
+/// fifteen figures General shows). `format` is the code read, once for
+/// its cache; `None` is General.
+fn cached_number(
+    raw: &str,
+    format: Option<Arc<NumFmt>>,
+    date1904: bool,
+) -> (String, Option<Datum>) {
+    use fluree_doc_xlsx::{cell_datum, format_number, CellStyle};
+    let style = CellStyle {
+        format: format.unwrap_or_else(|| Arc::new(NumFmt::General)),
+        ..CellStyle::default()
+    };
+    (
+        format_number(raw, &style, date1904),
+        cell_datum("n", raw, &style, date1904),
+    )
 }
 
 /// What the file declares about itself in its core properties: title,
@@ -237,13 +268,18 @@ const MAX_POINTS: usize = 100_000;
 /// categories. Of a multi-level category axis, the first level is read: the
 /// labels next to the plot, one per point.
 pub fn parse_chart_xml(xml: &str) -> Result<Option<ChartData>, PptxError> {
-    Ok(parse_chart(xml, &mut Budget::default())?)
+    let chart = parse_chart(xml, &mut Budget::default())?;
+    Ok(chart.map(|c| (c.title, c.categories, c.series)))
 }
 
-/// [`parse_chart_xml`], what it makes spent from the deck's `budget` before
-/// it is made: each point read, and each series' or category list's
-/// values laid out by index, as many as its cache declares.
-fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<ChartData>, TooLarge> {
+/// [`parse_chart_xml`], with each point's stored value beside what it
+/// shows, what it makes spent from the deck's `budget` before it is made:
+/// each point read, and each series' or category list's values laid out
+/// by index, as many as its cache declares. A cache of numbers is read
+/// through its format code (see `cached_number`). A series whose values
+/// formula names cells deleted since (`Sheet1!#REF!`) plots nothing and is
+/// left out; one whose name alone does has no name.
+fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<Chart>, TooLarge> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut chart = Chart::default();
@@ -264,10 +300,22 @@ fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<ChartData>, TooL
     let mut count = 0usize;
     let mut point: Option<usize> = None;
     let mut level = 0usize;
-    let mut pending: Vec<(usize, String)> = Vec::new();
+    let mut pending: Vec<(usize, String, Option<Datum>)> = Vec::new();
     let mut series_name = String::new();
     let mut text = String::new();
     let mut depth_title = 0usize;
+    // The cache being read holds numbers, and the format code it shows
+    // them through, read once for the cache, not again for each point; a
+    // point can name its own.
+    let mut numeric = false;
+    let mut cache_code: Option<Arc<NumFmt>> = None;
+    let mut point_code: Option<String> = None;
+    let mut in_code = false;
+    // Reading the formula the current part of a series reads its cells by.
+    let mut in_formula = false;
+    let mut name_broken = false;
+    let mut values_broken = false;
+    let mut date1904 = false;
 
     while let Ok(ev) = r.read_event_into(&mut buf) {
         match ev {
@@ -280,6 +328,22 @@ fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<ChartData>, TooL
                 "ser" => {
                     pending.clear();
                     series_name.clear();
+                    name_broken = false;
+                    values_broken = false;
+                }
+                "date1904" => date1904 = attr(&e, "val").is_some_and(|v| v == "1" || v == "true"),
+                "numCache" | "numLit" => {
+                    numeric = true;
+                    cache_code = None;
+                }
+                "strCache" | "strLit" | "multiLvlStrCache" => {
+                    numeric = false;
+                    cache_code = None;
+                }
+                "formatCode" => in_code = true,
+                "f" => {
+                    in_formula = true;
+                    text.clear();
                 }
                 "ptCount" => {
                     count = attr(&e, "val")
@@ -287,7 +351,10 @@ fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<ChartData>, TooL
                         .unwrap_or(0)
                         .min(MAX_POINTS);
                 }
-                "pt" => point = attr(&e, "idx").and_then(|v| v.parse().ok()),
+                "pt" => {
+                    point = attr(&e, "idx").and_then(|v| v.parse().ok());
+                    point_code = attr(&e, "formatCode");
+                }
                 "lvl" => level += 1,
                 "tx" => slot = Slot::Name,
                 "cat" | "xVal" => slot = Slot::Cat,
@@ -297,11 +364,26 @@ fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<ChartData>, TooL
                 _ => {}
             },
             Event::Text(t) => {
-                if in_v {
+                if in_v || in_code || in_formula {
                     text.push_str(&t.unescape().unwrap_or_default());
                 }
             }
             Event::End(e) => match local(e.name().as_ref()) {
+                "formatCode" => {
+                    cache_code = Some(Arc::new(custom_fmt(&std::mem::take(&mut text))));
+                    in_code = false;
+                }
+                "f" if in_formula => {
+                    let formula = std::mem::take(&mut text);
+                    in_formula = false;
+                    if formula.contains("#REF!") {
+                        match slot {
+                            Slot::Name => name_broken = true,
+                            Slot::Val => values_broken = true,
+                            _ => {}
+                        }
+                    }
+                }
                 "v" | "t" => {
                     if in_v {
                         let val = std::mem::take(&mut text);
@@ -317,13 +399,26 @@ fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<ChartData>, TooL
                                     // A point with no index follows the
                                     // one before it.
                                     let at = point.take().unwrap_or_else(|| {
-                                        pending.last().map_or(0, |(i, _)| i + 1)
+                                        pending.last().map_or(0, |(i, ..)| i + 1)
                                     });
                                     if at < MAX_POINTS {
-                                        let val = val.trim();
                                         budget.spend_cells(1)?;
-                                        budget.spend_text(val)?;
-                                        pending.push((at, val.to_string()));
+                                        let (shown, datum) = if numeric {
+                                            let format = (point_code.take())
+                                                .map(|c| Arc::new(custom_fmt(&c)))
+                                                .or_else(|| cache_code.clone());
+                                            cached_number(&val, format, date1904)
+                                        } else {
+                                            (val.trim().to_string(), None)
+                                        };
+                                        // Spent as soon as made: a format
+                                        // code's text is shown in each
+                                        // point it formats.
+                                        budget.spend_text(&shown)?;
+                                        if let Some(d) = &datum {
+                                            budget.spend_text(&d.value)?;
+                                        }
+                                        pending.push((at, shown, datum));
                                     }
                                 }
                                 Slot::Cat | Slot::Val | Slot::None => {}
@@ -335,18 +430,22 @@ fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<ChartData>, TooL
                 "title" => in_title = false,
                 "pt" => point = None,
                 "cat" | "xVal" => {
-                    let points = by_index(&mut pending, &mut count, budget)?;
+                    let (points, datums) = by_index(&mut pending, &mut count, budget)?;
                     if chart.categories.is_empty() {
                         chart.categories = points;
+                        chart.category_datums = datums;
                     }
                     slot = Slot::None;
                     level = 0;
                 }
                 "val" | "yVal" => {
-                    let points = by_index(&mut pending, &mut count, budget)?;
-                    chart
-                        .series
-                        .push((std::mem::take(&mut series_name), points));
+                    let (points, datums) = by_index(&mut pending, &mut count, budget)?;
+                    let name = std::mem::take(&mut series_name);
+                    if !values_broken {
+                        let name = if name_broken { String::new() } else { name };
+                        chart.series.push((name, points));
+                        chart.series_datums.push(datums);
+                    }
                     slot = Slot::None;
                 }
                 "tx" => {
@@ -360,31 +459,33 @@ fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<ChartData>, TooL
         }
         buf.clear();
     }
-    Ok((!chart.series.is_empty()).then_some((chart.title, chart.categories, chart.series)))
+    Ok((!chart.series.is_empty()).then_some(chart))
 }
 
 /// A cache's values laid out by index: as many as it declares or holds,
-/// blank where it wrote no point, spent from `budget` before they are made
-/// (a series with none still one slot). Leaves the cache state empty for
-/// the next.
+/// blank where it wrote no point, and what each stores, spent from
+/// `budget` before they are made (a series with none still one slot).
+/// Leaves the cache state empty for the next.
 fn by_index(
-    points: &mut Vec<(usize, String)>,
+    points: &mut Vec<(usize, String, Option<Datum>)>,
     count: &mut usize,
     budget: &mut Budget,
-) -> Result<Vec<String>, TooLarge> {
+) -> Result<(Vec<String>, Vec<Option<Datum>>), TooLarge> {
     let n = points
         .iter()
-        .map(|(i, _)| i + 1)
+        .map(|(i, ..)| i + 1)
         .max()
         .unwrap_or(0)
         .max(*count);
-    budget.spend_cells(n.max(1) as u64)?;
+    budget.spend_cells(2 * n.max(1) as u64)?;
     let mut out = vec![String::new(); n];
-    for (i, v) in points.drain(..) {
+    let mut datums = vec![None; n];
+    for (i, v, d) in points.drain(..) {
         out[i] = v;
+        datums[i] = d;
     }
     *count = 0;
-    Ok(out)
+    Ok((out, datums))
 }
 
 /// A chart as a table: categories down the first column, one column per
@@ -395,11 +496,31 @@ fn by_index(
 /// column for each series, is spent from `budget` before it is made, and
 /// its cells that hold text and their text after: a chart its frames name
 /// many times is read once and made once for each.
+#[cfg(test)]
 fn chart_element(
     (title, categories, series): &ChartData,
     page: usize,
     budget: &mut Budget,
 ) -> Result<Vec<Element>, TooLarge> {
+    let chart = Chart {
+        title: title.clone(),
+        categories: categories.clone(),
+        series: series.clone(),
+        ..Default::default()
+    };
+    chart_table(&chart, page, budget)
+}
+
+/// As [`chart_element`], with what each cell stores beside what it shows,
+/// spent with the grid when the chart stores any.
+fn chart_table(chart: &Chart, page: usize, budget: &mut Budget) -> Result<Vec<Element>, TooLarge> {
+    let Chart {
+        title,
+        categories,
+        series,
+        category_datums,
+        series_datums,
+    } = chart;
     let mut out = Vec::new();
     if !title.is_empty() {
         keep(
@@ -412,7 +533,15 @@ fn chart_element(
         .len()
         .max(series.iter().map(|(_, v)| v.len()).max().unwrap_or(0));
     let width = 1 + series.len();
-    budget.spend_cells((n as u64 + 1).saturating_mul(width as u64))?;
+    let stores = (category_datums.iter())
+        .chain(series_datums.iter().flatten())
+        .any(Option::is_some);
+    let grids = if stores { 2 } else { 1 };
+    budget.spend_cells(
+        (n as u64 + 1)
+            .saturating_mul(width as u64)
+            .saturating_mul(grids),
+    )?;
     let mut header = vec![String::new()];
     for (name, _) in series {
         header.push(name.clone());
@@ -432,6 +561,21 @@ fn chart_element(
         .join("\n");
     let mut e = element("doco:Table", text, None, page);
     e.header_rows = Some(1);
+    if stores {
+        let mut datums = vec![vec![None; width]];
+        for i in 0..rows.len() - 1 {
+            let mut row = vec![category_datums.get(i).cloned().flatten()];
+            for d in series_datums {
+                row.push(d.get(i).cloned().flatten());
+            }
+            row.resize(width, None);
+            datums.push(row);
+        }
+        for d in datums.iter().flatten().flatten() {
+            budget.spend_text(&d.value)?;
+        }
+        e.datums = Some(datums);
+    }
     e.cells = Some(rows);
     e.evidence = "pptx-chart";
     spend_table(&e, budget)?;
@@ -473,7 +617,7 @@ pub fn parse_slide_with_charts(
         }
     }
     // The first of an id, as a scan finds it.
-    let mut by_id: HashMap<&str, &ChartData> = HashMap::new();
+    let mut by_id: HashMap<&str, &Chart> = HashMap::new();
     for (id, chart) in &parsed {
         by_id.entry(id.as_str()).or_insert(chart);
     }
@@ -489,7 +633,7 @@ pub fn parse_slide_with_charts(
 fn parse_slide<'c>(
     xml: &str,
     page: usize,
-    chart: &dyn Fn(&str) -> Option<&'c ChartData>,
+    chart: &dyn Fn(&str) -> Option<&'c Chart>,
     budget: &mut Budget,
 ) -> Result<Vec<Element>, PptxError> {
     let mut r = Reader::from_str(xml);
@@ -549,7 +693,7 @@ fn parse_slide<'c>(
                     // The frame names its part by relationship id.
                     if let Some(id) = attr(&e, "id") {
                         if let Some(chart) = chart(&id) {
-                            out.extend(chart_element(chart, page, budget)?);
+                            out.extend(chart_table(chart, page, budget)?);
                         }
                     }
                 }
@@ -978,13 +1122,15 @@ mod tests {
         assert_eq!(*cats, ["North America", "EMEA", "Asia Pacific"]);
         assert_eq!(series.len(), 1);
         assert_eq!(series[0].0, "Share");
-        assert_eq!(series[0].1, ["34.5", "28.0", "17.5"]);
+        // A cache with no format code shows its numbers in General, as the
+        // chart does: `28.0` is `28`.
+        assert_eq!(series[0].1, ["34.5", "28", "17.5"]);
 
         let els = chart_element(&chart, 0, &mut Budget::default()).unwrap();
         let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
         let cells = t.cells.as_ref().unwrap();
         assert_eq!(cells[0], vec!["", "Share"]);
-        assert_eq!(cells[2], vec!["EMEA", "28.0"], "EMEA keeps its own value");
+        assert_eq!(cells[2], vec!["EMEA", "28"], "EMEA keeps its own value");
         assert_eq!(t.evidence, "pptx-chart");
     }
 
@@ -1003,7 +1149,7 @@ mod tests {
         let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
         let cells = t.cells.as_ref().unwrap();
         assert_eq!(cells[0], vec!["", "Americas", "EMEA"]);
-        assert_eq!(cells[2], vec!["2024", "34.5", "28.0"]);
+        assert_eq!(cells[2], vec!["2024", "34.5", "28"]);
     }
 
     #[test]
@@ -1032,6 +1178,59 @@ mod tests {
              <c:val><c:numLit><c:ptCount val=\"2\"/><c:pt idx=\"0\"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser>",
         );
         assert_eq!(parse_chart_xml(&x).unwrap().unwrap().2[0].1, ["5", ""]);
+    }
+
+    #[test]
+    fn a_charts_cache_reads_as_the_chart_shows_it() {
+        // Monthly categories stored as serial days under a date format, one
+        // point naming its own; values under General, one with a computed
+        // value's last binary digits.
+        let x = chart_xml(
+            "<c:ser><c:tx><c:strRef><c:f>Sheet1!$B$1</c:f><c:strCache><c:pt idx=\"0\"><c:v>Share</c:v></c:pt></c:strCache></c:strRef></c:tx>\
+             <c:cat><c:numRef><c:f>Sheet1!$A$2:$A$3</c:f><c:numCache><c:formatCode>d\\-mmm\\-yy</c:formatCode><c:ptCount val=\"2\"/>\
+             <c:pt idx=\"0\" formatCode=\"mmm\\-yy\"><c:v>36526</c:v></c:pt><c:pt idx=\"1\"><c:v>36557</c:v></c:pt></c:numCache></c:numRef></c:cat>\
+             <c:val><c:numRef><c:f>Sheet1!$B$2:$B$3</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"2\"/>\
+             <c:pt idx=\"0\"><c:v>6.2432000000000015E-2</c:v></c:pt><c:pt idx=\"1\"><c:v>9.3014240000000008</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>",
+        );
+        let chart = parse_chart(&x, &mut Budget::default()).unwrap().unwrap();
+        assert_eq!(chart.categories, ["2000-01-01", "2000-02-01"]);
+        assert_eq!(chart.series[0].1, ["0.062432", "9.301424"]);
+        // What it stores is kept, at full precision, typed.
+        let d = chart.series_datums[0][0].as_ref().unwrap();
+        assert_eq!(
+            (d.datatype, d.value.as_str()),
+            ("xsd:decimal", "0.062432000000000015")
+        );
+        assert_eq!(
+            chart.category_datums[0].as_ref().unwrap().datatype,
+            "xsd:date"
+        );
+        let table = chart_table(&chart, 0, &mut Budget::default()).unwrap();
+        let t = table.iter().find(|e| e.kind == "doco:Table").unwrap();
+        assert_eq!(t.cells.as_ref().unwrap()[1], ["2000-01-01", "0.062432"]);
+        assert!(t.datums.as_ref().unwrap()[0].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_series_whose_cells_were_deleted_is_no_column() {
+        let series = |name_f: &str, val_f: &str, name: &str| {
+            format!(
+                "<c:ser><c:tx><c:strRef><c:f>{name_f}</c:f><c:strCache><c:pt idx=\"0\"><c:v>{name}</c:v></c:pt></c:strCache></c:strRef></c:tx>\
+                 <c:cat><c:strLit><c:pt idx=\"0\"><c:v>2025</c:v></c:pt></c:strLit></c:cat>\
+                 <c:val><c:numRef><c:f>{val_f}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:pt idx=\"0\"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"
+            )
+        };
+        let x = chart_xml(&format!(
+            "{}{}{}",
+            series("Sheet1!$A$2", "Sheet1!$B$2", "Reference"),
+            // Name and values both point at deleted cells: it plots nothing.
+            series("Sheet1!#REF!", "Sheet1!#REF!", "#REF!"),
+            // Its name alone does: a column without a name.
+            series("Sheet1!#REF!", "Sheet1!$B$4", "#REF!"),
+        ));
+        let (_, _, series) = parse_chart_xml(&x).unwrap().unwrap();
+        let names: Vec<&str> = series.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["Reference", ""]);
     }
 
     #[test]

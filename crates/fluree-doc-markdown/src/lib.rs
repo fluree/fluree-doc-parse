@@ -16,6 +16,11 @@
 //! counted against the document's [`Budget`] before they are made: a band's
 //! label a megabyte long over a hundred columns and forty rows would
 //! otherwise be written four thousand times.
+//!
+//! A block of raw HTML is read with the HTML reader, within the same
+//! budget: it is content, and it is how a table that spans cells, or has
+//! bands or a header of several rows, is written in Markdown, ours
+//! included.
 
 use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{Element, Link};
@@ -156,6 +161,8 @@ struct Reader {
     /// links: 600,000 on one line, 4 MB, took 16 s.
     links: Vec<(usize, usize, Link)>,
     open_link: Option<(usize, String)>,
+    /// The raw HTML block being read, if one is open.
+    html: Option<String>,
 }
 
 impl Reader {
@@ -346,9 +353,17 @@ impl Reader {
                 Event::End(TagEnd::TableHead) => {
                     self.in_table_head = false;
                     // Markdown states where the header ends, so this is known
-                    // rather than measured.
-                    self.header_rows = 1;
-                    self.rows.push(std::mem::take(&mut self.row));
+                    // rather than measured. A pipe table must open with a
+                    // header row, so an empty one is how a table says it has
+                    // no header: every row is a body row.
+                    let row = std::mem::take(&mut self.row);
+                    if row.iter().all(|c| c.is_empty()) {
+                        self.header_rows = 0;
+                        self.first_bold.clear();
+                    } else {
+                        self.header_rows = 1;
+                        self.rows.push(row);
+                    }
                 }
                 Event::End(TagEnd::TableRow) => {
                     self.rows.push(std::mem::take(&mut self.row));
@@ -412,6 +427,29 @@ impl Reader {
                     }
                 }
                 Event::Rule => self.flush_block()?,
+                // A block of raw HTML is the document's content as much as
+                // the Markdown around it: a table with spans or bands can
+                // only be written so. It is read as the HTML reader reads a
+                // page, its headings declared by its tags and no keyword.
+                Event::Start(Tag::HtmlBlock) => {
+                    self.flush_block()?;
+                    self.html = Some(String::new());
+                }
+                Event::Html(t) => {
+                    if let Some(h) = &mut self.html {
+                        h.push_str(&t);
+                    }
+                }
+                Event::End(TagEnd::HtmlBlock) => {
+                    let h = self.html.take().unwrap_or_default();
+                    if !h.trim().is_empty() {
+                        // Read within the document's budget, which the
+                        // HTML reader leaves with what the block leaves.
+                        let (read, _, _) =
+                            fluree_doc_html::parse_message_within(&h, &mut self.budget)?;
+                        self.out.extend(read);
+                    }
+                }
                 _ => {}
             }
         }
@@ -703,5 +741,55 @@ mod tests {
         let e = parse("| a | b |\n|---|---|\n| [x](https://e.example) | y |\n\nAfter.");
         let after = e.iter().find(|x| x.text == "After.").expect("paragraph");
         assert!(after.links.is_none());
+    }
+
+    #[test]
+    fn a_table_written_as_html_is_read_as_one() {
+        // As the Markdown writer sets a table whose cells span: one row to a
+        // line, `<th>` for the header, a blank line after.
+        let src = "Before.\n\n<table>\n<tr><th>Region</th><th>Q1</th></tr>\n\
+                   <tr><td rowspan=\"2\">North</td><td>4</td></tr>\n\
+                   <tr><td>5</td></tr>\n</table>\n\nAfter.\n";
+        let els = parse(src);
+        assert_eq!(
+            kinds(&els),
+            ["doco:Paragraph", "doco:Table", "doco:Paragraph"]
+        );
+        let t = &els[1];
+        assert_eq!(
+            t.cells.as_deref().unwrap(),
+            [["Region", "Q1"], ["North", "4"], ["", "5"]]
+        );
+        assert_eq!(t.header_rows, Some(1));
+        assert_eq!(
+            t.merged_down.as_deref(),
+            Some(&[false, false, false, false, true, false][..])
+        );
+        // The ids run on through it.
+        assert_eq!(els[2].id, "elem-00003");
+    }
+
+    #[test]
+    fn an_empty_header_row_says_the_table_has_no_header() {
+        let src = "| | |\n|---|---|\n| **Speed** | |\n| Load | 40 |\n| Heat | 20 |\n";
+        let els = parse(src);
+        assert_eq!(kinds(&els), ["doco:Table"]);
+        let t = &els[0];
+        assert_eq!(
+            t.cells.as_deref().unwrap(),
+            [["Speed", ""], ["Load", "40"], ["Heat", "20"]]
+        );
+        assert_eq!(t.header_rows, Some(0));
+        // Its rows are counted from the first body row.
+        assert_eq!(t.sub_headers.as_deref(), Some(&[0][..]));
+        // A header row with any text in it heads the table.
+        let t = &parse("| | Q1 |\n|---|---|\n| North | 4 |\n")[0];
+        assert_eq!(t.header_rows, Some(1));
+        assert_eq!(t.cells.as_deref().unwrap(), [["", "Q1"], ["North", "4"]]);
+        // What the writer makes of a headerless table reads back the same.
+        let plain = parse("| | |\n|---|---|\n| Load | 40 |\n| Heat | 20 |\n");
+        let again = parse(&fluree_doc_model::emit::to_markdown(&plain));
+        assert_eq!(again[0].header_rows, Some(0));
+        assert_eq!(again[0].cells, plain[0].cells);
     }
 }
