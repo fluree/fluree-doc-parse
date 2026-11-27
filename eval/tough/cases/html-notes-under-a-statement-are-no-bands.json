@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "hyatt-10k-2025.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1468174/000146817426000007/h-20251231.htm",
+    "sha256": "ce8b65927eb4ef69fedfadd71b052dafc52fd3db7c77abf450e5f92a2a4aae24",
+    "about": "SEC filing, annual report on Form 10-K. Its accumulated other comprehensive loss table sets one year's rows, their numbered notes as rows of one cell, then the year before's rows and notes."
+  },
+  "checks": [
+    {
+      "id": "note-is-a-cell",
+      "found": "2026-11-27",
+      "issue": "The notes were read as bands over the rows after them: in no cell, and stacked into the next year's rows' section label.",
+      "cell": {"value": "(1) Amounts reclassified from accumulated other comprehensive loss included realized gains recognized in gains (losses) on sales of real estate and other on our consolidated statements of income (loss) related to the sale of the shares of the entities that own the Alua Portfolio (see Note 7)."}
+    },
+    {
+      "id": "next-years-rows-unlabelled",
+      "found": "2026-11-27",
+      "issue": "As above: the year before's rows carried the notes as their section.",
+      "cell": {"value": "(156)", "row": "Foreign currency translation adjustments (5)", "column": "Balance at January 1, 2025", "section": ""}
+    }
+  ]
+}

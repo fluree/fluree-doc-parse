@@ -1303,8 +1303,26 @@ fn assemble_lines(
             })
         })
         .collect();
-    for (((m, i, only_note), n), counts_on) in placed.into_iter().zip(raised).zip(continued) {
-        if n.is_some_and(|n| counts(i, n)) {
+    // A footnote nothing on its page counts with, the page's only note
+    // (`1`, or a lone `3`), is the note's all the same where it reads as
+    // one: set in a note's type, smaller than the body's, and nothing of
+    // the body's size below it on the page. A chart's tick labels stand
+    // beside its drawing with the page's text going on under it.
+    let lone: Vec<bool> = placed
+        .iter()
+        .map(|(_, i, _)| {
+            let b = &blocks[*i];
+            let note_type = |size: f32| (size as f64) < body * NOTE_SIZE;
+            note_type(b.font_size)
+                && !blocks
+                    .iter()
+                    .any(|o| o.bbox.y0 > b.bbox.y1 && !note_type(o.font_size))
+        })
+        .collect();
+    for ((((m, i, only_note), n), counts_on), lone) in
+        placed.into_iter().zip(raised).zip(continued).zip(lone)
+    {
+        if n.is_some_and(|n| counts(i, n) || lone) {
             let b = &mut blocks[i];
             b.bbox = b.bbox.union(&m.bbox);
             // Raised, it opens the block as a footnote's mark: no section's
@@ -1357,6 +1375,10 @@ fn assemble_lines(
     }
     blocks
 }
+
+/// Largest size, against the body's, of a footnote's type: a step below
+/// it at least.
+const NOTE_SIZE: f64 = 0.9;
 
 /// Least size, against its item's, of a list's count: set near the item's
 /// type, if a little smaller. A chart's tick labels beside a column of text
@@ -4506,6 +4528,58 @@ mod tests {
             1.5,
         );
         assert!(b.iter().all(|x| !x.text().starts_with("67")), "{b:?}");
+    }
+
+    #[test]
+    fn a_pages_only_footnote_keeps_its_number() {
+        // A 10pt page with one note at its foot: its number raised at the
+        // margin, 4pt, before 7pt text. Nothing counts with it.
+        let raised = |n: &str, y: f64| {
+            let mut m = l(n, 36.1, y, 4.0);
+            m.bbox.x1 = 38.0;
+            m.bbox.y1 = y + 2.6;
+            m
+        };
+        let note = |t: &str, y: f64| {
+            let mut line = l(t, 41.8, y, 7.0);
+            line.bbox.y1 = y + 5.0;
+            line.bbox.x1 = 250.0;
+            line
+        };
+        let body = |t: &str, y: f64| {
+            let mut line = l(t, 36.0, y, 10.0);
+            line.bbox.y1 = y + 7.0;
+            line.bbox.x1 = 520.0;
+            line
+        };
+        let lines = vec![
+            body(
+                "The page's own text, set at its body size, runs down the page.",
+                500.0,
+            ),
+            raised("1", 779.5),
+            note(
+                "Unless otherwise stated, all references accessed on 5 May 2025.",
+                780.0,
+            ),
+        ];
+        let b = assemble_with_marks(&lines, 1.3, &[], &[], &[], 10.0, &[]);
+        let note = b.last().unwrap();
+        assert_eq!(note.marker, None, "{b:?}");
+        assert!(note.text().starts_with("1 Unless"), "{:?}", note.text());
+        // Raised beside a figure's label with the page's text going on below
+        // it, a number is the figure's: it makes no note.
+        let lines = vec![
+            raised("1", 499.5),
+            {
+                let mut line = l("Share of population covered", 41.8, 500.0, 7.0);
+                line.bbox.y1 = 505.0;
+                line
+            },
+            body("The page's own text goes on below the figure.", 600.0),
+        ];
+        let b = assemble_with_marks(&lines, 1.3, &[], &[], &[], 10.0, &[]);
+        assert!(b.iter().all(|x| !x.text().starts_with("1 Share")), "{b:?}");
     }
 
     #[test]
