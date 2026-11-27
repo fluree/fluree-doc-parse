@@ -786,7 +786,7 @@
  "ilo-columns-under-wrapped-title": {
   "md list.extra": 3,
   "md table.header_rows": 3,
-  "md table.lost": 7,
+  "md table.lost": 6,
   "xhtml block.merged": 22,
   "xhtml order": 1,
   "xhtml table.restated_headers": 1,
@@ -796,7 +796,7 @@
  "ilo-word-across-table-edge-read-once": {
   "md list.extra": 3,
   "md table.header_rows": 3,
-  "md table.lost": 7,
+  "md table.lost": 6,
   "xhtml block.merged": 22,
   "xhtml order": 1,
   "xhtml table.restated_headers": 1,
