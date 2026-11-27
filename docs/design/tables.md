@@ -822,6 +822,17 @@ The first row of a ruled or aligned grid is the table's title when:
 The title is read out as a paragraph just above the table, and the table is
 read from the row under it.
 
+The title reads the glyphs the row's cells would read: each word whole, in
+the row that holds its centre of mass. A word set across the table's edge is
+then read once: in the title when the table takes it from the page, in the
+prose when it does not. Picked glyph by glyph, a head line set out past the
+table's edge lost its first letter (`ECIMAL MILLIMETERS`), and a chart's
+column heads read the end of a word the prose had already read (`World` and
+`ld`). A row read as one cell across the table is read the same way. Its
+words are spaced by the gaps between their ink, not by the spaces the text
+draws: a space drawn between two cells' labels would join them into one line
+run across the columns.
+
 The row under the title is not presumed the header: it earns it. A table
 whose title band sits over a block of fields (`Form Factor | SFF (2.5”) |
 Carrier | …`) or a list of parts has no header at all. Its first row is a

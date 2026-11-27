@@ -167,21 +167,13 @@ fn table_title(
     // between columns (`Hex Cap Screws` over four of them). Labels set
     // apart, each within its column, are the columns' own (`Area |
     // Competence` under one ruled cell).
-    let row_lines = || {
-        let inside: Vec<crate::glyph::Glyph> = page
-            .glyphs
-            .iter()
-            .filter(|gl| {
-                gl.bbox.is_some() && !gl.text.trim().is_empty() && gl.is_horizontal() && {
-                    let (x, y) = gl.center();
-                    g.cell_at(x, y).is_some_and(|(r, _)| r == 0)
-                }
-            })
-            .cloned()
-            .collect();
-        crate::line::assemble(&inside)
+    // The row's glyphs are those its cells read, its words whole: the grid
+    // takes them from the page, and the title is all that reads them.
+    let lines = if across {
+        crate::line::assemble(&g.row_glyphs(&page.glyphs, 0))
+    } else {
+        Vec::new()
     };
-    let lines = if across { row_lines() } else { Vec::new() };
     let runs_across = lines.iter().any(|l| {
         g.xs[1..g.xs.len() - 1]
             .iter()
@@ -8985,6 +8977,196 @@ mod tests {
         // of the table.
         let (g, page) = table(60.0);
         assert!(table_title(&g, &page, &[], false).is_none());
+    }
+
+    #[test]
+    fn a_title_set_out_past_the_grids_edge_reads_whole() {
+        // A head line read across the grid's first row, its first word set
+        // out 5 pt past the grid's left edge: `D` centred outside it, the
+        // word's centre of mass inside.
+        let glyph = |x0: f64, w: f64, y: f64, t: &str| Glyph {
+            text: t.into(),
+            bbox: Some(BBox {
+                x0,
+                y0: y - 7.0,
+                x1: x0 + w,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x0, y),
+            rotation_deg: 0.0,
+            font_size: 8.0,
+            weight: None,
+            italic: false,
+            advance: Some(w),
+            draw_index: 0,
+            ocr: None,
+        };
+        let mut glyphs = Vec::new();
+        let mut x = 95.0;
+        for w in ["DECIMAL", "MILLIMETERS", "FRACTION"] {
+            for c in w.chars() {
+                glyphs.push(glyph(x, 5.0, 10.0, &c.to_string()));
+                x += 5.0;
+            }
+            x += 4.0;
+        }
+        for (r, row) in [
+            ["1/64", ".01563", ".3969"],
+            ["1/32", ".03125", ".7938"],
+            ["3/64", ".04688", "1.1906"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 25.0 + r as f64 * 15.0;
+            for (c, t) in row.iter().enumerate() {
+                glyphs.push(glyph(110.0 + c as f64 * 100.0, 20.0, y, t));
+            }
+        }
+        for (i, g) in glyphs.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 100.0,
+                y0: 0.0,
+                x1: 400.0,
+                y1: 60.0,
+            },
+            xs: vec![100.0, 200.0, 300.0, 400.0],
+            ys: vec![0.0, 15.0, 30.0, 45.0, 60.0],
+        };
+        let page = crate::extract::Page {
+            index: 0,
+            glyphs,
+            images: Vec::new(),
+            rules: Vec::new(),
+            fills: Vec::new(),
+            dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
+            width: 600.0,
+            height: 800.0,
+            rotation: 0,
+            ocr: None,
+        };
+        // The grid takes the `D` from the page with its word: the title
+        // reads it, or no element does.
+        assert!(grid.takes(&page.glyphs)[0]);
+        let titled = table_title(&grid, &page, &[], true);
+        assert_eq!(
+            titled.map(|(t, _)| t).as_deref(),
+            Some("DECIMAL MILLIMETERS FRACTION")
+        );
+    }
+
+    #[test]
+    fn spaces_drawn_between_a_rows_labels_do_not_run_it_across() {
+        use crate::rule::{Orientation, Rule};
+        // A header row ruled open across (its verticals start under it),
+        // each label in its own column, the text drawing a space after
+        // each: the spaces have no ink, and the labels are the columns'.
+        let glyph = |x0: f64, y: f64, t: &str| {
+            let w = if t == " " {
+                2.5
+            } else {
+                5.0 * t.chars().count() as f64
+            };
+            Glyph {
+                text: t.into(),
+                bbox: (t != " ").then_some(BBox {
+                    x0,
+                    y0: y - 7.0,
+                    x1: x0 + w,
+                    y1: y,
+                }),
+                page: 0,
+                origin: (x0, y),
+                rotation_deg: 0.0,
+                font_size: 10.0,
+                weight: None,
+                italic: false,
+                advance: Some(w),
+                draw_index: 0,
+                ocr: None,
+            }
+        };
+        let mut glyphs = Vec::new();
+        for (x, t) in [
+            (105.0, "Quota"),
+            (135.0, "Measures"),
+            (210.0, "0-50%"),
+            (310.0, "51%-75%"),
+        ] {
+            glyphs.push(glyph(x, 10.0, t));
+            glyphs.push(glyph(x + 5.0 * t.chars().count() as f64, 10.0, " "));
+        }
+        for (r, row) in [["Target", "$300", "$150"], ["Licence", "8%", "10%"]]
+            .iter()
+            .enumerate()
+        {
+            for (c, t) in row.iter().enumerate() {
+                glyphs.push(glyph(105.0 + c as f64 * 100.0, 25.0 + r as f64 * 15.0, t));
+            }
+        }
+        for (i, g) in glyphs.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        let ys = [0.0, 15.0, 30.0, 45.0];
+        let xs = [100.0, 200.0, 300.0, 400.0];
+        let mut rules: Vec<Rule> = ys
+            .iter()
+            .map(|&y| Rule {
+                bbox: BBox {
+                    x0: 100.0,
+                    y0: y,
+                    x1: 400.0,
+                    y1: y + 0.5,
+                },
+                orientation: Orientation::Horizontal,
+                page: 0,
+            })
+            .collect();
+        rules.extend(xs.iter().map(|&x| Rule {
+            bbox: BBox {
+                x0: x,
+                y0: if x == 100.0 || x == 400.0 { 0.0 } else { 15.0 },
+                x1: x + 0.5,
+                y1: 45.0,
+            },
+            orientation: Orientation::Vertical,
+            page: 0,
+        }));
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 100.0,
+                y0: 0.0,
+                x1: 400.0,
+                y1: 45.0,
+            },
+            xs: xs.to_vec(),
+            ys: ys.to_vec(),
+        };
+        let page = crate::extract::Page {
+            index: 0,
+            glyphs,
+            images: Vec::new(),
+            rules,
+            fills: Vec::new(),
+            dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
+            width: 600.0,
+            height: 800.0,
+            rotation: 0,
+            ocr: None,
+        };
+        assert!(table_title(&grid, &page, &[], false).is_none());
     }
 
     #[test]
