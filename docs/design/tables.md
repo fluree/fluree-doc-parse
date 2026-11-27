@@ -99,6 +99,29 @@ Read page-wide, a grid takes in every rule on the page, and a logo's strokes
 at the page foot crossed none of a horizontals-only spec table's rows, so it
 was trimmed to its last two.
 
+A grid ends at the first blank row under its text: a rule below a table, such
+as a footer's separator, extends the grid past it, and the page's footer is no
+row of the table. A blank row the table rules as its own goes on, though:
+- the table has two columns or more;
+- every column edge is drawn down through the blank row and through the rows
+  with text either side of it;
+- the rows taken in under it hold their text as cells do, each glyph within
+  its row and no line run across a column edge closer than 0.4 em, about a
+  word space.
+
+Tables set such a row between groups of rows: a parameter table puts one
+before each instrument's settings, a SKU table between two sets of
+capacities. Ended there, the rows under it read as paragraphs, or as a table
+of their own headed by its first row. A chart's gridlines rule every band of
+its plot, and run on down past its legend, but the legend's words straddle
+them. A table has also begun over the blank row, two rows of it, and goes on
+under it in a row of two cells or more: one line of a chart's labels over its
+plot, or a column of legend values under it, is neither.
+
+The blank row is the ruling's spacing, not data, and is not emitted: the rows
+under it number on from the rows over it. A row a merged cell spans, its text
+read into the cell's first row, belongs to that cell and stays.
+
 A grid the trim runs down to the three lines a grid needs without finding a
 band any vertical crosses has only its rules to say where its rows are.
 Lines of text between two rules drawn over different stretches of the page,
