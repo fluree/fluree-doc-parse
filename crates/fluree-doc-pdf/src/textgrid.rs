@@ -644,6 +644,13 @@ pub fn has_vertical(rules: &[Rule], b: &BBox) -> bool {
 /// left to right. A stripe a few rows cross (a spanning label) is still a
 /// gutter; a column of currency signs belongs to the figures beside it.
 fn columns(lines: &[&Line], x0: f64, x1: f64) -> Vec<(f64, f64)> {
+    stripes(lines, x0, x1, false)
+}
+
+/// As [`columns`], or with `every`, every stripe any row inks, however few
+/// rows cross it: the ink [`columns`] leaves to the gutters, read where a
+/// header names it ([`with_named_stripes`]).
+fn stripes(lines: &[&Line], x0: f64, x1: f64, every: bool) -> Vec<(f64, f64)> {
     let used: Vec<&&Line> = lines.iter().filter(|l| l.chunks.len() >= 2).collect();
     let used: Vec<&&Line> = if used.is_empty() {
         lines.iter().collect()
@@ -669,7 +676,7 @@ fn columns(lines: &[&Line], x0: f64, x1: f64) -> Vec<(f64, f64)> {
             count[k] += usize::from(*m);
         }
     }
-    let threshold = used.len() / 8;
+    let threshold = if every { 0 } else { used.len() / 8 };
     let fs = used.iter().map(|l| l.fs).fold(0.0, f64::max).max(1.0);
     let min_gutter = ((fs * 0.3) / step).ceil() as usize;
     let mut cols: Vec<(f64, f64, usize)> = Vec::new();
@@ -703,7 +710,7 @@ fn columns(lines: &[&Line], x0: f64, x1: f64) -> Vec<(f64, f64)> {
         k = end + 1;
     }
     // A stripe only one row inks is no column.
-    cols.retain(|c| c.2 >= 2 || used.len() < 3);
+    cols.retain(|c| every || c.2 >= 2 || used.len() < 3);
     // Currency signs set at the column's left edge, apart from figures of
     // every width, are the next column's.
     let only_currency = |a: f64, b: f64| {
@@ -1012,6 +1019,74 @@ fn with_empty_columns(mut cols: Vec<(f64, f64)>, head: &[&Line]) -> Vec<(f64, f6
                 && !extra.iter().any(|&(a, b)| c.x1 > a && c.x0 < b)
             {
                 extra.push((c.x0, c.x1));
+            }
+        }
+    }
+    cols.extend(extra);
+    cols.sort_by(|a, b| a.0.total_cmp(&b.0));
+    cols
+}
+
+/// The columns a row or two fill under a label of their own. Ink so few
+/// rows set is left to the gutters ([`columns`]): a word set apart, a mark.
+/// But on a line of column labels, two others or more each over one
+/// column, a label clear of the rows' columns and over that ink alone
+/// heads it: a value the table gives one of its rows (`250` under `Mass of
+/// Sample (mg)`, the other samples' cells blank), or a verdict given once
+/// (`Criteria | Result` over `≥ 0.995 | Pass` on the last row).
+fn with_named_stripes(
+    mut cols: Vec<(f64, f64)>,
+    head: &[&Line],
+    body: &[&Line],
+    x0: f64,
+    x1: f64,
+) -> Vec<(f64, f64)> {
+    let lone: Vec<(f64, f64)> = stripes(body, x0, x1, true)
+        .into_iter()
+        .filter(|&(a, b)| !cols.iter().any(|&(p, q)| a < q && b > p))
+        .collect();
+    if lone.is_empty() {
+        return cols;
+    }
+    let mut extra: Vec<(f64, f64)> = Vec::new();
+    for l in head {
+        let singles = l
+            .chunks
+            .iter()
+            .filter(|c| covered(&cols, c).len() == 1)
+            .count();
+        if singles < 2 || !labels_only(l) {
+            continue;
+        }
+        for c in &l.chunks {
+            // Clear of the rows' columns: a label run on into one is that
+            // column's, or a label's wrapped line read as a row stands under
+            // it (`Timber edging 150x25` over `(4.8m)` and its column's
+            // figures).
+            let clear = cols.iter().all(|&(a, b)| c.x1 <= a || c.x0 >= b);
+            if !clear || !c.text.chars().any(char::is_alphabetic) {
+                continue;
+            }
+            if let [k] = covered(&lone, c)[..] {
+                // Not a phrase wrapped onto the line under it, a line's
+                // leading down (`Beauty store/` over `Fashion, Home &` in a
+                // column of text beside the table): the label of nothing.
+                let (a, b) = lone[k];
+                let top = body
+                    .iter()
+                    .filter_map(|n| {
+                        n.chunks
+                            .iter()
+                            .find(|d| d.x0 < b && d.x1 > a)
+                            .map(|d| (*n, d))
+                    })
+                    .min_by(|x, y| x.0.base.total_cmp(&y.0.base));
+                let wrapped = top.is_some_and(|(n, d)| {
+                    n.base - l.base <= n.fs.max(l.fs) * WRAP_LEADING && runs_on(c, d)
+                });
+                if !wrapped && !extra.contains(&lone[k]) {
+                    extra.push(lone[k]);
+                }
             }
         }
     }
@@ -2674,6 +2749,10 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             break;
         }
     }
+    let cols = {
+        let rows: Vec<&Line> = body.iter().filter(|l| !is_title(l)).copied().collect();
+        with_named_stripes(cols, &head, &rows, x0, x1)
+    };
     let mut cols = with_empty_columns(cols, &head);
     let parted: Vec<Line> = head
         .iter()
@@ -5098,6 +5177,99 @@ mod tests {
         assert_eq!(g.cols(), 6, "{texts:?}");
         let head = &texts[..lay.header_rows.max(1) * g.cols()];
         assert!(head.iter().any(|t| t == "Discount"), "{texts:?}");
+    }
+
+    #[test]
+    fn a_label_over_one_rows_value_heads_its_column() {
+        // The sample's mass, given on its row alone, the spiked samples'
+        // cells blank, and a verdict given once, on the last row: each under
+        // its own label, its own column, not run into the next. The stub's
+        // head is set on a line of its own (none here), so the mass's label
+        // stands beside no label of the stub's, and the verdict's at the
+        // table's edge.
+        let table = |labels: [&str; 4]| {
+            let mut gl = Vec::new();
+            for (t, x) in labels.iter().zip([130.0, 220.0, 310.0, 400.0]) {
+                gl.extend(set(t, x, 40.0));
+            }
+            for (i, row) in [
+                ["Sample", "250", "0", "100", ""],
+                ["80% Spike", "", "2", "50", ""],
+                ["100% Spike", "", "1", "20", ""],
+                ["120% Spike", "", "3", "50", "Pass"],
+            ]
+            .iter()
+            .enumerate()
+            {
+                let y = 56.0 + 14.0 * i as f64;
+                for (t, x) in row.iter().zip([20.0, 145.0, 240.0, 325.0, 405.0]) {
+                    gl.extend(set(t, x, y));
+                }
+            }
+            let region = BBox {
+                x0: 10.0,
+                y0: 30.0,
+                x1: 460.0,
+                y1: 110.0,
+            };
+            let grids = read(&lines(&gl), &[], region, 0);
+            assert_eq!(grids.len(), 1, "{grids:?}");
+            let g = &grids[0];
+            (g.cols(), g.cell_texts(&gl))
+        };
+        let (cols, texts) = table(["Mass (mg)", "Stock (mL)", "Volume (mL)", "Result"]);
+        assert_eq!(cols, 5, "{texts:?}");
+        let sample = texts
+            .iter()
+            .position(|t| t == "Sample")
+            .expect("its own cell");
+        assert_eq!(texts[sample + 1], "250", "{texts:?}");
+        assert_eq!(texts.last().map(String::as_str), Some("Pass"), "{texts:?}");
+        // Under no label, ink one row sets is no column.
+        let (cols, texts) = table(["", "Stock (mL)", "Volume (mL)", ""]);
+        assert_eq!(cols, 3, "{texts:?}");
+    }
+
+    #[test]
+    fn a_phrase_wrapped_over_one_rows_ink_heads_no_column() {
+        // A column of text beside the table, its phrase wrapped a line's
+        // leading down from the header's line onto the first row's:
+        // `Beauty store/` over `Fashion, Home &` labels nothing.
+        let mut gl = Vec::new();
+        for (t, x) in [("Beauty store/", 20.0), ("2025", 300.0), ("2024", 360.0)] {
+            gl.extend(set(t, x, 40.0));
+        }
+        for (t, x) in [
+            ("Fashion, Home &", 20.0),
+            ("Store sales", 160.0),
+            ("2,806.1", 300.0),
+            ("2,777.3", 360.0),
+        ] {
+            gl.extend(set(t, x, 51.0));
+        }
+        for (i, (label, a, b)) in [
+            ("Consignment", "(16.9)", "(18.6)"),
+            ("Store revenue", "2,789.2", "2,758.7"),
+            ("Online sales", "1,429.2", "1,314.1"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 65.0 + 14.0 * i as f64;
+            gl.extend(set(label, 160.0, y));
+            gl.extend(set(a, 300.0, y));
+            gl.extend(set(b, 360.0, y));
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 30.0,
+            x1: 420.0,
+            y1: 110.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert_eq!(grids[0].cols(), 3, "{texts:?}");
     }
 
     #[test]
