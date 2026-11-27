@@ -10156,6 +10156,26 @@ fn aligned_runs(rows: &[Vec<&crate::glyph::Glyph>], cells: &[Vec<f64>], page: us
                 // wrapped line is read into the row above, and the rows'
                 // pitch stays the rows' own.
                 j += 1;
+            } else if j + 1 < rows.len()
+                && run_rows.len() >= 2
+                && run_rows
+                    .iter()
+                    .zip(&run_cells)
+                    .all(|(r, c)| field_row(r, c))
+                && wraps_a_value(
+                    &rows[j + 1],
+                    &run_rows[run_rows.len() - 1],
+                    &run_cells[run_cells.len() - 1],
+                )
+                && within_pitch(&run_rows, &rows[j + 1])
+            {
+                // The grid's last value wrapped, under its last row: the
+                // grid's foot stands under the row's own, so the line is read
+                // into it. Its rows' tops, and so their pitch, stay as they
+                // were.
+                let wrapped = rows[j + 1].clone();
+                run_rows.last_mut().unwrap().extend(wrapped);
+                j += 1;
             } else {
                 break;
             }
@@ -10168,6 +10188,27 @@ fn aligned_runs(rows: &[Vec<&crate::glyph::Glyph>], cells: &[Vec<f64>], page: us
         i = j + 1;
     }
     out
+}
+
+/// Whether `line` stands under the run's last row no farther than the run's
+/// rows stand from each other: a wrapped value's next line, not the next
+/// block's first.
+fn within_pitch(rows: &[Vec<&crate::glyph::Glyph>], line: &[&crate::glyph::Glyph]) -> bool {
+    let base = |r: &[&crate::glyph::Glyph]| r.first().map(|g| g.origin.1);
+    let mut pitches: Vec<f64> = rows
+        .windows(2)
+        .filter_map(|w| Some(base(&w[1])? - base(&w[0])?))
+        .filter(|p| *p > 0.0)
+        .collect();
+    if pitches.is_empty() {
+        return false;
+    }
+    pitches.sort_by(f64::total_cmp);
+    let pitch = pitches[pitches.len() / 2];
+    match (base(line), rows.last().and_then(|r| base(r))) {
+        (Some(y), Some(last)) => y > last && y - last <= pitch * 1.1,
+        _ => false,
+    }
 }
 
 /// Whether a row is a field grid's: label and value pairs across it, each
