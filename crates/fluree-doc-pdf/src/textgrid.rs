@@ -3176,6 +3176,45 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             continue;
         }
         if label_only(l) {
+            // A row's label wrapped round its values, the values set level
+            // between its two lines: `Eq. Conc. Range` over `in Sample (%)`,
+            // the range's figures between them. Two lines of the label
+            // column a line's leading apart, and between them a line of
+            // values with no label of its own.
+            if let (Some(&n), Some(&m)) = (body.get(i + 1), body.get(i + 2)) {
+                let in_labels = |x: &Line| x.chunks.iter().all(|c| column_of(&cols, c) == Some(0));
+                // A label's two lines, not two of a paragraph's: no line of
+                // the label column runs on into them from above, a line's
+                // leading up, nor on from them below (prose set beside a
+                // chart's figures).
+                let leading = |a: &Line, b: &Line| b.base - a.base <= a.fs.max(b.fs) * WRAP_LEADING;
+                let above = i
+                    .checked_sub(1)
+                    .and_then(|j| body.get(j))
+                    .is_some_and(|p| label_only(p) && leading(p, l));
+                let below = body
+                    .get(i + 3)
+                    .is_some_and(|q| label_only(q) && leading(m, q));
+                let values = n
+                    .chunks
+                    .iter()
+                    .all(|c| column_of(&cols, c).is_some_and(|k| k > 0));
+                if !above
+                    && !below
+                    && in_labels(l)
+                    && in_labels(m)
+                    && label_only(m)
+                    && values
+                    && !n.chunks.is_empty()
+                    && l.base < n.base
+                    && n.base < m.base
+                    && m.base - l.base <= l.fs.max(m.fs) * WRAP_LEADING
+                {
+                    body_rows.push((vec![l, n, m], false));
+                    i += 3;
+                    continue;
+                }
+            }
             // Wrapped onto the next line, which carries the row's values.
             let next = body.get(i + 1).copied();
             let forward = next.is_some_and(|n| tight(l, n) && continues(l, n));
@@ -4838,6 +4877,110 @@ mod tests {
             "{:?}",
             lay.downs
         );
+    }
+
+    #[test]
+    fn a_label_wrapped_round_its_values_is_one_row() {
+        // The first row's label on two lines, its figures set level between
+        // them: one row, not a section over a row.
+        let mut gl = Vec::new();
+        for (t, x) in [("Oxy.", 160.0), ("Octo.", 220.0), ("Avo.", 280.0)] {
+            gl.extend(set(t, x, 40.0));
+        }
+        gl.extend(set("Conc. Range", 20.0, 56.0));
+        for (t, x) in [
+            ("0.3 - 7.5", 160.0),
+            ("0.8 - 20", 220.0),
+            ("0.3 - 7.5", 280.0),
+        ] {
+            gl.extend(set(t, x, 61.0));
+        }
+        gl.extend(set("in Sample (%)", 20.0, 67.0));
+        for (i, (label, a, b, c)) in [
+            ("Slope", "55.4", "45.6", "31.0"),
+            ("y-intercept", "33.8", "36.8", "-15.1"),
+            ("R2", "0.999", "0.999", "0.999"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 84.0 + 18.0 * i as f64;
+            for (t, x) in [(*label, 20.0), (*a, 160.0), (*b, 220.0), (*c, 280.0)] {
+                gl.extend(set(t, x, y));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 30.0,
+            x1: 340.0,
+            y1: 130.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let g = &grids[0];
+        let lay = g.layout.as_deref().expect("read from its text");
+        let texts = lay.texts(&gl, g.cols());
+        let rows: Vec<&[String]> = texts.chunks(g.cols()).collect();
+        assert!(lay.sub_headers.is_empty(), "{rows:?}");
+        let first = rows
+            .iter()
+            .find(|r| r[1] == "0.3 - 7.5")
+            .expect("the range's row");
+        assert_eq!(first[0], "Conc. Range in Sample (%)", "{rows:?}");
+    }
+
+    #[test]
+    fn a_paragraph_beside_figures_is_no_label_wrapped_round_them() {
+        // Prose set beside a chart's figures, its lines a leading apart, a
+        // line of figures level between two of them: no row's label.
+        let mut gl = Vec::new();
+        for (t, x) in [("Rate", 200.0), ("Share", 260.0)] {
+            gl.extend(set(t, x, 40.0));
+        }
+        for (t, x) in [("2019", 20.0), ("0.9", 200.0), ("92.0", 260.0)] {
+            gl.extend(set(t, x, 52.0));
+        }
+        let prose = [
+            "The largest fall was in the",
+            "adjusted rate of attendance",
+            "of children aged six to ten",
+            "years, which went down from",
+            "95.6 percent to 90.8 percent",
+        ];
+        for (i, t) in prose.iter().enumerate() {
+            gl.extend(set(t, 20.0, 66.0 + 12.0 * i as f64));
+        }
+        // Level between the second and third lines.
+        for (t, x) in [("0.7", 200.0), ("91.9", 260.0)] {
+            gl.extend(set(t, x, 84.0));
+        }
+        for (i, (a, b)) in [("0.5", "90.8"), ("1.0", "87.4"), ("0.6", "89.5")]
+            .iter()
+            .enumerate()
+        {
+            let y = 132.0 + 14.0 * i as f64;
+            gl.extend(set("2023", 20.0, y));
+            gl.extend(set(a, 200.0, y));
+            gl.extend(set(b, 260.0, y));
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 30.0,
+            x1: 320.0,
+            y1: 180.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert!(!grids.is_empty());
+        for g in grids {
+            let lay = g.layout.as_deref().expect("read from its text");
+            let texts = lay.texts(&gl, g.cols());
+            assert!(
+                !texts
+                    .iter()
+                    .any(|t| t.contains("attendance") && t.contains("aged")),
+                "{texts:?}"
+            );
+        }
     }
 
     #[test]
