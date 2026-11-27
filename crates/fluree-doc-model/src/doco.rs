@@ -546,16 +546,21 @@ fn column_headers(
         return names;
     }
     let mut paths: Vec<Vec<&str>> = vec![Vec::new(); ncols];
+    // The labels on each column's path, looked up rather than searched for
+    // along it: a header of thousands of rows made that the square of
+    // their number in each column.
+    let mut on_path: Vec<std::collections::HashSet<&str>> =
+        vec![std::collections::HashSet::new(); ncols];
     for (r, row) in rows.iter().enumerate().take(n_header) {
         // The cell holding the label over column `c`, carried along the
         // row rather than walked back to from each column.
         let mut owner = 0;
-        for (c, path) in paths.iter_mut().enumerate() {
+        for (c, (path, seen)) in paths.iter_mut().zip(&mut on_path).enumerate() {
             if c == 0 || !continues_left(r, c) {
                 owner = c;
             }
             let label = row.get(owner).map(|t| t.trim()).unwrap_or("");
-            if !label.is_empty() && !path.contains(&label) {
+            if !label.is_empty() && seen.insert(label) {
                 path.push(label);
             }
         }
@@ -4018,6 +4023,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_header_of_many_rows_is_named_in_linear_time() {
+        // Each row's label was looked for along the column's path so far.
+        let rows =
+            |n: usize| -> Vec<Vec<String>> { (0..n).map(|i| vec![format!("L{i}")]).collect() };
+        assert_eq!(column_headers(&rows(3), 3, None), ["L0 / L1 / L2"]);
+        let mut repeated = rows(2);
+        repeated.push(vec!["L0".into()]);
+        assert_eq!(column_headers(&repeated, 3, None), ["L0 / L1"]);
+        crate::scaling::assert_linear("a header's rows", 4_000, rows, |rows| {
+            std::hint::black_box(column_headers(rows, rows.len(), None));
+        });
     }
 
     #[test]
