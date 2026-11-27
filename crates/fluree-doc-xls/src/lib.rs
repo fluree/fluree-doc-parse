@@ -52,6 +52,10 @@ pub const MAX_CELLS: u64 = 1 << 22;
 /// that names it: 64 million, at most 192 MiB of UTF-8.
 pub const MAX_TEXT_CHARS: u64 = 64 << 20;
 
+/// The most sheet records a workbook's globals may list: each is a sheet
+/// calamine reads, and a page laid out, however many name one sheet.
+pub const MAX_SHEETS: usize = 1 << 16;
+
 #[derive(Debug)]
 pub enum XlsError {
     /// Not a compound file, or one whose structure is broken.

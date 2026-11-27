@@ -472,8 +472,10 @@ chain that loops or runs past the file; its workbook stream at most
 256 MiB; and its records walked as calamine would walk them, each one
 calamine reads checked against what calamine indexes in it. A workbook
 whose cells, sheets' grids or merged ranges pass about four million in all
-(a sheet named twice counting twice), or whose cells would copy more than
-64 million characters of text, fails as too large; one whose records are
+(a sheet named twice counting twice), whose cells would copy more than
+64 million characters of text, which lists more than 65,536 sheet records,
+or whose sheets' walks cover more than twice the stream (sheets laid inside
+each other, each walked to the end), fails as too large; one whose records are
 cut short, or whose sheet offsets point at no sheet, fails as malformed.
 calamine then reads a compound file written for it, holding a workbook
 stream of only the records it needs, each sheet once and its formulas
