@@ -1160,10 +1160,11 @@ fn model_reading(dir: &Path, blocks: &[(&str, &str)]) -> String {
 }
 
 #[test]
-fn a_page_near_blank_read_whole_keeps_a_models_headings_where_ocr_judges_them_by_position() {
+fn a_page_near_blank_read_whole_keeps_its_headings_by_ocr_and_by_a_model() {
     // A screenshot under a quarter of the page, with a caption that repeats
-    // the screen's name. OCR demotes the screen's title, whose words land
-    // in the picture; a model's reading has no positions, and keeps it.
+    // the screen's name. Read whole, the page's words are the page's text
+    // whoever reads them: OCR keeps the screen's title as a heading, as a
+    // model's reading does.
     let dir = scratch(
         "near-blank-screen",
         &near_blank("Customer Portal", "490 0 0 230 60 482"),
@@ -1193,7 +1194,10 @@ fn a_page_near_blank_read_whole_keeps_a_models_headings_where_ocr_judges_them_by
     // The screen's title, above the screen's prose (the page's caption
     // comes after it).
     let (kind, _) = element_with(&ocr, "Portal");
-    assert_eq!(kind, "\"doco:Paragraph\"", "{ocr}");
+    assert!(
+        kind == "\"doco:Title\"" || kind == "\"doco:SectionTitle\"",
+        "{ocr}"
+    );
     assert!(
         ocr.find("Portal").unwrap() < ocr.find("Reference").unwrap(),
         "{ocr}"

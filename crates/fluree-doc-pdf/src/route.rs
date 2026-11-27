@@ -228,9 +228,8 @@ const ABUTTING_GAP: f64 = 2.0;
 /// Whether a raster region of `page` (a box of its images, in the page's
 /// reading frame) is a screen pasted into it rather than the page's
 /// content: the picture it is part of covers under half the page
-/// ([`IMAGE_DOMINANT_COVERAGE`]). A heading read in a pasted region is the
-/// screen's, not the document's, whoever reads it: OCR
-/// ([`crate::ocr::Injected::pasted`]) or a model.
+/// ([`IMAGE_DOMINANT_COVERAGE`]). A heading a model reads in a pasted
+/// region is the screen's, not the document's.
 ///
 /// The picture is the region and every image the text layer leaves void
 /// that touches it, as the router judges a page image-dominated on the

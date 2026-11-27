@@ -362,9 +362,7 @@ build them.
   - `fluree_doc_docx::OcrParse::unread` is a list of
     `fluree_doc_model::UnreadImage`, the graph's own entries, where it held
     `(Picture, Unread)` pairs, and `OcrParse` gains `errors`.
-    `fluree_doc_image::ImageElements` gains `not_texty` and `noise`, and
-    `ocr::Injected` gains `pasted`, the regions it may read that cover less
-    of their page than `route::IMAGE_DOMINANT_COVERAGE`, half.
+    `fluree_doc_image::ImageElements` gains `not_texty` and `noise`.
 
 ### OCR readings and their confidence
 
