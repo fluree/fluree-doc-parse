@@ -482,21 +482,33 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
     let detected = !boxes_ink(pairs.into_iter());
     let sizes: Vec<(usize, f64, f64)> = sizes.into_iter().flatten().collect();
     let document_median = weighted_median(sizes.iter().map(|&(_, s, w)| (s, w)).collect());
+    // Each page's median once, from one pass over the sizes: asked for each
+    // reading, filtering every size for its page, a long scan with a reading
+    // or more on every page would cost pages times words.
+    let mut own: std::collections::HashMap<usize, Vec<(f64, f64)>> =
+        std::collections::HashMap::new();
+    if detected {
+        for &(p, s, w) in &sizes {
+            own.entry(p).or_default().push((s, w));
+        }
+    }
+    let page_median: std::collections::HashMap<usize, Option<f64>> = own
+        .into_iter()
+        .map(|(p, own)| {
+            let median = if own.len() >= PAGE_MEDIAN_MIN_LINES {
+                weighted_median(own)
+            } else {
+                document_median
+            };
+            (p, median)
+        })
+        .collect();
     let page_boxes = |pi: usize| -> Boxes {
         if !detected {
             return Boxes::Ink;
         }
-        let own: Vec<(f64, f64)> = sizes
-            .iter()
-            .filter(|&&(p, _, _)| p == pi)
-            .map(|&(_, s, w)| (s, w))
-            .collect();
         Boxes::Detected {
-            median: if own.len() >= PAGE_MEDIAN_MIN_LINES {
-                weighted_median(own)
-            } else {
-                document_median
-            },
+            median: page_median.get(&pi).copied().unwrap_or(document_median),
         }
     };
     let mut out: Vec<Option<Injected>> = (0..readings.len()).map(|_| None).collect();
@@ -2681,6 +2693,11 @@ pub fn readings(
     injected: &[Injected],
     elements: &[fluree_doc_model::Element],
 ) -> Vec<fluree_doc_model::OcrReading> {
+    // A document read with no OCR has nothing to list: no map of its
+    // elements is built for it.
+    if injected.iter().all(|r| r.refused.is_some()) {
+        return Vec::new();
+    }
     let round = |c: f64| (c * 1e4).round() / 1e4;
     // Per page once, not the whole document once per reading: a long scan
     // has a reading or more on every page.
