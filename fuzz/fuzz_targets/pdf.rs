@@ -17,7 +17,7 @@ fuzz_target!(|data: &[u8]| {
         let outline = fluree_doc_pdf::outline::extract(&raw);
         let _ = fluree_doc_pdf::info::read(&raw);
         let mut budget = fluree_doc_model::budget::Budget::default();
-        if let Ok(notes) = fluree_doc_pdf::annot::annotations(&raw, &mut budget) {
+        if let Ok(notes) = fluree_doc_pdf::annot::annotations(&raw, raw.pages().len(), &mut budget) {
             let _ = fluree_doc_pdf::annot::elements(&notes);
         }
         let _ = fluree_doc_pdf::annot::embedded_files(&raw);

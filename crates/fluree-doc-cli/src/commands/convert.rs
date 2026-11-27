@@ -2537,10 +2537,10 @@ fn convert_bytes(
         &fluree_doc_pdf::link::extract(&raw),
         &doc.pages,
     );
-    // The notes a reader left on the pages, after each page's own text,
-    // within what one document may make.
+    // The notes a reader left on the pages read, after each page's own
+    // text, within what one document may make.
     let mut budget = fluree_doc_model::budget::Budget::default();
-    let annotations = fluree_doc_pdf::annot::annotations(&raw, &mut budget)
+    let annotations = fluree_doc_pdf::annot::annotations(&raw, doc.pages.len(), &mut budget)
         .map_err(|e| format!("PDF too large: its notes, {}", common::refused(&e)))?;
     fluree_doc_pdf::annot::place(
         &mut a.elements,

@@ -332,6 +332,12 @@ fn render_and_forms_say_which_bound_a_pdf_is_past() {
 
 /// A PDF of `n` pages, each saying its number.
 fn pages_pdf(n: usize) -> Vec<u8> {
+    pages_pdf_with(n, 0, |_| String::new())
+}
+
+/// A PDF of `n` pages, each saying its number, then `lines` lines of
+/// words, with `extra(i)` written in the dictionary of page `i`.
+fn pages_pdf_with(n: usize, lines: usize, extra: impl Fn(usize) -> String) -> Vec<u8> {
     let font = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
     let mut objs = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
@@ -345,11 +351,18 @@ fn pages_pdf(n: usize) -> Vec<u8> {
         font.to_string(),
     ];
     for i in 0..n {
-        let text = format!("BT /F1 12 Tf 72 700 Td (Page number {}) Tj ET", i + 1);
+        let words: String = (0..lines)
+            .map(|l| format!(" 0 -14 Td (Line {l} of page {}, in words) Tj", i + 1))
+            .collect();
+        let text = format!(
+            "BT /F1 12 Tf 72 740 Td (Page number {}) Tj{words} ET",
+            i + 1
+        );
         objs.push(format!(
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
-             /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>",
-            5 + 2 * i
+             /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R {} >>",
+            5 + 2 * i,
+            extra(i)
         ));
         objs.push(format!(
             "<< /Length {} >>\nstream\n{text}\nendstream",
@@ -449,4 +462,30 @@ fn a_page_tree_nested_past_the_parsers_stack_is_refused_not_a_crash() {
         "{}",
         stderr(&o)
     );
+}
+
+#[test]
+fn a_note_on_a_page_past_the_page_limit_is_not_read() {
+    let dir = scratch("notes");
+    let pdf = dir.join("noted.pdf");
+    let note = |i: usize| {
+        format!(
+            "/Annots [<< /Type /Annot /Subtype /Text /Rect [100 700 120 720] \
+             /Contents (A note on page {}) >>]",
+            i + 1
+        )
+    };
+    std::fs::write(&pdf, pages_pdf_with(3, 0, note)).unwrap();
+    let pdf = pdf.to_str().unwrap();
+    let o = fdoc(&dir, &["convert", pdf, "--no-escalate", "-q"], &[]);
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("A note on page 3"), "{out}");
+    let o = fdoc(
+        &dir,
+        &["convert", pdf, "--no-escalate", "-q", "--max-pages", "2"],
+        &[],
+    );
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("A note on page 2"), "{out}");
+    assert!(!out.contains("A note on page 3"), "{out}");
 }
