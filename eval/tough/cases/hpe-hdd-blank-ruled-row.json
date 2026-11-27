@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "hpe-hdd-quickspecs.pdf",
+    "url": "https://www.hpe.com/psnow/doc/a00001287enw.pdf",
+    "sha256": "59838ba8f9e0431c4a6cbd71ce6d205de979ca02df1431ce3b8ec2ee91fe051c",
+    "about": "HPE hard disk drive QuickSpecs. The Models table on page 5 sets a blank ruled row after its 12TB row, inside the table."
+  },
+  "notes": [
+    "2026-11-27 (#484): the table ended at the blank row; the 16-26 TB rows and the SATA 6G block read as figure text and a run-on paragraph."
+  ],
+  "checks": [
+    {
+      "id": "capacity-under-the-blank-row",
+      "found": "2026-11-27",
+      "issue": "#484: `16TB | P23608-B21 He`, under the blank row, was figure text.",
+      "cell": {
+        "value": "P23608-B21 He",
+        "row": "Business Critical (7.2K rpm) / SAS 12G"
+      }
+    },
+    {
+      "id": "sata-block-in-table",
+      "found": "2026-11-27",
+      "issue": "#484: the SATA 6G block's SKUs were figure text.",
+      "cell": {
+        "value": "861686-B21",
+        "column": "HDD Carrier / Low Profile SKU"
+      }
+    },
+    {
+      "id": "no-run-on-capacities",
+      "found": "2026-11-27",
+      "issue": "#484: the capacities under the blank row ran on as one paragraph.",
+      "no_text": "26TB LFF 512n 1TB"
+    }
+  ]
+}

@@ -99,6 +99,45 @@ Read page-wide, a grid takes in every rule on the page, and a logo's strokes
 at the page foot crossed none of a horizontals-only spec table's rows, so it
 was trimmed to its last two.
 
+A grid ends at the first blank row under its text: a rule below a table, such
+as a footer's separator, extends the grid past it, and the page's footer is no
+row of the table. A blank row the table rules as its own goes on, though:
+- the table has two columns or more;
+- every column edge is drawn down through the blank row and through the rows
+  with text either side of it;
+- the rows taken in under it hold their text as cells do, each glyph within
+  its row and no line run across a column edge closer than 0.4 em, about a
+  word space.
+
+Tables set such a row between groups of rows: a parameter table puts one
+before each instrument's settings, a SKU table between two sets of
+capacities. Ended there, the rows under it read as paragraphs, or as a table
+of their own headed by its first row. A chart's gridlines rule every band of
+its plot, and run on down past its legend, but the legend's words straddle
+them. A table has also begun over the blank row, two rows of it, and goes on
+under it in a row of two cells or more: one line of a chart's labels over its
+plot, or a column of legend values under it, is neither.
+
+The blank row is the ruling's spacing, not data, and is not emitted: the rows
+under it number on from the rows over it. A row a merged cell spans, its text
+read into the cell's first row, belongs to that cell and stays.
+
+A table's last row printed over a page break, alone at the head of the next
+page inside the table's ruling (`Needle Wash | Methanol`), is a ruled row on
+its own, and one row stands alone as no table. It is the table's row,
+continuing it, when:
+- the page before ends on a ruled table, two lines of text or fewer under it
+  (a folio, a running line);
+- the page opens on the row, two lines or fewer over it;
+- it is ruled as the table is: rules over and under it across the table's
+  width, its sides drawn at the table's, and every column rule in it at one
+  of the table's columns;
+- it is one row, no taller than three of the table's rows, with text in two
+  cells or more.
+
+It is read in the table's columns. Two rows or more under the break are a
+table of their own, read as any is, and the continued table joins them.
+
 A grid the trim runs down to the three lines a grid needs without finding a
 band any vertical crosses has only its rules to say where its rows are.
 Lines of text between two rules drawn over different stretches of the page,
@@ -800,6 +839,25 @@ which is worse than a header read as one more row.
 Labels set apart within their columns, each under one ruled cell across the
 table (`Area | Competence`), are the columns' own. So is a group label over
 some of the columns (`Dates` over `Start | Next review`).
+
+A band that is the first of the table's section bands is no title. A table
+that groups its rows under bands, each one label across the row, opens on its
+first band: `Carrier Gas Settings (helium)` over `Injection parameters` and
+`GC parameters` in a parameter table, or `Gastrointestinal disorders` over
+`Eye disorders` in an adverse-reactions table continued from the page
+before. Read out as a title, the band named none of the rows under it. The
+first row stays in the table, as a band labelling the rows under it, with no
+header row, when:
+
+- the row under it does not head the table, by the tests above;
+- a later row of the table is a band, as the sub-headers below are found;
+- that band is set as the first row is: in one size (to 5%) and one weight,
+  shaded or bare alike, and with the table's outer edges drawn through both
+  or through neither.
+
+A title set apart from the bands, larger, bold over plain bands, or shaded
+over bare ones (a BMC table's shaded first row over its italic bands), stays
+a title. So does one over a header.
 
 A table read from its text takes a title band the same way, under stricter
 conditions:

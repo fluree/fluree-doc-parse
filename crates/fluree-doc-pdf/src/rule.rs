@@ -40,7 +40,7 @@ pub enum Orientation {
     Vertical,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rule {
     pub bbox: BBox,
     pub orientation: Orientation,

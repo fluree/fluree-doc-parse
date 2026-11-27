@@ -1,0 +1,42 @@
+{
+  "document": {
+    "file": "odl-bench-01030000000122.pdf",
+    "url": "https://raw.githubusercontent.com/opendataloader-project/opendataloader-bench/main/pdfs/01030000000122.pdf",
+    "sha256": "770c9434a3530bfb67ef32510b63e1da347dfd6c51e5db9e0b13e90c8b287895",
+    "ocr_words": "../fixtures/ocr-words/odl-bench-01030000000122",
+    "about": "opendataloader-bench 01030000000122: a biology lab's restriction-digest table set as a picture, ruled in black: seven columns under a header three lines deep, and each tube's 10 µL in a column of its own, the other two left empty."
+  },
+  "notes": [
+    "2026-11-26: as viscosity-table-set-as-picture. The rows' sparse cells place no column by alignment; the drawn rules do. The stored reading is the built-in engine's (PP-OCRv6 small) of the picture's crop, with the rules drawn in its pixels: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`."
+  ],
+  "checks": [
+    {
+      "id": "seven-columns",
+      "found": "2026-11-26",
+      "issue": "The table set as a picture read as paragraphs.",
+      "columns": {
+        "with": "EA or EB",
+        "count": 7
+      }
+    },
+    {
+      "id": "sparse-cell-in-its-column",
+      "found": "2026-11-26",
+      "issue": "As above; by alignment, the three tubes' 10 µL fell into one column.",
+      "row": {
+        "Tube": "S2",
+        "Suspect 2 DNA": "10 μL",
+        "H2O": "2 μL"
+      }
+    },
+    {
+      "id": "header-read-whole",
+      "found": "2026-11-26",
+      "issue": "As above; the header's three lines split its cells.",
+      "cell": {
+        "value": "3 μL",
+        "column": "BamHI-HindIII restriction enzyme mixture"
+      }
+    }
+  ]
+}
