@@ -45,8 +45,8 @@ document, and where the file declares its structure the set is nearly empty:
 | a magazine with none | 0 | 33 | 30 |
 
 The same fact is in [`json`](json.md) and [`doco`](doco.md) as
-`evidence` — `outline`, `numbering` and `title` are declared, `font-size` and
-`bold` are inferred.
+`evidence` — `outline` and `numbering` are declared, `font-size` and `bold`
+are inferred.
 
 ## Links
 
@@ -101,6 +101,7 @@ lossy in a specific way worth knowing:
 | DoCO | tag | what is lost |
 |---|---|---|
 | `doco:Title` | `<h1>` | that it is the document's title rather than a top-level heading |
+| `doco:Subtitle` | `<p>` | that it is the title's subtitle |
 | `doco:SectionTitle` | `<h1>`–`<h6>` | nothing |
 | `doco:Paragraph` | `<p>` | nothing |
 | a [transcript](../inputs/transcripts.md) turn | `<p data-speaker="…" data-start-ms="…" data-end-ms="…">`, the label in `<b>` | nothing |

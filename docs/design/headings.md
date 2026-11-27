@@ -737,7 +737,27 @@ directly above the title with no text between them, is not a section of its
 own either. As a heading it ranked below the title, so it opened a deeper
 section that closed at the title with nothing in it. It is read as text,
 where the page sets it. Journal banners (`Open Access`, `RESEARCH
-ARTICLE`) are kickers too.
+ARTICLE`) are kickers too. Its paragraph's evidence is `kicker` where the
+line under it is the document's `doco:Title`. Over a line in doubt, which
+stays a heading, it is a paragraph like any other.
+
+Under a title that is sure, the line directly after it may be its subtitle, a
+`doco:Subtitle` with evidence `subtitle`: `July 2026` under `Monetary Policy
+Report`. It is a heading by its size alone until the title is settled, and is
+a subtitle when:
+
+- it is on the title's page, set close under the title (within the
+  title's size) and across it;
+- it is a step smaller than the title (95% of its size or less) and in one
+  or two lines;
+- it has no number and is no section's, division's or carried-on name, and
+  no lead-in;
+- no other heading of the document is set like it: the same weight and a
+  size within 5%. A line set as the sections are opens one (`Overview` set
+  as every section's heading under a report's title).
+
+A subtitle opens no section. Read as a heading, it opened one holding the
+front matter or nothing.
 
 Reading order is not the page's order of size, so the first blocks can miss
 the title:

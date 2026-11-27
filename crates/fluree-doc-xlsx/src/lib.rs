@@ -4158,6 +4158,7 @@ mod tests {
                         conf: Some(0.9),
                         ink: None,
                     }],
+                    rules: Vec::new(),
                 })
             }
         }

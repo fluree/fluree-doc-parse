@@ -458,28 +458,8 @@ holds is one hop:
   "po:contains": [ "…-element-3", "…-element-4", "…-table-5" ] }
 ```
 
-A document's own title — Word's Title style, a deck's title slide, a PDF's
-title read off its first page — is a `doco:Title`, and the document node's
-header in the same way:
-
-```json
-{ "@type": "foaf:Document",
-  "po:containsAsHeader": "…-element-2",
-  "po:contains": [ "…-element-1", "…-element-2" ] }
-
-{ "@id": "…-element-2", "@type": "doco:Title", "nif:isString": "Annual Report" }
-```
-
-It opens no section: what follows it up to the first heading is the body's,
-and the sections start at level 1. A document has one title, so a second
-reads as a top-level heading. A PDF's title is read off its first page, and
-is a `doco:Title` only where it is sure. Its `doc:evidence` says how: the
-file's own title names it (`metadata`), a bookmark does (`outline`), or its
-type sets it apart and nothing doubts it (`type`). A line in doubt (a date, a
-section's name or number, a company's name, a journal's mark) stays a
-level-1 `doco:SectionTitle`, and the document has no `doco:Title`: no title is
-better than a wrong one. Its `dcterms:title` stays what the file's
-information dictionary says.
+A document's own title is the document node's header in the same way: see
+[the title](#the-title-its-subtitle-and-its-kickers).
 
 `po:contains` is a set, as JSON-LD arrays are. Reading order is
 `nif:beginIndex`, which every node holding text carries; DoCO's own
@@ -490,6 +470,95 @@ Every node of a document shares one counter in emission order, so IRIs are
 `{base}-section-{n}`, `{base}-element-{n}`, `{base}-table-{n}` and so on, with
 `n` never reused. See [IRIs and re-extraction](#iris-and-re-extraction) for
 the base.
+
+## The title, its subtitle and its kickers
+
+A document's own title is a `doco:Title`, held as the document node's
+header by `po:containsAsHeader`, as a section's heading is held by its
+section. Its kicker and subtitle are in the body, on either side of it in
+reading order. From HSE's `Health and safety at quarries`:
+
+```json
+{ "@id": "…-element-0", "@type": "foaf:Document",
+  "po:containsAsHeader": "…-element-3",
+  "po:contains": [ "…-element-1", "…-element-3" ] }
+{ "@id": "…-element-1", "@type": "doco:BodyMatter",
+  "po:contains": [ "…-element-2", "…-element-4", "…-section-5", … ] }
+
+{ "@id": "…-element-2", "@type": "doco:Paragraph", "doc:evidence": "kicker",
+  "nif:beginIndex": 0, "nif:isString": "Health and Safety Executive" }
+{ "@id": "…-element-3", "@type": "doco:Title", "doc:evidence": "metadata",
+  "nif:beginIndex": 29, "nif:isString": "Health and safety at quarries" }
+{ "@id": "…-element-4", "@type": "doco:Subtitle", "doc:evidence": "subtitle",
+  "nif:beginIndex": 60, "nif:isString": "Quarries Regulations 1999" }
+```
+
+**Finding the title.** Follow the document node's `po:containsAsHeader`. A
+document has one title at most: a second `doco:Title` in the element list is
+emitted as a level-1 heading. The title opens no section. What follows it up
+to the first heading is the body's, and the sections start at level 1.
+
+**Where it comes from.** Its `doc:evidence` says how it was decided:
+
+| source | the title | `doc:evidence` |
+|---|---|---|
+| Word | the paragraph in the Title style | `docx` |
+| PowerPoint | the title on the deck's title slide | `pptx` |
+| PDF | the first page's title, where it is sure | `metadata`, `outline` or `type` |
+
+A PDF states no title of its own in its text, so its title is read off the
+first page, and is a `doco:Title` only where it is sure:
+
+- `metadata`: the file's own title (`/Title`) names the line.
+- `outline`: a bookmark at the outline's first depth names it.
+- `type`: its type sets it apart as the page's title, and nothing doubts it.
+
+**No title.** Where no title is sure, the document node has no
+`po:containsAsHeader`, and the graph has no `doco:Title`: the document is
+untitled. In a PDF, a line in doubt is a level-1 `doco:SectionTitle`: a date, a
+section's name or number, a division's label, a company's name, or a journal's
+mark. No title is better than a wrong one. The document node's
+[`dcterms:title`](#the-document-node-says-what-was-read) is what the file
+declares, whether there is a `doco:Title` or not. It may differ from the
+`doco:Title`, or be absent.
+
+**The subtitle.** An explanatory or alternative title set under the title is
+a `doco:Subtitle`, the element directly after the `doco:Title` in reading
+order (`nif:beginIndex`). It is in the body matter, as text is, not held as a
+header, and it opens no section. A document has one at most. To read it, take the element after the
+title when it is a `doco:Subtitle`.
+
+| source | the subtitle | `doc:evidence` |
+|---|---|---|
+| Word | the paragraph in the Subtitle style | `docx` |
+| PowerPoint | the first paragraph of the title slide's subtitle | `pptx` |
+| PDF | a line set as the title's subtitle | `subtitle` |
+
+In a PDF, a subtitle is read only under a title that is sure. It is the line
+directly after the title, on its page, that:
+
+- is set close under the title, a step smaller than it and larger than the
+  body, in one or two lines;
+- has no number, and is not a section's or a division's name;
+- is set unlike every other heading of the document. A line set as the
+  sections are opens one.
+
+**Kickers.** A PDF's kicker is a `doco:Paragraph` before the title with
+`doc:evidence` `kicker`. It is a category, series name or tagline set over
+the title, smaller than it, with nothing between (`Scalable. Responsive.
+Innovative.` over `Exos X16`). It is text, not a heading. Over a line in doubt,
+which is a heading and not a title, the same line is a plain paragraph.
+
+**Running banners.** A line repeated at the head or foot of the pages
+(`Contains Nonbinding Recommendations`, `UNCONTROLLED COPY WHEN PRINTED`) is
+not in the body. It is listed once on the document node, in
+[`doc:runningText`](#what-the-pages-say-about-the-document). On a one-page
+document nothing repeats, so the banner is a paragraph.
+
+**In the other formats.** [Markdown](markdown.md) writes the title as `#`,
+and the subtitle and kickers as plain lines. [XHTML](xhtml.md) writes the
+title as `<h1>`, and the subtitle and kickers as `<p>`.
+[JSON](json.md) carries the same `type` and `evidence` on each element.
 
 ## Lists contain their items
 

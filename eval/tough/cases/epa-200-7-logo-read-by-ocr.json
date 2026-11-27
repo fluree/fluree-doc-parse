@@ -1,0 +1,35 @@
+{
+  "document": {
+    "file": "epa-200-7.pdf",
+    "url": "https://www.epa.gov/sites/default/files/2015-08/documents/method_200-7_rev_4-4_1994.pdf",
+    "sha256": "abe8fbbb67f799278f4392c0a91445367c88a3bbafef53a8464a8ce2877792c8",
+    "ocr_words": "../fixtures/ocr-words/epa-200-7",
+    "about": "EPA Method 200.7, Revision 4.4 (1994). The cover sets the agency's logo as a picture: `EPA` beside `United States` / `Environmental Protection` / `Agency` in three lines; an OCR engine reads them in it."
+  },
+  "notes": [
+    "The stored reading is the built-in engine's (PP-OCRv6 small) of the logo's crop: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`.",
+    "Open: the engine reads `Agency` turned 1.3° and set taller, and it stays a paragraph of its own."
+  ],
+  "checks": [
+    {
+      "id": "logo-lines-read-together",
+      "found": "2026-11-26",
+      "issue": "Read with the page's text, the logo's lines were a paragraph each.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "United States"
+      },
+      "count": 0
+    },
+    {
+      "id": "logo-name-whole",
+      "found": "2026-11-26",
+      "issue": "The agency's name in one paragraph.",
+      "status": "open",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "United States Environmental Protection Agency"
+      }
+    }
+  ]
+}

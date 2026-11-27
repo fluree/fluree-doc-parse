@@ -177,6 +177,26 @@ page does, and every character keeps a position for
 | `words[].angle` | no | baseline direction, degrees counter-clockwise; the word is `box` turned about its center. Absent means level, unless the box is much taller than wide and holds three characters or more: that is text set sideways |
 | `words[].conf` | no | the engine's confidence, 0-1; its mean and minimum over the words taken are reported in [`doc:ocrReadings`](../formats/doco.md#ocr-readings). A score outside 0-1 says the reading is scored on another scale, where its other scores mean something else too (a Tesseract 1 is 1 in 100): the reading then reports no confidence at all, with a warning on stderr, and a reading of a region (`r{i}`) or of a placed picture is judged noise by its boxes alone, as a reading with no `conf` is. A word with no text is not counted, whatever its score: it is never placed, and Tesseract scores its rows of blocks and lines -1. Divide Tesseract's 0-100 scores by 100 |
 | `words[].ink` | no | the word's ink measured in the image read, in its pixels: heights above the baseline, `first_cap`, a capital opening the word from its foot; `top`, its highest line, which `top_line` names (`cap` or `ascender`; another name is read as none); `x_height`; `stem`, its stems' width, and `density`, how much of the band they are measured in is ink (0-1), which say its weight. The built-in engine writes it for Latin text. A reading whose words carry it is sized by their ink rather than their boxes, at the scale its boxes give: see below. Each field is optional, and a word without it is sized by its box. It sizes detector boxes only: a reading whose boxes hug the ink (Tesseract, hOCR, ALTO) is sized by them |
+| `rules` | no | the straight rules the image draws, in the same frame as the words. Absent means none |
+| `rules[].box` | with `rules` | `[x0, y0, x1, y1]`, y down: the rule's extent, a thin band |
+| `rules[].axis` | with `rules` | `horizontal` or `vertical` |
+
+**Rules.** A table pasted into a document as a picture keeps its ruling only
+as pixels, so the words alone do not say where its rows and columns are.
+`rules` says it. `fdoc ocr`, and `convert --ocr`, write the rules each `r{i}`
+crop draws: thin straight bands of ink darker than the image's ground, long
+against the image and its text. Where a picture's own rules grid most of its
+words into mostly filled cells across its text, the picture is read as a
+table ruled by them; any other picture's rules are not used. A `full`
+reading's rules are not used. A sidecar without `rules` reads as it always
+has, and an engine that supplies its own may draw them by any method.
+
+```json
+"rules": [
+  { "box": [35, 61, 903, 64], "axis": "horizontal" },
+  { "box": [35, 61, 38, 249], "axis": "vertical" }
+]
+```
 
 The format is stable: `--ocr-words` (`FDOC_OCR_WORDS`), the file names, the
 fields above and their units. A release changes or removes one only as a
@@ -228,7 +248,7 @@ looked up only for the page's unread regions. A word over a glyph the
 page already has is dropped, so a stamp the text layer carries is not read
 twice.
 
-Only those names are looked up — `full` on every page, `r{i}` for each unread region — so a batch can share one directory. The elements these words make up are marked `provenance: "ocr"`. A heading read in a region under half its page, on a page with a text layer of its own, is the title of a pasted screen, not a section of the document: it is read as a paragraph, as the text of a picture in a DOCX is, so the document's outline stays its own. So is one read on a page near blank but for such a picture (a screen alone on its page with its caption, read whole): its words land in the picture. A model's `full` reading of that page keeps its headings, having no positions to judge them by ([above](#crop-names)). A region that, with the images it abuts, covers half its page or more is not a pasted screen but the page's content (a scan under a stamped line or a fax header the text layer carries, whole or stored in strips, a strip each region), and keeps its headings, as a page read whole does. Each heading is judged by the region most of its words land in, as a model's reading is judged region by region, whether the reading is the region's `r{i}` or the page's `full`: a screen pasted on a page that also carries such a scan loses its headings, and the scan keeps its own.
+Only those names are looked up — `full` on every page, `r{i}` for each unread region — so a batch can share one directory. The elements these words make up are marked `provenance: "ocr"`. A word read in a region `r{i}` of a page with text of its own is the picture's text, read apart from the page's and never a heading; a word of a `full` reading is the page's text.
 
 **What to read.** The `render-routed` manifest says why each crop exists
 ([escalation tiers](escalation-tiers.md#producing-the-crops)). An OCR engine

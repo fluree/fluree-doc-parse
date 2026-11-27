@@ -26,6 +26,7 @@ pub mod assets;
 pub mod ink;
 #[cfg(feature = "oar")]
 pub mod oar;
+pub mod rules;
 pub mod sizing;
 pub mod texty;
 
@@ -180,6 +181,11 @@ pub struct WordReading {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
     pub words: Vec<OcrWord>,
+    /// The rules the image draws, read from its pixels ([`rules::drawn`]):
+    /// a table set as an image is ruled by them. Absent in a reading made
+    /// without them, which reads as no rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<rules::DrawnRule>,
 }
 
 impl WordReading {
@@ -268,6 +274,7 @@ mod tests {
             height: Some(1584.0),
             engine: None,
             words,
+            rules: Vec::new(),
         };
         let back = WordReading::from_json(&reading.to_json()).unwrap();
         for (a, b) in reading.words.iter().zip(&back.words) {
@@ -285,6 +292,25 @@ mod tests {
         assert_eq!(r.coords, Coords::Px);
         assert_eq!(r.words[1].angle, Some(0.0));
         assert_eq!(r.words[0].angle, None);
+        assert_eq!(WordReading::from_json(&r.to_json()).unwrap(), r);
+    }
+
+    #[test]
+    fn a_sidecar_without_rules_reads_as_before_and_one_with_them_round_trips() {
+        // Written before readings carried rules: no rules, and written back
+        // without the field.
+        let old = r#"{"width": 640, "height": 480, "words": [{"text": "Tube", "box": [56, 86, 112, 116]}]}"#;
+        let r = WordReading::from_json(old).unwrap();
+        assert!(r.rules.is_empty());
+        assert!(!r.to_json().contains("rules"));
+        // With rules: read and written as they are.
+        let new = r#"{"width": 640, "height": 480, "words": [{"text": "Tube", "box": [56, 86, 112, 116]}],
+            "rules": [{"box": [35, 61, 903, 64], "axis": "horizontal"},
+                      {"box": [35, 61, 38, 249], "axis": "vertical"}]}"#;
+        let r = WordReading::from_json(new).unwrap();
+        assert_eq!(r.rules.len(), 2);
+        assert_eq!(r.rules[1].axis, rules::Axis::Vertical);
+        assert_eq!(r.rules[0].bbox, [35.0, 61.0, 903.0, 64.0]);
         assert_eq!(WordReading::from_json(&r.to_json()).unwrap(), r);
     }
 

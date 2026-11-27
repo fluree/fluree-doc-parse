@@ -213,6 +213,17 @@ pub enum Crop {
     Region(usize),
 }
 
+/// Read into a region's reading the rules its picture draws
+/// ([`fluree_doc_vision::rules::drawn`]), from the pixels it was read in:
+/// what a table set as an image is ruled by, which the table path reads
+/// ([`crate::document`]'s picture tables). A whole page's reading is left
+/// without: a scan's ruling is not read from its pixels here.
+pub fn read_rules(crop: Crop, pixels: &fluree_doc_vision::Pixels, reading: &mut WordReading) {
+    if matches!(crop, Crop::Region(_)) {
+        reading.rules = fluree_doc_vision::rules::drawn(pixels, reading);
+    }
+}
+
 impl Crop {
     /// The crop a tag names (`full`, `r0`, …); `None` for any other tag,
     /// such as a table crop, which an OCR reading has no use for.
@@ -257,18 +268,6 @@ pub struct Injected {
     pub chars: Vec<BBox>,
     /// Words taken in each routed region, by index: `(region, words)`.
     pub regions_taken: Vec<(usize, usize)>,
-    /// The regions it may read that are pasted into their page
-    /// ([`route::pasted`]: the picture they are part of covers under half
-    /// of it), as a screenshot pasted into a page of text is, in the
-    /// display frame: a heading read there is the screen's
-    /// ([`mark_provenance`]). The one a region's reading reads, or those
-    /// among the regions a whole reading of a page routed in regions gives
-    /// only the words of, or the pictures of a page read whole as near
-    /// blank; none for any other page read whole, and none for a region or
-    /// picture that, with the images it abuts, covers half its page or
-    /// more, a scan with a stamped line of text of its own, whole or stored
-    /// in strips.
-    pub pasted: Vec<BBox>,
     /// The regions the reading was to read, in the display frame: the one a
     /// region's reading read, or every region an engine reads on a page a
     /// whole reading gives only the regions of ([`route::ocr_regions`]: the
@@ -292,7 +291,6 @@ impl Injected {
             skew_deg: 0.0,
             chars: Vec::new(),
             regions_taken: Vec::new(),
-            pasted: Vec::new(),
             regions: Vec::new(),
         }
     }
@@ -536,33 +534,13 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
                 ));
                 continue;
             }
-            // Decided by the regions the words land in, not by the crop read:
-            // a whole reading of a page routed in regions lands its words in
-            // the same regions a region's reading would. A page near blank
-            // but for its pictures is read whole, and its pictures are where
-            // the words land: one under half the page is a screen pasted
-            // there, as on a page of text.
-            let p = &doc.pages[t.pi];
-            let landing: Vec<BBox> = match (&t.area, &routes[t.pi]) {
-                (Area::Page, Route::Vlm(route::Reason::NearBlank)) => {
-                    p.images.iter().map(|im| im.bbox).collect()
-                }
-                (Area::Page, _) => Vec::new(),
-                (Area::Regions(within), _) => within.iter().map(|(_, b)| *b).collect(),
-            };
-            let pasted: Vec<BBox> = (landing.iter().zip(route::pasted_set(p, &landing)))
-                .filter(|(_, pasted)| *pasted)
-                .map(|(b, _)| p.to_display(*b))
-                .collect();
-            let injected = inject_one(
+            out[i] = Some(inject_one(
                 &mut doc.pages[t.pi],
                 *crop,
                 t,
                 page_boxes(t.pi),
-                &pasted,
                 reading,
-            );
-            out[i] = Some(Injected { pasted, ..injected });
+            ));
         }
     }
 
@@ -750,7 +728,6 @@ fn inject_one(
     crop: Crop,
     t: &Target,
     boxes: Boxes,
-    pasted: &[BBox],
     reading: &WordReading,
 ) -> Injected {
     let page = p.index;
@@ -803,33 +780,14 @@ fn inject_one(
     if let Area::Regions(within) = &t.area {
         result.regions = within.iter().map(|(_, r)| p.to_display(*r)).collect();
     }
-    // Each glyph the reading added says where it was read, by where it
-    // lands rather than by the crop read: in a picture pasted into its page
-    // (`pasted`, display frame: under half the page, a screenshot or a
-    // logo) it is the picture's text; anywhere else, a page read whole or a
-    // scan stored as a region over half its page, the page's.
-    let in_picture = |p: &Page, g: &crate::glyph::Glyph| {
-        g.bbox.is_some_and(|b| {
-            let d = p.to_display(b);
-            let (x, y) = ((d.x0 + d.x1) * 0.5, (d.y0 + d.y1) * 0.5);
-            pasted.iter().any(|q| {
-                (q.x0 - CROP_MARGIN..=q.x1 + CROP_MARGIN).contains(&x)
-                    && (q.y0 - CROP_MARGIN..=q.y1 + CROP_MARGIN).contains(&y)
-            })
-        })
+    // Each glyph the reading added says where it was read: a page read
+    // whole is the page's text, a region routed out of a page with text of
+    // its own is a picture's.
+    let source = match t.area {
+        Area::Page => crate::glyph::OcrSource::Page,
+        Area::Regions(_) => crate::glyph::OcrSource::Region,
     };
-    let sources: Vec<_> = (p.glyphs.iter())
-        .filter(|g| g.draw_index >= added_from)
-        .map(|g| {
-            if in_picture(p, g) {
-                crate::glyph::OcrSource::Region
-            } else {
-                crate::glyph::OcrSource::Page
-            }
-        })
-        .collect();
-    let added = p.glyphs.iter_mut().filter(|g| g.draw_index >= added_from);
-    for (g, source) in added.zip(sources) {
+    for g in p.glyphs.iter_mut().filter(|g| g.draw_index >= added_from) {
         g.ocr = Some(source);
     }
     // A whole-page reading most of whose words land nowhere is not a
@@ -877,14 +835,26 @@ fn inject_one(
     if t.replaces {
         p.glyphs.retain(|g| g.draw_index >= first_glyph);
     }
+    // A region's picture's rules, kept with the reading for the table path
+    // and laid nowhere else.
+    let rules = match (crop, t.shown) {
+        (Crop::Region(_), Some(region)) => place_rules(p, region, reading),
+        _ => Vec::new(),
+    };
     let mark = p.ocr.get_or_insert_with(|| crate::extract::OcrRead {
         first_glyph,
         ..Default::default()
     });
+    mark.rules.extend(rules);
     mark.whole |= matches!(t.area, Area::Page);
     for i in regions_read {
         if !mark.regions.contains(&i) {
             mark.regions.push(i);
+            let at = match &t.area {
+                Area::Regions(rs) => rs.iter().find(|(j, _)| *j == i).map(|(_, b)| *b),
+                Area::Page => None,
+            };
+            mark.region_boxes.push(at.unwrap_or_default());
         }
     }
     result
@@ -979,7 +949,7 @@ fn place(
     // happen to fall in 0-1.
     let scored = reading.scores_out_of_range() == 0;
     let px_per_unit = (reading.coords == Coords::Px).then(|| 1.0 / (sx * sy).sqrt());
-    let mut placed: Vec<Option<Placed>> = reading
+    let placed: Vec<Option<Placed>> = reading
         .words
         .iter()
         .filter(|w| !w.text.trim().is_empty())
@@ -1046,9 +1016,160 @@ fn place(
             })
         })
         .collect();
+    // The marks an engine took for letters are no words: left out before
+    // the words' type is measured against one another.
+    let mut placed = without_marks(placed);
     size_by_ink(&mut placed);
     weigh_by_ink(&mut placed);
     Ok(placed)
+}
+
+/// `placed` without the marks an engine took for letters: a letter alone,
+/// one it is unsure of (under [`WEAK_CONFIDENCE`]), with no word of its
+/// size beside it, in a script the reading's other words hardly use. A page
+/// read whole is read with its pictograms, and an engine whose alphabet
+/// holds Chinese reads an icon's frame as a character set alone (`月` for a
+/// document icon at 0.52, `口`, `日`) on a page printed in English. Laid on
+/// the page, the mark is a line of text the page never printed, opening the
+/// column it stands in. A letter of the page's own script stays, however
+/// unsure: a panel's number, a diagram's callout, a Chinese table's cell.
+/// So does a word with no confidence stated, or one among the words of its
+/// line.
+fn without_marks(placed: Vec<Option<Placed>>) -> Vec<Option<Placed>> {
+    // The reading's letters, Chinese, Japanese and Korean apart from the
+    // rest.
+    let (mut cjk, mut other) = (0usize, 0usize);
+    for c in placed.iter().flatten().flat_map(|w| w.text.chars()) {
+        if is_cjk(c) {
+            cjk += 1;
+        } else if c.is_alphabetic() {
+            other += 1;
+        }
+    }
+    let foreign = |c: char| {
+        let same = if is_cjk(c) {
+            cjk
+        } else if c.is_alphabetic() {
+            other
+        } else {
+            return false;
+        };
+        // Its own letter apart.
+        let (same, total) = (same - 1, cjk + other - 1);
+        total >= MIN_SCRIPT_LETTERS && same as f64 <= FOREIGN_SHARE * total as f64
+    };
+    let mark: Vec<bool> = placed
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            w.as_ref().is_some_and(|w| {
+                let mut letters = w.text.chars().filter(|c| !c.is_whitespace());
+                let one = match (letters.next(), letters.next()) {
+                    (Some(c), None) => Some(c),
+                    _ => None,
+                };
+                one.is_some_and(foreign)
+                    && w.conf.is_some_and(|c| c < WEAK_CONFIDENCE)
+                    && !placed
+                        .iter()
+                        .enumerate()
+                        .any(|(j, v)| j != i && v.as_ref().is_some_and(|v| line_mates(w, v)))
+            })
+        })
+        .collect();
+    placed
+        .into_iter()
+        .zip(mark)
+        .map(|(w, mark)| w.filter(|_| !mark))
+        .collect()
+}
+
+/// Fewest letters a reading holds besides a mark for its script to be
+/// known.
+const MIN_SCRIPT_LETTERS: usize = 20;
+
+/// Most share of a reading's other letters a mark's script may have for it
+/// to be foreign there: one letter in ten.
+const FOREIGN_SHARE: f64 = 0.1;
+
+/// Whether `v` stands beside `w` on one line, as words of a line do: of
+/// a height within twice the other's, level with it to half the taller
+/// one's height across its baseline, and no more than that height apart
+/// along it.
+fn line_mates(w: &Placed, v: &Placed) -> bool {
+    let frame = |q: &[(f64, f64); 4]| {
+        let len = (q[1].0 - q[0].0).hypot(q[1].1 - q[0].1);
+        let height = (q[3].0 - q[0].0).hypot(q[3].1 - q[0].1);
+        let centre = (
+            q.iter().map(|p| p.0).sum::<f64>() / 4.0,
+            q.iter().map(|p| p.1).sum::<f64>() / 4.0,
+        );
+        (len, height, centre)
+    };
+    let (wl, wh, wc) = frame(&w.quad);
+    let (vl, vh, vc) = frame(&v.quad);
+    let (short, tall) = (wh.min(vh), wh.max(vh));
+    if !(short > 0.0 && tall <= 2.0 * short && wl > 0.0) {
+        return false;
+    }
+    // Along the word's baseline, and across it.
+    let along = (
+        (w.quad[1].0 - w.quad[0].0) / wl,
+        (w.quad[1].1 - w.quad[0].1) / wl,
+    );
+    let (dx, dy) = (vc.0 - wc.0, vc.1 - wc.1);
+    let ahead = dx * along.0 + dy * along.1;
+    let across = -dx * along.1 + dy * along.0;
+    across.abs() <= 0.5 * tall && ahead.abs() - (wl + vl) * 0.5 <= tall
+}
+
+/// The rules a region's reading found drawn in its pixels
+/// ([`read_rules`]), on the page: mapped as its words are ([`place`]), in
+/// the page's frame, each cut to the region read. A rule runs the way its
+/// placed box is longer, so a page turned to be read turns its rules too.
+fn place_rules(p: &Page, region: BBox, reading: &WordReading) -> Vec<crate::rule::Rule> {
+    let rect = crop_rect(p, Some(region));
+    let (Coords::Px, Some(w), Some(h)) = (reading.coords, reading.width, reading.height) else {
+        return Vec::new();
+    };
+    if !(w > 0.0 && h > 0.0) {
+        return Vec::new();
+    }
+    let (sx, sy) = (rect.width() / w, rect.height() / h);
+    let mut out = Vec::new();
+    for r in &reading.rules {
+        let [x0, y0, x1, y1] = r.bbox;
+        if !r.bbox.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let a = p.from_display_point((rect.x0 + x0 * sx, rect.y0 + y0 * sy));
+        let b = p.from_display_point((rect.x0 + x1 * sx, rect.y0 + y1 * sy));
+        let placed = BBox {
+            x0: a.0.min(b.0),
+            y0: a.1.min(b.1),
+            x1: a.0.max(b.0),
+            y1: a.1.max(b.1),
+        };
+        let orientation = if placed.width() >= placed.height() {
+            crate::rule::Orientation::Horizontal
+        } else {
+            crate::rule::Orientation::Vertical
+        };
+        let cut = BBox {
+            x0: placed.x0.max(region.x0),
+            y0: placed.y0.max(region.y0),
+            x1: placed.x1.min(region.x1),
+            y1: placed.y1.min(region.y1),
+        };
+        if cut.x1 > cut.x0 && cut.y1 > cut.y0 {
+            out.push(crate::rule::Rule {
+                bbox: cut,
+                orientation,
+                page: p.index,
+            });
+        }
+    }
+    out
 }
 
 /// Fewest words of a reading with their ink measured for it to be sized by
@@ -2791,7 +2912,10 @@ pub fn read_pages_leaving(
             return;
         };
         match engine.read(&crop.pixels) {
-            Ok(reading) => readings.push((at, (crop.page, which, reading))),
+            Ok(mut reading) => {
+                read_rules(which, &crop.pixels, &mut reading);
+                readings.push((at, (crop.page, which, reading)))
+            }
             Err(e) => failed.push((at, (crop.name, e))),
         }
     });
@@ -3104,41 +3228,17 @@ fn rows_of(r: &WordReading) -> Vec<Vec<&fluree_doc_vision::OcrWord>> {
 /// layer's prose keeps its provenance, and a scanned page's stamped header,
 /// which the text layer had, keeps its own. Elements a model tier spliced in
 /// keep theirs.
-///
-/// A heading OCR read in a screenshot pasted into a page of text (a region
-/// whose picture covers under half its page, [`Injected::pasted`]) is a heading of the screen,
-/// not of the document: it is read as a paragraph, as the text of a picture
-/// placed in a DOCX is, so the document's outline stays its own. This is
-/// decided for each heading by the regions its OCR characters land in, as a
-/// model's reading is decided for each region it reads: most of them in a
-/// pasted region, and it is the screen's, whatever else the page holds,
-/// and whether the region's own crop or the whole page was read. A page
-/// near blank but for a screenshot (a caption under it, say) is read whole,
-/// and its pictures under half the page are pasted screens too. A scanned
-/// page read whole keeps its headings: they are the document's; so does a
-/// region that, with the images it abuts, covers half its page or more, a
-/// scan whose page also carries a stamped line or a fax header of its own,
-/// whole or stored in strips.
 pub fn mark_provenance(elements: &mut [fluree_doc_model::Element], injected: &[Injected]) {
     use std::collections::HashMap;
-    // Per page, character centers sorted by y, each with whether it lies in
-    // a pasted region: an element looks only at the band of the page it
-    // covers. A word is taken by its center, so a character of a word at a
-    // region's edge may sit just outside it: the crop's margin is the
-    // region's too.
-    let mut by_page: HashMap<usize, Vec<(f64, f64, bool)>> = HashMap::new();
+    // Per page, character centers sorted by y: an element looks only at
+    // the band of the page it covers.
+    let mut by_page: HashMap<usize, Vec<(f64, f64)>> = HashMap::new();
     for r in injected {
-        by_page
-            .entry(r.page)
-            .or_default()
-            .extend(r.chars.iter().map(|b| {
-                let (x, y) = ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5);
-                let pasted = r.pasted.iter().any(|p| {
-                    (p.x0 - CROP_MARGIN..=p.x1 + CROP_MARGIN).contains(&x)
-                        && (p.y0 - CROP_MARGIN..=p.y1 + CROP_MARGIN).contains(&y)
-                });
-                (x, y, pasted)
-            }));
+        by_page.entry(r.page).or_default().extend(
+            r.chars
+                .iter()
+                .map(|b| ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5)),
+        );
     }
     for v in by_page.values_mut() {
         v.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -3154,17 +3254,13 @@ pub fn mark_provenance(elements: &mut [fluree_doc_model::Element], injected: &[I
             continue;
         }
         let from = centers.partition_point(|c| c.1 < b.y0);
-        let (ocr, pasted) = centers[from..]
+        let ocr = centers[from..]
             .iter()
             .take_while(|c| c.1 <= b.y1)
             .filter(|c| b.contains(c.0, c.1))
-            .fold((0, 0), |(n, p), c| (n + 1, p + usize::from(c.2)));
+            .count();
         if ocr > 0 {
             e.provenance = "ocr";
-            if e.kind == "doco:SectionTitle" && pasted * 2 > ocr {
-                e.kind = "doco:Paragraph".into();
-                e.level = None;
-            }
         }
     }
 }
@@ -3251,6 +3347,7 @@ mod tests {
             height: Some(1584.0),
             engine: None,
             words,
+            rules: Vec::new(),
         }
     }
 
@@ -3343,6 +3440,7 @@ mod tests {
                     conf: Some(0.9),
                     ink: None,
                 }],
+                rules: Vec::new(),
             })
         }
     }
@@ -4128,6 +4226,162 @@ mod tests {
     }
 
     #[test]
+    fn a_mark_the_engine_took_for_a_letter_is_not_laid() {
+        // A poster read whole: an icon over a column's banner read as a
+        // Chinese character the engine is unsure of, another beside a line
+        // of smaller text, a panel's number read sure, a diagram's callout
+        // letter read unsure, and a letter it is unsure of among the words
+        // of its line.
+        let at = |text: &str, b: [f64; 4], conf: f64| OcrWord {
+            conf: Some(conf),
+            ..word(text, b)
+        };
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let r = inject(
+            &mut doc,
+            &[(
+                0,
+                Crop::Page,
+                px(vec![
+                    at("月", [700.0, 100.0, 760.0, 160.0], 0.52),
+                    at("BUT COPYRIGHT DOESN'T", [600.0, 200.0, 900.0, 224.0], 0.99),
+                    at("6", [600.0, 300.0, 630.0, 340.0], 0.99),
+                    at("Some", [600.0, 400.0, 660.0, 420.0], 0.98),
+                    at("a", [668.0, 404.0, 680.0, 420.0], 0.6),
+                    at("text", [688.0, 400.0, 740.0, 420.0], 0.98),
+                    at("日", [500.0, 500.0, 560.0, 588.0], 0.71),
+                    at("domain are free", [580.0, 530.0, 900.0, 545.0], 0.99),
+                    at("E", [300.0, 700.0, 320.0, 724.0], 0.6),
+                ]),
+            )],
+        );
+        assert_eq!((r[0].taken, r[0].dropped), (7, 2));
+        let text = text_of(&doc.pages[0]);
+        assert!(!text.contains('月') && !text.contains('日'), "{text}");
+        assert!(text.contains('6') && text.contains("Some a text"), "{text}");
+        assert!(text.contains('E'), "{text}");
+
+        // On a page read in Chinese, a character alone is the page's own,
+        // however unsure: a table's `是` keeps its cell.
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let r = inject(
+            &mut doc,
+            &[(
+                0,
+                Crop::Page,
+                px(vec![
+                    at(
+                        "第一章 国家统计局发布的数据",
+                        [100.0, 100.0, 700.0, 130.0],
+                        0.98,
+                    ),
+                    at(
+                        "各地区生产总值与人口统计年鉴",
+                        [100.0, 200.0, 700.0, 230.0],
+                        0.97,
+                    ),
+                    at("是", [900.0, 400.0, 930.0, 430.0], 0.7),
+                ]),
+            )],
+        );
+        assert_eq!((r[0].taken, r[0].dropped), (3, 0));
+
+        // An engine that states no confidence leaves nothing to judge.
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let unstated = OcrWord {
+            conf: None,
+            ..word("月", [700.0, 100.0, 760.0, 160.0])
+        };
+        let r = inject(&mut doc, &[(0, Crop::Page, px(vec![unstated]))]);
+        assert_eq!((r[0].taken, r[0].dropped), (1, 0));
+    }
+
+    #[test]
+    fn a_region_reading_s_rules_are_placed_cut_to_it_and_kept_apart() {
+        // The screenshot of the test below, its reading carrying the rules
+        // its pixels draw: one across the crop, margin to margin, and one
+        // down it.
+        let mut glyphs = Vec::new();
+        for row in 0..12 {
+            glyphs.extend(native("Body text line", 72.0, 80.0 + row as f64 * 14.0));
+        }
+        let shot = BBox {
+            x0: 100.0,
+            y0: 300.0,
+            x1: 500.0,
+            y1: 500.0,
+        };
+        let image = ImagePlacement {
+            bbox: shot,
+            texty: Some(true),
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+            key: None,
+        };
+        let mut doc = Document {
+            pages: vec![page(glyphs, vec![image])],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let drawn = doc.pages[0].rules.len();
+        let reading = WordReading {
+            coords: Coords::Px,
+            width: Some(1648.0),
+            height: Some(848.0),
+            engine: None,
+            words: vec![word("Balance", [24.0, 100.0, 184.0, 140.0])],
+            rules: vec![
+                fluree_doc_vision::rules::DrawnRule {
+                    bbox: [0.0, 200.0, 1648.0, 204.0],
+                    axis: fluree_doc_vision::rules::Axis::Horizontal,
+                },
+                fluree_doc_vision::rules::DrawnRule {
+                    bbox: [424.0, 24.0, 428.0, 824.0],
+                    axis: fluree_doc_vision::rules::Axis::Vertical,
+                },
+            ],
+        };
+        inject(&mut doc, &[(0, Crop::Region(0), reading)]);
+        let p = &doc.pages[0];
+        // Not the page's ruling: only a table read from the picture makes
+        // them that.
+        assert_eq!(p.rules.len(), drawn);
+        let rules = &p.ocr.as_ref().unwrap().rules;
+        assert_eq!(rules.len(), 2);
+        // 200 px down the crop is 50 units, 344 on the page; the margins
+        // either side are cut off at the region's edges.
+        let a = rules[0];
+        assert_eq!(a.orientation, crate::rule::Orientation::Horizontal);
+        assert!(
+            (a.bbox.x0 - 100.0).abs() < 1e-9 && (a.bbox.x1 - 500.0).abs() < 1e-9,
+            "{a:?}"
+        );
+        assert!(
+            (a.bbox.y0 - 344.0).abs() < 1e-9 && (a.bbox.y1 - 345.0).abs() < 1e-9,
+            "{a:?}"
+        );
+        let d = rules[1];
+        assert_eq!(d.orientation, crate::rule::Orientation::Vertical);
+        assert!(
+            (d.bbox.x0 - 200.0).abs() < 1e-9 && (d.bbox.y0 - 300.0).abs() < 1e-9,
+            "{d:?}"
+        );
+    }
+
+    #[test]
     fn a_reading_none_of_whose_words_land_on_the_page_is_set_aside() {
         // Every word off the page, as an origin or a scale not the page's
         // puts them: not a reading that came back blank, listed with no
@@ -4221,6 +4475,7 @@ mod tests {
             height: Some(h),
             engine: None,
             words,
+            rules: Vec::new(),
         };
         let mut doc = page_with_regions(&[UPPER, LOWER]);
         let glyphs = doc.pages[0].glyphs.len();
@@ -4303,6 +4558,7 @@ mod tests {
                 // In the margin above the region: a neighbour's text.
                 word("cut", [400.0, 2.0, 460.0, 20.0]),
             ],
+            rules: Vec::new(),
         };
         let r = inject(&mut doc, &[(0, Crop::Region(0), reading)]);
         assert_eq!((r[0].taken, r[0].dropped), (1, 1));
@@ -4379,6 +4635,7 @@ mod tests {
                     ink: None,
                 })
                 .collect(),
+            rules: Vec::new(),
         }
     }
 
@@ -4674,6 +4931,7 @@ mod tests {
             height: None,
             engine: None,
             words,
+            rules: Vec::new(),
         }
     }
 
@@ -4852,342 +5110,6 @@ mod tests {
                 Some(("doco:Paragraph", None, "ocr")),
                 "{crop:?} {els:?}"
             );
-        }
-    }
-
-    #[test]
-    fn a_heading_at_a_pasted_regions_edge_is_the_screens() {
-        // A screen pasted at 60-550 × 470-600, and a heading OCR read at its
-        // top: its words landed in the region by their centers, but letters
-        // are laid by their line, and these sit up to 5 units above it.
-        let shot = BBox {
-            x0: 60.0,
-            y0: 470.0,
-            x1: 550.0,
-            y1: 600.0,
-        };
-        let kind_at = |top: f64| {
-            let chars = (0..8)
-                .map(|i| BBox {
-                    x0: 80.0 + 12.0 * f64::from(i),
-                    y0: top,
-                    x1: 92.0 + 12.0 * f64::from(i),
-                    y1: top + 10.0,
-                })
-                .collect();
-            let injected = Injected {
-                chars,
-                pasted: vec![shot],
-                ..Injected::new(0, Crop::Region(0))
-            };
-            let mut heading =
-                fluree_doc_model::Element::new("doco:SectionTitle", "Overview", "rust", "font");
-            heading.level = Some(2);
-            heading.bbox = Some(BBox {
-                x0: 78.0,
-                y0: top - 2.0,
-                x1: 180.0,
-                y1: top + 12.0,
-            });
-            let mut els = [heading];
-            mark_provenance(&mut els, &[injected]);
-            (els[0].kind.clone(), els[0].provenance)
-        };
-        // Within the crop's margin, the region's: the screen's heading.
-        assert_eq!(kind_at(460.0), ("doco:Paragraph".to_string(), "ocr"));
-        // Past it, the page's own.
-        assert_eq!(kind_at(450.0), ("doco:SectionTitle".to_string(), "ocr"));
-    }
-
-    #[test]
-    fn a_heading_read_in_a_screenshot_alone_on_its_page_is_a_paragraph() {
-        // A page holding only a pasted screenshot (under a quarter of it)
-        // and its caption: too few glyphs for a page of text, so it is read
-        // whole as near blank. The screen's title is still the screen's.
-        let glyphs = native("Figure 3", 72.0, 330.0);
-        let shot = ImagePlacement {
-            bbox: BBox {
-                x0: 60.0,
-                y0: 80.0,
-                x1: 550.0,
-                y1: 310.0,
-            },
-            texty: Some(true),
-            ppi: None,
-            bitonal: false,
-            grid: (1000, 1000),
-            key: None,
-        };
-        let mut doc = Document {
-            pages_past_limit: 0,
-            pages: vec![page(glyphs, vec![shot])],
-            title: None,
-        };
-        assert!(route::share(&doc.pages[0], &shot.bbox) < route::IMAGE_DOMINANT_COVERAGE);
-        assert_eq!(
-            route::decide(&doc.pages[0]).0,
-            route::Route::Vlm(route::Reason::NearBlank)
-        );
-        let mut words = vec![
-            word("Account", [80.0, 100.0, 220.0, 130.0]),
-            word("Overview", [230.0, 100.0, 380.0, 130.0]),
-        ];
-        let prose = [
-            "Reference ABC-7781 opened at the branch office on the date shown",
-            "with the balance carried forward from the previous closed period",
-            "and the last payment recorded against it by the branch in March",
-        ];
-        for row in 0..9 {
-            let mut x = 80.0;
-            let y = 150.0 + row as f64 * 16.0;
-            for w in prose[row % 3].split(' ') {
-                let len = w.len() as f64 * 6.0;
-                words.push(word(w, [x, y, x + len, y + 11.0]));
-                x += len + 6.0;
-            }
-        }
-        let injected = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
-        assert!(injected[0].taken > 0, "{injected:?}");
-        assert_eq!(injected[0].pasted, [doc.pages[0].to_display(shot.bbox)]);
-        let els = analysed(&mut doc, &injected);
-        let title = els.iter().find(|e| e.text.contains("Overview")).unwrap();
-        assert_eq!(
-            (title.kind.as_str(), title.level, title.provenance),
-            ("doco:Paragraph", None, "ocr"),
-            "{els:?}"
-        );
-    }
-
-    #[test]
-    fn a_heading_read_in_a_scan_under_a_stamped_header_stays_one() {
-        // Two stamped lines of text, too many glyphs for the page to be
-        // routed a scan, over a scan covering most of the page: read in a
-        // region, but the region is the page's content, and its title is the
-        // document's.
-        let scan = scan_strip(80.0, 760.0);
-        assert!(
-            route::share(&stamped_page(vec![scan]), &scan.bbox) >= route::IMAGE_DOMINANT_COVERAGE
-        );
-        assert_scan_title_stays_a_heading(vec![scan], &[0]);
-    }
-
-    #[test]
-    fn a_heading_read_in_a_scan_stored_in_strips_under_a_stamped_header_stays_one() {
-        // The same scan stored in two strips, each under half the page, as
-        // some scanners and producers store one: the router routes a region
-        // a strip, and the picture they make is still the page's content.
-        let strips = vec![scan_strip(80.0, 420.0), scan_strip(420.0, 760.0)];
-        let page = stamped_page(strips.clone());
-        for s in &strips {
-            assert!(route::share(&page, &s.bbox) < route::IMAGE_DOMINANT_COVERAGE);
-        }
-        assert_scan_title_stays_a_heading(strips, &[0, 1]);
-    }
-
-    /// A strip of a scan, `y0` to `y1`, the scan's width.
-    fn scan_strip(y0: f64, y1: f64) -> ImagePlacement {
-        ImagePlacement {
-            bbox: BBox {
-                x0: 40.0,
-                y0,
-                x1: 572.0,
-                y1,
-            },
-            texty: Some(true),
-            ppi: None,
-            bitonal: false,
-            grid: (1000, 1000),
-            key: None,
-        }
-    }
-
-    /// Two stamped lines of a fax header over `scans`.
-    fn stamped_page(scans: Vec<ImagePlacement>) -> Page {
-        let mut glyphs = native(
-            "RECEIVED 2026-03-14 BY FAX FROM BRANCH OFFICE 0042 PAGE 1 OF 3",
-            40.0,
-            30.0,
-        );
-        glyphs.extend(native(
-            "FORWARDED TO THE LOANS DEPARTMENT FOR REVIEW AND FILING BY HAND",
-            40.0,
-            44.0,
-        ));
-        page(glyphs, scans)
-    }
-
-    /// OCR reads a loan agreement's title and body in the scan of a
-    /// [`stamped_page`], one reading per region in `regions` (the words
-    /// landing in each), then the whole page once: its title stays a
-    /// heading either way.
-    fn assert_scan_title_stays_a_heading(scans: Vec<ImagePlacement>, regions: &[usize]) {
-        let mut words = vec![
-            word("LOAN", [80.0, 100.0, 180.0, 130.0]),
-            word("AGREEMENT", [190.0, 100.0, 400.0, 130.0]),
-        ];
-        let prose = [
-            "This agreement is made between the lender and the borrower named",
-            "below and sets out the terms on which the loan is advanced to them",
-            "and the schedule on which it is to be repaid with interest accrued",
-        ];
-        for row in 0..30 {
-            let mut x = 80.0;
-            let y = 160.0 + row as f64 * 16.0;
-            for w in prose[row % 3].split(' ') {
-                let len = w.len() as f64 * 6.0;
-                words.push(word(w, [x, y, x + len, y + 11.0]));
-                x += len + 6.0;
-            }
-        }
-        let route::Route::VlmRegions(routed) = route::decide(&stamped_page(scans.clone())).0 else {
-            panic!("routed in regions");
-        };
-        assert_eq!(routed.len(), regions.len());
-        let by_region: Vec<_> = regions
-            .iter()
-            .map(|&ri| {
-                let b = routed[ri];
-                let own = words
-                    .iter()
-                    .filter(|w| {
-                        let y = (w.bbox[1] + w.bbox[3]) * 0.5;
-                        y >= b.y0 && y < b.y1
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
-                (0, Crop::Region(ri), page_units(own))
-            })
-            .collect();
-        for readings in [by_region, vec![(0, Crop::Page, page_units(words.clone()))]] {
-            let mut doc = Document {
-                pages_past_limit: 0,
-                pages: vec![stamped_page(scans.clone())],
-                title: None,
-            };
-            let injected = inject(&mut doc, &readings);
-            assert!(
-                injected.iter().all(|r| r.taken > 0 && r.pasted.is_empty()),
-                "{injected:?}"
-            );
-            let els = analysed(&mut doc, &injected);
-            let title = els.iter().find(|e| e.text.contains("AGREEMENT")).unwrap();
-            assert_eq!(
-                (title.kind.as_str(), title.provenance),
-                ("doco:SectionTitle", "ocr"),
-                "{els:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_screens_heading_is_a_paragraph_beside_a_scan_on_its_page() {
-        // A page of text holding both a pasted screenshot (a tenth of the
-        // page) and a scan covering over half of it: each region's reading
-        // is judged on its own, as a model's is. The screen's title is a
-        // paragraph; the scan's stays a heading.
-        let mut glyphs: Vec<Glyph> = native("Findings", 72.0, 40.0)
-            .into_iter()
-            .map(|g| Glyph {
-                font_size: 18.0,
-                ..g
-            })
-            .collect();
-        let prose = [
-            "The quarterly figures are summarised in the screen shown below",
-            "where each account carries its balance and its last reference",
-            "as the branch recorded them when the period was closed for review",
-        ];
-        for row in 0..6 {
-            glyphs.extend(native(prose[row % 3], 72.0, 66.0 + row as f64 * 12.0));
-        }
-        let image = |x0, y0, x1, y1| ImagePlacement {
-            bbox: BBox { x0, y0, x1, y1 },
-            texty: Some(true),
-            ppi: None,
-            bitonal: false,
-            grid: (1000, 1000),
-            key: None,
-        };
-        let shot = image(60.0, 150.0, 560.0, 260.0);
-        let scan = image(30.0, 290.0, 590.0, 770.0);
-        let doc = Document {
-            pages_past_limit: 0,
-            pages: vec![page(glyphs, vec![shot, scan])],
-            title: None,
-        };
-        assert!(route::share(&doc.pages[0], &scan.bbox) >= route::IMAGE_DOMINANT_COVERAGE);
-        let route::Route::VlmRegions(regions) = route::decide(&doc.pages[0]).0 else {
-            panic!("routed in regions");
-        };
-        let at = |b: BBox| regions.iter().position(|r| *r == b).unwrap();
-        let mut shot_words = vec![
-            word("Balance", [80.0, 160.0, 200.0, 190.0]),
-            word("9,876.54", [210.0, 160.0, 340.0, 190.0]),
-        ];
-        let mut x = 80.0;
-        for w in "Reference ABC-7781 opened at the branch office on the date shown".split(' ') {
-            let len = w.len() as f64 * 6.0;
-            shot_words.push(word(w, [x, 220.0, x + len, 231.0]));
-            x += len + 6.0;
-        }
-        let mut scan_words = vec![
-            word("LOAN", [80.0, 300.0, 180.0, 330.0]),
-            word("AGREEMENT", [190.0, 300.0, 400.0, 330.0]),
-        ];
-        let body = [
-            "This agreement is made between the lender and the borrower named",
-            "below and sets out the terms on which the loan is advanced to them",
-            "and the schedule on which it is to be repaid with interest accrued",
-        ];
-        for row in 0..20 {
-            let mut x = 80.0;
-            let y = 350.0 + row as f64 * 16.0;
-            for w in body[row % 3].split(' ') {
-                let len = w.len() as f64 * 6.0;
-                scan_words.push(word(w, [x, y, x + len, y + 11.0]));
-                x += len + 6.0;
-            }
-        }
-        // Each region read on its own, or the whole page read once, its
-        // words landing in the same two regions: the outline is the same.
-        let by_region = [
-            (
-                0,
-                Crop::Region(at(shot.bbox)),
-                page_units(shot_words.clone()),
-            ),
-            (
-                0,
-                Crop::Region(at(scan.bbox)),
-                page_units(scan_words.clone()),
-            ),
-        ];
-        let whole = [(
-            0,
-            Crop::Page,
-            page_units(shot_words.into_iter().chain(scan_words).collect()),
-        )];
-        for readings in [&by_region[..], &whole[..]] {
-            let mut doc = doc.clone();
-            let injected = inject(&mut doc, readings);
-            assert!(injected.iter().all(|r| r.refused.is_none()), "{injected:?}");
-            let els = analysed(&mut doc, &injected);
-            let kind = |text: &str| {
-                els.iter()
-                    .find(|e| e.text.contains(text))
-                    .map(|e| (e.kind.as_str(), e.provenance))
-            };
-            assert_eq!(kind("9,876.54"), Some(("doco:Paragraph", "ocr")), "{els:?}");
-            // The scan's heading is the document's: a section's, or, set
-            // largest on the page, its title.
-            assert!(
-                matches!(
-                    kind("AGREEMENT"),
-                    Some(("doco:SectionTitle" | "doco:Title", "ocr"))
-                ),
-                "{els:?}"
-            );
-            assert_eq!(kind("Findings").unwrap().0, "doco:SectionTitle");
         }
     }
 
@@ -5716,6 +5638,7 @@ mod tests {
                 word("Name", [100.0, 500.0, 200.0, 520.0]),
                 word("Date", [100.0, 540.0, 200.0, 560.0]),
             ],
+            rules: Vec::new(),
         };
         inject(&mut doc, &[(0, Crop::Page, reading)]);
         assert_eq!(doc.pages[0].rotation, 0);
@@ -6979,6 +6902,7 @@ mod tests {
             height: Some(w * 2.0),
             engine: None,
             words: vec![word("Total", [20.0, 20.0, 120.0, 46.0])],
+            rules: Vec::new(),
         };
         let r = inject(&mut doc, &[(0, Crop::Page, reading)]);
         assert_eq!(
@@ -6992,6 +6916,7 @@ mod tests {
             height: Some(h * 2.0),
             engine: None,
             words: vec![word("Total", [20.0, 20.0, 120.0, 46.0])],
+            rules: Vec::new(),
         };
         assert_eq!(
             inject(&mut blank_scan(), &[(0, Crop::Page, reading)])[0].taken,
@@ -7653,6 +7578,7 @@ mod tests {
                 conf: Some(0.99),
                 ink: None,
             }],
+            rules: Vec::new(),
         };
         let page_units = with_copies(
             &doc,
@@ -8552,6 +8478,7 @@ mod tests {
             height: Some(3300.0),
             engine: None,
             words,
+            rules: Vec::new(),
         }
     }
 

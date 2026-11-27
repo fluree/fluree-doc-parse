@@ -51,6 +51,8 @@ Roughly in order of how often you will see them:
 | `outline` | the PDF bookmark tree named this heading |
 | `metadata` | a PDF's `doco:Title` that the file's own title (`/Title`) names |
 | `type` | a PDF's `doco:Title` set apart as the first page's title by its type, nothing doubting it |
+| `subtitle` | a PDF's `doco:Subtitle`: a line set as the sure title's subtitle, directly under it |
+| `kicker` | a PDF's `doco:Paragraph` set over its `doco:Title`, smaller than it: a category, series name or tagline |
 | `header`, `footer` | a line repeated at the top or bottom of every page, kept once; see [furniture](../design/furniture.md#removed-from-the-body-kept-about-the-document) |
 
 A PDF's `doco:Title` carries `metadata`, `outline` or `type`: how sure it

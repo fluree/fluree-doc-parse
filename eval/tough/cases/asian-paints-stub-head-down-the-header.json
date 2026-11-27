@@ -1,0 +1,16 @@
+{
+  "document": {
+    "file": "asian-paints-standalone-fs-2024-25.pdf",
+    "url": "https://www.asianpaints.com/content/dam/asianpaints/website/secondary-navigation/investors/annual-reports/2024-2025/Standalone-Financial_Statements.pdf",
+    "sha256": "c27143bca538d491e9e889ffed28980257f7a3bed4a1685d223bed5d3cb30b35",
+    "about": "Asian Paints standalone financial statements 2024-25 (92 pages): note tables with a stub's head set down a header of two levels."
+  },
+  "checks": [
+    {
+      "id": "subsidiary-fair-value-header-whole",
+      "found": "2026-11-27",
+      "issue": "The fair-value table on page 78 sets `Name of subsidiary Company` down its header, beside `Fair valuation Gain / (Loss)` over the years. The upward walk stopped at it: the stub had no head and the years lost their group.",
+      "row": {"Name of subsidiary Company": "Obgenix Software Private Limited", "Fair valuation Gain / (Loss) / Year 2024-25": "(167.76)"}
+    }
+  ]
+}
