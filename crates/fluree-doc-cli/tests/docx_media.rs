@@ -891,6 +891,23 @@ fn a_reading_supplied_is_taken_whatever_the_probe_makes_of_the_picture() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn with_no_escalate_no_picture_is_sent_to_the_configured_model() {
+    // A model configured and a picture it would be sent: `--no-escalate`
+    // keeps it on the machine. Nothing is sent, so nothing fails to be.
+    let dir = scratch("no-escalate");
+    let input = dir.join("report.docx");
+    std::fs::write(&input, docx()).unwrap();
+    let home = model_home(&dir, 0);
+    let (doco, err) = run(&input, &home, "doco", &[]);
+    assert!(err.contains("the configured model"), "{err}");
+    let (doco_kept, err) = run(&input, &home, "doco", &["--no-escalate".as_ref()]);
+    assert!(!err.contains("the configured model"), "{err}");
+    assert_eq!(reasons(&doco), ["Failed"]);
+    assert_eq!(reasons(&doco_kept), ["NotRead"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A DOCX of `parts` pictures, each its own part holding `image`.
 fn docx_of_parts(parts: usize, image: &[u8]) -> Vec<u8> {
     let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";

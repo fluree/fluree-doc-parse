@@ -271,6 +271,29 @@ fn a_signatures_logo_is_not_sent_to_the_model_and_a_screenshot_is() {
 }
 
 #[test]
+fn with_no_escalate_no_image_is_sent_to_the_configured_model() {
+    // A screenshot a model configured would be sent (and refuse, here):
+    // `--no-escalate` keeps it on the machine.
+    let dir = scratch("no-escalate");
+    let input = dir.join("mail.eml");
+    std::fs::write(&input, eml_of("image/png", &screen(600, 200))).unwrap();
+    with_model(&dir);
+    let out = convert(&dir, &input, &["-f".as_ref(), "doco".as_ref()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("the configured model"), "{err}");
+    let out = convert(
+        &dir,
+        &input,
+        &["-f".as_ref(), "doco".as_ref(), "--no-escalate".as_ref()],
+    );
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("the configured model"), "{err}");
+    assert_eq!(reasons(&out.stdout), ["NotRead"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_strip_too_short_to_hold_a_line_is_not_sent_to_the_model() {
     // A strip of text wide enough, but 30 pixels high: under the 48 an
     // image must have on its shorter side, as a rule or a banner is.

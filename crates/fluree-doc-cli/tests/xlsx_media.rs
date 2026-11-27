@@ -9,19 +9,25 @@ use std::process::Command;
 /// A workbook of one sheet: a line on row 1, a picture
 /// (`xl/media/image1.png`) anchored at row 3, a line on row 6.
 fn xlsx() -> Vec<u8> {
-    let png = {
-        let img = image::RgbImage::from_fn(300, 100, |x, y| {
-            // Lines of strokes a letter wide on a light ground: text, to
-            // the pixel probe.
-            let ink = (12..24).contains(&(y % 40)) && x % 10 < 6 && x < 225;
-            image::Rgb(if ink { [40, 40, 40] } else { [200, 200, 200] })
-        });
-        let mut out = Vec::new();
-        image::DynamicImage::ImageRgb8(img)
-            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-            .unwrap();
-        out
-    };
+    xlsx_with(capture(300, 100))
+}
+
+/// A PNG of `w` × `h` pixels: lines of strokes a letter wide on a light
+/// ground, text to the pixel probe.
+fn capture(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(w, h, |x, y| {
+        let ink = (12..24).contains(&(y % 40)) && x % 10 < 6 && x < w * 3 / 4;
+        image::Rgb(if ink { [40, 40, 40] } else { [200, 200, 200] })
+    });
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
+}
+
+/// [`xlsx`], its picture `png`.
+fn xlsx_with(png: Vec<u8>) -> Vec<u8> {
     let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     let ns = format!(
         "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"{rel}\""
@@ -225,5 +231,42 @@ fn a_model_reading_supplied_for_the_image_is_placed_where_it_is() {
     assert!(before < read && read < after, "{text}");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!err.contains("were not read"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn with_no_escalate_no_picture_is_sent_to_the_configured_model() {
+    // A capture over the floor a model is sent, and a model configured
+    // whose key it cannot use: sent (and refused) by default, kept on the
+    // machine with `--no-escalate`.
+    let dir = scratch("no-escalate");
+    let input = dir.join("book.xlsx");
+    std::fs::write(&input, xlsx_with(capture(600, 200))).unwrap();
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let key = home.join("key.json");
+    std::fs::write(&key, "{}").unwrap();
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "[escalation]\nprovider = \"gemini\"\n[escalation.gemini]\ncredentials = {:?}\n",
+            key.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let out = convert(&dir, &input, &["-f".as_ref(), "doco".as_ref()]);
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("the configured model"), "{err}");
+    let out = convert(
+        &dir,
+        &input,
+        &["-f".as_ref(), "doco".as_ref(), "--no-escalate".as_ref()],
+    );
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("the configured model"), "{err}");
+    let doco = String::from_utf8_lossy(&out.stdout);
+    assert!(doco.contains("\"NotRead\""), "{doco}");
     let _ = std::fs::remove_dir_all(dir);
 }
