@@ -89,7 +89,9 @@ Both formats:
   metadata beyond the speaker label, `signature`: written as text or not at
   all; DoCO carries them as properties.
 - `notes_for`: a slide's speaker notes are written as a section of their own
-  after the slides; the slide they belong to is DoCO's.
+  after the slides, under `Speaker notes` and each slide's name (`Slide 4:
+  Results`); the reference sets the same two headings over them. The slide
+  they belong to is DoCO's, which puts them inside it.
 
 Kinds:
 

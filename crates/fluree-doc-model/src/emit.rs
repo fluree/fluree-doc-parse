@@ -66,7 +66,7 @@ pub struct MarkdownOptions {
 
 /// A slide's name over its speaker notes: `Slide 4: <its title>`, by its
 /// place in the deck.
-fn notes_heading(elements: &[Element], slide: usize) -> String {
+pub fn notes_heading(elements: &[Element], slide: usize) -> String {
     let title = elements.iter().find(|e| {
         e.notes_for.is_none()
             && e.page == slide
