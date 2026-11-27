@@ -8182,9 +8182,9 @@ fn head_size(glyphs: &[crate::glyph::Glyph], y0: f64, y1: f64) -> f64 {
 /// their centres), and each column's figures under one head at most. Each
 /// edge moves to the middle of the gutter between the column before it,
 /// head and figures, and its own, where that gutter is as wide as the
-/// columns are parted by and the edge cuts through no word of the body: a
-/// chart sets each figure at its bar's end, and a negative bar's figure
-/// stands out in the gutter. A head set just past the grid's first edge
+/// columns are parted by and the edge cuts through no run of the body's
+/// words: a chart sets each figure at its bar's end, and a negative bar's
+/// figure stands out in the gutter, a run of its own. A head set just past the grid's first edge
 /// over the first column's figures (`World`) moves that edge out to it.
 fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
     let cols = g.cols();
@@ -8196,41 +8196,83 @@ fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
     // The page's words, each glyph joined to the one before it on its line
     // where they touch (a sign to its digits): a word is placed whole, by
     // its centre, as the grid's cells take it.
-    let mut placed: Vec<(f64, f64, f64, f64)> = glyphs
+    let mut placed: Vec<(f64, f64, f64, f64, &str)> = glyphs
         .iter()
         .filter(|gl| !gl.text.trim().is_empty() && gl.is_horizontal())
         .filter_map(|gl| {
             let b = gl.bbox?;
-            Some((b.x0, b.x1, gl.origin.1, f64::from(gl.font_size).max(1.0)))
+            Some((
+                b.x0,
+                b.x1,
+                gl.origin.1,
+                f64::from(gl.font_size).max(1.0),
+                gl.text.as_str(),
+            ))
         })
         .collect();
     placed.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.0.total_cmp(&b.0)));
     let mut inked: Vec<(f64, f64, f64)> = Vec::new();
+    let mut texts: Vec<String> = Vec::new();
     let mut last: Option<(f64, f64)> = None;
-    for (a, b, y, size) in placed {
+    for (a, b, y, size, t) in placed {
         match (inked.last_mut(), last) {
             (Some(w), Some((ly, _))) if (y - ly).abs() <= size * 0.3 && a - w.1 <= size * 0.25 => {
                 w.1 = w.1.max(b);
+                if let Some(s) = texts.last_mut() {
+                    s.push_str(t);
+                }
             }
-            _ => inked.push((a, b, y)),
+            _ => {
+                inked.push((a, b, y));
+                texts.push(t.to_string());
+            }
         }
         last = Some((y, size));
     }
     // The figures of each column: the body's words by their centres.
-    let body: Vec<(f64, f64)> = inked
+    let body: Vec<(f64, f64, &str)> = inked
         .iter()
-        .filter(|&&(_, _, y)| y >= g.ys[1] && y < bottom)
-        .map(|&(a, b, _)| (a, b))
+        .zip(&texts)
+        .filter(|(&(_, _, y), _)| y >= g.ys[1] && y < bottom)
+        .map(|(&(a, b, _), t)| (a, b, t.as_str()))
         .collect();
+    // The body's runs: its words on one line a cell's gap apart joined.
+    let runs: Vec<(f64, f64)> = {
+        let mut lines: Vec<(f64, f64, f64)> = inked
+            .iter()
+            .filter(|&&(_, _, y)| y >= g.ys[1] && y < bottom)
+            .copied()
+            .collect();
+        lines.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.0.total_cmp(&b.0)));
+        let mut runs: Vec<(f64, f64, f64)> = Vec::new();
+        for (a, b, y) in lines {
+            match runs.last_mut() {
+                Some(r) if (y - r.2).abs() <= fs * 0.3 && a - r.1 <= fs * TABLE_CELL_GAP => {
+                    r.1 = r.1.max(b)
+                }
+                _ => runs.push((a, b, y)),
+            }
+        }
+        runs.into_iter().map(|(a, b, _)| (a, b)).collect()
+    };
     // Taken at their median start and end: a figure the edges set in the
     // wrong column stretches no column.
     let mut words: Vec<(Vec<f64>, Vec<f64>)> = vec![(Vec::new(), Vec::new()); cols];
-    for &(a, b) in &body {
+    let mut numeric = vec![0usize; cols];
+    for &(a, b, t) in &body {
         let m = (a + b) / 2.0;
         if let Some(c) = g.xs.windows(2).position(|w| m >= w[0] && m < w[1]) {
             words[c].0.push(a);
             words[c].1.push(b);
+            let t: String = t.chars().map(|c| if c == '–' { '-' } else { c }).collect();
+            numeric[c] += usize::from(is_numeric_cell(&t));
         }
+    }
+    // Columns of figures past the first, which may be a stub of labels: most
+    // of each one's words are figures. Text set in panels under their titles
+    // lines up as well, word for word, and is no table of heads over figures.
+    if (1..cols).any(|c| numeric[c] * 2 <= words[c].0.len()) {
+        return;
     }
     let median = |v: &mut Vec<f64>| {
         v.sort_by(f64::total_cmp);
@@ -8298,10 +8340,11 @@ fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
     for k in 1..cols {
         let (left, right) = (block(k - 1).1, block(k).0);
         let edge = (left + right) / 2.0;
-        // No word of the body cut through: a chart sets a figure at its
-        // bar's end, and a negative bar's figure stands out in the gutter,
-        // on one side of the edge or the other.
-        let clear = !body.iter().any(|&(a, b)| a < edge && b > edge);
+        // No run of the body's words cut through, words a cell's gap apart
+        // one run: a chart sets a figure at its bar's end, and a negative
+        // bar's figure stands out in the gutter on one side of the edge or
+        // the other; a line of text run past the edge is a cell's.
+        let clear = !runs.iter().any(|&(a, b)| a < edge && b > edge);
         if right - left < fs * ALIGNED_SPLIT_GAP_EMS || !clear {
             return;
         }
