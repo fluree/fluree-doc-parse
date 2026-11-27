@@ -782,7 +782,14 @@ impl<'a> Collector<'a> {
                     if band(b.y0).max(k0) != k || !meets(&b, &c) {
                         continue;
                     }
-                    if !under(&b, &c) {
+                    // A bar narrower across the line than the type is set
+                    // hides no letter: a link's underline drawn over the
+                    // underscores of its URL, a rule over a dash, paints
+                    // the very mark it lies on, and the text still reads.
+                    let g = &self.glyphs[i];
+                    let turned = (g.rotation_deg.rem_euclid(180.0) - 90.0).abs() < 45.0;
+                    let across = if turned { c.x1 - c.x0 } else { c.y1 - c.y0 };
+                    if !under(&b, &c) || across < g.font_size as f64 {
                         torn = true;
                         break 'bands;
                     }
@@ -3836,6 +3843,16 @@ mod cover_tests {
         // word with it, so the band takes none of the line.
         let text = read(&format!("{UNDER} 0 0 1 rg 10 90 40 30 re f {SHOWN}"));
         assert!(text.contains("Hidden words"), "{text:?}");
+    }
+
+    #[test]
+    fn a_bar_thinner_than_the_type_hides_nothing() {
+        // A link's underline, drawn after its URL, over the underscore it
+        // lies on: the underscore still reads.
+        let text = read(&format!(
+            "BT /F1 12 Tf 1 0 0 1 20 100 Tm (a_b) Tj ET 0 0 1 rg 15 98 40 1.4 re f {SHOWN}"
+        ));
+        assert!(text.contains("a_b"), "{text:?}");
     }
 
     #[test]
