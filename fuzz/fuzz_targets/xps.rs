@@ -17,7 +17,13 @@ fuzz_target!(|data: &[u8]| {
             let _ = xps.page_image(p.index);
         }
         let mut doc = xps.doc.clone();
-        let analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
+        let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
+        let mut budget = fluree_doc_pdf::PageBudget::default();
+        if fluree_doc_pdf::spend_table_copies(&mut doc, &mut analysis.elements, &mut budget)
+            .is_err()
+        {
+            return;
+        }
         let _ = fluree_doc_pdf::unread_pages(&doc, &analysis.elements);
         fluree_doc_parse_fuzz::check(&analysis.elements);
     });

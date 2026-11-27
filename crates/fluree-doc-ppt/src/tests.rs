@@ -807,12 +807,15 @@ fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
     // The text, its marks counted at six bytes each, then the elements.
     let budget = |n: u64| Budget::new(n * ELEMENT_BYTES + 7_000 * TEXT_BYTES, u64::MAX);
     assert_eq!(
-        parse_within(&bytes, &mut budget(1_000)).unwrap().0.len(),
+        parse_with_media_within(&bytes, &mut budget(1_000))
+            .unwrap()
+            .0
+            .len(),
         1_000
     );
     assert!(matches!(
-        parse_within(&bytes, &mut budget(999)),
-        Err(PptError::TooLarge(ref m)) if m.contains("elements")
+        parse_with_media_within(&bytes, &mut budget(999)),
+        Err(PptError::TooLarge(ref m)) if m.to_string().contains("elements")
     ));
 }
 
@@ -1008,9 +1011,9 @@ fn what_doco_copies_of_a_table_is_spent_before_it_is_kept() {
     let bytes = deck_of(&[], &slide, None);
     // Room for the table and its text, which a budget of 20 MiB is many
     // times over, but not for 10 MB of copies at 12 bytes a byte.
-    let err = parse_within(&bytes, &mut Budget::new(20 << 20, 1 << 20)).unwrap_err();
+    let err = parse_with_media_within(&bytes, &mut Budget::new(20 << 20, 1 << 20)).unwrap_err();
     assert!(err.to_string().contains("copies"), "{err}");
-    let (els, _) = parse_within(&bytes, &mut Budget::default()).unwrap();
+    let (els, _) = parse_with_media_within(&bytes, &mut Budget::default()).unwrap();
     assert!(els.iter().any(|e| e.kind == "doco:Table"));
 }
 
@@ -1078,7 +1081,7 @@ fn a_placeholder_named_again_is_a_copy_spent_each_time() {
     let deck = deck_listing(&list, &[slide], &[(2, 0)]);
     assert!(parse(&deck).is_ok());
     let need = 1_001 * 10_000 * fluree_doc_model::budget::TEXT_BYTES;
-    let refused = parse_within(&deck, &mut Budget::new(need / 2, u64::MAX));
+    let refused = parse_with_media_within(&deck, &mut Budget::new(need / 2, u64::MAX));
     assert!(matches!(refused, Err(PptError::TooLarge(_))));
 }
 
@@ -1108,6 +1111,6 @@ fn slides_laid_inside_each_other_are_walked_within_the_budgets_work() {
     let deck = compound(&[("/PowerPoint Document", &s), ("/Current User", &user)]);
     assert!(parse(&deck).is_ok());
     // Each walk visits the slides inside it: about 100 * 101 / 2 records.
-    let e = parse_within(&deck, &mut Budget::new(u64::MAX, 2_000)).unwrap_err();
-    assert!(e.to_string().contains("steps of layout"), "{e}");
+    let e = parse_with_media_within(&deck, &mut Budget::new(u64::MAX, 2_000)).unwrap_err();
+    assert!(e.to_string().contains("steps of work"), "{e}");
 }

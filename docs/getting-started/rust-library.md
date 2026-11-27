@@ -33,18 +33,23 @@ for e in &analysis.elements {
 That second argument is the PDF **outline** (bookmark tree) — a
 near-ground-truth heading signal, and one no other engine tested uses. It is
 read from the PDF object graph rather than the content stream, so it comes
-from a separate call and you construct the `Pdf` yourself:
+from a separate call: open the `Pdf` once with `fluree_doc_pdf::open`, and
+extract from it:
 
 ```rust
-use fluree_doc_pdf::{document, extract_bytes, outline};
+use fluree_doc_pdf::{document, extract_pdf, open, outline};
 
-let data = std::fs::read("report.pdf")?;
-let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))?;
+let pdf = open(std::fs::read("report.pdf")?)?;
 let ol = outline::extract(&pdf);
 
-let mut doc = extract_bytes(data)?;
+let mut doc = extract_pdf(&pdf)?;
 let analysis = document::analyze(&mut doc, &ol);
 ```
+
+`open` measures the page tree before the parser walks it, and refuses one
+that would overflow the stack or list more pages than it can hold
+([Limits](../reference/limits.md#a-pdfs-page-tree)); `hayro_syntax::Pdf::new`
+called directly walks it unguarded, and a crafted file aborts the process.
 
 Passing `&[]` costs you only the outline signal; the other heading detectors
 still run.
@@ -181,7 +186,11 @@ cells (`parse_with_ocr`, `parse_with_media`, `read_pictures`, `read_media`),
 and `fluree-doc-email` for the images a message shows in its body
 (`email.media`, `email.media_bytes`), through the same loop
 (`fluree_doc_model::read_pictures`). `fluree_doc_image::read_placed` is the
-reading `parse_with_ocr` runs: each image read by an engine, once.
+reading `parse_with_ocr` runs: each image read by an engine, once, what
+its reading makes spent from the document's budget as the document left it
+(`fluree_doc_docx::parse_package_within`, `fluree_doc_xlsx::parse_package_within`,
+`fluree_doc_ppt::parse_with_media_within`, `Email::budget`): a picture past
+it comes back unread, `PastMemoryLimit`, and the document is kept.
 
 ## Read a non-PDF source
 
@@ -368,7 +377,7 @@ build them.
   figure holds none.
 - `DocoOptions` and `Notes` gain `unread_images`, listed in the graph as
   `doc:unreadImages`: `NotRead`, `Missing`, `UnsupportedFormat`,
-  `PastAllowance`, `Small`, `NotTexty` or `Failed`.
+  `PastAllowance`, `PastMemoryLimit`, `Small`, `NotTexty` or `Failed`.
 - `escalate::CropReason` gains `SmallImage`, an image a document places
   under the pixels a model is sent, which an OCR engine still reads. That
   floor is `fluree_doc_model::under_model_floor` (`MIN_SHORT_SIDE_PX`,
@@ -424,27 +433,154 @@ build them.
     reading that came back blank; a placed picture whose reading is
     refused so is `Failed` in `doc:unreadImages`.
 
+### Limits on what a document may take
+
+The budget itself, what each reader spends and the calls it changed (the
+readers that now return a `Result`, `converting_to`, `within`, the
+`Package` reads), are listed in [Changes for library
+callers](../reference/crate-map.md#changes-for-library-callers); what the
+limits on it changed:
+
+- Each reader's error gains `TooLarge(fluree_doc_model::budget::TooLarge)`:
+  `ExtractError`, `DocxError`, `PptxError`, `XlsxError`, `CsvError`,
+  `DocError`, `PptError`, `XlsError`, `OdfError`, `RtfError`, `XpsError`
+  and `EmailError`. None of these enums is `#[non_exhaustive]`: a `match`
+  over one needs an arm for it, or `_`. A caller of this work's earlier
+  pull request, where the variant held a `String`, gets the same message
+  from `e.to_string()`, and which limit was passed from `e.limit()`.
+- `fluree_doc_pdf::Document` gains `pages_past_limit`, the pages after the
+  last one read, and `cut_short`, where the budget stopped the reading
+  before the page limit (`CutShort`): a `Document` literal needs both
+  (`pages_past_limit: 0, cut_short: None` for one read whole).
+- `annot::annotations(pdf, budget)`, of this work's earlier pull request,
+  is `annotations(pdf, pages, budget)`: the notes of the first `pages`
+  pages only, those read (`doc.pages.len()`).
+- `UnreadPage::reason` gains `PastPageLimit`, `PastMemoryLimit` and
+  `PastWorkLimit`: a page a limit left unread ([Limits](../reference/limits.md#pages)).
+- Changed behaviour: a PDF is read to its 10,000th page, and one whose
+  memory or work runs out on a page after the first is read to the page
+  before, where it was refused; the pages not read are listed by
+  `unread_pages`. `render::page` draws a page past the render pixels at the
+  scale that fits, which `Raster::scale` says. A PDF opened by
+  `fluree_doc_pdf::open`, as `extract_bytes` opens one, is refused when its
+  page tree nests or lists past the bounds the parser can walk. Converted
+  by `fdoc`, a PDF's, an XPS document's and an OCR reading's tables are
+  spent the copies DoCO writes of their cells (`spend_table_copies`): a
+  PDF or an XPS document past them is read shorter, and an image refused.
+- One budget for a document and the pictures it places:
+  `fluree_doc_image::read_texty`, `elements_from_words` and `read_placed`
+  take the document's `&mut Budget` and spend what each reading makes
+  (`spend_reading`: its elements, their text, a table's cells and their
+  DoCO copies, its tables counted apart, `Budget::apart`). A reading past
+  it is not an `Err`: it comes back `ImageElements::past_budget`, nothing
+  read or spent, and `read_placed` lists its picture `PastMemoryLimit`
+  (`UnreadImage::reason` gains it). `ImageElements` gains `past_budget`,
+  which a literal or an exhaustive pattern needs. `elements`, a bare
+  image, keeps a budget of its own and still returns `Err` past it.
+  `fluree_doc_email::Email` gains `budget`, what reading the message
+  left, for its pictures.
+- Changed behaviour: `fdoc convert --comments` spends a PDF's notes from
+  the document's budget once its pages and their tables are final,
+  where they had one of their own (`PageBudget::spend_whole`): past it,
+  they are left out with a warning, the pages kept.
+- New: `fluree_doc_model::budget::Limits`, `limited_to`, `limits`, `Limit`,
+  `MAX_PAGES` and `MAX_RENDER_PIXELS`, `TooLarge::new`, `fixed`, `within`,
+  `limit` and `max`; `fluree_doc_model::PAST_PAGE_LIMIT`,
+  `PAST_MEMORY_LIMIT`, `PAST_WORK_LIMIT`, `past_limit_reason` and
+  `is_past_limit`; `fluree_doc_pdf::open`, `extract_pdf`,
+  `extract_pdf_with`, `extract_pdf_within`, `PageBudget` (and
+  `PageBudget::spend_whole`), `spend_table_copies`, `past_limit`, `CutShort`
+  and the module `page_tree`; `fluree_doc_model::budget::Budget::apart`;
+  `fluree_doc_image::spend_reading`; `fluree_doc_docx::parse_package_within`,
+  `fluree_doc_xlsx::parse_package_within` and
+  `fluree_doc_ppt::parse_with_media_within`;
+  `render::fitted_scale`, `page_scale`, `shrunk_by`, `page_shrunk_by` and
+  `MAX_RENDER_SIDE`.
+
 ## Errors
 
 `extract_file` and `extract_bytes` return `Result<Document, ExtractError>`.
-`ExtractError`, `DocxError` and `PptxError` all implement
-`std::error::Error`, so they compose with `?`, `Box<dyn Error>` and `anyhow`.
+`ExtractError` and every reader's error implement `std::error::Error`, so
+they compose with `?`, `Box<dyn Error>` and `anyhow`.
 
 `fluree_doc_markdown::parse`, `fluree_doc_text::parse` and
-`fluree_doc_html::parse` read every byte sequence; they fail only past the
-document's budget, returning the `fluree_doc_model::budget::TooLarge` itself.
+`fluree_doc_html::parse` read every byte sequence; they fail only past a
+limit, returning the `fluree_doc_model::budget::TooLarge` itself.
+
+### Limits
+
+A document past what it may take ([Limits](../reference/limits.md)) is
+refused with a `TooLarge`: the readers' errors carry it in their
+`TooLarge` variant, and as their `source()`. It says which limit was
+passed, and its value:
+
+```rust
+use fluree_doc_model::budget::{limited_to, Limit, Limits, TooLarge};
+
+let mut limits = Limits::default();
+limits.memory = 512 << 20; // what one document may take, estimated bytes
+limits.pages = 500;        // a PDF or XPS read to its 500th page
+let read = limited_to(limits, || fluree_doc_docx::parse(&bytes));
+if let Err(fluree_doc_docx::DocxError::TooLarge(e)) = &read {
+    match e.limit() {
+        Limit::Memory => eprintln!("past {} bytes: {e}", e.max()),
+        Limit::Fixed => eprintln!("past a bound of the reader's own: {e}"),
+        _ => eprintln!("{e}"),
+    }
+}
+```
+
+A PDF past the page limit, or past its memory or work on a page after the
+first, is not refused: it is read short, to the last page that fit, and
+`doc.pages_past_limit` counts the pages after it. The copies DoCO writes of
+its tables' cells are spent from the same budget once the elements are
+final: read it with `extract_pdf_within`, keeping the `PageBudget`, and
+pass that to `fluree_doc_pdf::spend_table_copies` before writing, which
+reads the document shorter where they do not fit (an XPS document or an
+OCR reading spends them from a `PageBudget::default()`):
+
+```rust
+let raw = fluree_doc_pdf::open(bytes)?;
+let mut budget = fluree_doc_pdf::PageBudget::default();
+let mut doc = fluree_doc_pdf::extract_pdf_within(&raw, &Default::default(), &mut budget)?;
+let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
+fluree_doc_pdf::spend_table_copies(&mut doc, &mut analysis.elements, &mut budget)?;
+```
+ Nothing in the elements
+says so, and `to_markdown(&elements)` carries no notes: list the pages
+(`fluree_doc_pdf::unread_pages`, each `PastPageLimit`, `PastMemoryLimit`
+or `PastWorkLimit`, `fluree_doc_model::is_past_limit` telling them apart)
+and pass them on, as `to_markdown_with` writes them in band:
+
+```rust
+let unread = fluree_doc_pdf::unread_pages(&doc, &analysis.elements);
+if unread.iter().any(|u| fluree_doc_model::is_past_limit(&u.reason)) {
+    eprintln!("read to page {}", doc.pages.len());
+}
+let notes = fluree_doc_model::Notes { unread, ..Default::default() };
+let md = fluree_doc_model::to_markdown_with(&analysis.elements, &notes);
+```
+
+`limited_to` holds every reader called inside it, on its thread, to those
+limits; outside it they are `Limits::default()`. A thread a caller spawns
+starts at the defaults: call `limited_to` in it too. A reader's own bounds
+(`Limit::Fixed`: a part read beside the document, the glyphs of an XPS
+page) are not among the limits a caller sets. `Limit::Pages` is a document
+listing more pages than a reader holds before it reads any (250,000, or
+the page limit where that is more).
 
 ## A document's budget
 
 Each reader's entry point makes the document's budget
-(`fluree_doc_model::budget::Budget::default()`) from two settings of the
-thread that calls it: the output the document is converted to
-(`budget::converting_to`), whose costs it counts at, and the share of
-memory `budget::within` leaves it. Both are thread-local. A caller that
-runs readers on a pool of its own (rayon, a blocking pool) sets them inside
-each task, on the worker thread: set on the thread that hands the work out,
-they do not reach the reader, which counts at DoCO's costs with a whole
-budget. See [Limits](../reference/limits.md).
+(`fluree_doc_model::budget::Budget::default()`) from three settings of the
+thread that calls it: the limits (`budget::limited_to`, above), the output
+the document is converted to (`budget::converting_to`), whose costs it
+counts at, and the share of memory `budget::within` leaves it, the least
+of that share and the memory limit. All three are thread-local. A caller
+that runs readers on a pool of its own (rayon, a blocking pool) sets them
+inside each task, on the worker thread: set on the thread that hands the
+work out, they do not reach the reader, which counts at DoCO's costs with
+the default limits. See [Limits](../reference/limits.md).
 
 Pages read as parts of one document can share its budget, as an e-mail's
 HTML versions do: `fluree_doc_html::parse_within`, `parse_message_within`

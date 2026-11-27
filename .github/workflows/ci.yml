@@ -37,3 +37,66 @@ jobs:
       - run: cargo test -p fluree-doc-cli --test ocr_engine -- --ignored
         env:
           FDOC_OCR_MODELS: ${{ runner.temp }}/ocr-assets
+
+  # Every fuzz target for a short, fixed time over its seeds: a reader that
+  # panics, aborts, hangs or runs past its memory limit on an input a few
+  # mutations from a seed fails here, before a long campaign finds it
+  # (fuzz/README.md). Built once, for all targets; run one after the other,
+  # every one of them whatever an earlier one found, the job failing at the
+  # end if any did.
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SECONDS_EACH: 15
+      # cargo-fuzz builds for the target it was itself built for unless told,
+      # and the prebuilt one install-action fetches is a musl build, for
+      # which the toolchain has no standard library.
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      # A dated nightly, not the latest: a nightly that breaks cargo-fuzz or
+      # libFuzzer would fail this job on a change that did nothing wrong.
+      # Moved forward by hand, with the date in fuzz/README.md.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-11-20
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> target
+      - name: Build the targets
+        working-directory: fuzz
+        run: cargo fuzz build -O -a -s none --target $TARGET
+      - name: Run each target
+        working-directory: fuzz
+        run: |
+          # Run apart from the loop, so that a list that fails, or names
+          # nothing, fails the job rather than running no target.
+          targets=$(cargo fuzz list)
+          if [ -z "$targets" ]; then
+            echo "::error::cargo fuzz list named no target"
+            exit 1
+          fi
+          failed=""
+          for t in $targets; do
+            mkdir -p corpus/$t
+            echo "::group::$t"
+            cargo fuzz run "$t" corpus/$t seeds/$t -O -a -s none --target $TARGET -- \
+              -rss_limit_mb=320 -timeout=10 -max_len=262144 \
+              -max_total_time=$SECONDS_EACH -print_final_stats=1 \
+              || failed="$failed $t"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::fuzz targets that failed:$failed"
+            exit 1
+          fi
+      - name: Keep what failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts

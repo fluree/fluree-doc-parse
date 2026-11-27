@@ -78,6 +78,29 @@ project = "my-project"          # optional; read from the key when absent
 | `gemini.credentials` | path to the service-account JSON key |
 | `gemini.project` | overrides the project named in the key |
 
+## Limits
+
+What one document may take, where the defaults do not suit a deployment:
+
+```toml
+[limits]
+max_memory = 4096            # MiB (default 2560)
+max_work = 268435456         # steps (default)
+max_pages = 20000            # pages of a PDF or XPS read (default 10000)
+max_render_pixels = 64000000 # pixels a page is rendered with (default)
+```
+
+Each is overridden by its `FDOC_MAX_*` variable and its `--max-*` flag
+([Environment variables](../reference/env-vars.md#limits)). A key the
+table does not know (`max_memroy`), and a value that is not a whole number
+(`max_memory = "64"`, `-1`), are warned about on every command, `fdoc
+config show` included, and ignored, that limit alone, the rest of the file
+read: refused, a typo in a limit would make the whole file unreadable, and
+the escalation settings beside it with it. A zero is an error naming where
+it was set. `fdoc config show` prints the
+limits in effect. What each bounds, and what none does, is in
+[Limits](../reference/limits.md#setting-the-limits).
+
 ## OCR
 
 ```toml
@@ -96,7 +119,7 @@ max_small_regions_per_page = 0
 | `models` | the OCR assets directory (models and ONNX Runtime) |
 | `threads` | ONNX Runtime threads per crop read (default 1: a batch runs one per worker) |
 | `max_megapixels` | most megapixels the engine reads in one pass (default 12.5, from 1 to 128): a page scanned at 300 dpi or a 12 Mpx photo is read whole, a larger image in overlapping strips, one too wide for them shrunk with a warning. A pass costs about 230 bytes a pixel while it is read ([how an image is sized](ocr.md#how-an-image-is-sized)) |
-| `max_memory` | the memory, in MiB, the passes the engine reads at once may take, each counted at about 230 bytes a pixel (default 8192); a pass that does not fit waits for others to end, one larger than all of it is read alone ([memory and speed](ocr.md#memory-and-speed)). Env: `FDOC_OCR_MAX_MEMORY` |
+| `max_memory` | the memory, in MiB, the passes the engine reads at once may take, each counted at about 230 bytes a pixel (default: a third of the memory free, at most 8192); a pass that does not fit waits for others to end, one larger than all of it is read alone ([memory and speed](ocr.md#memory-and-speed)). Env: `FDOC_OCR_MAX_MEMORY` |
 | `max_crops` | most crops the engine reads in one document; past it pages read whole come first, then routed regions, then small ones, and a note names how many were left (default 1000, `0` for no limit). Separate from `escalation.max_crops`: a scanned page is one crop, and a model's 200 would leave page 201 of a long scan unread |
 | `max_small_regions_per_page` | most small regions (pictures too small for a model's call) the engine reads on one page, the largest first, and a note names how many were left (default `0`: every one is read). Routed regions and pages read whole are always read. Set it where a page's time must be bounded: a drawing's callouts or a paper's figure labels can make a hundred crops of one page, each read on its own. At 8, such a page reads in about a tenth of the time, and a corpus loses about 2.6% of its OCR'd lines, mostly callouts and labels, but some of them a drawing's notes or problems set as images |
 

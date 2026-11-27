@@ -44,7 +44,7 @@ pub enum PptxError {
     Xml(String),
     NoSlides,
     /// Past what one document may make ([`Budget`]), naming it.
-    TooLarge(String),
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for PptxError {
@@ -58,11 +58,19 @@ impl std::fmt::Display for PptxError {
     }
 }
 
-impl std::error::Error for PptxError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for PptxError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<TooLarge> for PptxError {
     fn from(e: TooLarge) -> Self {
-        Self::TooLarge(e.to_string())
+        Self::TooLarge(e)
     }
 }
 

@@ -28,11 +28,11 @@
 //! the analysis's boxes are in, also on a page turned to be read upright.
 //!
 //! ```no_run
-//! # use fluree_doc_pdf::{document, escalate, extract_bytes, outline};
+//! # use fluree_doc_pdf::{document, escalate, extract_pdf, outline};
 //! # let bytes: Vec<u8> = vec![];
-//! let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+//! let pdf = fluree_doc_pdf::open(bytes).unwrap();
 //! let ol = outline::extract(&pdf);
-//! let mut doc = extract_bytes(bytes).unwrap();
+//! let mut doc = extract_pdf(&pdf).unwrap();
 //! let extracted = doc.clone();
 //! let opts = document::AnalyzeOptions { emit_anchors: true, ..Default::default() };
 //! let mut analysis = document::analyze_with(&mut doc, &ol, &opts);
@@ -103,9 +103,10 @@ pub const MAX_STORED_PPI: f64 = 300.0;
 /// page's size.
 pub const MAX_PAGE_PIXELS: f64 = 64.0e6;
 
-/// The longest side, in pixels, the renderer can draw: it sizes its canvas
-/// in 16 bits, and a page drawn wider loses what lies past the edge.
-pub const MAX_RENDER_SIDE: f64 = 65_535.0;
+/// The longest side, in pixels, a page is drawn with
+/// ([`crate::render::MAX_RENDER_SIDE`]): the renderer sizes its canvas in
+/// 16 bits, and aborted the process on a side of 65,528.
+pub const MAX_RENDER_SIDE: f64 = crate::render::MAX_RENDER_SIDE as f64;
 
 /// The most renders of one page its crops are cut from. Crops at their
 /// stored resolution each ask for their own scale, and a page of hundreds of
@@ -1079,6 +1080,14 @@ fn cut_crops(
     let pages = pdf.pages();
     let cache = RenderCache::new();
     let draw = |page, scale| render_page(page, &cache, scale);
+    // A page past the pixels a render may take is drawn at the scale that
+    // fits, and its crops are cut, and say they were, at that scale.
+    let scale_of = |pi: usize, r: Option<&BBox>| {
+        let asked = scale_of(pi, r);
+        pages
+            .get(pi)
+            .map_or(asked, |p| crate::render::page_scale(p, asked))
+    };
     for (page_idx, regions) in jobs {
         let Some(page) = pages.get(*page_idx) else {
             continue;
@@ -1553,6 +1562,8 @@ mod tests {
         let doc = Document {
             pages: vec![page],
             title: None,
+            pages_past_limit: 0,
+            cut_short: None,
         };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
@@ -1644,6 +1655,8 @@ mod tests {
     #[test]
     fn a_page_read_whole_says_why() {
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(0, 0, true), page(1, 500, false), page(2, 500, false)],
             title: None,
         };
@@ -1697,6 +1710,8 @@ mod tests {
             y1: 450.0,
         };
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![
                 page(0, 0, true),
                 page(1, 50, true),
@@ -1718,6 +1733,8 @@ mod tests {
         // read for its text: the doubt must not relabel it as a page an OCR
         // engine may skip.
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(0, 50, true), broken_page(1, 300)],
             title: None,
         };
@@ -1730,6 +1747,8 @@ mod tests {
     #[test]
     fn a_heading_doubt_comes_before_a_figure_doubt() {
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(0, 500, false), page(1, 500, false)],
             title: None,
         };
@@ -1804,6 +1823,8 @@ mod tests {
             }
         }
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -1849,6 +1870,8 @@ mod tests {
             crate::route::Route::VlmRegions(_)
         ));
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -2057,6 +2080,8 @@ mod tests {
             key: None,
         }];
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -2090,6 +2115,8 @@ mod tests {
             key: None,
         }];
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -2134,6 +2161,8 @@ mod tests {
         }];
         let doc = Document {
             pages: vec![p, page(1, 500, false)],
+            pages_past_limit: 0,
+            cut_short: None,
             title: None,
         };
         let (mut jobs, reasons) = reasons_with_doubts(&doc, &[0]);
@@ -2288,6 +2317,8 @@ mod tests {
     #[test]
     fn a_page_that_routes_whole_once_cleaned_is_read_whole() {
         let extracted = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page_that_reads_as_a_scan_once_cleaned()],
             title: None,
         };
@@ -2326,6 +2357,8 @@ mod tests {
     #[test]
     fn a_page_that_reads_as_a_scan_once_cleaned_ranks_as_one() {
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![
                 page_that_reads_as_a_scan_once_cleaned(),
                 page(1, 500, false),
@@ -2397,6 +2430,8 @@ mod tests {
     #[test]
     fn a_doubt_page_over_a_region_found_once_cleaned_ranks_with_regions() {
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page_with_a_region_only_once_cleaned(), page(1, 500, false)],
             title: None,
         };
@@ -2450,6 +2485,8 @@ mod tests {
             g.page = 2;
         }
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(0, 0, true), broken_page(1, 300), cleaned, regions],
             title: None,
         };
@@ -2488,6 +2525,8 @@ mod tests {
         };
         p.images = vec![image(550.0), image(150.0)];
         let doc = Document {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };

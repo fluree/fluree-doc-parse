@@ -62,13 +62,22 @@ const MAX_NAME_CHARS: usize = 1 << 10;
 /// times list it, and each page's `/Annots` array once, however many pages
 /// share it. Each note is spent from `budget` (an element and its text)
 /// before it is kept: past it, the document is too large.
-pub fn annotations(pdf: &Pdf, budget: &mut Budget) -> Result<Vec<Annotation>, TooLarge> {
+///
+/// Only on the first `pages` pages, those the document was read to
+/// (`Document::pages.len()`): a note on a page past them, past the page
+/// limit or where the budget stopped the reading, would be a paragraph of
+/// a page the output lists as not read.
+pub fn annotations(
+    pdf: &Pdf,
+    pages: usize,
+    budget: &mut Budget,
+) -> Result<Vec<Annotation>, TooLarge> {
     let mut out = Vec::new();
     let mut texts = Texts::default();
     let mut seen_arrays = HashSet::new();
     let mut seen = HashSet::new();
     let mut entries = 0usize;
-    for (page, p) in pdf.pages().iter().enumerate() {
+    for (page, p) in pdf.pages().iter().take(pages).enumerate() {
         if let Some(r) = p.raw().get_ref(b"Annots") {
             if !seen_arrays.insert(r) {
                 continue;
@@ -632,7 +641,7 @@ mod tests {
             b"<< /Type /Annot /Subtype /Text /Rect [10 10 50 50] /Contents (Kept) >>".to_vec(),
         ]);
         let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
-        let notes = annotations(&pdf, &mut Budget::default()).unwrap();
+        let notes = annotations(&pdf, usize::MAX, &mut Budget::default()).unwrap();
         assert_eq!(notes.len(), 1, "{notes:?}");
         assert_eq!(notes[0].contents, "Kept");
         let pdf = Pdf::new(std::sync::Arc::new(objects_pdf(&[
@@ -641,7 +650,7 @@ mod tests {
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [+ ] >>".to_vec(),
         ])))
         .unwrap();
-        assert!(annotations(&pdf, &mut Budget::default())
+        assert!(annotations(&pdf, usize::MAX, &mut Budget::default())
             .unwrap()
             .is_empty());
     }
@@ -649,7 +658,7 @@ mod tests {
     #[test]
     fn notes_with_something_written_are_read_with_their_author() {
         let pdf = Pdf::new(std::sync::Arc::new(annotated(&zlib(b"x")))).unwrap();
-        let notes = annotations(&pdf, &mut Budget::default()).unwrap();
+        let notes = annotations(&pdf, usize::MAX, &mut Budget::default()).unwrap();
         assert_eq!(notes.len(), 2, "{notes:?}");
         assert_eq!(notes[0].subtype, "Text");
         assert_eq!(notes[0].author.as_deref(), Some("Sam Example"));
@@ -662,6 +671,38 @@ mod tests {
         assert_eq!(els[0].text, "Sam Example: Check this total");
         assert_eq!(els[0].evidence, "annotation");
         assert_eq!(els[1].text, "Été");
+    }
+
+    #[test]
+    fn a_note_on_a_page_past_those_read_is_not_read() {
+        // A note on each of three pages, the document read to its second:
+        // the third page's note would be a paragraph of a page listed
+        // unread.
+        let page = |n: usize| {
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [\
+                 << /Subtype /Text /Rect [10 10 50 50] /Contents (On page {n}) >>] >>"
+            )
+            .into_bytes()
+        };
+        let pdf = objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".to_vec(),
+            page(1),
+            page(2),
+            page(3),
+        ]);
+        let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
+        let read = |pages: usize| -> Vec<String> {
+            annotations(&pdf, pages, &mut Budget::default())
+                .unwrap()
+                .into_iter()
+                .map(|n| n.contents)
+                .collect()
+        };
+        assert_eq!(read(2), ["On page 1", "On page 2"]);
+        assert_eq!(read(3).len(), 3);
+        assert!(read(0).is_empty());
     }
 
     #[test]
@@ -688,7 +729,7 @@ mod tests {
             format!("({long})").into_bytes(),
         ]);
         let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
-        let notes = annotations(&pdf, &mut Budget::default()).unwrap();
+        let notes = annotations(&pdf, usize::MAX, &mut Budget::default()).unwrap();
         let read: Vec<_> = notes
             .iter()
             .map(|n| (n.page, n.subtype.as_str(), n.contents.chars().count()))
@@ -705,8 +746,8 @@ mod tests {
         // Each note an element and its text, spent before it is kept.
         let need = 4 * fluree_doc_model::budget::ELEMENT_BYTES
             + fluree_doc_model::budget::TEXT_BYTES * (5 + 11 + 2 * MAX_NOTE_CHARS as u64 + 6);
-        assert!(annotations(&pdf, &mut Budget::new(need, 0)).is_ok());
-        assert!(annotations(&pdf, &mut Budget::new(need - 1, 0)).is_err());
+        assert!(annotations(&pdf, usize::MAX, &mut Budget::new(need, 0)).is_ok());
+        assert!(annotations(&pdf, usize::MAX, &mut Budget::new(need - 1, 0)).is_err());
     }
 
     #[test]

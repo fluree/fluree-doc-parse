@@ -70,7 +70,9 @@ of the image was there to keep (no words written for it).
 
 Only the first page of a multi-page TIFF is read, with a warning, and the
 others are listed in [`doc:unreadPages`](../formats/doco.md) with the reason
-`LaterPage`. Some TIFF codings are not decoded and stop the image with the
+`LaterPage`. Its pages are counted to the page limit (10,000,
+`--max-pages`); a file going on past it lists the first page past it
+`PastPageLimit`, and counts no further. Some TIFF codings are not decoded and stop the image with the
 decoder's error: CCITT Group 3 fax (Group 4 is read), YCbCr and CIELab colour.
 A JPEG that ends before its image does is read as far as it goes, with a
 warning: the decoder fills in the rest, so part of the page may be blank.

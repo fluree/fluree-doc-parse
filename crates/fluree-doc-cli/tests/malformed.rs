@@ -43,9 +43,10 @@ fn cycle() -> Vec<u8> {
     with_tree(CATALOG, "<< /Type /Pages /Kids [2 0 R] /Count 1 >>")
 }
 
-/// The page reference buried ten thousand arrays deep.
+/// The page reference buried a thousand arrays deep (past 2,048, the
+/// file is refused before the parser reads it).
 fn nested() -> Vec<u8> {
-    let d = 10_000;
+    let d = 1_000;
     with_tree(
         CATALOG,
         &format!(

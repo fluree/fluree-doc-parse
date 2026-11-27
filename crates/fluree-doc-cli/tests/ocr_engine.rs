@@ -1088,6 +1088,31 @@ fn an_xps_scan_and_a_pasted_screenshot_read_as_text_where_they_are() {
 
 #[test]
 #[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn the_engine_says_what_memory_a_batch_sets_aside_for_it() {
+    use fluree_doc_vision::oar::{BYTES_PER_PIXEL, DEFAULT_MEMORY, PIPELINE_MEMORY};
+    use fluree_doc_vision::OcrEngine;
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let opts = OarOptions {
+        pipelines: 3,
+        ..OarOptions::default()
+    };
+    let engine = OarEngine::open(&dir, &opts).unwrap();
+    assert_eq!(engine.most_memory(), DEFAULT_MEMORY + 3 * PIPELINE_MEMORY);
+    // A budget smaller than the largest pass: that pass, read alone.
+    let small = OarOptions {
+        pipelines: 1,
+        memory: 1 << 20,
+        ..OarOptions::default()
+    };
+    let engine = OarEngine::open(&dir, &small).unwrap();
+    assert_eq!(
+        engine.most_memory(),
+        small.sizing.max_pixels() * BYTES_PER_PIXEL + PIPELINE_MEMORY
+    );
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
 fn fdoc_ocr_names_the_image_it_shrinks() {
     // 3,000 × 400 px over a cap of 1 Mpx: a strip as tall as the image is
     // wide would not fit, so the image is read shrunk, and the warning says

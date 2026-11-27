@@ -21,8 +21,7 @@ const MAX_COLUMNS: u64 = 1 << 14;
 
 pub(crate) fn elements(content: &Tree, budget: &mut Budget) -> Result<Vec<Element>, OdfError> {
     let sheets = sheets(content, budget)?;
-    fluree_doc_xlsx::grid_elements(sheets, "odf", budget)
-        .map_err(|e| OdfError::TooLarge(e.to_string()))
+    fluree_doc_xlsx::grid_elements(sheets, "odf", budget).map_err(OdfError::TooLarge)
 }
 
 /// The sheets' cells, each copy of a repeated one a cell, each spent from
@@ -54,8 +53,7 @@ fn sheets(content: &Tree, budget: &mut Budget) -> Result<Vec<GridSheet>, OdfErro
             }
             let repeat = count(content.attr(r, "number-rows-repeated"));
             // The row's text is copied out of the tree to be read.
-            crate::room_for_text(content, r, budget)
-                .map_err(|e| OdfError::TooLarge(e.to_string()))?;
+            crate::room_for_text(content, r, budget).map_err(OdfError::TooLarge)?;
             let cells = cells_of(content, r, &bold);
             if is_header && row == u64::from(header) {
                 header += repeat.min(16) as u32;
@@ -72,9 +70,9 @@ fn sheets(content: &Tree, budget: &mut Budget) -> Result<Vec<GridSheet>, OdfErro
                     for k in 0..c.columns {
                         total += 1;
                         if total > MAX_CELLS {
-                            return Err(OdfError::TooLarge(format!(
+                            return Err(OdfError::TooLarge(TooLarge::fixed(format!(
                                 "its sheets hold more than {MAX_CELLS} cells"
-                            )));
+                            ))));
                         }
                         spend(budget, &c.cell.text)?;
                         let col = c.cell.col + k;
@@ -164,7 +162,7 @@ fn cells_of(t: &Tree, r: usize, bold: &HashSet<String>) -> Vec<RowCell> {
 
 /// One cell and its text, spent before they are made.
 fn spend(budget: &mut Budget, text: &str) -> Result<(), OdfError> {
-    let too_large = |e: TooLarge| OdfError::TooLarge(e.to_string());
+    let too_large = |e: TooLarge| OdfError::TooLarge(e);
     budget.spend_cells(1).map_err(too_large)?;
     budget.spend_text(text).map_err(too_large)
 }
@@ -290,7 +288,7 @@ mod tests {
             "<table:table-row><table:table-cell table:number-columns-repeated=\"3000\"><text:p>{big}</text:p></table:table-cell></table:table-row>"
         );
         assert!(
-            matches!(parse(&sheet(&row)), Err(OdfError::TooLarge(ref m)) if m.contains("text")),
+            matches!(parse(&sheet(&row)), Err(OdfError::TooLarge(ref m)) if m.to_string().contains("text")),
             "{:?}",
             parse(&sheet(&row)).map(|e| e.len())
         );

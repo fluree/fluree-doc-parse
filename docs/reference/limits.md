@@ -16,19 +16,66 @@ of memory a document may take`) rather than taking the process down with
 it, and in a batch the other documents still convert.
 
 The other readers are not on this budget, and bound what they make by
-bounds of their own, where they have any: XPS its pages and glyphs
+bounds of their own, where they have any: XPS the pages it lists (250,000,
+read or past the page limit, or the page limit where that is more) and the
+glyphs it reads
 ([XPS](../inputs/xps.md#bounds)), an image its pixels
 ([Images](../inputs/images.md#size-and-coordinates)). A PDF spends the
-budget on its annotations alone; the transcript readers have no bound
-beyond their input's size. Of an e-mail, only an HTML body is on it: its
-MIME tree or compound file, and a plain-text body, are bounded by the
-message's size ([An e-mail's own layer](#an-e-mails-own-layer)).
+budget on what its pages draw, as they are interpreted ([A PDF's
+content](#a-pdfs-content)), and on its annotations; the transcript readers
+have no bound beyond their input's size. Of an e-mail, only an HTML body
+is on it: its MIME tree or compound file, and a plain-text body, are
+bounded by the message's size ([An e-mail's own
+layer](#an-e-mails-own-layer)).
 
 A budget is one document's. A message's attachments are converted within
 what the message leaves of its budget, one at a time
 ([Files an e-mail carries](#files-an-e-mail-carries)); a batch runs no more
 documents at once than free memory holds budgets for
 ([Batches](#batches)).
+
+## Setting the limits
+
+The bounds a caller may set are gathered in one value,
+`fluree_doc_model::budget::Limits`, whose default is the constants below:
+
+| Limit | Default | Bounds | Flag, variable, config key |
+| --- | --- | --- | --- |
+| `memory` | 2.5 GiB | what one document's elements, cells, text and parts inflated are estimated to take ([Memory](#memory)) | `--max-memory` (MiB), `FDOC_MAX_MEMORY`, `max_memory` |
+| `work` | 2^28 steps | the layout passes and parsers' loops whose cost the file chooses ([Work](#work)) | `--max-work`, `FDOC_MAX_WORK`, `max_work` |
+| `pages` | 10,000 | the pages a PDF or an XPS document is read to ([Pages](#pages)) | `--max-pages`, `FDOC_MAX_PAGES`, `max_pages` |
+| `render_pixels` | 64 million | the pixels a page is rendered with ([Renders](#renders)) | `--max-render-pixels`, `FDOC_MAX_RENDER_PIXELS`, `max_render_pixels` |
+
+A library caller sets them for the readers it calls with
+`budget::limited_to(limits, || ...)`, on its thread, as `within` and
+`converting_to` are set; every budget made inside
+(`Budget::default()`) and every page cap and render follows them. `fdoc`
+resolves them once per command, each `--max-*` flag over its `FDOC_MAX_*`
+variable over the `[limits]` table of `.fdoc/config.toml`, and sets them
+for every document it reads, a batch's workers included; `-j` is sized
+from the memory limit in effect, or from `--job-memory` where it is set
+([Batches](#batches)). Under the fuzz
+targets the defaults are the fuzz build's ([Under the fuzz
+targets](#under-the-fuzz-targets)).
+
+A reader's own bounds on what the budget does not count (a part read
+beside the document, an XPS page's glyphs, an image's pixels, the cells
+calamine allocates) are not among them: each is sized for the shipped
+budget and fixed, and stays so whatever memory limit is set.
+
+A limit passed is a `budget::TooLarge`, which says which limit
+(`TooLarge::limit()`: `Memory`, `Work`, `Pages`, or `Fixed` for a reader's
+own) and its value (`TooLarge::max()`). The render pixels never refuse a
+document: past them, a page is drawn smaller ([Renders](#renders)). Nor
+does the page limit, but for a document listing more pages than a reader
+can hold before it reads any: past it, a document is read to it and the
+pages after listed unread ([Pages](#pages)), and a PDF whose memory or
+work runs out on a page after the first is read to the page before. Each
+reader's error carries it, in its `TooLarge` variant and as its
+`source()`, so a caller can tell a document past a limit it may raise from
+a broken one. `fdoc` names the flag that raises it: `table too large:
+cells past the 1 MiB of memory a document may take (raise it with
+--max-memory)`.
 
 ## Memory
 
@@ -180,7 +227,42 @@ counts them on every cell they land on, with the part before
 document's tables): a band of 6,000 characters at the foot of one page,
 over 10,000 rows on the next, is 120 MB of labels from 6 KB, and is refused.
 The 5.3 GB above is 4.4 B a byte copied, under the 12 the budget counts;
-both files are refused as DoCO now, before a copy is made. Only DoCO makes
+both files are refused as DoCO now, before a copy is made.
+
+A PDF's tables, an XPS document's and those an OCR reading makes are laid
+out from what the page draws, by a layout that keeps no budget: their
+copies are spent once the document's elements are final (after the model
+tiers' readings and the pages not asked for left out), from the
+budget the pages were read within. Past it, a PDF or an XPS document is
+read short, as it is past the budget while its pages are read: to the most
+pages whose glyphs and tables' copies fit together, the pages dropped
+giving back what their glyphs spent, the rest listed `PastMemoryLimit`. A
+table on a document's first page that does not fit alone, and an image
+(one page), leave nothing to read short and are refused.
+
+What is made after, and may be left out without the document being
+wrong, is spent from what the pages and their tables left, all or
+nothing, and never reads the document short:
+
+- the notes a PDF's readers left (`--comments`): past what is left, all
+  of them are left out, with a warning (`warning: <stem>: notes left out:
+  …`), and the pages are kept whole. Spent before the tables' copies,
+  notes nobody prints could have read a document short of its pages;
+- the text read in the pictures a document places in its flow (a
+  `.docx`'s, an `.xlsx`'s, a `.ppt`'s, an e-mail's), by OCR or a model:
+  each picture's reading (its elements, their text, a table's cells and
+  the copies DoCO writes of them) is spent from what the document, then
+  the pictures before it, left, in the order they are first drawn (a
+  reading the configured model makes in the run, once it has read them
+  all). A picture whose reading is past it is listed unread,
+  `PastMemoryLimit` ([Images nothing read](../formats/doco.md#images-nothing-read)),
+  counted on stderr with `--max-memory` to raise it, and no model is
+  sent it; the document and the pictures before it are kept. Each picture
+  spent from a budget of its own, a document of 256 pictures could take
+  256 times what one document may. An XPS document's pictures are read
+  into its pages, and spent with them, as above. 24 pages of a
+ruled table of 40 rows, each a header of three 46-character names, read in
+2 MiB as Markdown and the text, and to page 15 as DoCO. Only DoCO makes
 these copies: converted to text, a value merged down is counted once a row,
 as the projection shows it, and converted to Markdown, XHTML or JSON,
 nothing is copied, so both files convert.
@@ -189,8 +271,13 @@ nothing is copied, so both files convert.
 
 Layout passes whose cost the file chooses (islands of cells compared
 pairwise to mend a block a missing cell split, a table's rows read across
-its range) spend a count of steps of their own, at most 2^28 a document: a
-few seconds.
+its range), and a PDF's interpreter for each thing a page draws ([A PDF's
+content](#a-pdfs-content)), spend a count of steps of their own, at most
+2^28 a document. A step is not a fixed time: a layout pass's takes
+nanoseconds, but a glyph the PDF interpreter draws, even off the page, 2
+to 3.5 µs (4 million off the page took 14 s), so a PDF may take 8 to 15
+minutes before its steps run out. The work bounds what a file can make a
+reader do, not how long it takes ([Time](#time)).
 
 A package's parts name each other by relationship id (a `.docx`'s
 headers, footers and images, an `.xlsx`'s sheets and the pictures of its
@@ -434,38 +521,202 @@ The budget is a document's, and a batch (`fdoc convert DIR --out-dir OUT
 -j N`) converts N documents at once in one process, so N documents each
 within their budget could together pass what the machine has, and one
 allocation refused would abort the whole batch, or the kernel kill it. So
-no more documents run at once than the memory free to the process holds at
-3.75 GiB each, a whole budget and half as much again for the document's
-input and a library's own copies (the 4 GB a document at its budget was
-measured to fit in), and at least one. The memory free is the least of
-what the system has available (`MemAvailable` in `/proc/meminfo`), what
-the process's control groups leave it (a container's limit: cgroup v2's
-`memory.max` less `memory.current`, v1's `memory.limit_in_bytes` less
-`memory.usage_in_bytes`, for its group and each above it, from the path
-`/proc/self/cgroup` names under `/sys/fs/cgroup`; what a group uses is
-counted less the file cache the kernel reclaims first, `inactive_file` in
-its `memory.stat`, `total_inactive_file` in v1, as docker and the kubelet
-count a working set), and what its address
-space may grow to (`ulimit -v`). Where none is known (outside Linux), no
-more than one per core. A lowered `-j` is said on stderr, where the batch
-has more files than it runs at once (`note: -j 4 lowered to 1: 2860 MiB of
-memory free, 3840 MiB a document`). Six `.docx` that each make 300 MB of
-DoCO, converted with `-j 6` under a 4 GB address space, aborted the batch;
-they now convert one at a time. Three HTML tables that each peak at 1.5 GB,
-converted with `-j 3` in a group limited to 3 GB on a host with 23 GB
-available, had the batch killed, silently; they now convert one at a time.
-And a group limited to 9 GB, after 4 GB written to a file had left 3.1 GB
-of cache counted in its use, no longer lowers `-j 2` to one.
+each document is admitted only once the memory free to the process has
+room for it beside those already running: a whole budget, its input, held
+whole, and 1.25 GiB for what the readers' own bounds let a library take
+beside the budget (an image decoded within 1 GiB), 3.75 GiB and the input
+by default. A document that needs more than there is runs alone. The
+input and the 1.25 GiB do not shrink with `--max-memory`. A page limit
+past 250,000 adds what the PDF parser keeps for the pages past that, 1.5
+KiB each ([A PDF's page tree](#a-pdfs-page-tree)).
 
-`--job-memory <MiB>` (or `FDOC_JOB_MEMORY`) says what a document of the
-batch takes in place of the 3.75 GiB: as many run at once as the memory
-free holds at that, and each is read within two thirds of it
+`--job-memory <MiB>` (or `FDOC_JOB_MEMORY`) says what a document takes in
+place of that estimate, its budget and the 1.25 GiB, where the caller has
+measured what its documents take on its machine: each document is then
+admitted at that and its input, and read within two thirds of it
 (`fluree_doc_model::budget::within`), as the default's 2.5 GiB budget is
-two thirds of its 3.75. An 8 GB container that runs one document at a
-time runs four with `--job-memory 1536`, each refused past 1 GiB. Where
-the memory free is not known, setting it lifts the one-per-core bound: a
-batch that waits on the network, not the processor, runs as many as
-`-j` asks.
+two thirds of its 3.75 GiB; `--max-memory`, where it is lower, still bounds
+it. An 8 GB container that runs one document at a time runs four small
+ones with `--job-memory 1536`, each refused past 1 GiB. Where the memory
+free is not known, setting it lifts the one-per-core bound below: a batch
+that waits on the network, not the processor, runs as many as `-j` asks.
+
+`-j` is lowered, with a note on stderr, to as many documents as the
+memory free holds at the batch's smallest input, and at least one (`note:
+-j 4 lowered to 1: 2860 MiB of memory free, 3840 MiB a document`); a large
+input among small ones waits for room rather than lowering `-j` for the
+others. The memory free is, on Linux, the least of what the system has
+available (`MemAvailable`), what the process's control groups leave it
+(a container's limit, counted as docker and the kubelet count a working
+set) and what its address space may grow to (`ulimit -v`); on macOS, the
+pages `vm_stat` counts free, inactive or speculative, a container's limit
+or `ulimit -v` not looked at. Where it is not known (on any other
+system), no more than one document per core runs at once.
+
+A batch reading images with the OCR engine (`--ocr`) sets aside, before it
+counts documents, the memory the engine may take: its own budget
+(`ocr.max_memory`; unset, a third of the memory free, at most 8 GiB; or one
+pass at `ocr.max_megapixels` where that is more, as it is read alone) and
+0.3 GB for each pipeline it may build, one per image read at once, four at
+most. The engine is shared by every document, so it is set aside once, not
+per document: with the defaults, a batch runs one document at once with 12
+GiB free, two with 16 GiB (`note: -j 4 lowered to 2: 16384 MiB of memory
+free, 6661 MiB of it for OCR, 3840 MiB a document`). Set `ocr.max_memory`
+lower to run more documents at once; the engine then reads fewer images at
+a time ([Memory and speed](../cli/ocr.md#memory-and-speed)).
+
+What these figures were measured on is in [How the limits were
+sized](../design/limits.md#batches).
+
+## Pages
+
+A PDF or an XPS document is read to its 10,000th page, the page limit
+(`Limits::pages`, `--max-pages`), and no further: the pages past it are
+neither interpreted nor laid out. A PDF whose memory or work runs out on a
+page after the first is read to the page before, the last whole one
+([A PDF's content](#a-pdfs-content)). Never silently: each page not read
+is listed in `doc:unreadPages` with the limit that left it, one entry a
+page:
+
+| Reason | The page is | Raised by |
+| --- | --- | --- |
+| `PastMemoryLimit` | on or after the one a PDF's memory ran out on, before the page limit | `--max-memory` |
+| `PastWorkLimit` | on or after the one a PDF's work ran out on, before the page limit | `--max-work` |
+| `PastPageLimit` | past the page limit (past both, it is this one: raising the budget alone leaves it unread) | `--max-pages` |
+
+`fluree_doc_pdf::unread_pages` lists them, from `Document::pages_past_limit`
+and `Document::cut_short`; `fluree_doc_model::is_past_limit` tells these
+reasons from the others. `fdoc` warns once for each run (`pages
+10001-12000 are past the page limit, not read (2000 pages)`), then names
+the flag that raises the limit that stopped it (`read to page 10000
+(raise it with --max-pages)`). Under `-q` it still says the second where
+the output carries no notes (`-f json`, `-f text`): nothing else would
+tell a document read short from a whole one. `--strict` does not fail such
+a document: it fails one that yields nothing, and the pages read are
+output. The notes left on the pages past those read are not read either.
+
+A document listing more than 250,000 pages, or more than the page limit
+where that is higher, is refused before any page is read
+(`Limit::Pages`, raised by `--max-pages`): the PDF parser keeps each page
+of its tree, about 1.4 KB, before the page limit can leave any unread, and
+an XPS document lists each page past the limit (`XPS document too large:
+it lists more than 250000 pages`). A caller that raises the page limit past
+250,000 asks for that many pages read, and accepts what the parser keeps
+for them. A multi-page TIFF, of which only the first page is read, counts
+its pages to one past the limit: the pages after the first are listed
+`LaterPage`, and one past the limit `PastPageLimit`, after which the file
+is not followed.
+
+The page limit bounds the pages read, not what each page holds: a page's
+glyphs, paths and pictures are [A PDF's content](#a-pdfs-content). Slides
+(`.pptx`, `.ppt`, `.odp`) and sheets are not cut at the page limit: each
+slide's part, and each element made of it, is spent from the memory
+budget, which bounds them already, and a deck has no page a reader routes.
+
+## A PDF's content
+
+A page's content stream is interpreted by hayro, which calls back into the
+reader for each thing the page draws, and has no bound of its own: a page
+of 31 KB drawing 20 million glyphs took 4.1 GB. So each call spends the
+document's budget (`Budget::default`, one for all its pages) before what it
+drew is kept:
+
+| What the page draws | Work | Memory |
+| --- | --- | --- |
+| a glyph | a step | 224 bytes, its text where a mapping gives it more than four bytes, 48 more where it starts a line, and 192 more for each glyph of the page that holds the most, once |
+| a path | a step a segment | a cell slot for each rule or fill kept |
+| an image | a step, and 4,096 where its probe decodes it (not for an image whose probe is off, nor one drawn again whose result is reused) | a cell slot for its placement |
+
+Past the budget the page is stopped where it is (where the build unwinds;
+built to abort on a panic, the interpreter runs the page to its end with
+nothing more kept), and dropped: the document is read to the page before,
+the pages from there listed unread ([Pages](#pages)). By the costs
+above, a text PDF of 5,000 pages of fifty lines is read to about its
+3,500th within the default budget, rather than refused. Where the first page alone passes the budget, nothing would be
+read, and the document is refused: `extract: PDF too large: glyphs past
+the 2560 MiB of memory a document may take (raise it with --max-memory)`
+(`ExtractError::TooLarge`).
+
+What the interpreter does between two calls is not counted: decoding a
+content stream, the operators that draw nothing (a million `q` or `cm`),
+building a path before handing it over, a glyph's outline, a shading. Its
+memory is bounded by the content stream's own size, its time by none:
+there is no deadline ([Time](#time)). The layout passes after extraction
+spend the work budget where their cost is the file's choice; their memory
+follows the glyphs kept. The notes left on the pages read are read after
+the pages, from what the pages and their tables left ([Copies of a
+table's cells](#copies-of-a-tables-cells)): past it, they are left out,
+not the pages.
+
+The measurements behind each cost are in [How the limits were
+sized](../design/limits.md#a-pdfs-content).
+
+## A PDF's page tree
+
+hayro-syntax walks a PDF's page tree when the document is opened, by
+recursion, with no bound on its depth, and keeps every page it walks: a
+1.7 MB file of 20,000 nested nodes overflowed the stack and aborted the
+process, and a 12 KB file whose two levels each list one kid a thousand
+times made a million pages, 1.4 GB. The parser has no hook into that walk,
+so before a document is opened (`fluree_doc_pdf::open`, which
+`extract_bytes` and every `fdoc` command use; `extract_pdf` reads a
+document opened so) its tree is measured from the file's bytes
+(`fluree_doc_pdf::page_tree`), and refused past:
+
+- 256 levels (`PDF too large: its page tree nests more than 256 deep`), a
+  reader's own bound (`Limit::Fixed`); a real tree is a handful deep;
+- 250,000 pages, or the page limit where that is more (`its page tree
+  lists more than 250000 pages`, `Limit::Pages`), each path to a page
+  counted, a page listed twice counted twice. The longest real documents
+  run to tens of thousands.
+
+The measure reads every object the file holds as the parser reads one, in
+every version an incremental update left and inside object streams, and
+counts from the objects a catalog names by `/Pages`, where the parser's
+walk starts: a structure tree's array of references, or a name tree's
+`/Kids`, are not pages. An object nesting more than 2,048 deep is refused
+(`an object nests more than 2048 deep`), as are object streams decoding
+past 64 MiB each or 256 MiB in all, cross-reference streams listing more
+than four million objects, and objects overlapping so that reading them
+would scan the file and what its object streams decode to more than 16
+times over.
+
+The measure does not see everything the parser may walk: an encrypted
+document's object streams, for one, are not decrypted. What it misses,
+and how each bound was found, are in [How the limits were
+sized](../design/limits.md#a-pdfs-page-tree). The parser bounding its own
+walk is the complete answer, and is to come from hayro-syntax.
+
+## Renders
+
+A page is rendered whole, for `fdoc render` and for the crops a model or
+an OCR engine reads, which are cut from a render of their page. No page is
+drawn with more than 64 million pixels (256 MB of RGBA,
+`--max-render-pixels`), nor with a side longer than 32,767 pixels, which
+the renderer, sizing its canvas in 16 bits, cannot draw: a page the scale
+asked for would draw larger is drawn at the scale that fits
+(`fluree_doc_pdf::render::fitted_scale`), never cut, and the render, and
+each crop cut from it, records the scale it was drawn at (`Raster::scale`,
+`RawCrop::scale`). A page within both is drawn as asked; the largest page
+the format allows, 14,400 points a side, is drawn whole at 2x. `fdoc
+render` says which bound drew a page smaller (`drawn at 0.33x (1000x1000
+px), the most 1000000 pixels allow (--max-render-pixels)`, or `..., the
+longest side a render may take, 32767 pixels`, which no flag raises), and a
+page whose short side comes to less than a pixel at that scale is not
+drawn, and said to be. What a page's content costs to draw, beyond its
+pixels, is not bounded here ([A PDF's content](#a-pdfs-content)).
+Measured: [How the limits were sized](../design/limits.md#renders).
+
+## Time
+
+There is no deadline on a document, nor a time limit among the
+[limits](#setting-the-limits): work inside a library's loop (hayro's
+interpreter between two calls, html5ever's tree builder, a decoder) cannot
+be stopped from the thread running it, and a deadline checked only where
+the reader gets control back bounds nothing in between. What the limits
+bound is what a document may make and the steps whose cost the file
+chooses; a caller that needs a wall-clock bound runs the reader in a
+process it can kill (issue #23).
 
 ## Coordinates
 
@@ -476,8 +727,10 @@ coordinates could otherwise wrap its last column onto its first.
 ## Under the fuzz targets
 
 The fuzz targets (`fuzz/`) build the readers with a sixteenth of both
-bounds, 160 MiB and 2^24 steps: an input that spends the whole budget is
-then quick to run. Each input is read for one output, DoCO, the text, or
+bounds, 160 MiB and 2^24 steps, which `Limits::default()` then holds (the
+page limit and the render pixels are the shipped ones): an input that
+spends the whole budget is then quick to run. CI runs each target for 15
+seconds over its seeds (`fuzz/README.md`). Each input is read for one output, DoCO, the text, or
 the flat outputs, which its bytes pick, and checked at that output's costs,
 so the costs of each are fuzzed; an e-mail's files are converted within
 what the message leaves, as `--parse-attachments` converts them.
@@ -490,7 +743,9 @@ an XPS document's parts and glyphs (64 MiB a part, 250,000 glyphs a page,
 `.doc` or a `.ppt`; the pictures read from a `.ppt` or an
 Office package and the parts read beside an Office document's main one
 (64 MiB each); the files a PDF embeds (64 MiB each, 256 MiB in all, 512
-MiB decoded); and the pixels an image is decoded to (128 million, 1 GiB).
+MiB decoded); the object and cross-reference streams a PDF's page tree
+is measured through (64 MiB each, 256 MiB in all, 4 million entries); and the pixels an image is decoded to (128
+million, 1 GiB).
 Otherwise an input within them would take as much under the fuzzer as in
 production, past its memory limit.
 

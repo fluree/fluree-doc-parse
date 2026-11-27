@@ -457,8 +457,44 @@ pub struct UnreadPage {
     /// What the router saw: `Scanned`, `NearBlank` or `BrokenText`; or
     /// `OcrSparse`, a page an OCR reading read whole that still holds next
     /// to no text; or `LaterPage`, a page after the first of a multi-page
-    /// image file, which is not read.
+    /// image file, which is not read; or `PastPageLimit`, a page past the
+    /// most a document is read to (`budget::Limits::pages`): of a multi-page
+    /// image file, the first page past it, after which its pages are not
+    /// counted; or `PastMemoryLimit` or `PastWorkLimit`, a page of a PDF on
+    /// or after the one its budget ran out on (`budget::Limits::memory`,
+    /// `work`), before the page limit (see [`past_limit_reason`]).
     pub reason: String,
+}
+
+/// The reason a page past the page limit is listed unread
+/// ([`UnreadPage::reason`]).
+pub const PAST_PAGE_LIMIT: &str = "PastPageLimit";
+
+/// The reason a page is listed unread where the memory a document may take
+/// ran out before it ([`UnreadPage::reason`]).
+pub const PAST_MEMORY_LIMIT: &str = "PastMemoryLimit";
+
+/// The reason a page is listed unread where the work a document may take
+/// ran out before it ([`UnreadPage::reason`]).
+pub const PAST_WORK_LIMIT: &str = "PastWorkLimit";
+
+/// The reason a page left unread by `limit` is listed by: a document read
+/// short, to the page before the one the limit was passed on (a PDF whose
+/// budget runs out), or to the page limit. A page past both is past the
+/// page limit: raising the budget alone leaves it unread.
+pub fn past_limit_reason(limit: crate::budget::Limit) -> &'static str {
+    use crate::budget::Limit;
+    match limit {
+        Limit::Memory => PAST_MEMORY_LIMIT,
+        Limit::Work => PAST_WORK_LIMIT,
+        _ => PAST_PAGE_LIMIT,
+    }
+}
+
+/// Whether `reason` lists a page a limit left unread ([`past_limit_reason`]): the
+/// document was read short of it, and the page never looked at.
+pub fn is_past_limit(reason: &str) -> bool {
+    [PAST_MEMORY_LIMIT, PAST_WORK_LIMIT, PAST_PAGE_LIMIT].contains(&reason)
 }
 
 /// A raster region of a page whose content nothing read.
@@ -535,7 +571,7 @@ pub struct UnreadImage {
     /// Where the file keeps it, as the file names it
     /// ([`crate::MediaSource::name`]).
     pub part: String,
-    /// Why it was not read, one of seven:
+    /// Why it was not read, one of eight:
     ///
     /// - `NotRead`: nothing was asked to read it, no reading of it was
     ///   supplied, or the configured model was not sent it, past the images
@@ -546,6 +582,9 @@ pub struct UnreadImage {
     ///   as EMF or WMF, a GIF);
     /// - `PastAllowance`: past the pictures or pixels one document may have
     ///   read ([`crate::Allowance::DOCUMENT`]);
+    /// - `PastMemoryLimit` ([`PAST_MEMORY_LIMIT`]): read, but what its
+    ///   reading makes is past what the document, and the pictures read
+    ///   before it, left of its budget (`budget::Limits::memory`);
     /// - `Small`: nothing else read it, and it is under the pixels the
     ///   configured model is sent;
     /// - `NotTexty`: nothing else read it, and the pixel probe does not take
@@ -786,11 +825,16 @@ impl Notes {
     /// nobody understands is not a warning.
     pub fn summary(&self) -> Option<String> {
         let mut said: Vec<String> = Vec::new();
-        if !self.unread.is_empty() {
-            let mut pages: Vec<usize> = self.unread.iter().map(|u| u.index + 1).collect();
+        // The pages a limit left unread were never looked at: said apart,
+        // as one run for each limit, however many there are; the budget's
+        // first, as its pages come first.
+        let (past, unread): (Vec<&UnreadPage>, Vec<&UnreadPage>) =
+            self.unread.iter().partition(|u| is_past_limit(&u.reason));
+        if !unread.is_empty() {
+            let mut pages: Vec<usize> = unread.iter().map(|u| u.index + 1).collect();
             pages.sort_unstable();
             pages.dedup();
-            let mut reasons: Vec<&str> = self.unread.iter().map(|u| u.reason.as_str()).collect();
+            let mut reasons: Vec<&str> = unread.iter().map(|u| u.reason.as_str()).collect();
             reasons.sort_unstable();
             reasons.dedup();
             said.push(format!(
@@ -800,6 +844,23 @@ impl Notes {
                 if pages.len() == 1 { "ies" } else { "y" },
                 reasons.join(", ")
             ));
+        }
+        for (reason, limit) in [
+            (PAST_MEMORY_LIMIT, "memory limit"),
+            (PAST_WORK_LIMIT, "work limit"),
+            (PAST_PAGE_LIMIT, "page limit"),
+        ] {
+            let pages = past.iter().filter(|u| u.reason == reason);
+            let (first, last, n) = pages.fold((usize::MAX, 0, 0), |(f, l, n), u| {
+                (f.min(u.index + 1), l.max(u.index + 1), n + 1)
+            });
+            match n {
+                0 => {}
+                1 => said.push(format!("page {first} is past the {limit}, not read")),
+                _ => said.push(format!(
+                    "pages {first}-{last} are past the {limit}, not read ({n} pages)"
+                )),
+            }
         }
         // Only the regions the router sent a reader to: one it declined is a
         // logo or a photograph as often as content, listed in
@@ -883,6 +944,40 @@ fn page_runs(pages: &[usize]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_pages_a_limit_left_unread_are_said_as_a_run_for_each_limit() {
+        use super::*;
+        use crate::budget::Limit;
+        let page = |index: usize, reason: &str| UnreadPage {
+            index,
+            reason: reason.into(),
+        };
+        // Read to page 3, the memory out on page 4; the page limit 6.
+        let mut unread = vec![page(1, "Scanned")];
+        unread.extend((3..6).map(|i| page(i, past_limit_reason(Limit::Memory))));
+        unread.extend((6..9).map(|i| page(i, PAST_PAGE_LIMIT)));
+        let notes = Notes {
+            unread,
+            ..Default::default()
+        };
+        assert_eq!(
+            notes.summary().unwrap(),
+            "fluree-doc-parse: page 2 carries content no reader transcribed (Scanned). \
+             pages 4-6 are past the memory limit, not read (3 pages). \
+             pages 7-9 are past the page limit, not read (3 pages). This output is missing it."
+        );
+        let notes = Notes {
+            unread: vec![page(9, PAST_WORK_LIMIT)],
+            ..Default::default()
+        };
+        assert_eq!(
+            notes.summary().unwrap(),
+            "fluree-doc-parse: page 10 is past the work limit, not read. \
+             This output is missing it."
+        );
+        assert!(is_past_limit(PAST_WORK_LIMIT) && !is_past_limit("LaterPage"));
+    }
+
     #[test]
     fn a_stray_control_goes_and_the_links_move_with_the_text() {
         let mut e = Element {

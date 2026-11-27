@@ -76,7 +76,15 @@ impl From<TooLarge> for CsvError {
     }
 }
 
-impl std::error::Error for CsvError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for CsvError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// Parse a delimited file, its delimiter sniffed.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, CsvError> {

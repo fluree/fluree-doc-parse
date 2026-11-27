@@ -9877,6 +9877,8 @@ mod tests {
             "as drawn, the caption covers A"
         );
         let mut raw = RawDoc {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page],
             title: None,
         };
@@ -9967,6 +9969,8 @@ mod tests {
         let mut raw = RawDoc {
             pages: vec![page],
             title: None,
+            pages_past_limit: 0,
+            cut_short: None,
         };
         let routed = crate::route::Route::VlmRegions(vec![a]);
         assert_eq!(region_routes(&raw), vec![routed.clone()]);
@@ -10007,6 +10011,8 @@ mod tests {
             crate::route::Route::Deterministic
         );
         let mut raw = RawDoc {
+            pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page],
             title: None,
         };

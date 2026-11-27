@@ -40,6 +40,21 @@ scales the image to fit can derive the same factor rather than hard-coding it.
 |---|---|
 | `--scale <N>` | oversampling; 2 is ~144 dpi |
 | `--pages <RANGES>` | 1-based, e.g. `3`, `1-5`, `1,4,9-12` |
+| `--max-render-pixels <N>` | the most pixels a page is drawn with (default 64 million); see below |
+
+## A page larger than a render may take
+
+A page the scale would draw with more than 64 million pixels (256 MB of
+RGBA; a 4,000 x 4,000 pt page at 2x) is drawn at the scale that fits,
+never cut, and said on stderr; here a 3,000 pt page under
+`--max-render-pixels 16000000`:
+
+```
+note: poster.pdf: page 1 drawn at 1.3333333x (3999x3999 px), the most 16000000 pixels allow (--max-render-pixels)
+```
+
+Its boxes then take that scale, not `--scale`, to become pixels. See
+[Limits](../reference/limits.md#renders).
 
 ## From Rust
 
@@ -54,4 +69,6 @@ fluree-doc-pdf = { version = "0.1", features = ["render"] }
 let raster = fluree_doc_pdf::render::page(&pdf, page_index, render::SCALE)?;
 let png = raster.to_png()?;                       // whole page
 let crop = raster.crop_to_png(x0, y0, x1, y1)?;   // pixels, not PDF units
+// raster.scale: what it was drawn at, below SCALE for a page past the
+// render pixels of the limits in effect
 ```

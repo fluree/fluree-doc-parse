@@ -367,6 +367,70 @@ fn a_page_of_huge_text_goes_through_the_layout_pipeline() {
         .any(|e| e.text.contains("normal text here")));
 }
 
+#[test]
+fn pages_past_the_page_limit_are_counted_and_listed_not_read() {
+    use fluree_doc_model::budget::{limited_to, Limits};
+    let whole = parse(&report()).unwrap();
+    assert_eq!((whole.doc.pages.len(), whole.doc.pages_past_limit), (2, 0));
+    let mut one = Limits::default();
+    one.pages = 1;
+    let cut = limited_to(one, || parse(&report())).unwrap();
+    assert_eq!((cut.doc.pages.len(), cut.doc.pages_past_limit), (1, 1));
+    // The picture on the page not read is not offered to a reader.
+    assert!(cut.images.is_empty(), "{:?}", cut.images);
+    let unread: Vec<(usize, String)> = fluree_doc_pdf::unread_pages(&cut.doc, &[])
+        .into_iter()
+        .map(|u| (u.index, u.reason))
+        .collect();
+    assert_eq!(unread, [(1, "PastPageLimit".to_string())]);
+}
+
+#[test]
+fn a_document_listing_too_many_pages_is_refused() {
+    // One fixed document listing `n` pages, named by the sequence `refs`
+    // times: its pages counted each time.
+    let listing = |n: usize, refs: usize| {
+        package(&[
+            (
+                "FixedDocSeq.fdseq",
+                format!(
+                    "<FixedDocumentSequence>{}</FixedDocumentSequence>",
+                    "<DocumentReference Source=\"d.fdoc\"/>".repeat(refs)
+                ),
+            ),
+            (
+                "d.fdoc",
+                format!(
+                    "<FixedDocument>{}</FixedDocument>",
+                    "<PageContent Source=\"p.fpage\"/>".repeat(n)
+                ),
+            ),
+            ("p.fpage", fixed_page(&glyphs(96.0, 96.0, 16.0, "Hi"))),
+        ])
+    };
+    let at = parse(&listing(MAX_LISTED_PAGES / 2, 2)).unwrap();
+    assert_eq!(at.doc.pages.len(), MAX_PAGES);
+    assert_eq!(at.doc.pages_past_limit, MAX_LISTED_PAGES - MAX_PAGES);
+    match parse(&listing(MAX_LISTED_PAGES / 2 + 1, 2)) {
+        Err(XpsError::TooLarge(e)) => {
+            assert_eq!(e.limit(), fluree_doc_model::budget::Limit::Pages);
+            assert!(
+                e.to_string().contains("lists more than 250000 pages"),
+                "{e}"
+            );
+        }
+        Err(e) => panic!("{e}"),
+        Ok(x) => panic!("{} pages past the limit", x.doc.pages_past_limit),
+    }
+    // A page limit past it raises it: the caller asks for that many read.
+    let mut limits = fluree_doc_model::budget::Limits::default();
+    limits.pages = MAX_LISTED_PAGES + 2;
+    let read = fluree_doc_model::budget::limited_to(limits, || {
+        parse(&listing(MAX_LISTED_PAGES / 2 + 1, 2)).map(|x| x.doc.pages_past_limit)
+    });
+    assert_eq!(read.unwrap(), 0);
+}
+
 /// A document of `pages`, each part named `Pages/<n>.fpage`, those not in
 /// `held` left out of the package.
 fn pages_of(pages: &[String], held: &[usize]) -> Vec<u8> {

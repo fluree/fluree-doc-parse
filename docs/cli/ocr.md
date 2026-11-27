@@ -102,10 +102,13 @@ all its pipelines and is shrunk after each pass, so a process that has read
 large images holds under 1 GB between them, not the largest image's peak.
 
 The passes read at once share one budget, [`ocr.max_memory`](config.md#ocr),
-8 GiB by default (four pages at 300 dpi, or three 12 Mpx photos): a pass that
-does not fit beside those being read waits, in turn; one larger than the whole
-budget is read alone. So `-j` and the cap set how fast a batch reads, and the
-budget bounds what it holds. Measured with `-j4`, four images at once:
+by default a third of the memory free when the engine opens, at most 8 GiB (four
+pages at 300 dpi, or three 12 Mpx photos): a
+pass that does not fit beside those being read waits, in turn; one larger than
+the whole budget is read alone. So `-j` and the cap set how fast a batch reads, and the
+budget bounds what it holds. A batch sets the budget aside, with 0.3 GB a pipeline,
+before it counts how many documents the memory free holds
+([Batches](../reference/limits.md#batches)). Measured with `-j4`, four images at once:
 
 | images | 8 GiB budget | no bound |
 |---|---|---|

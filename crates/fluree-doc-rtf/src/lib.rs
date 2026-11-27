@@ -75,7 +75,7 @@ pub enum RtfError {
     /// Groups nested past [`MAX_DEPTH`].
     TooDeep,
     /// Past another bound, naming it.
-    TooLarge(String),
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for RtfError {
@@ -88,7 +88,15 @@ impl std::fmt::Display for RtfError {
     }
 }
 
-impl std::error::Error for RtfError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for RtfError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// Whether `bytes` is an RTF document: it opens with `{\rtf`, after any
 /// whitespace.
@@ -213,7 +221,7 @@ struct Reader<'a> {
     high: Option<u32>,
     /// What the document may still make; past it, why the file is refused.
     budget: Budget,
-    over: Option<String>,
+    over: Option<TooLarge>,
 }
 
 impl<'a> Reader<'a> {
@@ -299,7 +307,9 @@ impl<'a> Reader<'a> {
         self.flush_bytes();
         if self.flows.len() > MAX_FLOWS {
             self.over.get_or_insert_with(|| {
-                format!("more than {MAX_FLOWS} notes, comments, headers and footers")
+                TooLarge::fixed(format!(
+                    "more than {MAX_FLOWS} notes, comments, headers and footers"
+                ))
             });
             self.set_dest(Dest::Skip);
             return;
@@ -397,7 +407,7 @@ impl<'a> Reader<'a> {
                             }
                         }
                         Err(e) => {
-                            self.over.get_or_insert(e.to_string());
+                            self.over.get_or_insert(e);
                         }
                     }
                 }
@@ -678,7 +688,7 @@ impl<'a> Reader<'a> {
             _ => ("doco:Paragraph", None),
         };
         if let Err(e) = spend_element(&mut self.budget, &text) {
-            self.over.get_or_insert(e.to_string());
+            self.over.get_or_insert(e);
             return;
         }
         let depth = if kind == "doc:ListItem" { f.depth } else { 0 };
@@ -841,7 +851,7 @@ fn spend_element(budget: &mut Budget, text: &str) -> Result<(), TooLarge> {
 /// row definition of millions of cells being a few bytes a cell, and the
 /// rows after it a few bytes each. Past the budget, the file is refused
 /// (`over`) and the row dropped.
-fn end_row(f: &mut Flow, budget: &mut Budget, over: &mut Option<String>) {
+fn end_row(f: &mut Flow, budget: &mut Budget, over: &mut Option<TooLarge>) {
     if f.row.is_empty() {
         return;
     }
@@ -850,7 +860,7 @@ fn end_row(f: &mut Flow, budget: &mut Budget, over: &mut Option<String>) {
         return;
     }
     if let Err(e) = budget.spend_cells((row.len() + f.defs.len()) as u64) {
-        over.get_or_insert(e.to_string());
+        over.get_or_insert(e);
         return;
     }
     // A header row (`\trhdr`) heads the table only among the first rows.
@@ -863,7 +873,7 @@ fn end_row(f: &mut Flow, budget: &mut Budget, over: &mut Option<String>) {
 /// Close the table being read, if one is, into a `doco:Table`, its cells
 /// (its rows padded to its widest) spent from `budget` before they are made;
 /// past it, the file is refused (`over`) and the table is not made.
-fn flush_table(f: &mut Flow, budget: &mut Budget, over: &mut Option<String>) {
+fn flush_table(f: &mut Flow, budget: &mut Budget, over: &mut Option<TooLarge>) {
     end_row(f, budget, over);
     if f.rows.is_empty() {
         return;
@@ -882,7 +892,7 @@ fn flush_table(f: &mut Flow, budget: &mut Budget, over: &mut Option<String>) {
             budget.spend_cell_texts(rows.iter().flat_map(|(r, _)| r).map(String::as_str))
         });
     if let Err(e) = spent {
-        over.get_or_insert(e.to_string());
+        over.get_or_insert(e);
         return;
     }
     let mut cells = vec![String::new(); size];
@@ -926,7 +936,7 @@ fn flush_table(f: &mut Flow, budget: &mut Budget, over: &mut Option<String>) {
     e.merged_down = down.iter().any(|x| *x).then_some(down);
     // What DoCO copies of it: a merged value in each cell it covers.
     if let Err(err) = budget.spend_copies(&e) {
-        over.get_or_insert(err.to_string());
+        over.get_or_insert(err);
         return;
     }
     f.out.push(e);

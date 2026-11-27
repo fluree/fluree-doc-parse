@@ -21,8 +21,9 @@ pub mod symbols;
 
 pub use doco::{to_doco, to_text, DocoOptions};
 pub use element::{
-    is_stray_control, xsd_date_time, xsd_temporal, Attachment, Datum, DocumentInfo, Element, Link,
-    Notes, OcrReading, ParseWarning, Target, Turn, UnreadImage, UnreadPage, UnreadRegion,
+    is_past_limit, is_stray_control, past_limit_reason, xsd_date_time, xsd_temporal, Attachment,
+    Datum, DocumentInfo, Element, Link, Notes, OcrReading, ParseWarning, Target, Turn, UnreadImage,
+    UnreadPage, UnreadRegion, PAST_MEMORY_LIMIT, PAST_PAGE_LIMIT, PAST_WORK_LIMIT,
 };
 pub use emit::{
     to_markdown, to_markdown_with, to_markdown_with_options, to_xhtml, to_xhtml_with,

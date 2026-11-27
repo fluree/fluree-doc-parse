@@ -658,6 +658,37 @@ fn cut(
     fluree_doc_vision::Pixels::new(cw, ch, pixels.layout, data)
 }
 
+/// The flag that raises `limit`, where one does: a reader's own bounds are
+/// fixed.
+pub(crate) fn raised_by(limit: fluree_doc_model::budget::Limit) -> Option<&'static str> {
+    use fluree_doc_model::budget::Limit;
+    match limit {
+        Limit::Memory => Some("--max-memory"),
+        Limit::Work => Some("--max-work"),
+        Limit::Pages => Some("--max-pages"),
+        _ => None,
+    }
+}
+
+/// A reader's error as `fdoc` says it: its message and, where it is a
+/// limit passed that a flag raises, the flag (`... may take (raise it with
+/// --max-memory)`). The limit is the error itself or one of its sources.
+pub(crate) fn refused(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut cause = Some(e);
+    let mut flag = None;
+    while let Some(c) = cause {
+        if let Some(t) = c.downcast_ref::<fluree_doc_model::budget::TooLarge>() {
+            flag = raised_by(t.limit());
+            break;
+        }
+        cause = c.source();
+    }
+    match flag {
+        Some(flag) => format!("{e} (raise it with {flag})"),
+        None => e.to_string(),
+    }
+}
+
 /// The part of a picture drawn at `drawn` that `region` covers: its pixels,
 /// and the box on the page they show.
 #[cfg(test)]

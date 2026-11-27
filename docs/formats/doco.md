@@ -204,10 +204,20 @@ file, 0-based like every other, and by design it has **no entry in
 nothing was measured to put there. A consumer joining `doc:unreadPages` to
 `doc:pages` on `pageIndex` finds no match for it, and should not expect
 one. A TIFF of many pages lists each; the warning `fdoc` prints gives them
-as a range (`pages 2–10050`).
+as a range (`pages 2–10000`).
 
-A consumer that validates `reason` against a fixed set should accept all
-six.
+Or it is `PastPageLimit`: a page of a PDF or an XPS document past the most a
+document is read to (10,000, `--max-pages`), listed one entry a page, with
+no entry in `doc:pages` either; of a TIFF, the first page past it, after
+which its pages are not counted. Or `PastMemoryLimit` or `PastWorkLimit`:
+a page of a PDF on or after the one its memory or its work ran out on,
+before the page limit, the document read to the page before
+(`--max-memory`, `--max-work`). A consumer asking whether a document was
+read whole looks for any of these three
+([Limits](../reference/limits.md#pages)).
+
+A consumer that validates `reason` against a fixed set should accept every
+one above.
 
 Deliberately not an element. A marker element would have to carry text to be
 visible, and inventing text puts characters into the projection that every
@@ -354,7 +364,7 @@ where no Content-ID names that part alone, never its file name, which two
 images can share. An image several figures draw (a logo
 or a screenshot pasted more than once) is read once, under the name of the
 first figure drawing it, and listed unread once for each figure. `reason` is
-one of seven:
+one of eight:
 
 | `reason` | the image | counted on stderr |
 |---|---|---|
@@ -362,6 +372,7 @@ one of seven:
 | `Missing` | the file does not hold it: a link to an outside file, a relationship the file does not define | yes |
 | `UnsupportedFormat` | not a PNG, JPEG or TIFF: a vector drawing kept as EMF or WMF, a GIF | no |
 | `PastAllowance` | past what one document may have read: 256 images, 512 million pixels as their headers state them (an image whose header does not parse is charged a pixel per byte) | yes |
+| `PastMemoryLimit` | read, but what its reading makes (its elements, their text, a table's cells and the copies DoCO writes of them) is past what the document, and the images read before it, left of the memory one document may take (`--max-memory`); the configured model is not sent it ([limits](../reference/limits.md#copies-of-a-tables-cells)) | yes |
 | `Small` | nothing else read it, and the configured model is not sent it: under 400 pixels on its longer side or 48 on its shorter | no |
 | `NotTexty` | nothing else read it, and the configured model is not sent it, as the pixel probe does not take it for text (a photograph, a chart, a logo); or OCR read it, and what it read was noise, as a photograph or a gradient read for text gives: the rule a [`NotTexty` region](#regions-nothing-read)'s reading is held to, and the reading is listed with `setAside: "noise"` ([OCR readings](#ocr-readings)) | no |
 | `Failed` | its reading failed, or was set aside because its words could not be placed on it (told before the reading is judged noise), the part it names is not there or cannot be read, its part is empty or ends before its format can be told, or its header does not parse, so the configured model is not sent it; stderr says why | yes |

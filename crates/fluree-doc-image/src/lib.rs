@@ -19,6 +19,7 @@
 //! Some TIFF codings are not read: CCITT Group 3 fax (Group 4 is), YCbCr and
 //! CIELab colour. Such a file is refused with the decoder's error.
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_pdf::ocr::{self, Crop, Injected};
 use fluree_doc_pdf::Document;
 use fluree_doc_vision::{Layout, OcrEngine, Pixels};
@@ -49,7 +50,10 @@ pub struct Header {
     pub height: u32,
     /// One bit per pixel as stored.
     pub bitonal: bool,
-    /// Pages stored: more than one only for a multi-page TIFF.
+    /// Pages stored: more than one only for a multi-page TIFF, whose pages
+    /// are counted up to one past the page limit
+    /// ([`Limits::pages`](fluree_doc_model::budget::Limits::pages)): more
+    /// than it says the file goes on past it.
     pub pages: usize,
 }
 
@@ -297,7 +301,8 @@ fn png_is_one_bit(b: &[u8]) -> bool {
 
 /// How many image directories (pages) a TIFF chains, classic or BigTIFF; 0
 /// for a file that is not one. A chain that loops, or runs past the file or
-/// past [`MAX_TIFF_PAGES`], is counted as far as it goes.
+/// one past the page limit ([`max_tiff_pages`]), is counted as far as it
+/// goes.
 fn tiff_pages(b: &[u8]) -> usize {
     let le = b.starts_with(b"II");
     let at = |o: u64, n: usize| -> Option<u64> {
@@ -321,7 +326,7 @@ fn tiff_pages(b: &[u8]) -> usize {
     let mut seen = std::collections::HashSet::new();
     let mut next = first;
     while let Some(ifd) = next.filter(|&o| o != 0) {
-        if seen.len() >= MAX_TIFF_PAGES || !seen.insert(ifd) {
+        if seen.len() >= max_tiff_pages() || !seen.insert(ifd) {
             break;
         }
         next = at(ifd, count).and_then(|n| {
@@ -336,7 +341,11 @@ fn tiff_pages(b: &[u8]) -> usize {
 
 /// The most pages of a TIFF counted: each one after the first is listed
 /// unread in the output, and a few kilobytes can chain a hundred thousand.
-const MAX_TIFF_PAGES: usize = 10_000;
+/// One past the page limit, so that a file going on past it is told from
+/// one that stops at it.
+fn max_tiff_pages() -> usize {
+    fluree_doc_model::budget::limits().pages.saturating_add(1)
+}
 
 /// Whether a decoded image looks like text as the PDF router judges a raster
 /// region: its pixels to the probe ([`fluree_doc_vision::texty`]) — a
@@ -410,27 +419,49 @@ pub struct ImageElements {
     /// The reading taken, with the engine's confidence, as
     /// [`ocr::readings`] reports it: on page 0, the image.
     pub ocr: Vec<fluree_doc_model::OcrReading>,
+    /// The limit passed where what the reading makes is past what is left
+    /// of the document's budget ([`spend_reading`]): `elements` and `ocr`
+    /// are then empty, nothing of it spent, and the image is not read. A
+    /// document's picture is listed unread past the limit
+    /// ([`fluree_doc_model::past_limit_reason`]), as a PDF's page past its
+    /// budget is, rather than the document refused.
+    pub past_budget: Option<TooLarge>,
 }
 
 /// Decode an image, read it and analyse it: an image the pixel probe does
 /// not take for text ([`texty`]) is not read, and comes back
 /// [`ImageElements::not_texty`]. What an engine reads in one it takes for
 /// text is still held to the noise rule ([`without_noise`]).
+///
+/// The image is a document of its own: what its reading makes is spent from
+/// a budget of its own ([`Budget::default`]), and past it the image is
+/// refused, as an `Err`: it is one page, so nothing is left to read short.
 pub fn elements(bytes: &[u8], engine: &dyn OcrEngine) -> Result<ImageElements, String> {
     let image = decode(bytes)?;
     if !texty(&image) {
         return Ok(not_texty(&image));
     }
-    read_texty(image, engine)
+    let read = read_texty(image, engine, &mut Budget::default())?;
+    match read.past_budget {
+        Some(e) => Err(format!("image too large: {e}")),
+        None => Ok(read),
+    }
 }
 
 /// As [`elements`], of an image a caller has decoded and chosen to read,
 /// having found it [`texty`] or reading it whatever the probe makes of it
 /// (a document's picture, [`read_placed`]): it is neither decoded nor
 /// probed again. What the engine reads is still held to the noise rule.
-pub fn read_texty(image: Decoded, engine: &dyn OcrEngine) -> Result<ImageElements, String> {
+/// What the reading makes is spent from `budget`, the document's the image
+/// is placed in ([`spend_reading`]): past it, the image comes back
+/// [`ImageElements::past_budget`], with nothing read.
+pub fn read_texty(
+    image: Decoded,
+    engine: &dyn OcrEngine,
+    budget: &mut Budget,
+) -> Result<ImageElements, String> {
     let reading = engine.read(&image.pixels)?;
-    Ok(analysed(document(&image), image.more_pages, reading))
+    analysed(document(&image), image.more_pages, reading, budget)
 }
 
 /// What [`elements`] gives for an image the pixel probe does not take for
@@ -449,21 +480,24 @@ fn not_texty(image: &Decoded) -> ImageElements {
         refused: None,
         more_pages: image.more_pages,
         ocr: Vec::new(),
+        past_budget: None,
     }
 }
 
 /// As [`elements`], from the words an engine already read in the image
 /// (decoded upright, as [`decode`] gives it). Only the image's header is
 /// read, for the page the words are on: the pixel probe is not run, the
-/// caller has chosen to read it.
+/// caller has chosen to read it. What the words make is spent from
+/// `budget`, as [`read_texty`] spends it.
 pub fn elements_from_words(
     bytes: &[u8],
     reading: fluree_doc_vision::WordReading,
+    budget: &mut Budget,
 ) -> Result<ImageElements, String> {
     // Only the header: the words are already read.
     let h = header(bytes)?;
     let doc = fluree_doc_pdf::image::page_of(h.width, h.height, h.bitonal);
-    Ok(analysed(doc, h.pages > 1, reading))
+    analysed(doc, h.pages > 1, reading, budget)
 }
 
 /// `reading`, an engine's reading of the one page of `doc`, a picture, with
@@ -498,11 +532,14 @@ fn set_aside_noise(
     }
 }
 
+/// What the words make is spent from `budget` ([`spend_reading`]): past it,
+/// the image comes back [`ImageElements::past_budget`], with nothing read.
 fn analysed(
     mut doc: Document,
     more_pages: bool,
     reading: fluree_doc_vision::WordReading,
-) -> ImageElements {
+    budget: &mut Budget,
+) -> Result<ImageElements, String> {
     let (reading, noise) = set_aside_noise(&doc, reading);
     let mut injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
     // Listed as set aside, with what it held: the confidence of a reading
@@ -521,8 +558,15 @@ fn analysed(
     };
     let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
     ocr::mark_provenance(&mut analysis.elements, &injected);
-    let ocr = ocr::readings(&injected, &analysis.elements);
-    ImageElements {
+    let past_budget = spend_reading(budget, &analysis.elements).err();
+    if past_budget.is_some() {
+        analysis.elements.clear();
+    }
+    let ocr = match past_budget {
+        Some(_) => Vec::new(),
+        None => ocr::readings(&injected, &analysis.elements),
+    };
+    Ok(ImageElements {
         elements: analysis.elements,
         size,
         not_texty: false,
@@ -530,7 +574,43 @@ fn analysed(
         refused: injected.first().and_then(|r| r.refused),
         more_pages,
         ocr,
-    }
+        past_budget,
+    })
+}
+
+/// Spend from `budget`, the document's, what the output keeps of
+/// `elements`, a reading of a picture placed in it (or of an image that is
+/// the document): each element and its text, a table's cells and their
+/// text, and the copies DoCO writes of its cells
+/// ([`Budget::spend_copies`]). Its tables are counted apart from the
+/// document's ([`Budget::apart`]): their ids are the reading's own.
+///
+/// All or nothing: past the budget, nothing is spent, and the reading is
+/// not to be kept. A document's pictures are read one after the other from
+/// what the document and the pictures before left, so together they take
+/// no more than one document may, however many there are; each alone is
+/// still bounded by its pixels ([`fluree_doc_model::Allowance`]).
+pub fn spend_reading(
+    budget: &mut Budget,
+    elements: &[fluree_doc_model::Element],
+) -> Result<(), TooLarge> {
+    budget.apart(|budget| {
+        // Spent on a copy, kept only whole. Apart, the copy holds no table
+        // of the document's to clone.
+        let mut b = budget.clone();
+        for e in elements {
+            b.spend_elements(1)?;
+            b.spend_text(&e.text)?;
+            if let Some(cells) = &e.cells {
+                let slots = cells.iter().map(Vec::len).sum::<usize>();
+                b.spend_cells(slots as u64)?;
+                b.spend_cell_texts(cells.iter().flatten().map(String::as_str))?;
+            }
+            b.spend_copies(e)?;
+        }
+        *budget = b;
+        Ok(())
+    })
 }
 
 /// What an engine made of the images a document places in its flow.
@@ -543,7 +623,9 @@ pub struct PlacedRead {
     /// figure drawing them, with why: `Missing` (not in the file),
     /// `UnsupportedFormat` (not a PNG, JPEG or TIFF: a drawing kept as EMF or
     /// WMF, a GIF), `PastAllowance` (past what one document may have read,
-    /// [`fluree_doc_model::Allowance::DOCUMENT`]), `Failed` (its bytes or its
+    /// [`fluree_doc_model::Allowance::DOCUMENT`]), `PastMemoryLimit` (what its
+    /// reading makes past what is left of the document's budget,
+    /// [`ImageElements::past_budget`]), `Failed` (its bytes or its
     /// reading failed, or was set aside as one whose words could not be
     /// placed: [`ImageElements::refused`]) or `NotTexty` (its reading was
     /// noise: [`ImageElements::noise`]). Never `NotRead`: each image held
@@ -570,14 +652,23 @@ pub struct PlacedRead {
 /// probe keeps a billed model's call from a photograph or a logo, and an
 /// engine costs nothing per image; what it reads in one that holds no text
 /// is held to the noise rule ([`without_noise`]).
+///
+/// What each reading makes is spent from `budget`, the document's, as the
+/// document left it ([`spend_reading`]), in the order the pictures are
+/// read: a picture whose reading is past what is left is listed unread
+/// (`PastMemoryLimit`), and the document, and the pictures before it, are
+/// kept.
 pub fn read_placed(
     media: Vec<fluree_doc_model::Media>,
     bytes: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
     engine: &dyn OcrEngine,
+    budget: &mut Budget,
 ) -> PlacedRead {
     use fluree_doc_model::{Picture, PictureReader, Unread};
     struct Engine<'e> {
         engine: &'e dyn OcrEngine,
+        /// The document's budget, which each reading is spent from.
+        budget: &'e mut Budget,
         /// The picture being read, by tag.
         current: String,
         /// The pictures whose bytes are no image OCR decodes, by tag.
@@ -608,7 +699,7 @@ pub fn read_placed(
                 })
         }
         fn read(&mut self, _: &Picture, image: &[u8]) -> Result<ImageElements, String> {
-            read_texty(decode(image)?, self.engine)
+            read_texty(decode(image)?, self.engine, self.budget)
         }
     }
     // Each picture's place among the document's, by the name it goes by.
@@ -618,6 +709,7 @@ pub fn read_placed(
     }
     let mut reader = Engine {
         engine,
+        budget,
         current: String::new(),
         unsupported: Default::default(),
     };
@@ -640,6 +732,12 @@ pub fn read_placed(
                 ..o
             })
         };
+        // What it read is past what the document has left: not read, as a
+        // PDF's page past its budget is not.
+        if let Some(e) = &r.past_budget {
+            unread.push((picture, fluree_doc_model::past_limit_reason(e.limit())));
+            continue;
+        }
         // A reading that is noise is set aside: listed all the same, with
         // the words it held and the engine's confidence in them.
         if r.noise {
@@ -842,7 +940,12 @@ mod tests {
         // A document's picture is read by the engine all the same: the
         // probe gates a billed model's call, not OCR. It holds nothing.
         let blank = Blank(Default::default());
-        let r = read_placed(vec![media], &mut |_| Ok(flat_png(600, 400)), &blank);
+        let r = read_placed(
+            vec![media],
+            &mut |_| Ok(flat_png(600, 400)),
+            &blank,
+            &mut Budget::default(),
+        );
         assert_eq!(blank.0.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert_eq!(r.read.len(), 1);
         assert_eq!(r.read[0].0, "figure-0-1");
@@ -916,6 +1019,7 @@ mod tests {
             media,
             &mut |_| Ok(parts.next().unwrap().to_vec()),
             &TwoLines,
+            &mut Budget::default(),
         );
         let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
         assert_eq!(reasons, ["Failed", "Failed", "UnsupportedFormat"]);
@@ -952,8 +1056,10 @@ mod tests {
             refused,
             more_pages,
             ocr,
+            past_budget,
         } = elements(&png(600, 400), &TwoLines).unwrap();
         assert_eq!((size.width, size.height), (600.0, 400.0));
+        assert!(past_budget.is_none());
         assert!(!not_texty);
         assert!(!noise);
         assert_eq!(refused, None);
@@ -1021,7 +1127,7 @@ mod tests {
             reading(&all_of_it, None),
             reading(&all_of_it, Some(0.66)),
         ] {
-            let read = elements_from_words(&image, r).unwrap();
+            let read = elements_from_words(&image, r, &mut Budget::default()).unwrap();
             assert!(read.noise);
             assert!(read.elements.is_empty(), "{:?}", read.elements);
         }
@@ -1033,10 +1139,122 @@ mod tests {
             reading(&fragments, Some(0.9)),
             reading(&large, Some(0.99)),
         ] {
-            let read = elements_from_words(&image, r).unwrap();
+            let read = elements_from_words(&image, r, &mut Budget::default()).unwrap();
             assert!(!read.noise);
             assert!(!read.elements.is_empty());
         }
+    }
+
+    /// A table of three columns under their names, forty rows, on a page of
+    /// 1400 × 1800 pixels: DoCO writes each name again on every cell under
+    /// it.
+    fn table_reading() -> WordReading {
+        let words: Vec<OcrWord> = (0..40)
+            .flat_map(|r| {
+                (0..3).map(move |c| {
+                    let x = 100.0 + 400.0 * c as f64;
+                    let y = 60.0 + 40.0 * r as f64;
+                    OcrWord {
+                        text: match r {
+                            0 => ["Name", "Value", "Unit"][c].into(),
+                            _ => format!("{}.5", (r + c) % 10),
+                        },
+                        bbox: [x, y, x + 120.0, y + 24.0],
+                        angle: None,
+                        conf: Some(0.95),
+                    }
+                })
+            })
+            .collect();
+        WordReading {
+            coords: Coords::Px,
+            width: Some(1400.0),
+            height: Some(1800.0),
+            engine: None,
+            words,
+            rules: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_reading_is_spent_whole_from_the_documents_budget_or_not_kept() {
+        let reading = table_reading();
+        let image = png(1400, 1800);
+        let mut whole = Budget::new(fluree_doc_model::budget::MAX_MEMORY, 0);
+        let read = elements_from_words(&image, reading.clone(), &mut whole).unwrap();
+        assert!(read.elements.iter().any(|e| e.cells.is_some()), "a table");
+        assert!(read.past_budget.is_none() && !read.ocr.is_empty());
+        let spent = fluree_doc_model::budget::MAX_MEMORY - whole.memory_left();
+        // Its elements, its cells and the copies DoCO writes of them: the
+        // names on each of the 117 cells under them.
+        assert!(
+            spent > 117 * fluree_doc_model::budget::ELEMENT_BYTES,
+            "{spent}"
+        );
+        // What a document left that holds it, exactly, keeps it.
+        let mut exact = Budget::new(spent, 0);
+        let read = elements_from_words(&image, reading.clone(), &mut exact).unwrap();
+        assert!(read.past_budget.is_none(), "{:?}", read.past_budget);
+        assert_eq!(exact.memory_left(), 0);
+        // A byte less, and nothing of it is kept or spent: the next picture
+        // of the document has what this one found.
+        let mut short = Budget::new(spent - 1, 0);
+        let read = elements_from_words(&image, reading, &mut short).unwrap();
+        assert!(read.past_budget.is_some());
+        assert!(read.elements.is_empty() && read.ocr.is_empty());
+        assert_eq!(short.memory_left(), spent - 1);
+    }
+
+    /// An engine that reads [`table_reading`] in whatever it is shown.
+    struct Tables;
+
+    impl OcrEngine for Tables {
+        fn name(&self) -> &str {
+            "tables"
+        }
+        fn read(&self, _: &Pixels) -> Result<WordReading, String> {
+            Ok(table_reading())
+        }
+    }
+
+    #[test]
+    fn a_documents_pictures_are_read_within_what_the_document_left() {
+        // What one picture's reading takes.
+        let mut one = Budget::new(fluree_doc_model::budget::MAX_MEMORY, 0);
+        elements_from_words(&png(1400, 1800), table_reading(), &mut one).unwrap();
+        let each = fluree_doc_model::budget::MAX_MEMORY - one.memory_left();
+        // Five pictures, each alone well within a document's budget, in a
+        // document that has left room for two and a half of them: the first
+        // two are read, the others listed unread past the memory limit, and
+        // the document is not refused.
+        let media: Vec<fluree_doc_model::Media> = (1..=5)
+            .map(|n| fluree_doc_model::Media {
+                figure: format!("figure-0-{n}"),
+                source: fluree_doc_model::MediaSource::Part(format!("word/media/image{n}.png")),
+                index: 0,
+            })
+            .collect();
+        let mut budget = Budget::new(5 * each / 2, 0);
+        let r = read_placed(media, &mut |_| Ok(png(600, 400)), &Tables, &mut budget);
+        let read: Vec<&str> = r.read.iter().map(|(f, _)| f.as_str()).collect();
+        assert_eq!(read, ["figure-0-1", "figure-0-2"]);
+        let unread: Vec<(&str, &str)> = (r.unread.iter())
+            .map(|u| (u.image.as_str(), u.reason.as_str()))
+            .collect();
+        assert_eq!(
+            unread,
+            [
+                ("m3", "PastMemoryLimit"),
+                ("m4", "PastMemoryLimit"),
+                ("m5", "PastMemoryLimit")
+            ]
+        );
+        // The readings kept are those listed, and what they took is spent.
+        assert!(r
+            .ocr
+            .iter()
+            .all(|o| matches!(o.image.as_deref(), Some("m1" | "m2"))));
+        assert_eq!(budget.memory_left(), 5 * each / 2 - 2 * each);
     }
 
     /// An engine that reads one unsure stroke in whatever it is shown.
@@ -1070,7 +1288,12 @@ mod tests {
             source: fluree_doc_model::MediaSource::Part("word/media/image1.png".into()),
             index: 0,
         };
-        let r = read_placed(vec![media], &mut |_| Ok(png(600, 400)), &Unsure);
+        let r = read_placed(
+            vec![media],
+            &mut |_| Ok(png(600, 400)),
+            &Unsure,
+            &mut Budget::default(),
+        );
         assert!(r.read.is_empty(), "{:?}", r.read);
         let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
         assert_eq!(reasons, ["NotTexty"]);
@@ -1136,7 +1359,12 @@ mod tests {
             assert_eq!((read.refused, read.noise), (Some(why), false), "{conf}");
             assert!(read.elements.is_empty() && read.ocr.is_empty(), "{conf}");
             // Not taken for a picture with no text in it: listed, with why.
-            let r = read_placed(vec![media], &mut |_| Ok(png(600, 400)), &engine);
+            let r = read_placed(
+                vec![media],
+                &mut |_| Ok(png(600, 400)),
+                &engine,
+                &mut Budget::default(),
+            );
             assert!(r.read.is_empty(), "{:?}", r.read);
             let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
             assert_eq!(reasons, ["Failed"], "{conf} {one_on}");
@@ -1344,7 +1572,7 @@ mod tests {
             words,
             rules: Vec::new(),
         };
-        let read = elements_from_words(&png(200, 600), reading).unwrap();
+        let read = elements_from_words(&png(200, 600), reading, &mut Budget::default()).unwrap();
         assert_eq!(read.ocr[0].words, 3, "{:?}", read.ocr);
         assert_eq!((read.size.width, read.size.height), (200.0, 600.0));
         for e in &read.elements {
@@ -1536,7 +1764,7 @@ mod tests {
     #[test]
     fn a_long_tiff_chain_is_counted_up_to_its_cap() {
         // Empty directories chained one after the other, past the cap.
-        let n = MAX_TIFF_PAGES + 50;
+        let n = max_tiff_pages() + 50;
         let mut t = b"II*\0".to_vec();
         t.extend(8u32.to_le_bytes());
         for k in 0..n {
@@ -1544,7 +1772,14 @@ mod tests {
             t.extend(0u16.to_le_bytes());
             t.extend(next.to_le_bytes());
         }
-        assert_eq!(tiff_pages(&t), MAX_TIFF_PAGES);
+        assert_eq!(tiff_pages(&t), fluree_doc_model::budget::MAX_PAGES + 1);
+        // Under a lower page limit, to one past it.
+        let mut l = fluree_doc_model::budget::Limits::default();
+        l.pages = 7;
+        assert_eq!(
+            fluree_doc_model::budget::limited_to(l, || tiff_pages(&t)),
+            8
+        );
     }
 
     #[test]

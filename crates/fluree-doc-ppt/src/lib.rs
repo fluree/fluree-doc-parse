@@ -98,7 +98,7 @@ pub enum PptError {
     /// The file is encrypted.
     Encrypted,
     /// Past a bound.
-    TooLarge(String),
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for PptError {
@@ -116,11 +116,19 @@ impl std::fmt::Display for PptError {
     }
 }
 
-impl std::error::Error for PptError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for PptError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<TooLarge> for PptError {
     fn from(e: TooLarge) -> Self {
-        Self::TooLarge(e.to_string())
+        Self::TooLarge(e)
     }
 }
 
@@ -182,10 +190,10 @@ fn stream(cf: &mut cfb::CompoundFile<Cursor<&[u8]>>, name: &str) -> Result<Vec<u
         .open_stream(name)
         .map_err(|e| PptError::Container(e.to_string()))?;
     if s.len() > MAX_STREAM_BYTES {
-        return Err(PptError::TooLarge(format!(
+        return Err(PptError::TooLarge(TooLarge::fixed(format!(
             "{name}: {} bytes, more than the {MAX_STREAM_BYTES} read",
             s.len()
-        )));
+        ))));
     }
     let mut v = Vec::new();
     s.take(MAX_STREAM_BYTES)
@@ -224,9 +232,9 @@ fn persist(doc: &[u8], mut edit: usize) -> Result<(HashMap<u32, u32>, u32), PptE
         let mut at = if fresh { dir.data.0 } else { dir.data.1 };
         entries += (dir.data.1 - at) / 4;
         if entries > MAX_PERSIST_ENTRIES {
-            return Err(PptError::TooLarge(format!(
+            return Err(PptError::TooLarge(TooLarge::fixed(format!(
                 "persist directories of more than {MAX_PERSIST_ENTRIES} entries"
-            )));
+            ))));
         }
         while at + 4 <= dir.data.1 {
             let head = u32_at(doc, at).unwrap_or(0);
@@ -940,13 +948,19 @@ fn open(bytes: &[u8]) -> Result<Opened<'_>, PptError> {
 /// alternative text, and the store entry holding it (`Pictures#<n>`), for an
 /// OCR engine or a model to read; [`read_media`] reads one's bytes.
 pub fn parse_with_media(bytes: &[u8]) -> Result<(Vec<Element>, Vec<Media>), PptError> {
-    parse_within(bytes, &mut Budget::default())
+    parse_with_media_within(bytes, &mut Budget::default())
 }
 
-/// [`parse_with_media`], against `budget`: every text read, from the slide
-/// list, the slides, their notes and their tables, spent before it is
-/// decoded; every element and cell before it is made.
-fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<Media>), PptError> {
+/// [`parse_with_media`], against `budget`, the deck's, and leaving it
+/// spent: every text read, from the slide list, the slides, their notes and
+/// their tables, spent before it is decoded; every element and cell before
+/// it is made. A caller that goes on to read the deck's pictures spends what
+/// their readings make from what the deck left of it, so a deck and its
+/// pictures are bounded together.
+pub fn parse_with_media_within(
+    bytes: &[u8],
+    budget: &mut Budget,
+) -> Result<(Vec<Element>, Vec<Media>), PptError> {
     let Opened {
         doc, document, map, ..
     } = open(bytes)?;
@@ -974,7 +988,9 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
             match c.typ {
                 SLIDE_PERSIST => {
                     if slides.len() >= MAX_SLIDES {
-                        return Err(PptError::TooLarge(format!("more than {MAX_SLIDES} slides")));
+                        return Err(PptError::TooLarge(TooLarge::fixed(format!(
+                            "more than {MAX_SLIDES} slides"
+                        ))));
                     }
                     slides.push((u32_at(data, 0).unwrap_or(0), Vec::new()));
                 }

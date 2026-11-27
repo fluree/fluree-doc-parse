@@ -125,7 +125,9 @@ pub(crate) fn open_engine(
             let opts = fluree_doc_vision::oar::OarOptions {
                 threads: settings.threads,
                 sizing: settings.sizing,
-                memory: settings.memory.unwrap_or(defaults.memory),
+                memory: settings
+                    .memory
+                    .unwrap_or_else(|| default_memory(super::convert::free_memory())),
                 notices: Some(Arc::new(|msg: &str| eprintln!("{}", engine_warning(msg)))),
                 ..defaults
             };
@@ -133,6 +135,18 @@ pub(crate) fn open_engine(
             Ok(Arc::new(engine))
         }
     }
+}
+
+/// The engine's memory budget where none is set: a third of the memory
+/// `free` to the process, so the documents of a batch keep the rest (two
+/// at once with 16 GiB free, with four pipelines), at most the engine's
+/// own default (8 GiB), which is also the budget where the free memory is
+/// not known. A pass larger than the budget is read alone, so a small
+/// budget slows the engine but does not refuse an image.
+#[cfg(feature = "ocr")]
+fn default_memory(free: Option<u64>) -> u64 {
+    use fluree_doc_vision::oar::DEFAULT_MEMORY;
+    free.map_or(DEFAULT_MEMORY, |f| (f / 3).min(DEFAULT_MEMORY))
 }
 
 #[cfg(not(feature = "ocr"))]
@@ -398,22 +412,15 @@ pub fn run(args: &OcrArgs, verbose: bool, quiet: bool) -> i32 {
         n => n,
     }
     .min(images.len().max(1));
-    let next = std::sync::atomic::AtomicUsize::new(0);
     let failed = std::sync::atomic::AtomicUsize::new(0);
-    std::thread::scope(|s| {
-        for _ in 0..workers {
-            s.spawn(|| loop {
-                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some(path) = images.get(i) else { break };
-                match read_one(engine.as_ref(), path, &args.out) {
-                    Ok((name, words)) if verbose => eprintln!("{name}: {words} words"),
-                    Ok(_) => {}
-                    Err(e) => {
-                        failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        eprintln!("error: {e}");
-                    }
-                }
-            });
+    in_workers(workers, &images, |path| {
+        match read_one(engine.as_ref(), path, &args.out) {
+            Ok((name, words)) if verbose => eprintln!("{name}: {words} words"),
+            Ok(_) => {}
+            Err(e) => {
+                failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                eprintln!("error: {e}");
+            }
         }
     });
     let failed = failed.into_inner();
@@ -430,6 +437,26 @@ pub fn run(args: &OcrArgs, verbose: bool, quiet: bool) -> i32 {
         );
     }
     i32::from(failed > 0)
+}
+
+/// `each` of `items`, on `workers` threads taking the next one in turn,
+/// each within the limits the caller reads within
+/// ([`fluree_doc_model::budget::limited_to`]): a thread spawned starts
+/// with the defaults.
+fn in_workers<T: Sync>(workers: usize, items: &[T], each: impl Fn(&T) + Sync) {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let limits = fluree_doc_model::budget::limits();
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| {
+                fluree_doc_model::budget::limited_to(limits, || loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(item) = items.get(i) else { break };
+                    each(item);
+                })
+            });
+        }
+    });
 }
 
 #[cfg(feature = "ocr")]
@@ -476,7 +503,36 @@ fn read_one(_: &dyn OcrEngine, _: &Path, _: &Path) -> Result<(String, usize), St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn each_worker_reads_within_the_callers_limits() {
+        use fluree_doc_model::budget::{limited_to, limits, Limits};
+        let mut l = Limits::default();
+        l.pages = 7;
+        let seen = std::sync::Mutex::new(Vec::new());
+        limited_to(l, || {
+            super::in_workers(3, &[1, 2, 3, 4, 5], |_| {
+                seen.lock().unwrap().push(limits().pages);
+            })
+        });
+        assert_eq!(seen.into_inner().unwrap(), [7; 5]);
+    }
+
     use super::*;
+
+    #[cfg(feature = "ocr")]
+    #[test]
+    fn the_default_ocr_budget_is_a_third_of_the_free_memory_within_bounds() {
+        let gib = 1u64 << 30;
+        // A third of 12 GiB; 8 GiB at most, whatever the pixel cap (a
+        // pass larger than the budget is read alone, not beside others);
+        // the engine's 8 GiB where unknown.
+        assert_eq!(default_memory(Some(12 * gib)), 4 * gib);
+        assert_eq!(default_memory(Some(16 * gib)), 16 * gib / 3);
+        assert_eq!(default_memory(Some(64 * gib)), 8 * gib);
+        assert_eq!(default_memory(None), 8 * gib);
+        // Little free: a third of it, however small.
+        assert_eq!(default_memory(Some(3 * gib)), gib);
+    }
 
     #[test]
     #[cfg(feature = "ocr")]

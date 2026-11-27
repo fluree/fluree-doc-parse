@@ -11,7 +11,46 @@ pub mod triage;
 use crate::cli::{Cli, Commands, ConvertArgs, DevCommands, Format, MdLinks};
 
 /// Dispatch a parsed CLI to its command, returning the process exit code.
+///
+/// Every command but `config` reads within the limits the `--max-*` flags,
+/// the `FDOC_MAX_*` variables and the config's `[limits]` set: resolved
+/// once, here, for every document it reads.
 pub fn run(cli: Cli) -> i32 {
+    if matches!(cli.command, Commands::Config { .. }) {
+        return dispatch(cli);
+    }
+    let limits = match limits(&cli.limits) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
+    fluree_doc_model::budget::limited_to(limits, || dispatch(cli))
+}
+
+/// The limits `flags` set, over the environment, over the config file. A
+/// config that does not read is warned about, and its limits not taken; a
+/// key its `[limits]` does not know, or a value of the wrong type, warned
+/// about and ignored.
+fn limits(flags: &crate::cli::LimitArgs) -> Result<fluree_doc_model::budget::Limits, String> {
+    let config = match crate::config::load() {
+        Ok(l) => {
+            for w in l.config.limits.warnings() {
+                eprintln!("warning: {}: {w}", l.path.display());
+            }
+            l.config.limits
+        }
+        Err(e) => {
+            eprintln!("warning: {e}");
+            eprintln!("         its [limits] are not applied");
+            crate::config::Limits::default()
+        }
+    };
+    config.resolve(flags, |v| std::env::var(v).ok())
+}
+
+fn dispatch(cli: Cli) -> i32 {
     match cli.command {
         Commands::Convert(args) => convert::run(&args, cli.verbose, cli.quiet),
         Commands::Ocr(args) => ocr::run(&args, cli.verbose, cli.quiet),

@@ -299,7 +299,7 @@ fn a_sheet_offset_that_is_no_sheet_is_refused() {
     let bytes = compound(&[("/Workbook", &s)]);
     // Refused by the walk, before calamine reads anything from there.
     assert!(
-        matches!(parse(&bytes), Err(XlsError::Biff(ref m)) if m.contains("offset")),
+        matches!(parse(&bytes), Err(XlsError::Biff(ref m)) if m.to_string().contains("offset")),
         "{:?}",
         parse(&bytes)
     );
@@ -484,7 +484,7 @@ fn a_shared_string_named_by_many_cells_counts_for_each() {
         .collect();
     let s = raw_stream(&[sst_of(8_000)], &[0], &[cells]);
     assert!(
-        matches!(parse(&compound(&[("/Workbook", &s)])), Err(XlsError::TooLarge(ref m)) if m.contains("characters")),
+        matches!(parse(&compound(&[("/Workbook", &s)])), Err(XlsError::TooLarge(ref m)) if m.to_string().contains("characters")),
     );
     // The same string named by a few cells reads.
     let cells: Vec<Vec<u8>> = (0..10u16).map(|i| label(i, 0, PLAIN, 0)).collect();
@@ -617,7 +617,7 @@ fn sheets_laid_inside_each_other_are_walked_no_more_than_twice_the_stream() {
     }
     let r = parse(&compound(&[("/Workbook", &s)]));
     assert!(
-        matches!(r, Err(XlsError::TooLarge(ref m)) if m.contains("walked")),
+        matches!(r, Err(XlsError::TooLarge(ref m)) if m.to_string().contains("walked")),
         "{r:?}"
     );
     // The innermost alone reads.
@@ -639,7 +639,7 @@ fn sheet_records_past_their_bound_are_refused() {
     let s = raw_stream(&[], &names, &[vec![]]);
     let r = parse(&compound(&[("/Workbook", &s)]));
     assert!(
-        matches!(r, Err(XlsError::TooLarge(ref m)) if m.contains("sheet records")),
+        matches!(r, Err(XlsError::TooLarge(ref m)) if m.to_string().contains("sheet records")),
         "{r:?}"
     );
 }

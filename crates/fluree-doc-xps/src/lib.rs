@@ -29,7 +29,8 @@
 //!
 //! **Bounds**, as for any archive: each part at most [`MAX_PART_BYTES`]
 //! uncompressed and all parts read at most [`MAX_TOTAL_BYTES`], checked as
-//! they inflate; at most [`MAX_PAGES`] pages, [`MAX_PAGE_GLYPHS`] glyphs on
+//! they inflate; at most [`MAX_PAGES`] pages read (those past it listed
+//! unread) of at most [`MAX_LISTED_PAGES`] listed, [`MAX_PAGE_GLYPHS`] glyphs on
 //! a page and [`MAX_GLYPHS`] in all (counted before a run is laid out, so a
 //! run past the bound is refused before its glyphs are made) and [`MAX_DEPTH`] nested elements on a page. A page is
 //! at most [`MAX_PAGE_SIZE`] units across; a run drawn larger than its page
@@ -37,7 +38,7 @@
 //! its page, so no coordinate reaching the layout pipeline is beyond a
 //! page's reach.
 
-use fluree_doc_model::budget::scaled;
+use fluree_doc_model::budget::{scaled, Limit, TooLarge};
 use fluree_doc_model::DocumentInfo;
 use fluree_doc_ooxml::{attr, local, Package};
 use fluree_doc_pdf::geom::BBox;
@@ -54,8 +55,19 @@ use quick_xml::Reader;
 pub const MAX_PART_BYTES: u64 = scaled(64 << 20);
 /// The most bytes all the parts read are inflated to: 512 MiB.
 pub const MAX_TOTAL_BYTES: u64 = scaled(512 << 20);
-/// The most pages read.
-pub const MAX_PAGES: usize = 10_000;
+/// The most pages read by default, the page limit of every paged format
+/// ([`fluree_doc_model::budget::MAX_PAGES`]); a caller sets its own with
+/// [`Limits::pages`](fluree_doc_model::budget::Limits::pages). The pages
+/// past it are counted, not read ([`Document::pages_past_limit`]).
+pub const MAX_PAGES: usize = fluree_doc_model::budget::MAX_PAGES;
+/// The most pages a document may list, those read and those past the page
+/// limit: 250,000, as many as a PDF's page tree may, or the page limit
+/// where that is more (a caller asking for that many pages read). Each
+/// page past the limit is counted, and listed unread, so this bounds that
+/// list: a 163 KB package whose one fixed document, named eight times,
+/// listed 2.1 million pages each time made 16.7 million, 1.2 GB as JSON and
+/// an abort as DoCO.
+pub const MAX_LISTED_PAGES: usize = 250_000;
 /// The most glyphs, and pictures, read from one document: four million.
 ///
 /// The pages are laid out by the PDF pipeline, all held at once. Spread over
@@ -89,7 +101,7 @@ pub enum XpsError {
     /// A package with no fixed document sequence: not an XPS document.
     NotXps,
     /// Past one of the bounds.
-    TooLarge(String),
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for XpsError {
@@ -105,7 +117,15 @@ impl std::fmt::Display for XpsError {
     }
 }
 
-impl std::error::Error for XpsError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for XpsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// A picture a page places, for an OCR engine or a model to read.
 #[derive(Debug, Clone, PartialEq)]
@@ -209,7 +229,9 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
 fn parse_within(bytes: &[u8], max_glyphs: usize) -> Result<Xps, XpsError> {
     let mut pkg = Package::open(bytes).map_err(XpsError::Zip)?;
     if pkg.part_names().len() > MAX_PARTS {
-        return Err(XpsError::TooLarge(format!("more than {MAX_PARTS} parts")));
+        return Err(XpsError::TooLarge(TooLarge::fixed(format!(
+            "more than {MAX_PARTS} parts"
+        ))));
     }
     let seq = pkg.root("fixedrepresentation").ok_or(XpsError::NotXps)?;
     let mut budget = MAX_TOTAL_BYTES;
@@ -219,20 +241,38 @@ fn parse_within(bytes: &[u8], max_glyphs: usize) -> Result<Xps, XpsError> {
                 budget -= b.len() as u64;
                 Ok(Some(decode(&b)))
             }
-            Err(e) if e.contains("more than") => Err(XpsError::TooLarge(e)),
+            Err(e) if e.contains("more than") => Err(XpsError::TooLarge(TooLarge::fixed(e))),
             Err(_) => Ok(None),
         }
     };
     let seq_xml = read(&mut pkg, &seq)?.ok_or(XpsError::NotXps)?;
     let mut page_parts = Vec::new();
-    for doc in sources(&seq_xml, "DocumentReference", &seq) {
+    let (limit, mut past_limit) = (fluree_doc_model::budget::limits().pages, 0);
+    let most = MAX_LISTED_PAGES.max(limit);
+    let mut docs = Vec::new();
+    sources(&seq_xml, "DocumentReference", |src| {
+        docs.push(resolved(&seq, src));
+        Ok(())
+    })?;
+    for doc in docs {
         let Some(doc_xml) = read(&mut pkg, &doc)? else {
             continue;
         };
-        page_parts.extend(sources(&doc_xml, "PageContent", &doc));
-        if page_parts.len() > MAX_PAGES {
-            return Err(XpsError::TooLarge(format!("more than {MAX_PAGES} pages")));
-        }
+        // Past the page limit, the pages are counted, not kept, up to the
+        // most a document may list.
+        sources(&doc_xml, "PageContent", |src| {
+            if page_parts.len() < limit {
+                page_parts.push(resolved(&doc, src));
+            } else {
+                past_limit += 1;
+            }
+            if page_parts.len() + past_limit > most {
+                return Err(XpsError::TooLarge(
+                    TooLarge::new(Limit::Pages, most as u64, "pages").within("it lists"),
+                ));
+            }
+            Ok(())
+        })?;
     }
     let mut pages = Vec::new();
     let mut images = Vec::new();
@@ -255,7 +295,12 @@ fn parse_within(bytes: &[u8], max_glyphs: usize) -> Result<Xps, XpsError> {
         images.extend(imgs);
     }
     Ok(Xps {
-        doc: Document { pages, title: None },
+        doc: Document {
+            pages,
+            pages_past_limit: past_limit,
+            cut_short: None,
+            title: None,
+        },
         images,
         info: pkg.info(),
     })
@@ -272,26 +317,34 @@ fn decode(bytes: &[u8]) -> String {
     }
 }
 
-/// The parts the `Source` attributes of `element`s in `xml` name, resolved
-/// against the directory of `part`.
-fn sources(xml: &str, element: &str, part: &str) -> Vec<String> {
-    let dir = part.rsplit_once('/').map_or("", |(d, _)| d);
+/// Hand `each` the `Source` attribute of each `element` in `xml`, as
+/// written, in order; an error it returns stops the reading.
+fn sources(
+    xml: &str,
+    element: &str,
+    mut each: impl FnMut(&str) -> Result<(), XpsError>,
+) -> Result<(), XpsError> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
-    let mut out = Vec::new();
     loop {
         match r.read_event_into(&mut buf) {
             Err(_) | Ok(Event::Eof) => break,
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if local(e.name().as_ref()) == element => {
                 if let Some(src) = attr(&e, "Source") {
-                    out.push(fluree_doc_ooxml::resolve_part(dir, &src));
+                    each(&src)?;
                 }
             }
             _ => {}
         }
         buf.clear();
     }
-    out
+    Ok(())
+}
+
+/// The part `src` names, resolved against the directory of `part`.
+fn resolved(part: &str, src: &str) -> String {
+    let dir = part.rsplit_once('/').map_or("", |(d, _)| d);
+    fluree_doc_ooxml::resolve_part(dir, src)
 }
 
 /// An affine transform as XAML writes one, `m11,m12,m21,m22,dx,dy`: a point
@@ -417,9 +470,9 @@ fn page(
         };
         buf.clear();
         if stack.len() >= MAX_DEPTH {
-            return Err(XpsError::TooLarge(format!(
+            return Err(XpsError::TooLarge(TooLarge::fixed(format!(
                 "elements nested more than {MAX_DEPTH} deep"
-            )));
+            ))));
         }
         let name = local(e.name().as_ref()).to_string();
         let parent = stack.last().map_or(base, |f| f.matrix);
@@ -547,9 +600,9 @@ fn page(
 }
 
 fn too_many() -> XpsError {
-    XpsError::TooLarge(format!(
+    XpsError::TooLarge(TooLarge::fixed(format!(
         "more than {MAX_PAGE_GLYPHS} glyphs and pictures on a page, or {MAX_GLYPHS} in all"
-    ))
+    )))
 }
 
 fn clip(b: BBox, to: &BBox) -> BBox {

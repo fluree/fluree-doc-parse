@@ -93,7 +93,7 @@ pub enum OdfError {
     /// No `content.xml`.
     NoContent,
     /// Past a bound.
-    TooLarge(String),
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for OdfError {
@@ -107,11 +107,19 @@ impl std::fmt::Display for OdfError {
     }
 }
 
-impl std::error::Error for OdfError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for OdfError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<TooLarge> for OdfError {
     fn from(e: TooLarge) -> Self {
-        Self::TooLarge(e.to_string())
+        Self::TooLarge(e)
     }
 }
 
@@ -176,9 +184,10 @@ fn tree(pkg: &mut Package<'_>, name: &str, budget: &mut Budget) -> Result<Option
         // budget.
         Err(e) if e.contains("more than") => {
             let refused = budget.spend_bytes(left + 1).err();
-            return Err(refused.map_or(OdfError::TooLarge(e), OdfError::from));
+            return Err(refused.map_or(OdfError::TooLarge(TooLarge::fixed(e)), OdfError::from));
         }
-        Err(e) => return Err(OdfError::TooLarge(e)),
+        // A part that does not inflate is a broken file, past no bound.
+        Err(e) => return Err(OdfError::Zip(e)),
     };
     budget.spend_bytes(bytes.len() as u64)?;
     let xml = match String::from_utf8(bytes) {

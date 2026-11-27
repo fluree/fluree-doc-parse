@@ -18,6 +18,8 @@ unicode-normalization.workspace = true
 # Embedded files are inflated here, against a bound the parser's own
 # decoders do not take.
 flate2 = "1"
+# Finding every `obj` a file holds, for the page tree's measure.
+memchr = "2"
 hayro = { version = "0.7", optional = true }
 png = { version = "0.17", optional = true }
 

@@ -553,6 +553,22 @@ fn a_part_past_what_the_budget_has_left_is_refused_before_it_is_read() {
     );
 }
 
+#[test]
+fn a_corrupt_part_is_a_broken_file_not_one_too_large() {
+    // A content part whose compressed bytes are damaged: no bound is
+    // passed, so nothing a larger limit would read.
+    let mut pkg = text(&"<text:p>Some words to compress.</text:p>".repeat(200));
+    let name = b"content.xml";
+    let header = pkg.windows(name.len()).position(|w| w == name).unwrap() - 30;
+    let le16 = |at: usize| u16::from_le_bytes([pkg[at], pkg[at + 1]]) as usize;
+    let data = header + 30 + le16(header + 26) + le16(header + 28);
+    for b in &mut pkg[data + 8..data + 24] {
+        *b ^= 0x5a;
+    }
+    let err = parse(&pkg).unwrap_err();
+    assert!(matches!(err, OdfError::Zip(_)), "{err}");
+}
+
 /// A text document whose content part is `prefix`, `bytes`, then the end of
 /// a paragraph: bytes that need not be UTF-8.
 fn text_with_bytes(bytes: &[u8]) -> Vec<u8> {

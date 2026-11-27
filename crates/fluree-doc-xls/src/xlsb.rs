@@ -44,7 +44,9 @@ fn check(bytes: &[u8]) -> Result<(), XlsError> {
     let mut zip =
         zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| XlsError::Package(e.to_string()))?;
     if zip.len() > MAX_ENTRIES {
-        return Err(XlsError::TooLarge(format!("more than {MAX_ENTRIES} parts")));
+        return Err(XlsError::TooLarge(TooLarge::fixed(format!(
+            "more than {MAX_ENTRIES} parts"
+        ))));
     }
     let mut total = 0u64;
     for i in 0..zip.len() {
@@ -58,15 +60,15 @@ fn check(bytes: &[u8]) -> Result<(), XlsError> {
         )
         .map_err(|e| XlsError::Package(format!("{name}: {e}")))?;
         if n > MAX_PART_BYTES {
-            return Err(XlsError::TooLarge(format!(
+            return Err(XlsError::TooLarge(TooLarge::fixed(format!(
                 "{name} inflates past {MAX_PART_BYTES} bytes"
-            )));
+            ))));
         }
         total += n;
         if total > MAX_TOTAL_BYTES {
-            return Err(XlsError::TooLarge(format!(
+            return Err(XlsError::TooLarge(TooLarge::fixed(format!(
                 "its parts inflate past {MAX_TOTAL_BYTES} bytes"
-            )));
+            ))));
         }
     }
     Ok(())
@@ -92,7 +94,7 @@ fn parse_within(
 }
 
 fn too_large(e: TooLarge) -> XlsError {
-    XlsError::TooLarge(e.to_string())
+    XlsError::TooLarge(e)
 }
 
 /// One BIFF12 record: its type and its data.
@@ -190,9 +192,9 @@ fn workbook(part: &[u8]) -> Result<(bool, Vec<(String, String)>), XlsError> {
                 let (rel, end) = wide(r.data, 8).ok_or_else(cut)?;
                 let (name, _) = wide(r.data, end).ok_or_else(cut)?;
                 if sheets.len() == MAX_ENTRIES {
-                    return Err(XlsError::TooLarge(format!(
+                    return Err(XlsError::TooLarge(TooLarge::fixed(format!(
                         "more than {MAX_ENTRIES} sheets listed"
-                    )));
+                    ))));
                 }
                 sheets.push((name, rel));
             }
@@ -417,9 +419,9 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
                     };
                     merged += 1;
                     if merged > MAX_CELLS {
-                        return Err(XlsError::TooLarge(format!(
+                        return Err(XlsError::TooLarge(TooLarge::fixed(format!(
                             "its sheets hold more than {MAX_CELLS} merged ranges"
-                        )));
+                        ))));
                     }
                     budget.spend_cells(1).map_err(too_large)?;
                     if r0 <= r1 && c0 <= c1 {
@@ -464,9 +466,9 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
             };
             total += 1;
             if total > MAX_CELLS {
-                return Err(XlsError::TooLarge(format!(
+                return Err(XlsError::TooLarge(TooLarge::fixed(format!(
                     "its sheets hold more than {MAX_CELLS} cells"
-                )));
+                ))));
             }
             let Some((text, datum)) = value(&v, date1904) else {
                 continue;
@@ -686,7 +688,7 @@ pub(crate) mod tests {
             .collect();
         let bytes = sheet_book(std::slice::from_ref(&big), &cells);
         assert!(
-            matches!(parse_xlsb(&bytes), Err(XlsError::TooLarge(ref m)) if m.contains("text")),
+            matches!(parse_xlsb(&bytes), Err(XlsError::TooLarge(ref m)) if m.to_string().contains("text")),
             "{:?}",
             parse_xlsb(&bytes).map(|(e, _)| e.len())
         );
@@ -736,7 +738,7 @@ pub(crate) mod tests {
         assert!(read(&bytes, &mut budget(1_000)).is_ok());
         assert!(matches!(
             read(&bytes, &mut budget(999)),
-            Err(XlsError::TooLarge(ref m)) if m.contains("cells")
+            Err(XlsError::TooLarge(ref m)) if m.to_string().contains("cells")
         ));
     }
 
@@ -747,7 +749,7 @@ pub(crate) mod tests {
         assert_eq!(els.iter().filter(|e| e.text == "S").count(), 1, "{els:?}");
         assert!(matches!(
             parse_xlsb(&listed_book(&[], &cells, MAX_ENTRIES + 1)),
-            Err(XlsError::TooLarge(ref m)) if m.contains("sheets")
+            Err(XlsError::TooLarge(ref m)) if m.to_string().contains("sheets")
         ));
     }
 
@@ -766,7 +768,7 @@ pub(crate) mod tests {
         );
         assert!(matches!(
             shared_strings(&part, &mut slots(999)),
-            Err(XlsError::TooLarge(ref m)) if m.contains("cells")
+            Err(XlsError::TooLarge(ref m)) if m.to_string().contains("cells")
         ));
     }
 
@@ -796,7 +798,7 @@ pub(crate) mod tests {
         assert!(parse_xlsb(&book('y')).is_ok());
         assert!(matches!(
             parse_xlsb(&book('\u{1}')),
-            Err(XlsError::TooLarge(ref m)) if m.contains("text")
+            Err(XlsError::TooLarge(ref m)) if m.to_string().contains("text")
         ));
     }
 

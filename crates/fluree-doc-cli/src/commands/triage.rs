@@ -121,12 +121,12 @@ pub fn run(path: &Path) -> i32 {
         let mut column_doubts: Vec<(usize, fluree_doc_pdf::column::Doubt)> = Vec::new();
         let mut crops = 0usize;
         {
-            if let (Ok(mut d), Some(raw)) = (
-                extract_file(f),
-                std::fs::read(f)
-                    .ok()
-                    .and_then(|b| hayro_syntax::Pdf::new(std::sync::Arc::new(b)).ok()),
-            ) {
+            let raw = std::fs::read(f)
+                .ok()
+                .and_then(|b| fluree_doc_pdf::open(b).ok());
+            if let Some((mut d, raw)) =
+                raw.and_then(|raw| Some((fluree_doc_pdf::extract_pdf(&raw).ok()?, raw)))
+            {
                 let ol = fluree_doc_pdf::outline::extract(&raw);
                 // Crops are chosen from the document as extracted, which
                 // the analysis below changes.
