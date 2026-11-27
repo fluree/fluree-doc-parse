@@ -2435,6 +2435,12 @@ fn emit_table(table: &Handle, out: &mut Out) {
 
     let mut rows: Vec<Vec<(String, usize, usize)>> = Vec::new();
     let mut kinds: Vec<RowKind> = Vec::new();
+    // The text of the cells gathered so far, at its cost: each cell's is
+    // checked to fit in what is left of the budget with them before it is
+    // gathered, and spent with the table ([`spend_table`]). Gathered
+    // unchecked, a table's text was all copied before any of it was
+    // counted.
+    let mut gathered = 0u64;
     for tr in &trs {
         let mut cells = Vec::new();
         let mut marks = Vec::new();
@@ -2444,6 +2450,12 @@ fn emit_table(table: &Handle, out: &mut Out) {
                 Some("td") => false,
                 _ => continue,
             };
+            let mut count = Gather::new(&out.facts, false);
+            count.children(&cell);
+            gathered = gathered.saturating_add(count.cost);
+            if !out.spend(|b| b.clone().spend_text_cost(gathered)) {
+                return;
+            }
             // A table cell's text becomes a grid position, which has no
             // room for an anchor span; the link is dropped with it.
             let text = text_of(&cell, &out.facts).0;
@@ -3652,6 +3664,24 @@ mod tests {
     fn within(src: &str, memory: u64) -> Result<Vec<Element>, TooLarge> {
         let mut budget = Budget::new(memory, u64::MAX).for_output(output());
         read_within(src, false, &mut budget).map(|(e, _)| e)
+    }
+
+    #[test]
+    fn a_tables_cell_text_is_checked_before_it_is_gathered() {
+        // Two cells of 300 KB each, in a budget that holds the page's tree
+        // and little more: refused for the text before it is copied out of
+        // the tree, not once the table holding it is made.
+        let long = "w".repeat(300_000);
+        let page = format!("<table><tr><td>{long}</td><td>{long}</td></tr></table>");
+        let (_, left) = build(
+            &page,
+            Budget::new(MAX_MEMORY, u64::MAX).for_output(output()),
+        )
+        .unwrap();
+        let tree = MAX_MEMORY - left.memory_left();
+        let err = within(&page, tree + 100_000).unwrap_err().to_string();
+        assert!(err.contains("text past"), "{err}");
+        assert!(within(&page, tree + 20 * MAX_MEMORY / 1000).is_ok());
     }
 
     #[test]
