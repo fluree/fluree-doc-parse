@@ -2560,6 +2560,15 @@ pub(crate) fn crosses_gutter<'a>(
     (alone || !halves).then_some(gutter)
 }
 
+/// Text that stands as a label of its own, not one carrying on the label
+/// over it: `100%` or `LM` under a header's head, where `size` under
+/// `Frame`, `(7.2K rpm)` under `Business Critical` or `x = E/U` under a
+/// type's name go on with it.
+pub(crate) fn opens_a_label(s: &str) -> bool {
+    let t = s.trim();
+    !t.is_empty() && !t.starts_with(|c: char| c.is_lowercase() || c == '(' || c == '[')
+}
+
 pub(crate) fn is_numeric_cell(s: &str) -> bool {
     if s.is_empty() || !s.chars().any(|c| c.is_ascii_digit()) {
         return false;

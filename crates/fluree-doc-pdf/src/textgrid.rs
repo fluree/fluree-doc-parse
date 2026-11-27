@@ -93,6 +93,25 @@ fn row_gap(rules: &[Rule], x0: f64, x1: f64, y0: f64, y1: f64, fs: f64, band: bo
 /// Deepest header read.
 const MAX_HEADER_LINES: usize = 5;
 
+/// How far a stub's head set down the header may stand from the header's
+/// size, as a share of it: the header's lines are set alike, a point or so
+/// apart at most; a caption over a photograph beside the table is set at
+/// twice their size.
+const HEAD_SIZE: f64 = 0.15;
+
+/// Text that ends a sentence, or opens what follows as prose does: a colon
+/// at its end, or a full stop after a word in lower case (`and disposal.`).
+/// A label's abbreviation (`No.`, `Vol.`) is no sentence's end.
+fn ends_a_sentence(text: &str) -> bool {
+    let t = text.trim_end();
+    if t.ends_with(':') {
+        return true;
+    }
+    t.strip_suffix('.')
+        .and_then(|w| w.split_whitespace().last())
+        .is_some_and(|w| w.chars().count() >= 3 && w.chars().all(|c| c.is_lowercase()))
+}
+
 /// A run of glyphs on one line, parted from its neighbours by a cell gap.
 #[derive(Debug, Clone)]
 struct Chunk {
@@ -1770,6 +1789,25 @@ fn read_beside(
                         .any(|a| column_of(&cols0, a) == column_of(&cols0, c))
                 })
         };
+        // A line of the columns' heads set within a line over `l`: words,
+        // or years and units, in the columns past the stub and none in it (a
+        // title across the table starts in the stub).
+        let heads_over = |l: &Line| {
+            clipped[floor..]
+                .iter()
+                .rev()
+                .find(|o| o.base < l.base - 1.0)
+                .is_some_and(|o| {
+                    l.base - o.base <= l.fs.max(o.fs) * WRAP_LEADING
+                        && !o.chunks.is_empty()
+                        && o.chunks
+                            .iter()
+                            .all(|c| column_of(&cols0, c).is_some_and(|k| k > 0))
+                        && o.chunks.iter().all(|c| {
+                            !is_figure(&c.text) || is_year(&c.text) || is_unit_head(&c.text)
+                        })
+                })
+        };
         while first > floor
             && if framed_at(first - 1) {
                 levels < MAX_HEADER_LINES
@@ -1914,6 +1952,28 @@ fn read_beside(
             };
             let banner = above.chunks.iter().all(&banner_chunk);
             let fills_gaps = above.chunks.iter().all(|c| banner_chunk(c) || fills_gap(c));
+            // A stub's head set down the header's lines beside the columns'
+            // heads, centred on them or wrapped over two (`Solution Name`
+            // beside `Mass of` over `Sample (mg)`, `Time` over `(min)`):
+            // a label's few words in the stub the lines under it leave
+            // empty, or hold the rest of, within a line of the line under it.
+            // A line ending a sentence (`… were:`, `… and disposal.`) is the
+            // prose over the table. Down the header means between its lines,
+            // over the stub's own labels: the columns' heads go on over it
+            // too, as a chart's labels, a caption beside the table or a title
+            // beside a one-line header do not.
+            let stub = stub
+                || label_row(above)
+                    && header_seen > 0
+                    && cur.base - above.base <= cur.fs * WRAP_LEADING
+                    && above.chunks[0].text.split_whitespace().count() <= SECTION_WORDS
+                    && !ends_a_sentence(&above.chunks[0].text)
+                    && (above.fs - cur.fs).abs() <= cur.fs * HEAD_SIZE
+                    && cols0
+                        .first()
+                        .is_some_and(|s| above.chunks[0].x1 > s.0 && above.chunks[0].x0 < s.1)
+                    && fills_gap(&above.chunks[0])
+                    && heads_over(above);
             if header_named && !(banner || wrapped || fills_gaps) {
                 break;
             }
@@ -4952,6 +5012,86 @@ mod tests {
         // The group's words, over the inner rule and a gap, in the header.
         let head = texts[..lay.header_rows * grids[0].cols()].join(" ");
         assert!(head.contains("Survey of all"), "{texts:?}");
+    }
+
+    /// A table ruled over and under its header, the header's `lines` set
+    /// at their baselines (`(text, x, y)`), three rows of figures under it:
+    /// the header row's text, read.
+    fn header_read(lines_at: &[(&str, f64, f64)]) -> String {
+        let rules = vec![
+            rule_across(10.0, 330.0, 24.0),
+            rule_across(10.0, 330.0, 62.0),
+        ];
+        let xs = [20.0, 120.0, 220.0];
+        let mut gl = Vec::new();
+        for &(t, x, y) in lines_at {
+            gl.extend(set(t, x, y));
+        }
+        for (i, row) in [
+            ["Spike 1", "2", "25"],
+            ["Spike 2", "1", "10"],
+            ["Spike 3", "3", "25"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (k, t) in row.iter().enumerate() {
+                gl.extend(set(t, xs[k], 76.0 + 14.0 * i as f64));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 64.0,
+            x1: 330.0,
+            y1: 110.0,
+        };
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let lay = grids[0].layout.as_deref().expect("read from its text");
+        grids[0].cell_texts(&gl)[..lay.header_rows * grids[0].cols()].join(" | ")
+    }
+
+    #[test]
+    fn a_sentence_s_end_is_no_label() {
+        assert!(ends_a_sentence("the Executive Committee) were:"));
+        assert!(ends_a_sentence("goodwill impairment and disposal."));
+        assert!(!ends_a_sentence("Solution Name"));
+        assert!(!ends_a_sentence("Sample No."));
+        assert!(!ends_a_sentence("(min)"));
+    }
+
+    #[test]
+    fn a_stub_head_centred_down_the_header_is_the_header_s() {
+        // `Name` centred down a header of two lines, the columns' heads on
+        // both: the walk up from the rows takes the header whole.
+        let head = header_read(&[
+            ("Mass of", 120.0, 34.0),
+            ("Final", 220.0, 34.0),
+            ("Name", 20.0, 41.0),
+            ("Sample (mg)", 120.0, 48.0),
+            ("Vol. (mL)", 220.0, 48.0),
+        ]);
+        assert!(head.contains("Name"), "{head}");
+        assert!(head.contains("Mass of"), "{head}");
+        assert!(head.contains("Final"), "{head}");
+    }
+
+    #[test]
+    fn a_stub_head_wrapped_beside_deeper_heads_is_the_header_s() {
+        // `Time` over `(min)`, centred down column heads of three lines.
+        let head = header_read(&[
+            ("Mobile", 120.0, 30.0),
+            ("Mobile", 220.0, 30.0),
+            ("Time", 20.0, 37.0),
+            ("Phase", 120.0, 43.0),
+            ("Phase B", 220.0, 43.0),
+            ("(min)", 20.0, 50.0),
+            ("A(%)", 120.0, 56.0),
+            ("(%)", 220.0, 56.0),
+        ]);
+        assert!(head.contains("Time"), "{head}");
+        assert!(head.contains("(min)"), "{head}");
+        assert!(head.contains("Mobile"), "{head}");
     }
 
     /// A rule across the table at `y`, from `x0` to `x1`.
