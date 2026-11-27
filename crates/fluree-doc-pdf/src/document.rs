@@ -905,6 +905,12 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
                 .all(|(x, y)| x.split_whitespace().eq(y.split_whitespace()))
     };
     let mut last = None;
+    // Each linked part's table's own header rows, as its first part sets
+    // them: a part carried on from a part with no header of its own (a
+    // page of rows) is headed by those, and a later page repeating them
+    // repeats the table's header.
+    let mut table_heads: std::collections::HashMap<String, Vec<Vec<String>>> =
+        std::collections::HashMap::new();
     for i in 0..elements.len() {
         if is_splice_anchor(&elements[i]) {
             continue;
@@ -930,7 +936,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         let (Some(a), Some(b)) = (frame(prev), frame(next)) else {
             continue;
         };
-        let (Some(head), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
+        let (Some(prev_cells), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
             continue;
         };
         let aligned = a.xs.len() == b.xs.len()
@@ -944,10 +950,16 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         // A second part that is the first one over again, every row, is
         // the next copy of a form printed box after box down the pages, not
         // the rest of the first: no table carries on by repeating its body.
-        if head.len() == rows.len() && head.iter().zip(rows).all(|(a, b)| same(a, b)) {
+        if prev_cells.len() == rows.len() && prev_cells.iter().zip(rows).all(|(a, b)| same(a, b)) {
             continue;
         }
-        let n = prev.header_rows.unwrap_or(0).min(head.len());
+        let own = prev.header_rows.unwrap_or(0).min(prev_cells.len());
+        let head: Vec<Vec<String>> = if own > 0 {
+            prev_cells[..own].to_vec()
+        } else {
+            table_heads.get(&prev.id).cloned().unwrap_or_default()
+        };
+        let n = head.len();
         let repeats = n > 0 && rows.len() > n && (0..n).all(|r| same(&head[r], &rows[r]));
         // The header repeated with a cell of it read on into the label under
         // it: the stub's head drawn open into the first group's cell
@@ -1018,6 +1030,34 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         } else {
             0
         });
+        // A row further down that sets the table's header again (a new
+        // period's label row under its band, `Labor Category | Hours | …`)
+        // names the columns for the rows under it.
+        if n > 0 {
+            let start = next.header_rows.unwrap_or(0);
+            let subs = next.sub_headers.clone().unwrap_or_default();
+            let again: Vec<usize> = next
+                .cells
+                .as_ref()
+                .map(|cells| {
+                    (start..cells.len())
+                        .filter(|r| !subs.contains(r))
+                        .filter(|&r| {
+                            cells[r].iter().filter(|t| !t.trim().is_empty()).count() >= 2
+                                && same(&head[n - 1], &cells[r])
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !again.is_empty() {
+                let mut restated = next.restated_headers.clone().unwrap_or_default();
+                restated.extend(again);
+                restated.sort_unstable();
+                restated.dedup();
+                next.restated_headers = Some(restated);
+            }
+            table_heads.insert(next.id.clone(), head);
+        }
     }
 }
 
