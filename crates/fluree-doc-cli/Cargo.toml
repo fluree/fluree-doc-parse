@@ -27,6 +27,7 @@ fluree-doc-transcript.workspace = true
 fluree-doc-email.workspace = true
 fluree-doc-vision.workspace = true
 fluree-doc-image.workspace = true
+fluree-doc-conform.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 serde.workspace = true
