@@ -6009,6 +6009,42 @@ mod tests {
     }
 
     #[test]
+    fn a_total_s_label_is_its_row_s_label() {
+        // Totals labelled over the items' figures: each label is read into
+        // the first column, spanning the columns to its own, and names the
+        // row's amount; it is no value of the column it stands over.
+        let (gl, region) = invoice(
+            &["Code", "Item", "Qty", "Price", "", "Amount"],
+            &[
+                ("Total amount excluding VAT", 250.0, "127.45"),
+                ("Amount due", 300.0, "154.21"),
+            ],
+        );
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert!(!grids.is_empty(), "{grids:?}");
+        let g = &grids[0];
+        let lay = g.layout.as_deref().expect("read from its text");
+        let cols = g.cols();
+        let texts = lay.texts(&gl, cols);
+        let row = |label: &str| {
+            (0..g.rows())
+                .find(|&r| texts[r * cols..(r + 1) * cols].iter().any(|t| t == label))
+                .unwrap_or_else(|| panic!("no row of {label}: {texts:?}"))
+        };
+        for label in ["Total amount excluding VAT", "Amount due"] {
+            let r = row(label);
+            assert_eq!(texts[r * cols], label, "{texts:?}");
+            assert!(
+                lay.spans
+                    .iter()
+                    .any(|&(sr, c0, c1)| sr == r && c0 == 0 && c1 >= 2),
+                "{:?}",
+                lay.spans
+            );
+        }
+    }
+
+    #[test]
     fn a_header_label_over_no_rows_column_heads_an_empty_column() {
         // `Discount` over a column no item fills: its own column, not a
         // second name for the next one.
