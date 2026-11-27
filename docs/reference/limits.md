@@ -217,6 +217,15 @@ walking the table as the writer does, without making a copy): each cell a
 merge fills, a node of its own, at the element's cost, and each byte copied,
 merged value or label, at the text's. A cell's labels are counted on every
 table, merged or not: a long row label over many columns is the same copy.
+A part of a table a page break carried on (`continues`) is written with
+what it takes from the part before: the column names in force at that
+part's end, on a part with no header of its own, the band open at its foot,
+on each row until the part's own first band or break, and the value it ends
+on in a cell the break cut. None is in the part's own cells, so the budget
+counts them on every cell they land on, with the part before
+(`fluree_doc_model::doco::TableCopies`, which the budget keeps across a
+document's tables): a band of 6,000 characters at the foot of one page,
+over 10,000 rows on the next, is 120 MB of labels from 6 KB, and is refused.
 The 5.3 GB above is 4.4 B a byte copied, under the 12 the budget counts;
 both files are refused as DoCO now, before a copy is made. Only DoCO makes
 these copies: converted to text, a value merged down is counted once a row,
