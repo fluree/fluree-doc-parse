@@ -459,13 +459,19 @@ limits on it changed:
   `unread_pages`. `render::page` draws a page past the render pixels at the
   scale that fits, which `Raster::scale` says. A PDF opened by
   `fluree_doc_pdf::open`, as `extract_bytes` opens one, is refused when its
-  page tree nests or lists past the bounds the parser can walk.
+  page tree nests or lists past the bounds the parser can walk. Converted
+  by `fdoc`, a PDF's, an XPS document's and an OCR reading's tables are
+  spent the copies DoCO writes of their cells (`spend_table_copies`): a
+  PDF or an XPS document past them is read shorter, an image refused, and
+  `fluree_doc_image::read_texty` and `elements_from_words` return `Err`
+  for a reading whose tables' copies are past one document's budget.
 - New: `fluree_doc_model::budget::Limits`, `limited_to`, `limits`, `Limit`,
   `MAX_PAGES` and `MAX_RENDER_PIXELS`, `TooLarge::new`, `fixed`, `within`,
   `limit` and `max`; `fluree_doc_model::PAST_PAGE_LIMIT`,
   `PAST_MEMORY_LIMIT`, `PAST_WORK_LIMIT`, `past_limit_reason` and
   `is_past_limit`; `fluree_doc_pdf::open`, `extract_pdf`,
-  `extract_pdf_with`, `past_limit`, `CutShort` and the module `page_tree`;
+  `extract_pdf_with`, `extract_pdf_within`, `PageBudget`,
+  `spend_table_copies`, `past_limit`, `CutShort` and the module `page_tree`;
   `render::fitted_scale`, `page_scale`, `shrunk_by`, `page_shrunk_by` and
   `MAX_RENDER_SIDE`.
 
@@ -504,7 +510,21 @@ if let Err(fluree_doc_docx::DocxError::TooLarge(e)) = &read {
 
 A PDF past the page limit, or past its memory or work on a page after the
 first, is not refused: it is read short, to the last page that fit, and
-`doc.pages_past_limit` counts the pages after it. Nothing in the elements
+`doc.pages_past_limit` counts the pages after it. The copies DoCO writes of
+its tables' cells are spent from the same budget once the elements are
+final: read it with `extract_pdf_within`, keeping the `PageBudget`, and
+pass that to `fluree_doc_pdf::spend_table_copies` before writing, which
+reads the document shorter where they do not fit (an XPS document or an
+OCR reading spends them from a `PageBudget::default()`):
+
+```rust
+let raw = fluree_doc_pdf::open(bytes)?;
+let mut budget = fluree_doc_pdf::PageBudget::default();
+let mut doc = fluree_doc_pdf::extract_pdf_within(&raw, &Default::default(), &mut budget)?;
+let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
+fluree_doc_pdf::spend_table_copies(&mut doc, &mut analysis.elements, &mut budget)?;
+```
+ Nothing in the elements
 says so, and `to_markdown(&elements)` carries no notes: list the pages
 (`fluree_doc_pdf::unread_pages`, each `PastPageLimit`, `PastMemoryLimit`
 or `PastWorkLimit`, `fluree_doc_model::is_past_limit` telling them apart)

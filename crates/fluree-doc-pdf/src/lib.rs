@@ -22,12 +22,15 @@
 //! **Supported.** These follow semver and are what a consumer should build on:
 //!
 //! - [`extract_file`] / [`extract_bytes`] → [`Document`], and [`extract_pdf`]
-//!   for a document already [`open`]ed
+//!   for a document already [`open`]ed ([`extract_pdf_within`] spending a
+//!   budget the caller keeps)
 //! - [`open`] — a PDF as hayro-syntax reads it, its page tree's depth
 //!   bounded first ([`page_tree`])
 //! - [`image::page_of`] — a bare raster image as a one-page document
 //! - [`document::analyze_with`] → `Analysis`, plus [`document::to_markdown`]
 //!   and [`document::to_xhtml`]
+//! - [`spend_table_copies`] — the copies DoCO writes of the tables, spent
+//!   from that budget before the output is written
 //! - [`doco::to_doco`] / [`doco::to_text`] and [`doco::DocoOptions`]
 //! - [`route::decide`] and [`route::signals`] — escalation verdicts
 //! - [`unread_pages`] and [`unread_regions`] — what the router sent a reader
@@ -326,6 +329,84 @@ pub fn parse_warnings(doc: &Document) -> Vec<fluree_doc_model::ParseWarning> {
     out
 }
 
+/// Spend from `budget`, the document's, the copies the output writes of the
+/// tables among `elements`
+/// ([`Budget::spend_copies`](fluree_doc_model::budget::Budget::spend_copies)),
+/// in the order they are written, once the elements are those that will be:
+/// after the analysis, the tiers' readings and the notes placed, and after
+/// any page not asked for is left out.
+///
+/// The analysis sizes a table by its cells, as it reads them; DoCO writes
+/// more of it than that, each cell's column header, row label and band, a
+/// value merged down in each row it covers, and on a part a page break
+/// carries on (`continues`), the header and band it takes from the part
+/// before. A table of a few kilobytes of cells can be gigabytes of those.
+/// Every other reader spends them as it keeps each table; a PDF's, an XPS
+/// document's and an OCR reading's tables are made by the layout, which has
+/// no budget, so they are spent here, before the output is written.
+///
+/// Past the budget, the document is read short, as it is past the budget
+/// while its pages are read ([`Document::cut_short`]): to the most pages
+/// whose own spending, as [`extract_pdf_within`] counted it page by page,
+/// and whose tables' copies fit together, the pages dropped giving back
+/// what they spent. The rest of `doc.pages` is dropped and listed unread
+/// past the limit ([`past_limit`]; `PastMemoryLimit`, as the pages it had
+/// already cut short are now), and the elements on them left out with it.
+/// Where that would leave no element, the document is refused with the
+/// limit passed, as one whose first page is past the budget is.
+pub fn spend_table_copies(
+    doc: &mut Document,
+    elements: &mut Vec<fluree_doc_model::Element>,
+    budget: &mut PageBudget,
+) -> Result<(), fluree_doc_model::budget::TooLarge> {
+    use fluree_doc_model::budget::Budget;
+    /// `elements` on the pages before `end`, in order, spent from `b`.
+    fn spend(
+        mut b: Budget,
+        elements: &[fluree_doc_model::Element],
+        end: usize,
+    ) -> Result<Budget, fluree_doc_model::budget::TooLarge> {
+        for e in elements.iter().filter(|e| e.page < end) {
+            b.spend_copies(e)?;
+        }
+        Ok(b)
+    }
+    let err = match spend(budget.now.clone(), elements, usize::MAX) {
+        Ok(spent) => {
+            budget.now = spent;
+            return Ok(());
+        }
+        Err(err) => err,
+    };
+    // The first `n` pages kept: the fewer, the less their glyphs and their
+    // tables spend, so the most that fit are found by halving, each try a
+    // pass over the elements. All of them do not fit; none always does.
+    let end = |n: usize| doc.pages.get(n).map_or(usize::MAX, |p| p.index);
+    let fits = |n: usize| spend(budget.after_pages(n), elements, end(n)).ok();
+    let (mut lo, mut hi, mut kept) = (0, doc.pages.len(), None);
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        match fits(mid) {
+            Some(b) => (lo, kept) = (mid, Some(b)),
+            None => hi = mid,
+        }
+    }
+    let cut = end(lo);
+    let Some(spent) = kept.filter(|_| elements.iter().any(|e| e.page < cut)) else {
+        return Err(err);
+    };
+    budget.now = spent;
+    let dropped = doc.pages.len() - lo;
+    doc.pages.truncate(lo);
+    elements.retain(|e| e.page < cut);
+    doc.pages_past_limit += dropped;
+    doc.cut_short = Some(CutShort {
+        limit: err.limit(),
+        pages: dropped + doc.cut_short.map_or(0, |c| c.pages),
+    });
+    Ok(())
+}
+
 /// Two boxes for the same region, computed the same way: equal but for
 /// floating-point noise.
 pub(crate) fn same_box(a: &BBox, b: &BBox) -> bool {
@@ -355,8 +436,9 @@ pub mod watermark;
 
 pub use block::Block;
 pub use extract::{
-    extract_bytes, extract_bytes_with, extract_file, extract_pdf, extract_pdf_with, CutShort,
-    Document, ExtractError, ExtractOptions, ImagePlacement, Page,
+    extract_bytes, extract_bytes_with, extract_file, extract_pdf, extract_pdf_with,
+    extract_pdf_within, CutShort, Document, ExtractError, ExtractOptions, ImagePlacement, Page,
+    PageBudget,
 };
 pub use furniture::Furniture;
 pub use geom::BBox;
@@ -897,5 +979,234 @@ mod tests {
         // Short text of another kind does not.
         let layout = Element::new("doco:Paragraph", "Short note", "rust", "layout");
         assert_eq!(unread_pages(&doc, &[layout]).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod copies_tests {
+    use super::*;
+    use fluree_doc_model::budget::{Budget, Limit, ELEMENT_BYTES, TEXT_BYTES};
+    use fluree_doc_model::doco::{table_copies, Copies, TableCopies};
+    use fluree_doc_model::Element;
+
+    /// A PDF of `pages` pages, each a ruled table of three columns and
+    /// `rows` rows, its first page's first row the header (`Name`, `Value`,
+    /// `Unit`); a page after it holds rows only, so its part carries on the
+    /// first's under its header.
+    fn ruled_tables(pages: usize, rows: usize) -> Vec<u8> {
+        let page = |p: usize| {
+            let x = [72, 222, 372, 522];
+            let (top, h) = (720, 18);
+            let mut s = vec!["0.5 w".to_string()];
+            for r in 0..=rows {
+                let y = top - r * h;
+                s.push(format!("{} {y} m {} {y} l S", x[0], x[3]));
+            }
+            for c in x {
+                s.push(format!("{c} {top} m {c} {} l S", top - rows * h));
+            }
+            s.push("BT /F1 10 Tf".into());
+            for r in 0..rows {
+                for c in 0..3 {
+                    let t = match (p, r) {
+                        (0, 0) => ["Name", "Value", "Unit"][c].to_string(),
+                        _ => format!("r{p}x{r}c{c}"),
+                    };
+                    let y = top - r * h - 13;
+                    s.push(format!("1 0 0 1 {} {y} Tm ({t}) Tj", x[c] + 4));
+                }
+            }
+            s.push("ET".into());
+            s.join("\n")
+        };
+        let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            format!(
+                "<< /Type /Pages /Kids [{}] /Count {pages} >>",
+                kids.join(" ")
+            ),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        ];
+        for i in 0..pages {
+            let content = page(i);
+            objects.push(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+                 /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>",
+                5 + 2 * i
+            ));
+            objects.push(format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            ));
+        }
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").bytes());
+        }
+        out.extend(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .bytes(),
+        );
+        out
+    }
+
+    /// The document of `pdf`, and its elements as the analysis makes them.
+    fn analysed(pdf: Vec<u8>) -> (Document, Vec<Element>) {
+        let mut doc = extract_bytes(pdf).unwrap();
+        let elements = document::analyze(&mut doc, &[]).elements;
+        (doc, elements)
+    }
+
+    /// What DoCO's copies `c` are spent at.
+    fn cost(c: Copies) -> u64 {
+        c.cells * ELEMENT_BYTES + c.text * TEXT_BYTES
+    }
+
+    /// What the copies of `elements`' tables are spent, each part with what
+    /// it carries on from the part before.
+    fn copies_cost(elements: &[Element]) -> u64 {
+        let mut tables = TableCopies::default();
+        elements.iter().map(|e| cost(tables.count(e))).sum()
+    }
+
+    /// `elements` spent from a budget of `memory`, with what it left.
+    fn spent(memory: u64, pdf: Vec<u8>) -> (Result<(), TooLarge>, Document, Vec<Element>) {
+        let (mut doc, mut elements) = analysed(pdf);
+        let mut budget = PageBudget::new(Budget::new(memory, 0));
+        let r = spend_table_copies(&mut doc, &mut elements, &mut budget);
+        (r, doc, elements)
+    }
+
+    use fluree_doc_model::budget::TooLarge;
+
+    #[test]
+    fn a_pdf_whose_tables_copies_are_past_the_budget_is_read_short_or_refused() {
+        let pdf = || ruled_tables(3, 8);
+        let (_, elements) = analysed(pdf());
+        let tables: Vec<&Element> = elements.iter().filter(|e| e.cells.is_some()).collect();
+        assert_eq!(
+            tables.iter().map(|t| t.page).collect::<Vec<_>>(),
+            [0, 1, 2],
+            "a table a page"
+        );
+        let need = copies_cost(&elements);
+        let last = {
+            let mut tables = TableCopies::default();
+            elements
+                .iter()
+                .map(|e| cost(tables.count(e)))
+                .last()
+                .unwrap()
+        };
+        assert!(last > 0, "its last part's cells carry labels");
+        // Within it, every element is kept, nothing said.
+        let (r, doc, kept) = spent(need, pdf());
+        assert!(r.is_ok());
+        assert_eq!(
+            (kept.len(), doc.pages.len(), doc.cut_short),
+            (elements.len(), 3, None)
+        );
+        // A byte short, read to the page before the last table, the last
+        // page listed past the memory limit.
+        let (r, doc, kept) = spent(need - 1, pdf());
+        assert!(r.is_ok());
+        assert!(kept.iter().all(|e| e.page < 2) && kept.iter().any(|e| e.page == 1));
+        assert_eq!(doc.pages.len(), 2);
+        assert_eq!(doc.pages_past_limit, 1);
+        let unread = unread_pages(&doc, &kept);
+        assert_eq!(unread.len(), 1, "{unread:?}");
+        assert_eq!(
+            (unread[0].index, unread[0].reason.as_str()),
+            (2, "PastMemoryLimit")
+        );
+        // The first table past it leaves nothing to read: refused.
+        let first = cost(table_copies(tables[0]));
+        let (r, _, _) = spent(first - 1, pdf());
+        assert_eq!(r.unwrap_err().limit(), Limit::Memory);
+    }
+
+    #[test]
+    fn a_table_split_over_pages_is_spent_what_it_carries_on() {
+        let pdf = || ruled_tables(2, 10);
+        let (_, elements) = analysed(pdf());
+        let tables: Vec<&Element> = elements.iter().filter(|e| e.cells.is_some()).collect();
+        assert_eq!(tables.len(), 2);
+        assert_eq!(tables[1].continues.as_deref(), Some(tables[0].id.as_str()));
+        assert_eq!(tables[1].header_rows, Some(0), "no header of its own");
+        // The second part's cells carry the first's column names, which
+        // are not in its own cells.
+        let alone: u64 = tables.iter().map(|t| cost(table_copies(t))).sum();
+        let carried = copies_cost(&elements);
+        assert!(carried > alone, "{carried} > {alone}");
+        let (r, doc, kept) = spent(carried, pdf());
+        assert!(r.is_ok());
+        assert_eq!((kept.len(), doc.pages.len()), (elements.len(), 2));
+        // Counted alone, the parts would fit; with what the second carries,
+        // it does not, and the document is read to the first page.
+        let (r, doc, kept) = spent(alone, pdf());
+        assert!(r.is_ok());
+        assert!(kept.iter().all(|e| e.page == 0));
+        assert_eq!((doc.pages.len(), doc.pages_past_limit), (1, 1));
+    }
+
+    /// `pdf` read within a budget of half what its glyphs cost: cut short
+    /// while its pages are read.
+    fn read_short(pdf: Vec<u8>) -> (Document, PageBudget) {
+        use fluree_doc_model::budget::GLYPH_BYTES;
+        let glyphs = extract_bytes(pdf.clone()).unwrap().glyph_count() as u64;
+        let mut budget = PageBudget::new(Budget::new(glyphs * GLYPH_BYTES / 2, u64::MAX));
+        let raw = open(pdf).unwrap();
+        let doc = extract_pdf_within(&raw, &ExtractOptions::default(), &mut budget).unwrap();
+        assert!(doc.cut_short.is_some() && doc.pages.len() > 1);
+        (doc, budget)
+    }
+
+    #[test]
+    fn a_pdf_read_short_by_its_pages_leaves_the_budget_to_the_pages_kept() {
+        // What the page dropped spent before it stopped is not left spent:
+        // what is made of the pages kept is spent from what they left.
+        let (mut doc, mut budget) = read_short(ruled_tables(6, 30));
+        assert!(budget.budget().memory_left() > 0);
+        let mut kept = vec![Element::new("doco:Paragraph", "Kept", "rust", "layout")];
+        spend_table_copies(&mut doc, &mut kept, &mut budget).unwrap();
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn the_pages_a_cut_drops_give_back_what_they_spent() {
+        // Read short by its glyphs, next to nothing is left: its first
+        // table's copies do not fit in that, but do in what the pages after
+        // it spent. It is read to fewer pages, not refused.
+        let (mut doc, mut budget) = read_short(ruled_tables(6, 30));
+        let read = doc.pages.len();
+        let mut elements = document::analyze(&mut doc, &[]).elements;
+        let first = elements.iter().find(|e| e.cells.is_some()).unwrap();
+        assert!(cost(table_copies(first)) > budget.budget().memory_left());
+        spend_table_copies(&mut doc, &mut elements, &mut budget).unwrap();
+        let kept = doc.pages.len();
+        assert!(kept >= 1 && kept < read, "{kept} of {read}");
+        assert!(elements.iter().all(|e| e.page < kept));
+        assert!(elements.iter().any(|e| e.page == kept - 1));
+        assert_eq!(doc.cut_short.unwrap().limit, Limit::Memory);
+        assert_eq!(doc.pages_past_limit, 6 - kept);
+        // The pages kept are the most that fit: one more does not.
+        let mut more = budget.after_pages(kept + 1);
+        let (_, all) = analysed(ruled_tables(6, 30));
+        let spent_more = all
+            .iter()
+            .filter(|e| e.page <= kept)
+            .try_for_each(|e| more.spend_copies(e));
+        assert!(spent_more.is_err());
     }
 }

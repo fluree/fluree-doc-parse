@@ -227,7 +227,20 @@ counts them on every cell they land on, with the part before
 document's tables): a band of 6,000 characters at the foot of one page,
 over 10,000 rows on the next, is 120 MB of labels from 6 KB, and is refused.
 The 5.3 GB above is 4.4 B a byte copied, under the 12 the budget counts;
-both files are refused as DoCO now, before a copy is made. Only DoCO makes
+both files are refused as DoCO now, before a copy is made.
+
+A PDF's tables, an XPS document's and those an OCR reading makes are laid
+out from what the page draws, by a layout that keeps no budget: their
+copies are spent once the document's elements are final (after the model
+tiers' readings, the notes, and the pages not asked for left out), from the
+budget the pages were read within. Past it, a PDF or an XPS document is
+read short, as it is past the budget while its pages are read: to the most
+pages whose glyphs and tables' copies fit together, the pages dropped
+giving back what their glyphs spent, the rest listed `PastMemoryLimit`. A
+table on a document's first page that does not fit alone, and an image
+(one page), leave nothing to read short and are refused. 24 pages of a
+ruled table of 40 rows, each a header of three 46-character names, read in
+2 MiB as Markdown and the text, and to page 15 as DoCO. Only DoCO makes
 these copies: converted to text, a value merged down is counted once a row,
 as the projection shows it, and converted to Markdown, XHTML or JSON,
 nothing is copied, so both files convert.

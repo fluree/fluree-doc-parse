@@ -1044,7 +1044,10 @@ report, so malformed files fail as errors you can catch.
 A PDF is read within [limits](../reference/limits.md): its pages to the
 10,000th (those past it listed unread, `PastPageLimit`), what they draw
 within the document's memory and work budget (past it, read to the last
-whole page, the rest listed unread, `PastMemoryLimit` or `PastWorkLimit`),
+whole page, the rest listed unread, `PastMemoryLimit` or `PastWorkLimit`;
+then, for DoCO, the copies it writes of the tables' cells, read to the
+most pages whose glyphs and copies fit: [Copies of a table's
+cells](../reference/limits.md#copies-of-a-tables-cells)),
 its page tree at most 256 deep and 250,000 pages (or the page limit, where
 that is more), and a page rendered for a crop with at most 64 million
 pixels and 32,767 a side. Past the tree's bounds, or the budget on its

@@ -1442,7 +1442,7 @@ fn convert_image(
         .or_else(|| fluree_doc_pdf::image::dimensions(&data))
         .filter(|&(w, h)| w > 0 && h > 0)
         .ok_or_else(|| format!("{} header declares no usable size", format.mime()))?;
-    let doc = fluree_doc_pdf::image::page_of(w, h, false);
+    let mut doc = fluree_doc_pdf::image::page_of(w, h, false);
     let sizes: Vec<fluree_doc_model::PageSize> = doc
         .pages
         .iter()
@@ -1481,6 +1481,13 @@ fn convert_image(
         // No line of OCR's to check the model's reading against: the model
         // reads an image OCR took no word in.
         splice_image_reading(&mut elements, stem, page, readings.as_ref(), &[]);
+        // The tables of the reading, their copies spent as a PDF's are.
+        fluree_doc_pdf::spend_table_copies(
+            &mut doc,
+            &mut elements,
+            &mut fluree_doc_pdf::PageBudget::default(),
+        )
+        .map_err(|e| format!("image too large: {}", common::refused(&e)))?;
     }
     // An image nothing read is listed unread, so the output says so too. A
     // reading of the whole image read it, however short.
@@ -2368,6 +2375,14 @@ fn ocr_image(
         &Default::default(),
     );
     fluree_doc_pdf::ocr::mark_provenance(&mut a.elements, &injected);
+    // Its tables' copies, as a PDF's are (`spend_table_copies`): one page,
+    // so past the budget the image is refused rather than read short.
+    fluree_doc_pdf::spend_table_copies(
+        &mut doc,
+        &mut a.elements,
+        &mut fluree_doc_pdf::PageBudget::default(),
+    )
+    .map_err(|e| format!("image too large: {}", common::refused(&e)))?;
     let sizes = doc
         .pages
         .iter()
@@ -2667,7 +2682,10 @@ fn convert_bytes(
     // (`ocr::copies`): read by OCR alone, and a hash of every image's
     // stream (decrypted, in an encrypted file) a run without it never uses.
     eopts.key_images = ocr;
-    let mut doc = fluree_doc_pdf::extract_pdf_with(&raw, &eopts)
+    // The document's budget, spent by its pages as they are read, then by
+    // the copies DoCO writes of its tables once its elements are final.
+    let mut budget = fluree_doc_pdf::PageBudget::default();
+    let mut doc = fluree_doc_pdf::extract_pdf_within(&raw, &eopts, &mut budget)
         .map_err(|e| format!("extract: {}", common::refused(&e)))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
@@ -2852,6 +2870,12 @@ fn convert_bytes(
     if let Some(keep) = pages {
         a.elements.retain(|e: &Element| keep.contains(&e.page));
     }
+    // The elements are those written from here: their tables' copies are
+    // spent, the document read short to the most pages whose glyphs and
+    // copies fit, before the pages, the notes and the unread pages are told
+    // from `doc`.
+    fluree_doc_pdf::spend_table_copies(&mut doc, &mut a.elements, &mut budget)
+        .map_err(|e| common::refused(&fluree_doc_pdf::ExtractError::TooLarge(e)))?;
     // Page geometry travels with the graph: a bbox cannot be placed on a
     // rendered page without the size of the page it came from.
     let sizes = doc
@@ -3136,6 +3160,15 @@ fn convert_xps(
     if pages.is_some() {
         a.elements.retain(|e: &Element| asked(e.page));
     }
+    // Its tables' copies, as a PDF's are (`spend_table_copies`), from a
+    // budget of their own: what the package's pages take is bounded by the
+    // reader's own bounds, not spent from one.
+    fluree_doc_pdf::spend_table_copies(
+        &mut doc,
+        &mut a.elements,
+        &mut fluree_doc_pdf::PageBudget::default(),
+    )
+    .map_err(|e| common::refused(&fluree_doc_xps::XpsError::TooLarge(e)))?;
     let sizes = doc
         .pages
         .iter()

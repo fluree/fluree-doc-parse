@@ -2661,6 +2661,71 @@ pub fn extract_pdf_with(
     pdf: &hayro_interpret::hayro_syntax::Pdf,
     options: &ExtractOptions,
 ) -> Result<Document, ExtractError> {
+    extract_pdf_within(pdf, options, &mut PageBudget::default())
+}
+
+/// A paged document's budget: the document's [`Budget`], and what it had
+/// spent at the end of each page read
+/// ([`extract_pdf_within`]).
+///
+/// What is made of the pages once they are read, the copies DoCO writes of
+/// their tables ([`crate::spend_table_copies`]), is spent from it too. Past
+/// it, the document is read short to a page, and what the pages dropped
+/// spent is given back: their glyphs are not kept. A text PDF read to its
+/// 3,500th page by its glyphs has next to nothing left, so a table on its
+/// first page would otherwise leave nothing read at all.
+#[derive(Debug, Clone)]
+pub struct PageBudget {
+    /// The budget as everything read so far left it.
+    pub(crate) now: Budget,
+    /// The budget as it was at the end of each page read, in order.
+    pub(crate) pages: Vec<Budget>,
+}
+
+impl Default for PageBudget {
+    /// [`Budget::default`], no page read.
+    fn default() -> Self {
+        Self::new(Budget::default())
+    }
+}
+
+impl PageBudget {
+    /// `budget`, no page read yet.
+    pub fn new(budget: Budget) -> Self {
+        Self {
+            now: budget,
+            pages: Vec::new(),
+        }
+    }
+
+    /// The budget as it stands.
+    pub fn budget(&self) -> &Budget {
+        &self.now
+    }
+
+    /// The budget as the first `n` pages read left it, should the pages
+    /// after them be dropped: as it stands where the pages were not counted
+    /// one by one (a document not read by [`extract_pdf_within`]).
+    pub(crate) fn after_pages(&self, n: usize) -> Budget {
+        match n.checked_sub(1).and_then(|i| self.pages.get(i)) {
+            Some(b) => b.clone(),
+            None => self.now.clone(),
+        }
+    }
+}
+
+/// [`extract_pdf_with`], spending what the pages draw from `budget`, the
+/// document's ([`PageBudget::default`] where the caller has none of its
+/// own), and leaving it spent, with what it had spent at the end of each
+/// page: a caller that goes on to make the document's elements spends what
+/// they cost from it, the copies DoCO writes of its tables'
+/// cells ([`crate::spend_table_copies`]) on top of the glyphs the pages
+/// hold while they are written.
+pub fn extract_pdf_within(
+    pdf: &hayro_interpret::hayro_syntax::Pdf,
+    options: &ExtractOptions,
+    budget: &mut PageBudget,
+) -> Result<Document, ExtractError> {
     let cache = InterpreterCache::new();
     // The interpreter's warnings, gathered per page: by default they go
     // nowhere, and an image that failed to decode is placed all the same.
@@ -2678,7 +2743,6 @@ pub fn extract_pdf_with(
     };
     // One budget for the document's pages: what each draws is spent from
     // it as it is kept, and each call the interpreter makes is a step.
-    let mut budget = Budget::default();
     let mut pages = Vec::new();
     let mut ink: Vec<PageInk> = Vec::new();
     let mut letters = crate::ligature::Letters::default();
@@ -2701,8 +2765,11 @@ pub fn extract_pdf_with(
     for (index, page) in all.iter().take(read).enumerate() {
         let (w, h) = page.render_dimensions();
         faces.read(page);
+        // The budget as the pages before left it, put back should this one
+        // be dropped: what it spent before it stopped is not kept.
+        let before = budget.now.clone();
         let mut dev = Collector {
-            budget: &mut budget,
+            budget: &mut budget.now,
             over: None,
             page: index,
             glyphs: Vec::new(),
@@ -2777,6 +2844,9 @@ pub fn extract_pdf_with(
                 limit: e.limit(),
                 pages: read - index,
             });
+            // Spent as the pages kept are, for what the caller makes of
+            // them next: left past its bound, it would refuse anything more.
+            budget.now = before;
             break;
         }
         // A span the page left open still covers what it drew.
@@ -2867,6 +2937,7 @@ pub fn extract_pdf_with(
         unkey_what_shows_more(&page_box, &mut page.images, &page.glyphs, &painted);
         ink.push(dev.ink);
         pages.push(page);
+        budget.pages.push(budget.now.clone());
     }
     infer_weights(&mut pages, &ink, |k| faces.get(k).and_then(|f| f.stem));
     lift_light_body(&mut pages);

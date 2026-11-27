@@ -438,7 +438,7 @@ pub fn elements(bytes: &[u8], engine: &dyn OcrEngine) -> Result<ImageElements, S
 /// probed again. What the engine reads is still held to the noise rule.
 pub fn read_texty(image: Decoded, engine: &dyn OcrEngine) -> Result<ImageElements, String> {
     let reading = engine.read(&image.pixels)?;
-    Ok(analysed(document(&image), image.more_pages, reading))
+    analysed(document(&image), image.more_pages, reading)
 }
 
 /// What [`elements`] gives for an image the pixel probe does not take for
@@ -471,7 +471,7 @@ pub fn elements_from_words(
     // Only the header: the words are already read.
     let h = header(bytes)?;
     let doc = fluree_doc_pdf::image::page_of(h.width, h.height, h.bitonal);
-    Ok(analysed(doc, h.pages > 1, reading))
+    analysed(doc, h.pages > 1, reading)
 }
 
 /// `reading`, an engine's reading of the one page of `doc`, a picture, with
@@ -506,11 +506,15 @@ fn set_aside_noise(
     }
 }
 
+/// Refused, as an `Err`, where the copies DoCO writes of the tables the
+/// words make are past one document's budget
+/// ([`fluree_doc_pdf::spend_table_copies`]): the image is one page, so
+/// nothing is left to read short.
 fn analysed(
     mut doc: Document,
     more_pages: bool,
     reading: fluree_doc_vision::WordReading,
-) -> ImageElements {
+) -> Result<ImageElements, String> {
     let (reading, noise) = set_aside_noise(&doc, reading);
     let mut injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
     // Listed as set aside, with what it held: the confidence of a reading
@@ -529,8 +533,14 @@ fn analysed(
     };
     let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
     ocr::mark_provenance(&mut analysis.elements, &injected);
+    fluree_doc_pdf::spend_table_copies(
+        &mut doc,
+        &mut analysis.elements,
+        &mut fluree_doc_pdf::PageBudget::default(),
+    )
+    .map_err(|e| format!("image too large: {e}"))?;
     let ocr = ocr::readings(&injected, &analysis.elements);
-    ImageElements {
+    Ok(ImageElements {
         elements: analysis.elements,
         size,
         not_texty: false,
@@ -538,7 +548,7 @@ fn analysed(
         refused: injected.first().and_then(|r| r.refused),
         more_pages,
         ocr,
-    }
+    })
 }
 
 /// What an engine made of the images a document places in its flow.
@@ -1045,6 +1055,50 @@ mod tests {
             assert!(!read.noise);
             assert!(!read.elements.is_empty());
         }
+    }
+
+    #[test]
+    fn a_readings_tables_are_spent_their_doco_copies() {
+        use fluree_doc_model::budget::{limited_to, Limits};
+        // A table of three columns under their names, forty rows: DoCO
+        // writes each name again on every cell under it.
+        let words: Vec<OcrWord> = (0..40)
+            .flat_map(|r| {
+                (0..3).map(move |c| {
+                    let x = 100.0 + 400.0 * c as f64;
+                    let y = 60.0 + 40.0 * r as f64;
+                    OcrWord {
+                        text: match r {
+                            0 => ["Name", "Value", "Unit"][c].into(),
+                            _ => format!("{}.5", (r + c) % 10),
+                        },
+                        bbox: [x, y, x + 120.0, y + 24.0],
+                        angle: None,
+                        conf: Some(0.95),
+                    }
+                })
+            })
+            .collect();
+        let reading = WordReading {
+            coords: Coords::Px,
+            width: Some(1400.0),
+            height: Some(1800.0),
+            engine: None,
+            words,
+            rules: Vec::new(),
+        };
+        let image = png(1400, 1800);
+        let read = elements_from_words(&image, reading.clone()).unwrap();
+        assert!(read.elements.iter().any(|e| e.cells.is_some()), "a table");
+        // Within a budget its copies do not fit in, refused: one page, nothing
+        // left to read short.
+        let mut small = Limits::default();
+        small.memory = 1 << 10;
+        let refused = limited_to(small, || elements_from_words(&image, reading)).unwrap_err();
+        assert!(
+            refused.starts_with("image too large: copies of table cells"),
+            "{refused}"
+        );
     }
 
     /// An engine that reads one unsure stroke in whatever it is shown.
