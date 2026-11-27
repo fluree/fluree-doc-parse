@@ -594,6 +594,12 @@
   "xhtml table.header_rows": 3,
   "xhtml table.sub_headers": 3
  },
+ "html-table-carried-across-page-breaks": {
+  "md table.header_rows": 3,
+  "md table.sub_headers": 3,
+  "xhtml table.header_rows": 3,
+  "xhtml table.sub_headers": 3
+ },
  "ibge-chart-picture-no-table": {
   "md table.sub_headers": 1,
   "xhtml block.merged": 21,
