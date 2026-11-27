@@ -8177,15 +8177,18 @@ fn head_size(glyphs: &[crate::glyph::Glyph], y0: f64, y1: f64) -> f64 {
 /// the heads' row is no header and is left out, its lines read as the
 /// page's, the heads' words interleaved (`Lower-Upper-Lowmiddlemiddle-…`).
 ///
-/// Each head (a run of the header row's words) stands over the figures of
-/// exactly one column, taken at their median extent (the body's words by
-/// their centres), and each column's figures under one head at most. Each
-/// edge moves to the middle of the gutter between the column before it,
-/// head and figures, and its own, where that gutter is as wide as the
-/// columns are parted by and the edge cuts through no run of the body's
-/// words: a chart sets each figure at its bar's end, and a negative bar's
-/// figure stands out in the gutter, a run of its own. A head set just past the grid's first edge
-/// over the first column's figures (`World`) moves that edge out to it.
+/// Every column past the first holds figures: most of its words (the
+/// body's, by their centres) are numbers. Text set in panels under their
+/// titles lines up word for word as well, and is no such table. Each head
+/// (a run of the header row's words) stands over the figures of exactly
+/// one column, taken at their median extent, and each column's figures
+/// under one head at most. Each edge moves to the middle of the gutter
+/// between the column before it, head and figures, and its own, where that
+/// gutter is as wide as the columns are parted by and the edge cuts through
+/// no run of the body's words: a chart sets each figure at its bar's end,
+/// and a negative bar's figure stands out in the gutter, a run of its own.
+/// A head set just past the grid's first edge over the first column's
+/// figures (`World`) moves that edge out to it.
 fn fit_heads_to_figures(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
     let cols = g.cols();
     if g.layout.is_some() || g.rows() < 2 || cols < 2 {
