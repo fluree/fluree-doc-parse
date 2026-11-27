@@ -413,7 +413,7 @@ fn a_document_listing_too_many_pages_is_refused() {
     assert_eq!(at.doc.pages_past_limit, MAX_LISTED_PAGES - MAX_PAGES);
     match parse(&listing(MAX_LISTED_PAGES / 2 + 1, 2)) {
         Err(XpsError::TooLarge(e)) => {
-            assert_eq!(e.limit(), fluree_doc_model::budget::Limit::Fixed);
+            assert_eq!(e.limit(), fluree_doc_model::budget::Limit::Pages);
             assert!(
                 e.to_string().contains("lists more than 250000 pages"),
                 "{e}"
@@ -422,4 +422,11 @@ fn a_document_listing_too_many_pages_is_refused() {
         Err(e) => panic!("{e}"),
         Ok(x) => panic!("{} pages past the limit", x.doc.pages_past_limit),
     }
+    // A page limit past it raises it: the caller asks for that many read.
+    let mut limits = fluree_doc_model::budget::Limits::default();
+    limits.pages = MAX_LISTED_PAGES + 2;
+    let read = fluree_doc_model::budget::limited_to(limits, || {
+        parse(&listing(MAX_LISTED_PAGES / 2 + 1, 2)).map(|x| x.doc.pages_past_limit)
+    });
+    assert_eq!(read.unwrap(), 0);
 }

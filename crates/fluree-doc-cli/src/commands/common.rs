@@ -634,6 +634,7 @@ pub(crate) fn raised_by(limit: fluree_doc_model::budget::Limit) -> Option<&'stat
     match limit {
         Limit::Memory => Some("--max-memory"),
         Limit::Work => Some("--max-work"),
+        Limit::Pages => Some("--max-pages"),
         _ => None,
     }
 }

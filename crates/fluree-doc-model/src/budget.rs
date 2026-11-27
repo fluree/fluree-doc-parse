@@ -358,10 +358,16 @@ pub const PAGE_GLYPH_BYTES: u64 = 192;
 /// spaces peaked at 4.0 GB.
 pub const PART_BYTES: u64 = 2;
 
-/// Which bound a document passed: the memory or the work of [`Limits`],
-/// which a caller may raise, or a reader's own. The other two never refuse
-/// a document: past the page limit it is read to it and the rest listed
-/// unread, and a page past the render pixels is drawn smaller.
+/// Which bound a document passed: the memory, the work or the pages of
+/// [`Limits`], which a caller may raise, or a reader's own. The render
+/// pixels never refuse a document: a page past them is drawn smaller.
+///
+/// The pages refuse only a document listing more than a reader can hold
+/// before it reads any (a PDF's page tree past 250,000 pages, or past
+/// [`Limits::pages`] where that is more): past the page limit, a document
+/// is read to it and the rest listed unread. A PDF past its memory or work
+/// on a page after the first is read to the page before, the rest listed
+/// unread too ([`crate::past_limit_reason`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Limit {
@@ -369,9 +375,11 @@ pub enum Limit {
     Memory,
     /// [`Limits::work`], in steps.
     Work,
+    /// [`Limits::pages`], or a reader's own bound on the pages it lists
+    /// where that is more.
+    Pages,
     /// A reader's own bound, fixed (a part read beside the document, the
-    /// cells calamine may allocate, how deep a page tree nests and how many
-    /// pages it lists).
+    /// cells calamine may allocate, how deep a page tree nests).
     Fixed,
 }
 

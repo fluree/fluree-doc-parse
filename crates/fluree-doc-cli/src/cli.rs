@@ -50,7 +50,8 @@ pub struct LimitArgs {
     pub max_work: Option<u64>,
 
     /// Pages a PDF or XPS document is read to; those past it are listed
-    /// unread, `PastPageLimit` (default 10000) [env: FDOC_MAX_PAGES]
+    /// unread, `PastPageLimit` (default 10000). Past 250000, it also raises
+    /// the pages a document may list [env: FDOC_MAX_PAGES]
     #[arg(long, global = true, value_name = "N")]
     pub max_pages: Option<usize>,
 

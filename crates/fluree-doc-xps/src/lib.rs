@@ -38,7 +38,7 @@
 //! its page, so no coordinate reaching the layout pipeline is beyond a
 //! page's reach.
 
-use fluree_doc_model::budget::{scaled, TooLarge};
+use fluree_doc_model::budget::{scaled, Limit, TooLarge};
 use fluree_doc_model::DocumentInfo;
 use fluree_doc_ooxml::{attr, local, Package};
 use fluree_doc_pdf::geom::BBox;
@@ -61,10 +61,12 @@ pub const MAX_TOTAL_BYTES: u64 = scaled(512 << 20);
 /// past it are counted, not read ([`Document::pages_past_limit`]).
 pub const MAX_PAGES: usize = fluree_doc_model::budget::MAX_PAGES;
 /// The most pages a document may list, those read and those past the page
-/// limit: 250,000, as many as a PDF's page tree may. Each page past the
-/// limit is counted, and listed unread, so this bounds that list: a 163 KB
-/// package whose one fixed document, named eight times, listed 2.1 million
-/// pages each time made 16.7 million, 1.2 GB as JSON and an abort as DoCO.
+/// limit: 250,000, as many as a PDF's page tree may, or the page limit
+/// where that is more (a caller asking for that many pages read). Each
+/// page past the limit is counted, and listed unread, so this bounds that
+/// list: a 163 KB package whose one fixed document, named eight times,
+/// listed 2.1 million pages each time made 16.7 million, 1.2 GB as JSON and
+/// an abort as DoCO.
 pub const MAX_LISTED_PAGES: usize = 250_000;
 /// The most glyphs, and pictures, read from one document: four million.
 ///
@@ -237,6 +239,7 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
     let seq_xml = read(&mut pkg, &seq)?.ok_or(XpsError::NotXps)?;
     let mut page_parts = Vec::new();
     let (limit, mut past_limit) = (fluree_doc_model::budget::limits().pages, 0);
+    let most = MAX_LISTED_PAGES.max(limit);
     let mut docs = Vec::new();
     sources(&seq_xml, "DocumentReference", |src| {
         docs.push(resolved(&seq, src));
@@ -254,10 +257,10 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
             } else {
                 past_limit += 1;
             }
-            if page_parts.len() + past_limit > MAX_LISTED_PAGES {
-                return Err(XpsError::TooLarge(TooLarge::fixed(format!(
-                    "it lists more than {MAX_LISTED_PAGES} pages"
-                ))));
+            if page_parts.len() + past_limit > most {
+                return Err(XpsError::TooLarge(
+                    TooLarge::new(Limit::Pages, most as u64, "pages").within("it lists"),
+                ));
             }
             Ok(())
         })?;

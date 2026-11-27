@@ -48,7 +48,7 @@
 //! own is the complete answer.
 
 use crate::extract::ExtractError;
-use fluree_doc_model::budget::{scaled, TooLarge};
+use fluree_doc_model::budget::{scaled, Limit, TooLarge};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::{Array, Dict, MaybeRef, Name, Object, Stream};
 use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
@@ -67,15 +67,30 @@ use std::sync::Arc;
 /// tests' own).
 pub const MAX_PAGE_TREE_DEPTH: usize = 256;
 
-/// The most pages a page tree may list: 250,000. The parser keeps each
-/// page it walks, about 1.4 KB of them, before the page limit can leave
-/// any unread: a tree of 250,000 pages took 360 MB more than one of a
-/// single page as `fdoc convert` opened it. This bounds that to about 370
-/// MB, within the 1.25 GiB a batch keeps beside each document's budget for
-/// what the readers' own bounds let them take ([Batches] in
+/// The most pages a page tree may list, unless the page limit
+/// ([`Limits::pages`](fluree_doc_model::budget::Limits::pages)) is more:
+/// 250,000. The parser keeps each page it walks, about 1.4 KB of them
+/// ([`PAGE_TREE_PAGE_BYTES`]), before the page limit can leave any unread:
+/// a tree of 250,000 pages took 360 MB more than one of a single page as
+/// `fdoc convert` opened it. This bounds that to about 370 MB, within the
+/// 1.25 GiB a batch keeps beside each document's budget for what the
+/// readers' own bounds let them take ([Batches] in
 /// `docs/reference/limits.md`), with [`MAX_XREF_ENTRIES`]'s. The longest
 /// real documents run to tens of thousands of pages.
+///
+/// A caller that raises the page limit past it asks for that many pages
+/// read, and the parser's pages are let grow with it: `fdoc` counts what
+/// they take past this bound in what a batch sets aside for a document.
 pub const MAX_PAGE_TREE_PAGES: u64 = 250_000;
+
+/// What the parser keeps for each page it walks, rounded up: 1.5 KiB.
+pub const PAGE_TREE_PAGE_BYTES: u64 = 1536;
+
+/// The most pages a page tree may list under the limits in effect: the
+/// page limit, or [`MAX_PAGE_TREE_PAGES`] where that is more.
+pub fn most_pages_listed() -> u64 {
+    MAX_PAGE_TREE_PAGES.max(fluree_doc_model::budget::limits().pages as u64)
+}
 
 /// The deepest an object may nest its dictionaries and arrays: 2,048. The
 /// parser reads one by recursion, and on a 2 MiB thread overflowed past
@@ -112,9 +127,10 @@ pub const MAX_XREF_ENTRIES: u64 = scaled(4_000_000);
 const SCANS: usize = 16;
 
 /// Open `data` as a PDF, its page tree measured first: past
-/// [`MAX_PAGE_TREE_DEPTH`] or [`MAX_PAGE_TREE_PAGES`], or where it cannot
-/// be measured within the bounds above, it is refused rather than walked
-/// into a stack overflow or an allocation that fails.
+/// [`MAX_PAGE_TREE_DEPTH`] or [`most_pages_listed`], or where it cannot be
+/// measured within the bounds above, it is refused rather than walked into
+/// a stack overflow or an allocation that fails. Past the pages, the error
+/// is [`Limit::Pages`], which a higher page limit raises.
 pub fn open(data: impl Into<Arc<Vec<u8>>>) -> Result<Pdf, ExtractError> {
     let data = data.into();
     let shape = measure(&data).map_err(ExtractError::TooLarge)?;
@@ -123,10 +139,11 @@ pub fn open(data: impl Into<Arc<Vec<u8>>>) -> Result<Pdf, ExtractError> {
             "its page tree nests more than {MAX_PAGE_TREE_DEPTH} deep"
         ))));
     }
-    if shape.pages > MAX_PAGE_TREE_PAGES {
-        return Err(ExtractError::TooLarge(TooLarge::fixed(format!(
-            "its page tree lists more than {MAX_PAGE_TREE_PAGES} pages"
-        ))));
+    let most = most_pages_listed();
+    if shape.pages > most {
+        return Err(ExtractError::TooLarge(
+            TooLarge::new(Limit::Pages, most, "pages").within("its page tree lists"),
+        ));
     }
     Pdf::new(data).map_err(|e| ExtractError::Parse(format!("{e:?}")))
 }
@@ -1487,7 +1504,11 @@ mod tests {
     fn refused(data: Vec<u8>) -> String {
         match open(data) {
             Err(ExtractError::TooLarge(e)) => {
-                assert_eq!(e.limit(), fluree_doc_model::budget::Limit::Fixed);
+                // The pages a tree lists, which a higher page limit raises;
+                // anything else, a bound of the measure's own.
+                let pages = e.to_string().contains("lists more than");
+                let limit = if pages { Limit::Pages } else { Limit::Fixed };
+                assert_eq!(e.limit(), limit, "{e}");
                 e.to_string()
             }
             Err(e) => panic!("{e}"),
@@ -1999,6 +2020,40 @@ mod tests {
         file.extend(b"\nendstream\nendobj\n");
         assert!(16 * file.len() + (1 << 20) < 3_000_000, "{}", file.len());
         assert_eq!(depth(&file), 3);
+    }
+
+    #[test]
+    fn a_page_limit_past_the_pages_a_tree_may_list_raises_it() {
+        // 260 times 1000: past the 250,000 a tree may list by default,
+        // refused as the pages, which `--max-pages` raises.
+        let fan = |kid: usize, n: usize| {
+            let kids = vec![format!("{kid} 0 R"); n].join(" ");
+            format!("<< /Type /Pages /Kids [{kids}] >>")
+        };
+        let file = pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            fan(3, 260),
+            fan(4, 1000),
+            "<< /Type /Page >>".into(),
+        ]);
+        match open(file.clone()) {
+            Err(ExtractError::TooLarge(e)) => {
+                assert_eq!((e.limit(), e.max()), (Limit::Pages, MAX_PAGE_TREE_PAGES));
+                assert_eq!(e.to_string(), "its page tree lists more than 250000 pages");
+            }
+            other => panic!("{:?}", other.map(|p| p.pages().len())),
+        }
+        let mut limits = fluree_doc_model::budget::Limits::default();
+        limits.pages = 300_000;
+        let opened = fluree_doc_model::budget::limited_to(limits, || {
+            assert_eq!(most_pages_listed(), 300_000);
+            open(file).map(|p| p.pages().len())
+        });
+        assert_eq!(opened.unwrap(), 260_000);
+        // A page limit below the bound leaves it as it is.
+        limits.pages = 100;
+        let most = fluree_doc_model::budget::limited_to(limits, most_pages_listed);
+        assert_eq!(most, MAX_PAGE_TREE_PAGES);
     }
 
     #[test]

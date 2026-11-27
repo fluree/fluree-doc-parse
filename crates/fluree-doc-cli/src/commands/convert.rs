@@ -310,10 +310,19 @@ const LIBRARY_MEMORY: u64 = 5 << 28;
 /// [`LIBRARY_MEMORY`]: 3.75 GiB and the input by default. The last two do
 /// not shrink with the budget: a margin that did let a lowered
 /// `--max-memory` run more documents at once than the memory free holds.
+///
+/// A page limit past the pages a PDF's page tree may list by default
+/// lets the parser keep that many more pages before any is read: what
+/// they take is counted too
+/// ([`fluree_doc_pdf::page_tree::MAX_PAGE_TREE_PAGES`]).
 fn document_memory(input: u64) -> u64 {
-    fluree_doc_model::budget::limits()
+    use fluree_doc_pdf::page_tree::{MAX_PAGE_TREE_PAGES, PAGE_TREE_PAGE_BYTES};
+    let limits = fluree_doc_model::budget::limits();
+    let pages = (limits.pages as u64).saturating_sub(MAX_PAGE_TREE_PAGES);
+    limits
         .memory
         .saturating_add(LIBRARY_MEMORY)
+        .saturating_add(pages.saturating_mul(PAGE_TREE_PAGE_BYTES))
         .saturating_add(input)
 }
 
@@ -3240,6 +3249,17 @@ mod tests {
         let unlimited =
             "Max address space         unlimited            unlimited            bytes\n";
         assert_eq!(address_space(unlimited), None);
+    }
+
+    #[test]
+    fn a_page_limit_past_the_trees_bound_is_counted_in_a_documents_memory() {
+        let mut l = fluree_doc_model::budget::Limits::default();
+        l.pages = 1_250_000;
+        let more = fluree_doc_model::budget::limited_to(l, || document_memory(0));
+        assert_eq!(
+            more - document_memory(0),
+            1_000_000 * fluree_doc_pdf::page_tree::PAGE_TREE_PAGE_BYTES
+        );
     }
 
     #[test]
