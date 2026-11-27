@@ -43,7 +43,7 @@ Either way the words land where `convert` reads them.
 
 An image given on its own is given to be read, and is read as a scanned
 page is: the pixel probe that keeps a document's photographs and charts from
-any reader does not judge it, nor does the noise rule an OCR reading of a
+the configured model does not judge it, nor does the noise rule an OCR reading of a
 picture or of a PDF region is held to. What an engine reads in it is in the
 output, however unsure, as the words of a scan read poorly are. However few
 they are, the image is read: a stamp's `PAID` may be all it holds. The floor

@@ -302,15 +302,16 @@ fn line(w: u32, h: u32) -> Vec<u8> {
 }
 
 #[test]
-fn an_image_too_thin_for_a_line_of_text_is_read_by_nothing() {
-    // The floor a PDF's region is held to (10 pixels on its short side):
-    // a strip of 9 is not read, its words written or not, and listed as
-    // the probe's; one of 10 is read.
+fn words_written_for_an_image_are_read_whatever_the_probe_makes_of_it() {
+    // A strip of 9 pixels is under the floor a PDF's region is held to (10
+    // on its short side), and the pixel probe does not take it for text;
+    // the words written for it are read all the same, as one of 10 is: a
+    // reading supplied costs neither OCR nor a model's call.
     let dir = scratch("thin");
     let input = dir.join("mail.eml");
     let words = dir.join("words");
     std::fs::create_dir_all(&words).unwrap();
-    for (h, read) in [(9, false), (10, true)] {
+    for h in [9, 10] {
         std::fs::write(&input, eml_of("image/png", &line(700, h))).unwrap();
         let reading = serde_json::json!({
             "width": 700, "height": h,
@@ -329,12 +330,8 @@ fn an_image_too_thin_for_a_line_of_text_is_read_by_nothing() {
         );
         assert!(out.status.success());
         let text = String::from_utf8_lossy(&out.stdout);
-        assert_eq!(text.contains("4417-0093"), read, "{h}: {text}");
-        let reasons = reasons(&out.stdout);
-        assert_eq!(reasons.is_empty(), read, "{h}: {reasons:?}");
-        if !read {
-            assert_eq!(reasons, ["NotTexty"]);
-        }
+        assert!(text.contains("4417-0093"), "{h}: {text}");
+        assert!(reasons(&out.stdout).is_empty(), "{h}");
     }
     let _ = std::fs::remove_dir_all(dir);
 }

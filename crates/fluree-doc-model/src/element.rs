@@ -521,15 +521,25 @@ pub struct UnreadImage {
     /// Where the file keeps it, as the file names it
     /// ([`crate::MediaSource::name`]).
     pub part: String,
-    /// Why it was not read: `NotRead` (nothing was asked to read it, or no
-    /// reading of it was supplied), `Missing` (the file does not hold it: a
-    /// link to an outside file, a relationship it does not define),
-    /// `UnsupportedFormat` (not a PNG, JPEG or TIFF: a vector drawing kept as
-    /// EMF or WMF, a GIF), `PastAllowance` (past the pictures or pixels one
-    /// document may have read, [`crate::Allowance::DOCUMENT`]), `Small`
-    /// (nothing else read it, and it is under the pixels the configured
-    /// model is sent) or `Failed` (its reading failed, or the part it names
-    /// is not there).
+    /// Why it was not read, one of seven:
+    ///
+    /// - `NotRead`: nothing was asked to read it, no reading of it was
+    ///   supplied, or the configured model was not sent it, past the images
+    ///   one document may send it (`escalation.max_crops`);
+    /// - `Missing`: the file does not hold it (a link to an outside file, a
+    ///   relationship it does not define);
+    /// - `UnsupportedFormat`: not a PNG, JPEG or TIFF (a vector drawing kept
+    ///   as EMF or WMF, a GIF);
+    /// - `PastAllowance`: past the pictures or pixels one document may have
+    ///   read ([`crate::Allowance::DOCUMENT`]);
+    /// - `Small`: nothing else read it, and it is under the pixels the
+    ///   configured model is sent;
+    /// - `NotTexty`: nothing else read it, and the pixel probe does not take
+    ///   it for text, so the configured model was not sent it, or OCR read
+    ///   it and what it read was noise;
+    /// - `Failed`: its reading failed, the part it names is not there or
+    ///   cannot be read, its part ends before its format can be told, or
+    ///   its header does not parse, so the configured model was not sent it.
     pub reason: String,
 }
 
