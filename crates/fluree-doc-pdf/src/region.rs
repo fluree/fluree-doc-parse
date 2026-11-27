@@ -398,6 +398,9 @@ impl Page<'_> {
                     };
                     // A panel set beside the column's text reads apart from
                     // it, after the text beside it.
+                    // So does a picture's caption set beside it. The column
+                    // beside a caption keeps its measure: text runs on above
+                    // and below the picture across the column.
                     let parts: Vec<(Vec<Line>, bool)> = match sidebar(group, self.panels) {
                         Ok((before, panel, after)) => {
                             // The column beside the panel is narrower than
@@ -410,7 +413,15 @@ impl Page<'_> {
                             parts.extend(read_stretch(after));
                             parts
                         }
-                        Err(group) => read_stretch(group),
+                        Err(group) => match caption_beside(group, self.pictures) {
+                            Ok((before, caption, after)) => {
+                                let mut parts = read_stretch(before);
+                                parts.push((caption, true));
+                                parts.extend(read_stretch(after));
+                                parts
+                            }
+                            Err(group) => read_stretch(group),
+                        },
                     };
                     out.extend(parts.into_iter().map(|(lines, own_measure)| Group {
                         lines,
@@ -1550,6 +1561,212 @@ fn sidebar(
     Ok((rest, panel, after))
 }
 
+/// Farthest, in a caption's line height, a picture's foot stands over its
+/// caption's first line: the space a caption is set under its picture.
+const CAPTION_REACH: f64 = 1.5;
+
+/// A picture's caption set beside a column's text: the lines under a
+/// picture, or a row of pictures, within its width, set smaller than the
+/// text level with them. A photo set at the column's side, the column's
+/// text running on full width under it, leaves no gutter down the stretch,
+/// and read row by row, the caption's lines fell between the text's: a
+/// paragraph's sentence broken by `Luna's flagship fiber optic sensing
+/// instruments; the`, a list's first item parted from its last word by a
+/// radar image's caption.
+///
+/// Split out of `group` as [`sidebar`] splits a panel: the column's lines
+/// before the caption, and the paragraph running on past its foot to a line
+/// closing a sentence; the caption's lines; and the column's lines after.
+///
+/// The caption's lines follow on from each other, a line's leading apart at
+/// most. A line level with one of them stands beside it, outside the
+/// picture's width, and every such line is larger: a caption is set a size
+/// down from its text. Captions set at their text's size are read as the
+/// region pass reads them.
+fn caption_beside(
+    group: Vec<Line>,
+    pictures: &[BBox],
+) -> Result<(Vec<Line>, Vec<Line>, Vec<Line>), Vec<Line>> {
+    let level = |a: &BBox, b: &BBox| a.y1.min(b.y1) - a.y0.max(b.y0) > 0.0;
+    let mut found: Option<(Vec<usize>, BBox)> = None;
+    for p in pictures {
+        // The row of pictures this one stands in: those level with it and
+        // ending where it ends, its foot.
+        let row: Vec<&BBox> = pictures
+            .iter()
+            .filter(|q| level(p, q) && (q.y1 - p.y1).abs() <= BOX_SLACK)
+            .collect();
+        let x0 = row.iter().map(|q| q.x0).fold(f64::MAX, f64::min);
+        let x1 = row.iter().map(|q| q.x1).fold(f64::MIN, f64::max);
+        let under = |l: &Line| {
+            l.rotation_bucket == 0
+                && l.bbox.x0 >= x0 - BOX_SLACK
+                && l.bbox.x1 <= x1 + BOX_SLACK
+                && l.bbox.y0 >= p.y1 - BOX_SLACK
+        };
+        let mut order: Vec<usize> = (0..group.len()).filter(|&i| under(&group[i])).collect();
+        order.sort_by(|&i, &j| group[i].bbox.y0.total_cmp(&group[j].bbox.y0));
+        let mut caption: Vec<usize> = Vec::new();
+        for i in order {
+            let l = &group[i];
+            let fs = (l.font_size as f64).max(1.0);
+            let reach = match caption.last() {
+                None => p.y1 + CAPTION_REACH * fs,
+                Some(&k) => group[k].bbox.y1 + fs,
+            };
+            if l.bbox.y0 > reach {
+                break;
+            }
+            caption.push(i);
+        }
+        if caption.is_empty() {
+            continue;
+        }
+        let size = caption
+            .iter()
+            .map(|&i| group[i].font_size)
+            .fold(0.0f32, f32::max) as f64;
+        let beside: Vec<&Line> = group
+            .iter()
+            .enumerate()
+            .filter(|(i, o)| {
+                !caption.contains(i)
+                    && o.rotation_bucket == 0
+                    && (o.bbox.x1 <= x0 || o.bbox.x0 >= x1)
+                    && caption.iter().any(|&k| level(&group[k].bbox, &o.bbox))
+            })
+            .map(|(_, o)| o)
+            .collect();
+        let smaller = !beside.is_empty()
+            && beside
+                .iter()
+                .all(|o| o.font_size as f64 > size * (1.0 + CAPTION_SIZE_STEP));
+        if smaller
+            && caption
+                .iter()
+                .all(|&k| group[k].text.split_whitespace().count() >= 2)
+        {
+            // The picture and its caption, as one box.
+            let top = row.iter().map(|q| q.y0).fold(f64::MAX, f64::min);
+            let frame = caption.iter().map(|&k| group[k].bbox).fold(
+                BBox {
+                    x0,
+                    y0: top,
+                    x1,
+                    y1: p.y1,
+                },
+                |a, b| a.union(&b),
+            );
+            found = Some((caption, frame));
+            break;
+        }
+    }
+    let Some((caption, frame)) = found else {
+        return Err(group);
+    };
+    // As a panel is read apart ([`sidebar`]): no line runs into the caption
+    // from outside it, a paragraph's line fused with one of its own, and no
+    // text stands over or under the picture and its caption on their own
+    // side of the column, as a column's own text, or its page's folio, does.
+    let into = group.iter().enumerate().any(|(i, l)| {
+        !caption.contains(&i)
+            && l.rotation_bucket == 0
+            && overlap(&l.bbox, &frame)
+            && !(l.bbox.x0 >= frame.x0 - BOX_SLACK && l.bbox.x1 <= frame.x1 + BOX_SLACK)
+    });
+    let left = group.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+    let right = group.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
+    let h = group
+        .iter()
+        .map(|l| l.font_size as f64)
+        .fold(0.0, f64::max)
+        .max(1.0);
+    let right_side = frame.x0 - left > right - frame.x1;
+    let own_side = group.iter().enumerate().any(|(i, l)| {
+        !caption.contains(&i)
+            && l.rotation_bucket == 0
+            && !overlap(&l.bbox, &frame)
+            && (l.bbox.y1 <= frame.y0 || l.bbox.y0 >= frame.y1)
+            && l.bbox.x1 > frame.x0
+            && l.bbox.x0 < frame.x1
+            && if right_side {
+                l.bbox.x0 >= frame.x0 - h
+            } else {
+                l.bbox.x1 <= frame.x1 + h
+            }
+    });
+    if into || own_side {
+        return Err(group);
+    }
+    let foot = caption
+        .iter()
+        .map(|&i| group[i].bbox.y1)
+        .fold(f64::MIN, f64::max);
+    let original = group.clone();
+    let mut lines: Vec<(bool, Line)> = group
+        .into_iter()
+        .enumerate()
+        .map(|(i, l)| (caption.contains(&i), l))
+        .collect();
+    let panel: Vec<Line> = lines
+        .iter()
+        .filter(|(c, _)| *c)
+        .map(|(_, l)| l.clone())
+        .collect();
+    lines.retain(|(c, _)| !*c);
+    let mut rest: Vec<Line> = lines.into_iter().map(|(_, l)| l).collect();
+    let closes = |l: &Line| l.text.trim_end().ends_with(['.', '!', '?', ':']);
+    let item = |l: &Line| {
+        l.text
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(crate::block::is_bullet)
+    };
+    let mut at = rest.iter().take_while(|l| l.bbox.y0 < foot).count();
+    while at > 0 && at < rest.len() && !closes(&rest[at - 1]) {
+        at += 1;
+    }
+    // A list beside the caption runs on to its last item: the caption
+    // follows the list, not one of its items.
+    if at > 0 && rest[..at].iter().any(item) {
+        while at < rest.len() && item(&rest[at]) {
+            at += 1;
+            while at < rest.len() && !item(&rest[at]) && !closes(&rest[at - 1]) {
+                at += 1;
+            }
+        }
+    }
+    // The paragraph beside the caption may close a line under the picture,
+    // as the column widens there. Where it runs on across the column for
+    // more lines, its narrow lines and its wide ones read as one paragraph
+    // of two measures, and against the wider one its narrow lines read as
+    // ended by hand. Read as the region pass reads it, the caption's lines
+    // part the two measures, and the paragraph keeps its lines.
+    let narrow = rest[..at]
+        .iter()
+        .filter(|l| l.bbox.y1 > frame.y0 && l.bbox.y0 < frame.y1)
+        .map(|l| l.bbox.width())
+        .fold(0.0, f64::max);
+    let widened = rest[..at]
+        .iter()
+        .filter(|l| l.bbox.y0 >= frame.y1 && !item(l) && l.bbox.width() > narrow + h)
+        .count();
+    if widened > CAPTION_RUN_ON_LINES {
+        return Err(original);
+    }
+    let after = rest.split_off(at);
+    Ok((rest, panel, after))
+}
+
+/// Most lines the paragraph beside a caption may run on across the column
+/// under the picture ([`caption_beside`]): the line that closes it.
+const CAPTION_RUN_ON_LINES: usize = 1;
+
+/// How much smaller, as a share of the caption's size, the text beside a
+/// caption is set larger by at the least: a size step, as a heading's.
+const CAPTION_SIZE_STEP: f64 = 0.1;
+
 /// A stretch of a column whose every upright line stands in a drawn box,
 /// the outermost boxes two or more and apart, one holding two rows of text:
 /// a box diagram, a flowchart, a page of cards. The region pass reads its
@@ -1830,6 +2047,89 @@ mod tests {
             items.windows(2).all(|w| w[1] == w[0] + 1),
             "the panel reads whole"
         );
+    }
+
+    /// A column of prose at 10pt beside a photo, its 8pt caption under the
+    /// photo level with the column's last lines, the paragraph running on
+    /// across the page under it.
+    fn page_with_caption(caption_size: f32) -> (Vec<Line>, BBox) {
+        let sized = |mut l: Line, fs: f32| {
+            l.font_size = fs;
+            l
+        };
+        let mut lines: Vec<Line> = (0..8)
+            .map(|i| {
+                sized(
+                    line(
+                        &format!("the column of prose goes on here {i} words"),
+                        50.0,
+                        100.0 + 12.0 * i as f64,
+                        330.0,
+                    ),
+                    10.0,
+                )
+            })
+            .collect();
+        let photo = BBox {
+            x0: 355.0,
+            y0: 95.0,
+            x1: 545.0,
+            y1: 180.0,
+        };
+        lines.push(sized(
+            line("The photo's caption, its first line", 360.0, 182.0, 540.0),
+            caption_size,
+        ));
+        lines.push(sized(
+            line("and its second line under it", 360.0, 191.0, 520.0),
+            caption_size,
+        ));
+        lines.push(sized(
+            line(
+                "still going on under the photo across the page.",
+                50.0,
+                200.0,
+                540.0,
+            ),
+            10.0,
+        ));
+        lines.push(sized(
+            line(
+                "A new paragraph across the page opens here",
+                50.0,
+                215.0,
+                540.0,
+            ),
+            10.0,
+        ));
+        lines.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        (lines, photo)
+    }
+
+    #[test]
+    fn a_pictures_caption_beside_the_column_reads_after_its_sentence() {
+        let (lines, photo) = page_with_caption(8.0);
+        let out = texts(&read_order_with_panels(
+            vec![lines],
+            &[],
+            &[],
+            &[photo],
+            &[],
+            &[],
+        ));
+        let at = |t: &str| out.iter().position(|l| l.starts_with(t)).unwrap();
+        // The column, its sentence running on under the photo, the caption
+        // whole, then the next paragraph.
+        assert!(at("the column of prose goes on here 7") < at("still going on"));
+        assert!(at("still going on") < at("The photo's caption"));
+        assert_eq!(at("and its second line"), at("The photo's caption") + 1);
+        assert!(at("and its second line") < at("A new paragraph"));
+        // A caption set at its text's size is left to the region pass, and
+        // so is text under no picture.
+        let (lines, photo) = page_with_caption(10.0);
+        assert!(caption_beside(lines, &[photo]).is_err());
+        let (lines, _) = page_with_caption(8.0);
+        assert!(caption_beside(lines, &[]).is_err());
     }
 
     #[test]

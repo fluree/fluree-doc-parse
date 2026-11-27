@@ -344,6 +344,26 @@ rows it is missing from span it. Pieces drawn a few points apart in different
 rows, never two in one row, are one line, because a word processor sizes each
 row's cells on its own.
 
+A rule drawn in one row only is no column of the grid: a form sizes each
+row's boxes on its own. But it still parts the text of the cell it runs
+through. A purchase order's footer sets an ordering office's box beside an
+address box, a rule between them for their height, in one cell of the
+grid. Read as one, their lines took turns (`Ordered on behalf of the
+Secretary of LONDON 102 PETTY FRANCE (MOJ), Ministry of … State for
+Justice:`). A cell a rule parts is read a side at a time: the lines over
+the rule, each side's, left to right, then the lines under it. A label then
+reads with its own value (`3. ORDER NO. 89303421FEM400009`, not both labels
+before both values).
+
+The rule parts the cell only where it stands between two boxes of text:
+- it stands inside the cell, 3 points or more from its edges, where a
+  column's own rule does not;
+- no glyph's ink crosses it within its height: a stroke drawn through a
+  word is a drawing's;
+- each side holds two lines or more, one of three words or more. A small
+  table set in a cell rules its columns of values apart, and reads across
+  its rows.
+
 ## The table's outer edge
 
 A first column of labels that each span several rows (`Ceilings` over four)
@@ -447,6 +467,32 @@ body text, a box laid out around paragraphs, a drawing's labels.
   numbered section, as a contract's `(b) "Board" means …` did. Those stay
   as they are read until heading detection can tell a list's numbering
   from a section's (#451).
+- **Bulleted lists side by side.** A fact sheet sets two lists of points
+  side by side, each under its own heading. Where their lines fall level,
+  alignment reads their items as rows of a table of two columns,
+  `Clean, tune, repair… | • Install insulation…`. A grid read from
+  alignment whose every column is a list is read as lists: each of its
+  non-empty cells opens on a bullet or carries on the item above in lower
+  case, with at least two bullets in each column. A bullet may hang left of
+  its column, outside the grid, where no cell reads it; one standing on the
+  cell's row within two of its ems of the edge counts. A row of other text,
+  a head over each column of points, keeps the grid a table. So do rules
+  across it, one above and one below within the grid's own height: there
+  the grid is part of one row of a ruled table whose cells hold points.
+
+  Lists that line up so with nothing to corroborate a table are refused as
+  one, and read as the page's prose. Where the page's text runs on below
+  them in one column across their gutter, the page has no gutter between
+  them, and their lines were read across both lists by turns, an item's
+  wrapped line parted from it by the other list's item. Each column of such
+  a run that is a bulleted list is read as a box: the page reads boxes side
+  by side each whole, left to right, so each list reads under its own head.
+  A column is a list where two lines or more open on a bullet and every
+  other line is its head (the first) or set in past the bullets. Columns
+  part at the middle of each gutter, so a bullet hanging left of its column
+  is its list's. A list's last item may wrap past the run's last row: lines
+  set where its items' wrapped lines are, a line's leading apart, carry it
+  on.
 - **A box round paragraphs.** A ruled box whose one row under its labels
   holds a paragraph (sixty words or more in a cell) is a page laid out in
   columns, not a table.
@@ -809,6 +855,17 @@ The first row of a ruled or aligned grid is the table's title when:
 
 The title is read out as a paragraph just above the table, and the table is
 read from the row under it.
+
+The title reads the glyphs the row's cells would read: each word whole, in
+the row that holds its centre of mass. A word set across the table's edge is
+then read once: in the title when the table takes it from the page, in the
+prose when it does not. Picked glyph by glyph, a head line set out past the
+table's edge lost its first letter (`ECIMAL MILLIMETERS`), and a chart's
+column heads read the end of a word the prose had already read (`World` and
+`ld`). A row read as one cell across the table is read the same way. Its
+words are spaced by the gaps between their ink, not by the spaces the text
+draws: a space drawn between two cells' labels would join them into one line
+run across the columns.
 
 The row under the title is not presumed the header: it earns it. A table
 whose title band sits over a block of fields (`Form Factor | SFF (2.5”) |

@@ -69,6 +69,7 @@
   - [Tables](design/tables.md)
   - [Page furniture](design/furniture.md)
   - [The router](design/router.md)
+  - [Projection conformance](design/conformance.md)
 
 - [Reference](reference/README.md)
   - [Vocabulary](reference/vocabulary.md)
