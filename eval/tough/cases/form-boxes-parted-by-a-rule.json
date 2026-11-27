@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "uk-moj-purchase-order-r017.pdf",
+    "url": "https://www.contractsfinder.service.gov.uk/Notice/Attachment/5138c867-7025-4982-98aa-f68aa9ed206e",
+    "sha256": "8527a8b2781b219d5ed7c54db02cc1542369835403d27f3091a640b03f2ef471",
+    "about": "UK Ministry of Justice purchase order, 3 pages (Oracle BI Publisher). Each page's footer is a ruled form: an ordering office's box and an address box side by side, parted by a rule drawn in their row only, beside the order's totals."
+  },
+  "notes": [
+    "The footer is read as one table with the totals, the two boxes in one cell. Reading the boxes as paragraphs apart from the totals is a further question; these checks are the cell's reading order."
+  ],
+  "checks": [
+    {
+      "id": "office-box-whole",
+      "found": "2026-11-27",
+      "issue": "The rule between the boxes is no column of the grid, and the cell read their lines across it by turns: `Ordered on behalf of the Secretary of LONDON 102 PETTY FRANCE (MOJ), Ministry of … State for Justice:`.",
+      "text": "Ordered on behalf of the Secretary of State for Justice: Office:102 PETTY FRANCE (MOJ) LONDON Buyer:"
+    },
+    {
+      "id": "address-box-whole",
+      "found": "2026-11-27",
+      "issue": "As above, for the address box.",
+      "text": "LONDON 102 PETTY FRANCE (MOJ), Ministry of Justice, 102 Petty France, Westminster, London, SW1H 9AJ"
+    },
+    {
+      "id": "no-lines-by-turns",
+      "found": "2026-11-27",
+      "issue": "As above.",
+      "no_text": "Secretary of LONDON"
+    }
+  ]
+}
