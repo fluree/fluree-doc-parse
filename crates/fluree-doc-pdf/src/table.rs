@@ -1346,6 +1346,22 @@ impl Grid {
         if run >= 2 && self.stripes_from(fills, run - 1) && figures_row(&rows[run - 1]) {
             run -= 1;
         }
+        // The run's last row is the table's first band where it holds a
+        // label in its first cell alone, as a row further down does under a
+        // fill of its own: a funding table's `Months 1 – 12`, shaded as its
+        // header is, over the CLINs it groups, and `Months 13-24` over the
+        // next. A band labels the rows under it; it names no column.
+        let band = |r: usize| {
+            rows[r].first().is_some_and(|t| !t.trim().is_empty())
+                && rows[r].iter().skip(1).all(|t| t.trim().is_empty())
+        };
+        if run >= 2
+            && run <= rows.len()
+            && band(run - 1)
+            && (run..rows.len()).any(|r| band(r) && self.band_has_fill(fills, r))
+        {
+            run -= 1;
+        }
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
             return run;
         }
