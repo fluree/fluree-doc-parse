@@ -8022,6 +8022,7 @@ pub fn detect_aligned(
     for g in out.iter_mut() {
         extend_by_banner(g, &rows);
         drop_field_line(g, glyphs, rules);
+        fit_right_aligned_heads(g, glyphs);
     }
     out
 }
@@ -8032,10 +8033,12 @@ const FIELD_LINE_RULE_SPAN: f64 = 0.9;
 
 /// Drop an aligned grid's first row where it is a line of fields, each a
 /// label set inline with its value (`Guest Name: Sanjay | Date:
-/// 31/12/2017`), ruled off from the rows under it by a rule across the
-/// grid: the page's facts over the table, not the names of its columns. A
-/// header names its columns; a field states its own value. The grid starts
-/// at the rule.
+/// 31/12/2017`), or a line holding a figure over a row that names the
+/// columns in words (`Date limite de paiement … | 29.99` over `Montant EUR
+/// HT | Montant TVA | …`), ruled off from the rows under it by a rule
+/// across the grid: the page's facts over the table, not the names of its
+/// columns. A header names its columns; a field states its own value, and
+/// the table's head is its top. The grid starts at the rule.
 fn drop_field_line(g: &mut Grid, glyphs: &[crate::glyph::Glyph], rules: &[Rule]) {
     if g.layout.is_some() || g.rows() < 3 {
         return;
@@ -8047,7 +8050,18 @@ fn drop_field_line(g: &mut Grid, glyphs: &[crate::glyph::Glyph], rules: &[Rule])
         .map(|t| t.trim())
         .filter(|t| !t.is_empty())
         .collect();
-    if first.len() < 2 || !first.iter().all(|t| label_colon(t) == Some(false)) {
+    let fields = first.len() >= 2 && first.iter().all(|t| label_colon(t) == Some(false));
+    // A line holding an amount of its own (`29.99`) over heads named in
+    // words, figures under them: the heads are the table's top.
+    let figures_under = (2..g.rows()).any(|r| {
+        cells[r * cols..(r + 1) * cols]
+            .iter()
+            .any(|t| is_numeric_cell(t.trim()))
+    });
+    let over_names = first.iter().any(|t| is_numeric_cell(t))
+        && !head_runs(g, glyphs, 1).is_empty()
+        && figures_under;
+    if !fields && !over_names {
         return;
     }
     let (x0, x1) = (g.xs[0], g.xs[cols]);
@@ -8076,6 +8090,141 @@ fn drop_field_line(g: &mut Grid, glyphs: &[crate::glyph::Glyph], rules: &[Rule])
     g.ys.remove(0);
     g.ys[0] = top;
     g.bbox.y0 = top;
+}
+
+/// The runs of words in row `r` of a grid where the row names its columns
+/// in words: two runs or more, parted by a cell's gap, letters in them and
+/// no figure. Empty where the row is no such row. Read from the glyphs, not
+/// the cells: edges cutting through the names regroup their words.
+fn head_runs(g: &Grid, glyphs: &[crate::glyph::Glyph], r: usize) -> Vec<(f64, f64)> {
+    let (x0, x1, y0, y1) = (g.xs[0], g.xs[g.cols()], g.ys[r], g.ys[r + 1]);
+    let mut inked: Vec<(f64, f64, f64)> = Vec::new();
+    let mut letters = false;
+    for gl in glyphs
+        .iter()
+        .filter(|gl| !gl.text.trim().is_empty() && gl.is_horizontal())
+    {
+        let Some(b) = gl.bbox else { continue };
+        let (x, y) = gl.center();
+        if x < x0 || x > x1 || y < y0 || y >= y1 {
+            continue;
+        }
+        if gl.text.chars().any(|c| c.is_ascii_digit()) {
+            return Vec::new();
+        }
+        letters |= gl.text.chars().any(char::is_alphabetic);
+        inked.push((b.x0, b.x1, f64::from(gl.font_size).max(1.0)));
+    }
+    inked.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    for (a, b, fs) in inked {
+        match runs.last_mut() {
+            Some(run) if a - run.1 <= fs * TABLE_CELL_GAP => run.1 = run.1.max(b),
+            _ => runs.push((a, b)),
+        }
+    }
+    if letters && runs.len() >= 2 {
+        runs
+    } else {
+        Vec::new()
+    }
+}
+
+/// The median size of the glyphs between `y0` and `y1`: a row's type.
+fn head_size(glyphs: &[crate::glyph::Glyph], y0: f64, y1: f64) -> f64 {
+    let mut sizes: Vec<f64> = glyphs
+        .iter()
+        .filter(|gl| !gl.text.trim().is_empty())
+        .filter(|gl| {
+            let (_, y) = gl.center();
+            y > y0 && y < y1
+        })
+        .map(|gl| f64::from(gl.font_size))
+        .collect();
+    sizes.sort_by(f64::total_cmp);
+    sizes.get(sizes.len() / 2).copied().unwrap_or(1.0).max(1.0)
+}
+
+/// Move an aligned grid's column edges out from under its heads where a
+/// head is set right-aligned over its figures and wider than them (`Montant
+/// EUR HT` over `24.99`): the column starts where its figures do, and the
+/// head reaches back over the gutter, cut through by the edge. Where the
+/// rows are labelled in a stub, the head ends where the column's figures
+/// end, it reaches back a letter's width or more, and nothing of the column
+/// before stands between its start and the edge, the edge moves into the
+/// gutter before the head, midway to the text before it.
+fn fit_right_aligned_heads(g: &mut Grid, glyphs: &[crate::glyph::Glyph]) {
+    if g.layout.is_some() || g.rows() < 2 || g.cols() < 2 {
+        return;
+    }
+    let cols = g.cols();
+    let runs = head_runs(g, glyphs, 0);
+    if runs.is_empty() {
+        return;
+    }
+    // Amounts beside a stub of labels, as an invoice or a statement sets
+    // them: most body rows name themselves in words in the first column.
+    let cells = g.cell_texts(glyphs);
+    let named = (1..g.rows())
+        .filter(|&r| {
+            cells[r * cols]
+                .trim_start()
+                .starts_with(char::is_alphabetic)
+        })
+        .count();
+    if named < 2 || named * 2 < g.rows() - 1 {
+        return;
+    }
+    let (y1, bottom) = (g.ys[1], g.ys[g.rows()]);
+    let body: Vec<(f64, f64)> = glyphs
+        .iter()
+        .filter(|gl| !gl.text.trim().is_empty() && gl.is_horizontal())
+        .filter_map(|gl| {
+            let b = gl.bbox?;
+            let (x, y) = gl.center();
+            (x >= g.xs[0] && x <= g.xs[cols] && y >= y1 && y < bottom).then_some((b.x0, b.x1))
+        })
+        .collect();
+    for k in 1..cols {
+        let edge = g.xs[k];
+        let Some(&(a, b)) = runs.iter().find(|&&(a, b)| a < edge && b > edge) else {
+            continue;
+        };
+        if b > g.xs[k + 1] {
+            continue;
+        }
+        // Set right-aligned over the column's figures: the head ends where
+        // they end, within a letter's width. A head centred over them is
+        // another layout's.
+        let fs = head_size(glyphs, g.ys[0], g.ys[1]);
+        // Reaching back over the gutter, not set at the edge a hair before it.
+        if edge - a < fs {
+            continue;
+        }
+        let right = body
+            .iter()
+            .filter(|&&(s, e)| (s + e) / 2.0 >= edge && (s + e) / 2.0 < g.xs[k + 1])
+            .map(|&(_, e)| e)
+            .fold(f64::MIN, f64::max);
+        if right == f64::MIN || (b - right).abs() > fs {
+            continue;
+        }
+        // The text before the head: the body's and the head's own.
+        let before = body
+            .iter()
+            .chain(runs.iter())
+            .filter(|&&(_, e)| e < a)
+            .map(|&(_, e)| e)
+            .fold(g.xs[k - 1], f64::max);
+        // Nothing of the column before reaches under the head; the
+        // column's own figures may start a hair before its edge.
+        let clear = !body.iter().any(|&(s, e)| (s + e) / 2.0 < edge && e > a);
+        // Into a gutter, as wide as one the columns are parted by: letters
+        // set apart in a word (`D ECIMAL`) leave a narrower gap.
+        if clear && a - before >= fs * ALIGNED_SPLIT_GAP_EMS {
+            g.xs[k] = (before + a) / 2.0;
+        }
+    }
 }
 
 /// Take into an accepted grid the column banner set just above it.
@@ -12437,6 +12586,59 @@ mod header_tests {
         glyphs[1] = gly(402.0, 88.0, 70.0, "Date");
         drop_field_line(&mut g, &glyphs, &rules);
         assert_eq!(g.rows(), 3);
+    }
+
+    /// An invoice's amounts under right-aligned heads wider than their
+    /// figures, the grid's edges where the figures start; `over` sets a due
+    /// date and its amount on a line over the heads, ruled off from them.
+    fn amounts(over: bool) -> (Grid, Vec<crate::glyph::Glyph>, Vec<Rule>) {
+        let mut ys = vec![370.0, 390.0, 410.0, 430.0];
+        let mut glyphs = vec![
+            gly(297.0, 384.0, 74.0, "Montant EUR HT"),
+            gly(402.0, 384.0, 58.0, "Montant TVA"),
+            gly(487.0, 384.0, 79.0, "Montant EUR TTC"),
+            gly(40.0, 402.0, 160.0, "Abonnements"),
+            gly(335.0, 402.0, 30.0, "24.99"),
+            gly(431.0, 402.0, 22.0, "5.00"),
+            gly(530.0, 402.0, 29.0, "29.99"),
+            gly(40.0, 422.0, 84.0, "Communications"),
+            gly(341.0, 422.0, 22.0, "0.00"),
+            gly(431.0, 422.0, 22.0, "0.00"),
+            gly(536.0, 422.0, 22.0, "0.00"),
+        ];
+        if over {
+            ys.insert(0, 340.0);
+            glyphs.push(gly(40.0, 348.0, 220.0, "Date limite de paiement"));
+            glyphs.push(gly(488.0, 348.0, 37.0, "29.99"));
+        }
+        let g = plain_grid(vec![40.0, 336.0, 431.0, 531.0, 566.0], ys);
+        (g, glyphs, vec![h(40.0, 555.0, 367.0)])
+    }
+
+    #[test]
+    fn right_aligned_heads_keep_their_columns() {
+        let (mut g, glyphs, _) = amounts(false);
+        fit_right_aligned_heads(&mut g, &glyphs);
+        let texts = g.cell_texts(&glyphs);
+        assert_eq!(
+            &texts[..4],
+            &["", "Montant EUR HT", "Montant TVA", "Montant EUR TTC"],
+            "{:?}",
+            g.xs
+        );
+        assert_eq!(texts[5], "24.99");
+    }
+
+    #[test]
+    fn a_line_with_a_figure_ruled_off_over_named_columns_leaves_the_grid() {
+        let (mut g, glyphs, rules) = amounts(true);
+        drop_field_line(&mut g, &glyphs, &rules);
+        assert_eq!(g.rows(), 3);
+        assert_eq!(g.ys[0], 367.3);
+        // Not where no rule parts it from the heads.
+        let (mut g, glyphs, _) = amounts(true);
+        drop_field_line(&mut g, &glyphs, &[]);
+        assert_eq!(g.rows(), 4);
     }
 }
 
