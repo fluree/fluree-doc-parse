@@ -959,6 +959,96 @@ mod tests {
         assert_eq!(read, [(0, "moved to first"), (1, "moved to second")]);
     }
 
+    fn notes_page(body: &str) -> String {
+        format!("<p:notes {NS}><p:cSld><p:spTree>{body}</p:spTree></p:cSld></p:notes>")
+    }
+
+    #[test]
+    fn a_notes_page_is_read_from_its_body_placeholder() {
+        let x = notes_page(&format!(
+            "{}{}{}{}{}",
+            shape(Some("sldImg"), ""),
+            shape(
+                Some("body"),
+                &format!(
+                    "{}<a:p><a:pPr><a:buChar char=\"•\"/></a:pPr><a:r><a:t>A point</a:t></a:r></a:p>",
+                    para("What the presenter says.")
+                )
+            ),
+            shape(Some("sldNum"), &para("4")),
+            shape(Some("ftr"), &para("Footer")),
+            shape(None, &para("4")),
+        ));
+        let els = parse_notes_xml(&x, 3).unwrap();
+        let read: Vec<(&str, &str)> = els
+            .iter()
+            .map(|e| (e.kind.as_str(), e.text.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("doco:Paragraph", "What the presenter says."),
+                ("doc:ListItem", "A point")
+            ]
+        );
+        assert!(els.iter().all(|e| e.notes_for == Some(3) && e.page == 3));
+    }
+
+    #[test]
+    fn a_slides_notes_follow_the_last_slide_by_its_own_relationship() {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let base = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let notes_rel = |target: &str| {
+            format!(
+                "<Relationships><Relationship Id=\"rId9\" Type=\"{base}/notesSlide\" \
+                 Target=\"../notesSlides/{target}\"/></Relationships>"
+            )
+        };
+        for (name, body) in [
+            (
+                "ppt/presentation.xml",
+                format!(
+                    "<p:presentation {NS}><p:sldIdLst><p:sldId id=\"256\" r:id=\"rId1\"/>\
+                     <p:sldId id=\"257\" r:id=\"rId2\"/></p:sldIdLst></p:presentation>"
+                ),
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels",
+                format!(
+                    "<Relationships><Relationship Id=\"rId1\" Type=\"{base}/slide\" Target=\"slides/slide1.xml\"/>\
+                     <Relationship Id=\"rId2\" Type=\"{base}/slide\" Target=\"slides/slide2.xml\"/></Relationships>"
+                ),
+            ),
+            ("ppt/slides/slide1.xml", slide(&shape(None, &para("Slide one")))),
+            ("ppt/slides/slide2.xml", slide(&shape(None, &para("Slide two")))),
+            // Named the other way round: the relationship says whose they are.
+            ("ppt/slides/_rels/slide1.xml.rels", notes_rel("notesSlide2.xml")),
+            ("ppt/slides/_rels/slide2.xml.rels", notes_rel("notesSlide1.xml")),
+            ("ppt/notesSlides/notesSlide2.xml", notes_page(&shape(Some("body"), &para("About one")))),
+            ("ppt/notesSlides/notesSlide1.xml", notes_page(&shape(Some("body"), &para("About two")))),
+        ] {
+            z.start_file(name, opts).unwrap();
+            z.write_all(body.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+        let els = parse(buf.get_ref()).unwrap();
+        let read: Vec<(&str, Option<usize>)> =
+            els.iter().map(|e| (e.text.as_str(), e.notes_for)).collect();
+        assert_eq!(
+            read,
+            [
+                ("Slide one", None),
+                ("Slide two", None),
+                ("About one", Some(0)),
+                ("About two", Some(1))
+            ]
+        );
+    }
+
     #[test]
     fn nothing_claims_geometry() {
         let x = slide(&shape(Some("title"), &para("T")));

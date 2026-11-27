@@ -573,6 +573,14 @@ struct Emitter<'a> {
     open_sections: Vec<(usize, usize)>,
     /// The `doc:Message` node the current email message's elements go into.
     open_message: Option<usize>,
+    /// The `doco:BackMatter` node, once a deck's speaker notes open it.
+    back_idx: Option<usize>,
+    /// The slide whose speaker notes are open, and their
+    /// `doc:SpeakerNotes` node.
+    open_notes: Option<(usize, usize)>,
+    /// Each slide's node, by its index: its first section, or on the title
+    /// slide the deck's title. A slide's notes point at it.
+    slide_nodes: HashMap<usize, String>,
     /// `doc:Message` nodes by the id of the element that opened them, for
     /// an element that goes back to one.
     messages: HashMap<String, usize>,
@@ -656,6 +664,9 @@ impl<'a> Emitter<'a> {
     /// The open signature, else the innermost open section, else the open
     /// message, else the body.
     fn current_parent(&self) -> usize {
+        if let Some((_, notes)) = self.open_notes {
+            return notes;
+        }
         self.open_signature
             .as_ref()
             .map(|s| s.node)
@@ -670,6 +681,29 @@ impl<'a> Emitter<'a> {
     /// can tell a place named in a signature from a place the message talks
     /// about, and keep it on `doc:signer`: the address under a name is that
     /// sender's office, not the office of the company the thread discusses.
+    /// Open the `doc:SpeakerNotes` of a deck's slide, in the document's
+    /// `doco:BackMatter`: what the presenter says over the slide, set
+    /// apart from the body, which reads as the slides do. It points at the
+    /// slide's node (`doc:notesFor`).
+    fn open_notes(&mut self, doc: usize, slide: usize) {
+        let back = match self.back_idx {
+            Some(b) => b,
+            None => {
+                let b = self.node("element", "doco:BackMatter", Some("section"));
+                self.attach(doc, b);
+                self.back_idx = Some(b);
+                b
+            }
+        };
+        let idx = self.node("notes", "doc:SpeakerNotes", Some("section"));
+        self.nodes[idx].insert("doc:pageIndex".into(), json!(slide));
+        if let Some(iri) = self.slide_nodes.get(&slide) {
+            self.nodes[idx].insert("doc:notesFor".into(), Value::String(iri.clone()));
+        }
+        self.attach(back, idx);
+        self.open_notes = Some((slide, idx));
+    }
+
     fn open_signature(&mut self) {
         let parent = self.open_message.unwrap_or_else(|| self.current_parent());
         let idx = self.node("signature", "doc:Signature", None);
@@ -956,6 +990,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         counter: 0,
         open_sections: Vec::new(),
         open_message: None,
+        back_idx: None,
+        open_notes: None,
+        slide_nodes: HashMap::new(),
         messages: HashMap::new(),
         open_signature: None,
         mailboxes: HashMap::new(),
@@ -1034,6 +1071,14 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         if !open_lists.is_empty() && e.kind != "doc:ListItem" && !counted_across(elements, i) {
             open_lists.clear();
         }
+        if let Some(slide) = e.notes_for {
+            if em.open_notes.map(|(s, _)| s) != Some(slide) {
+                open_lists.clear();
+                em.close_signature();
+                em.open_sections.clear();
+                em.open_notes(doc_idx, slide);
+            }
+        }
         if let Some(m) = &e.message {
             open_lists.clear();
             em.close_signature();
@@ -1067,6 +1112,11 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 let start = span.map(|(s, _)| s);
                 em.set_links(title, e, start);
                 em.attach_header(doc_idx, title);
+                let iri = em.nodes[title]["@id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                em.slide_nodes.entry(e.page).or_insert(iri);
             }
             "doco:SectionTitle" | "doco:Title" => {
                 let level = match e.kind.as_str() {
@@ -1092,6 +1142,11 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 em.set_links(title, e, start);
                 em.attach_header(section, title);
                 em.open_sections.push((section, level));
+                let iri = em.nodes[section]["@id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                em.slide_nodes.entry(e.page).or_insert(iri);
             }
             "doc:ListItem" => {
                 // Close the lists deeper than the item. The outermost takes
@@ -1666,6 +1721,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             // A table carried on from the page before names the part it
             // carries on.
             "doc:continues": { "@type": "@id" },
+            "doc:notesFor": { "@type": "@id" },
         },
         "@graph": graph,
     });
@@ -1741,6 +1797,57 @@ mod tests {
 
     fn find<'a>(g: &'a [Value], ty: &str) -> Vec<&'a Value> {
         g.iter().filter(|n| n["@type"] == ty).collect()
+    }
+
+    #[test]
+    fn speaker_notes_are_back_matter_pointing_at_their_slide() {
+        let at = |kind: &str, text: &str, page: usize, level: Option<usize>| Element {
+            page,
+            level,
+            ..Element::new(kind, text, "pptx", "pptx")
+        };
+        let slides = vec![
+            at("doco:SectionTitle", "One", 0, Some(1)),
+            at("doco:Paragraph", "Body one", 0, None),
+            at("doco:SectionTitle", "Two", 1, Some(1)),
+            at("doco:Paragraph", "Body two", 1, None),
+        ];
+        let mut deck = slides.clone();
+        deck.push(Element {
+            notes_for: Some(1),
+            ..at("doco:Paragraph", "Said over two", 1, None)
+        });
+        let g = graph(&deck);
+        let body = &find(&g, "doco:BodyMatter")[0];
+        let back = &find(&g, "doco:BackMatter")[0];
+        let notes = &find(&g, "doc:SpeakerNotes");
+        assert_eq!(notes.len(), 1);
+        assert_eq!(back["po:contains"], json!([notes[0]["@id"]]));
+        assert!(!body["po:contains"]
+            .to_string()
+            .contains(notes[0]["@id"].as_str().unwrap()));
+        // It points at the second slide's section.
+        let sections = find(&g, "doco:Section");
+        assert_eq!(notes[0]["doc:notesFor"], sections[1]["@id"]);
+        // The body's offsets are what they were without the notes, and the
+        // notes' text comes after the body's.
+        let offsets = |g: &[Value]| -> Vec<(Value, Value)> {
+            g.iter()
+                .filter(|n| n["@type"] == "doco:Paragraph" && n["nif:isString"] != "Said over two")
+                .map(|n| (n["nif:beginIndex"].clone(), n["nif:endIndex"].clone()))
+                .collect()
+        };
+        assert_eq!(offsets(&g), offsets(&graph(&slides)));
+        let said = g
+            .iter()
+            .find(|n| n["nif:isString"] == "Said over two")
+            .unwrap();
+        let body_end = offsets(&g)
+            .iter()
+            .map(|(_, e)| e.as_u64().unwrap())
+            .max()
+            .unwrap();
+        assert!(said["nif:beginIndex"].as_u64().unwrap() > body_end);
     }
 
     #[test]
