@@ -1133,6 +1133,16 @@ fn reading_order(c: &mut Vec<usize>, glyphs: &[Glyph], adv: Advance) -> Vec<usiz
         return starts;
     }
     let inked = |r: &[usize]| r.iter().filter(|&&i| glyphs[i].bbox.is_some()).count();
+    // The size most of the line is set at.
+    let body = {
+        let mut sizes: Vec<f32> = c
+            .iter()
+            .filter(|&&i| glyphs[i].bbox.is_some())
+            .map(|&i| glyphs[i].font_size)
+            .collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.get(sizes.len() / 2).copied().unwrap_or(0.0)
+    };
     let pen_end = |i: usize| adv.at(glyphs[i].origin) + glyphs[i].advance.unwrap_or(0.0);
     for w in runs.windows(2) {
         let (a, b) = (&drawn[w[0].0..w[0].1], &drawn[w[1].0..w[1].1]);
@@ -1150,11 +1160,14 @@ fn reading_order(c: &mut Vec<usize>, glyphs: &[Glyph], adv: Advance) -> Vec<usiz
             .take(3)
             .copied()
             .collect();
+        // At the line's own size, too: two scripts' runs over one base
+        // (`N` with `inf` over `BN`) are of one size, the scripts'.
         let one_size = b
             .iter()
             .chain(&tail)
             .filter(|&&i| glyphs[i].bbox.is_some())
-            .all(|&i| same_size(size_of(i), size_of(b[0])));
+            .all(|&i| same_size(size_of(i), size_of(b[0])))
+            && same_size(size_of(b[0]), body);
         if !one_size {
             continue;
         }
@@ -1181,12 +1194,12 @@ fn reading_order(c: &mut Vec<usize>, glyphs: &[Glyph], adv: Advance) -> Vec<usiz
         // full stop. A mark set over a letter (`x̂`, `∉`), a bar or a bracket
         // (`|k|`, `s⁽³⁾`), a sign kerned under its number (`3,0 %`) is the
         // typesetting's own overlap.
+        // A spacing modifier letter (`ˆ`, `ˇ`) is a mark, letter or not.
         let word = |i: usize, closing: bool| {
-            glyphs[i]
-                .text
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_alphanumeric() || (closing && matches!(ch, ':' | '.')))
+            glyphs[i].text.chars().next().is_some_and(|ch| {
+                (ch.is_alphanumeric() && !('\u{2B0}'..='\u{2FF}').contains(&ch))
+                    || (closing && matches!(ch, ':' | '.'))
+            })
         };
         if !(b_start > a_start
             && b_start < adv.at(glyphs[last].origin)
@@ -3561,6 +3574,43 @@ mod tests {
         let mut v = sized_word("PRICE", 0.0, 100.0, 24.0);
         v.extend(sized_word("each", 70.0, 100.0, 10.0));
         assert_eq!(assemble(&v).len(), 1);
+    }
+
+    #[test]
+    fn a_value_set_over_its_labels_end_is_read_after_it() {
+        // `Amount:` at 8pt, 4pt a letter, its pen ending at 78; `29.99`
+        // drawn after it from 72, three-quarters of an em into it.
+        let mut v = sized_word("Amount:", 50.0, 100.0, 8.0);
+        v.extend(sized_word("29.99", 72.0, 100.0, 8.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert_eq!(texts, ["Amount: 29.99"]);
+    }
+
+    #[test]
+    fn overlaps_that_are_the_typesettings_own_keep_position_order() {
+        let moved = |v: &[Glyph]| {
+            let mut c: Vec<usize> = (0..v.len()).collect();
+            reading_order(&mut c, v, Advance::Right)
+        };
+        // Runs that only abut: position reads them right.
+        let mut v = sized_word("Amount:", 50.0, 100.0, 8.0);
+        v.extend(sized_word("29.99", 78.5, 100.0, 8.0));
+        assert!(moved(&v).is_empty());
+        // Two scripts' runs over one base, of one size, the scripts', the
+        // second set into the first.
+        let mut v = sized_word("Learning rate", 0.0, 100.0, 10.0);
+        v.extend(sized_word("inf", 68.0, 100.0, 6.0));
+        v.extend(sized_word("BNN", 70.0, 100.0, 6.0));
+        assert!(moved(&v).is_empty());
+        // A modifier letter over a figure, drawn after the word before it
+        // and set into its last letter.
+        let mut v = sized_word("vector", 50.0, 100.0, 8.0);
+        v.extend(sized_word("ˆ0", 68.0, 100.0, 8.0));
+        assert!(moved(&v).is_empty());
+        // A bar set over the end of the word before it.
+        let mut v = sized_word("value", 50.0, 100.0, 8.0);
+        v.extend(sized_word("|k|", 64.0, 100.0, 8.0));
+        assert!(moved(&v).is_empty());
     }
 
     #[test]
