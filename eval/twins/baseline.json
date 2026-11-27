@@ -73,6 +73,24 @@
    "other": 0,
    "word": 88
   },
+  "mixed-large@pdf": {
+   "false": 0,
+   "long": 62,
+   "other": 0,
+   "word": 59
+  },
+  "mixed-small@pdf": {
+   "false": 0,
+   "long": 75,
+   "other": 0,
+   "word": 61
+  },
+  "mixed-twotext@pdf": {
+   "false": 0,
+   "long": 103,
+   "other": 0,
+   "word": 88
+  },
   "noise@200": {
    "false": 0,
    "long": 105,

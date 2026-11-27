@@ -4131,6 +4131,11 @@ pub enum NumberKind {
 pub struct LevelInfo {
     rank: RankKey,
     source: LevelSource,
+    /// Set on a page an OCR engine read whole in a document that has text of
+    /// its own (a scanned screenshot printed into a memo): content inside
+    /// the document's outline, nested under its own headings and never over
+    /// them ([`settle_levels`]).
+    pub inside: bool,
     /// The kinds of its section number's parts (`2.1` two figures, `IV.A`
     /// a numeral and a letter), where it opens on one.
     number: Option<Vec<NumberKind>>,
@@ -4145,6 +4150,7 @@ impl Heading {
             _ => LevelSource::Set,
         };
         LevelInfo {
+            inside: false,
             rank: self.rank,
             number: (source != LevelSource::Title)
                 .then(|| number_kinds(&self.text))
@@ -4203,6 +4209,14 @@ const TITLE_HEADS_SECTIONS: bool = false;
 ///   by none set stronger, only by another bookmark, by its number or by
 ///   one set alike: the outline's span is the author's.
 ///
+/// - A heading set [`LevelInfo::inside`], on a page OCR read whole in a
+///   document with text of its own, is a child of the nearest open heading
+///   of the document's own and nests among those like it by their style
+///   alone. It heads none of the document's own: one of those closes it.
+///   Its sizes are its page's, set at the body ([`crate::document`]), and a
+///   screenshot's title bar set larger than the memo's sections would
+///   otherwise push the memo's next section under it.
+///
 /// Levels run as deep as the headings nest, to [`MAX_LEVEL`], however many
 /// styles the document sets them in. `fallback` is a heading's level where
 /// nothing is known of it.
@@ -4223,7 +4237,13 @@ pub fn settle_levels(hs: &[(Option<&LevelInfo>, usize)]) -> Vec<usize> {
     // Levels below the title, where it heads the sections.
     let mut under_title = 0;
     let mut out = Vec::with_capacity(hs.len());
+    let inside = |i: Option<&LevelInfo>| i.is_some_and(|i| i.inside);
     for &(info, fallback) in hs {
+        if !inside(info) {
+            while stack.last().is_some_and(|o| inside(o.info)) {
+                stack.pop();
+            }
+        }
         let level = match info {
             None => fallback,
             Some(LevelInfo {
@@ -4247,7 +4267,11 @@ pub fn settle_levels(hs: &[(Option<&LevelInfo>, usize)]) -> Vec<usize> {
                 // parts of its number and of this one's.
                 let numbered = info.number.as_ref().and_then(|own| {
                     stack.iter().rev().find_map(|o| {
-                        let open = o.info?.number.as_ref()?;
+                        let open = o
+                            .info
+                            .filter(|o| o.inside == info.inside)?
+                            .number
+                            .as_ref()?;
                         same_scheme(open, own).then_some((o.level, open.len(), own.len()))
                     })
                 });
@@ -4261,6 +4285,10 @@ pub fn settle_levels(hs: &[(Option<&LevelInfo>, usize)]) -> Vec<usize> {
                                 level = o.level + 1;
                                 break;
                             };
+                            if info.inside && !open.inside {
+                                level = o.level + 1;
+                                break;
+                            }
                             if open.rank == info.rank {
                                 level = o.level;
                                 break;
@@ -4726,10 +4754,47 @@ mod tests {
     }
 
     #[test]
+    fn a_page_read_whole_by_ocr_nests_under_the_documents_headings() {
+        let set = |size: i32, inside: bool| LevelInfo {
+            inside,
+            rank: (-size * 4, false, false, false, 0),
+            source: LevelSource::Set,
+            number: None,
+        };
+        // A memo's sections at 14 pt; a screenshot page read whole between
+        // them, its title bar at 20 and its panels at 16 once set at the
+        // memo's body.
+        let hs = [
+            set(14, false),
+            set(20, true),
+            set(16, true),
+            set(16, true),
+            set(14, false),
+            set(12, false),
+        ];
+        let refs: Vec<(Option<&LevelInfo>, usize)> = hs.iter().map(|h| (Some(h), 1)).collect();
+        // The screenshot's headings under the open section, by their own
+        // styles; the memo's next section closes them and stays at 1.
+        assert_eq!(settle_levels(&refs), [1, 2, 3, 3, 1, 2]);
+        // Read as the document's own, the title bar would have headed the
+        // memo's next section.
+        let own: Vec<LevelInfo> = hs
+            .iter()
+            .map(|h| LevelInfo {
+                inside: false,
+                ..h.clone()
+            })
+            .collect();
+        let refs: Vec<(Option<&LevelInfo>, usize)> = own.iter().map(|h| (Some(h), 1)).collect();
+        assert_eq!(settle_levels(&refs), [1, 1, 2, 2, 3, 4]);
+    }
+
+    #[test]
     fn levels_are_set_against_the_headings_open_above() {
         // A heading set at `size` points, bold, numbered by its text where
         // it opens on a number.
         let at = |source: LevelSource, size: i32, text: &str| LevelInfo {
+            inside: false,
             rank: (-size * 4, false, false, false, 0),
             source,
             number: number_kinds(text),

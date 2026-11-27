@@ -91,5 +91,39 @@ headings there.
   letter, `Payment$`; a note mark read into a word) are most of the other
   lines.
 
+## Mixed documents
+
+A document can hold text of its own and pages that are only images: a memo
+printing a scanned screenshot, a letter with a signed form scanned behind
+it. A page read whole by OCR has no scale of its own: its type is as large
+as the image was drawn, so its sizes say nothing next to the text's. The
+mixed sets (`mixed-small`, `mixed-large`, `mixed-twotext`) put a page of
+text and a page that is an image in one PDF. Counted over all their pages,
+the text's and the image's:
+
+| set | one-word headings | line headings | short lines as headings | other |
+|---|---|---|---|---|
+| `mixed-small`, the body read over every page | 64 / 91 | 84 / 108 | 34 / 183 | 154 |
+| `mixed-small`, each page at its own body | 61 / 91 | 75 / 108 | 0 / 183 | 0 |
+| `mixed-large`, the body read over every page | 59 / 59 | 62 / 67 | 3 / 116 | 13 |
+| `mixed-large`, each page at its own body | 59 / 59 | 62 / 67 | 0 / 116 | 0 |
+| `mixed-twotext`, the body read over every page | 78 / 118 | 96 / 144 | 51 / 238 | 228 |
+| `mixed-twotext`, each page at its own body | 88 / 118 | 103 / 144 | 0 / 238 | 0 |
+
+- **Read over every page, the body is a vote the image can win.** A page
+  showing two pages at half size holds more lines than the page of text, at
+  half its type; the body came out at the image's size, and the text's prose
+  read as headings. The vote is a histogram's, by the quarter point: the
+  same document could go either way with the image's sizes read a little
+  differently.
+- **Each page at its own body.** Where the document has text of its own,
+  its body is that text's, and a page read whole is set at it by its own
+  median, so a line stands out on its page or does not. Its headings are
+  inside the document's outline: under the document's section open above
+  them, never over the next one.
+- **What is left** is the half-size image's own headings, a fifth larger
+  than its 5 pt type: about half of them read as headings (34 of 64 one-word
+  headings in `mixed-small`, and all of its page of text's 27).
+
 The set does not test the general rules, which read its headings from a
 text layer.
