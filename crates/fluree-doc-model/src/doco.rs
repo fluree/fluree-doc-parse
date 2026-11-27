@@ -2001,7 +2001,10 @@ mod tests {
             .find(|c| c["doc:cellValue"] == "Ions 78 and 51 are read in SIM mode.")
             .expect("the note is a cell");
         assert!(note.get("doc:columnHeader").is_none());
-        let time = cells.iter().find(|c| c["doc:cellValue"] == "2.6 - 4").unwrap();
+        let time = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "2.6 - 4")
+            .unwrap();
         assert_eq!(time["doc:columnHeader"], "Time (min)");
 
         // Merged across two of three columns, a value stays the first's.
@@ -2022,7 +2025,10 @@ mod tests {
         t.merged_left = Some(left);
         let g = graph(&[t]);
         let cells = find(&g, "doc:TableCell");
-        let part = cells.iter().find(|c| c["doc:cellValue"] == "Not read").unwrap();
+        let part = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "Not read")
+            .unwrap();
         assert_eq!(part["doc:columnHeader"], "Time (min)");
     }
 
