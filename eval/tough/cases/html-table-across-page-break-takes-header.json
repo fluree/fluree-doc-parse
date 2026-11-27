@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "wtw-ex21-subsidiaries-2025.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1140536/000119312526069307/wtw-ex21_1.htm",
+    "sha256": "1fc1341aabcf0311f1cb2866e9eed03632aad16c6dcc10f7891d7084f7cd956d",
+    "about": "SEC filing, Exhibit 21 (DFIN), set as pages: the list of subsidiaries is one table per page, the first under the header `Company Name | Country of Incorporation / Organization`, the later ones with no header of their own."
+  },
+  "checks": [
+    {
+      "id": "name-column",
+      "found": "2026-11-27",
+      "issue": "Each later page's part was a table of its own with no header: its companies named no column.",
+      "cell": {
+        "value": "Willis Towers Watson Congo SA",
+        "column": "Company Name"
+      }
+    },
+    {
+      "id": "country-column",
+      "found": "2026-11-27",
+      "issue": "As above, for the country.",
+      "cell": {
+        "value": "Congo",
+        "column": "Country of Incorporation / Organization"
+      }
+    }
+  ]
+}

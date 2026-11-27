@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "bunge-ex21-subsidiaries-2025.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1996862/000162828026009842/subsidiarieslistex21112312.htm",
+    "sha256": "7cc7f828f7593a6a1f0fba87726eecbf441b75cdbe99ee5d7d8b31b8530945d4",
+    "about": "SEC filing, Exhibit 21, set as pages: the list of subsidiaries is one table per page, each opening on an empty row that sizes its columns, the page's folio and an <hr style=\"page-break-after:always\"> between them. Each country is a band over its companies."
+  },
+  "checks": [
+    {
+      "id": "band-carried-over-break",
+      "found": "2026-11-27",
+      "issue": "Each page's part was a table of its own: the companies at the head of a page lost the country band set on the page before (`Bunge USA LLC`, still under `United States of America`).",
+      "cell": {
+        "value": "Bunge USA LLC",
+        "section": "United States of America"
+      }
+    },
+    {
+      "id": "band-carried-over-next-break",
+      "found": "2026-11-27",
+      "issue": "As above, at a later break.",
+      "cell": {
+        "value": "BLA Servicios, S.A.",
+        "section": "Guatemala"
+      }
+    }
+  ]
+}

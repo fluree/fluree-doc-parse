@@ -1692,8 +1692,16 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         } else {
                             band_over(rows.len()).or_else(|| carried_band(rows.len()))
                         };
-                        // A last row holding its first cell alone, no band.
-                        let lone_end = (!subs.contains(&end)
+                        // A last row holding its first cell alone, no band,
+                        // in a table whose rows hold values beside their
+                        // labels. A list of names, one to a row, ends on one
+                        // like any other: no label cut by the break.
+                        let valued = (n_header..rows.len()).any(|r| {
+                            !subs.contains(&r)
+                                && rows[r].iter().skip(1).any(|t| !t.trim().is_empty())
+                        });
+                        let lone_end = (valued
+                            && !subs.contains(&end)
                             && rows[end].iter().skip(1).all(|t| t.trim().is_empty()))
                         .then(|| rows[end].first().map(|t| t.trim().to_string()))
                         .flatten()
@@ -2710,6 +2718,37 @@ mod tests {
         let urti = g.iter().find(|n| n["doc:cellValue"] == "13").unwrap();
         assert!(urti.get("doc:sectionLabel").is_none());
         assert_eq!(urti["doc:columnHeader"], "%");
+    }
+
+    #[test]
+    fn a_list_of_names_carries_its_band_over_the_break() {
+        // A list of subsidiaries, a name to a row under each country's band:
+        // a page ending on a name ends on a row like any other, and the next
+        // page's names are still that country's.
+        let r = |a: &str| vec![a.to_string(), String::new()];
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.cells = Some(vec![
+            r("United States of America"),
+            r("Bunge North America LLC"),
+            r("Viterra USA Investment LLC"),
+        ]);
+        a.header_rows = Some(0);
+        a.sub_headers = Some(vec![0]);
+        a.merged_left = Some(vec![false, true, false, true, false, true]);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.page = 1;
+        b.cells = Some(vec![r(""), r("Bunge USA LLC")]);
+        b.header_rows = Some(0);
+        b.merged_left = Some(vec![false, true, false, true]);
+        b.continues = Some("elem-00001".into());
+        let g = graph(&[a, b]);
+        let usa = g
+            .iter()
+            .find(|n| n["doc:cellValue"] == "Bunge USA LLC")
+            .unwrap();
+        assert_eq!(usa["doc:sectionLabel"], "United States of America");
     }
 
     #[test]
