@@ -283,6 +283,42 @@ sentence running past it, then the panel, then the rest. The column's lines
 beside the panel set their own measure: the page column's takes in the
 panel's width, and against it every line of the column would read short.
 
+**A picture's caption beside the column.** A photo set at the column's side,
+the text under it running the page's width, leaves the same single column,
+and its caption, set under it level with the column's last narrow lines,
+fell between them: `Luna's flagship fiber optic sensing instruments; the`
+inside a sentence, or a radar image's caption between a list item and its
+last word. The caption is read apart as a panel is, after the text beside it
+and the sentence running past its foot. When that text is a list, it reads
+on to the list's last item. A caption is the lines under a picture, or a
+row of pictures, within its width, each following the last within a line's
+leading, the first within one and a half of its lines of the picture's foot.
+It is read apart when:
+- the text level with it, outside the picture's width, is set a size larger
+  (by a tenth or more). A caption set at its text's size is left to the
+  region pass;
+- no line runs into the caption from outside, as a paragraph's line joined
+  to one of the caption's does;
+- no line over or under the picture and its caption stands on its own side
+  of the column: a column's own text, or a page's folio under a figure set at
+  the left;
+- the paragraph beside it runs on across the column under the picture for a
+  line at most, the line closing it, list items aside. A paragraph that runs
+  on further is one paragraph of two measures, narrow beside the picture and
+  the column's under it, and against the wider its narrow lines would read
+  as ended by hand. Its caption stays where the region pass reads it, between
+  the two.
+
+The column beside the caption keeps the measure its own reading gives it:
+text above and below the picture runs across the column.
+
+So that the caption's lines reach the region pass apart, a line is parted at
+a gap wider than a block's where the text either side of it is set in
+another size and on another baseline, each side's largest glyph compared (so
+a note's mark raised at a word's end says nothing). This holds even where
+lines nearby run across the gap: a paragraph's line keeps one size and
+baseline across its widest space.
+
 Where the page-wide pass does see the panel's column, the box is read after
 the column's region, and the column's last paragraph, running on under the
 box across the page, was cut by it. A group lying wholly in a panel, three
