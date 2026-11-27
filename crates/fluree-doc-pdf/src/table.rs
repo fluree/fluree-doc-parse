@@ -10343,18 +10343,18 @@ mod header_tests {
         // With no band of the kind further down, a shaded second row under
         // the header is the header's own.
         assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1)]), 2);
-        // A one-column listing shaded throughout holds such rows alone, and
-        // keeps the single header the full shading falls back to.
+        // A one-column listing holds such rows alone: its shading, broken
+        // once, is no band's. Its run is deeper than a header is, and it
+        // keeps the single header row it falls back to; shortened by one
+        // as though it ended on a band, it read as four header rows.
         let one = Grid {
             xs: vec![0.0, 400.0],
+            ys: (0..10).map(|r| 100.0 + 20.0 * r as f64).collect(),
             ..grid_with_bands()
         };
-        let lines: Vec<Vec<String>> = ["int f(int n) {", "if (n < 2) {", "return n;", "}", "}"]
-            .iter()
-            .map(|t| vec![t.to_string()])
-            .collect();
-        let all: Vec<_> = (0..5).map(row).collect();
-        assert_eq!(one.header_rows(&lines, &[], &[], &all), 1);
+        let lines: Vec<Vec<String>> = (0..9).map(|r| vec![format!("line {r}")]).collect();
+        let shaded: Vec<_> = (0..9).filter(|&r| r != 5).map(row).collect();
+        assert_eq!(one.header_rows(&lines, &[], &[], &shaded), 1);
     }
 
     #[test]
