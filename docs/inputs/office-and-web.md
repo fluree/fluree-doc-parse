@@ -498,8 +498,8 @@ A `.xlsb` is a workbook saved as binary records in a zip. Its records are
 read here, each checked against its length, rather than by calamine, which
 indexes them unchecked; a sheet's cells are laid out the same way as an
 `.xls`'s, and provenance and evidence are `xlsb`. Numbers read as General,
-dates as ISO dates, as for `.xls`; bold cells, frozen rows and merges are
-not read. Every part is first inflated to nowhere against 64 MiB each and
+dates as ISO dates, as for `.xls`; bold cells (a font of weight 700 or
+more) and merged ranges are read as an `.xls`'s are, frozen rows are not. Every part is first inflated to nowhere against 64 MiB each and
 256 MiB in all (and at most 10,000 parts); at most about four million cells
 are read, and a shared string's text, copied for each cell that names it,
 is counted each time against 256 MiB. A file is
