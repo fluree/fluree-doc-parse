@@ -593,7 +593,9 @@ struct Emitter<'a> {
 /// the one to the left, its last row read whole, and how many data rows it
 /// and the parts before it hold. And what names its last rows, for the rows
 /// the page break carried on: the columns' names in force there (a header
-/// restated partway down, where one is), and the band open over them.
+/// restated partway down, where one is), and the band open over them; with
+/// the table's opening rows (its header and the rows over its first band,
+/// as its first part sets them), which a later page may set again.
 struct TablePart {
     iri: String,
     head: Vec<Vec<String>>,
@@ -603,6 +605,7 @@ struct TablePart {
     rows: usize,
     names_at_end: Vec<String>,
     band_at_end: Option<String>,
+    opening: Vec<Vec<String>>,
 }
 
 impl<'a> Emitter<'a> {
@@ -1164,21 +1167,28 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     .as_ref()
                     .and_then(|id| em.tables.get(id))
                     .filter(|p| Some(p.last.len()) == ncols);
-                let (header_before, last_before, rows_before, head_before, band_before) =
-                    match earlier {
-                        Some(p) => {
-                            em.nodes[table]
-                                .insert("doc:continues".into(), Value::String(p.iri.clone()));
-                            (
-                                Some(p.names_at_end.clone()),
-                                Some(p.last.clone()),
-                                p.rows,
-                                Some((p.head.clone(), p.head_left.clone(), p.header_only)),
-                                p.band_at_end.clone(),
-                            )
-                        }
-                        None => (None, None, 0, None, None),
-                    };
+                let (
+                    header_before,
+                    last_before,
+                    rows_before,
+                    head_before,
+                    band_before,
+                    opening_before,
+                ) = match earlier {
+                    Some(p) => {
+                        em.nodes[table]
+                            .insert("doc:continues".into(), Value::String(p.iri.clone()));
+                        (
+                            Some(p.names_at_end.clone()),
+                            Some(p.last.clone()),
+                            p.rows,
+                            Some((p.head.clone(), p.head_left.clone(), p.header_only)),
+                            p.band_at_end.clone(),
+                            Some(p.opening.clone()),
+                        )
+                    }
+                    None => (None, None, 0, None, None, None),
+                };
 
                 // Cell entities: data rows index from 0 below the measured
                 // header (`header_rows` — absent means undetected, treated
@@ -1361,10 +1371,27 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     // Rows a page break carried on from the part before are
                     // under the band open at its end, until a band or a break
                     // of this part's own.
+                    // Rows at the part's top setting the table's opening
+                    // rows again (a page repeating its header, the date and
+                    // unit lines under the column names) are the head's,
+                    // under no band. Only at the top: further down, a row
+                    // like one of the opening ones (`Frequency | Annual`) is
+                    // data.
+                    let same_row = |a: &[String], b: &[String]| {
+                        a.len() == b.len()
+                            && a.iter().any(|t| !t.trim().is_empty())
+                            && a.iter().zip(b).all(|(x, y)| x.trim() == y.trim())
+                    };
+                    let opening = opening_before.as_deref().unwrap_or(&[]);
+                    let repeated_to = (n_header..rows.len())
+                        .find(|&r| !opening.iter().any(|o| same_row(&rows[r], o)))
+                        .unwrap_or(rows.len());
+                    let opening_again = |r: usize| r >= n_header && r < repeated_to;
                     let carried_band = |r: usize| -> Option<String> {
                         let own = subs.iter().any(|s| *s < r && *s >= n_header)
                             || subs.contains(&r)
-                            || breaks.iter().any(|&b| b <= r);
+                            || breaks.iter().any(|&b| b <= r)
+                            || opening_again(r);
                         if own {
                             return None;
                         }
@@ -1592,6 +1619,11 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             .map_or_else(|| header.clone(), |(_, h)| h.clone());
                         let band_at_end =
                             band_over(rows.len()).or_else(|| carried_band(rows.len()));
+                        // The table's opening rows, as its first part set them.
+                        let opening = opening_before.clone().unwrap_or_else(|| {
+                            let first_band = subs.iter().copied().filter(|&s| s >= n_header).min();
+                            rows[..first_band.unwrap_or(n_header).min(rows.len())].to_vec()
+                        });
                         em.tables.insert(
                             e.id.clone(),
                             TablePart {
@@ -1603,6 +1635,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 rows: rows_before + rows.len() - n_header,
                                 names_at_end,
                                 band_at_end,
+                                opening,
                             },
                         );
                     }
@@ -2535,6 +2568,38 @@ mod tests {
         // second).
         let cells = g.iter().filter(|n| n["@type"] == "doc:TableCell").count();
         assert_eq!(cells, 9);
+    }
+
+    #[test]
+    fn a_page_repeating_the_head_sets_it_under_no_band() {
+        // A balance sheet's page repeats its column names, dates and units
+        // at its top, then opens a band of its own: those rows are the
+        // head's, not the band's open at the page before's end. Further
+        // down, a row like one of the opening ones is data, and keeps the
+        // band carried over it.
+        let r = |a: &str, b: &str| vec![a.to_string(), b.into()];
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.cells = Some(vec![
+            r("", "2024"),
+            r("", "JPY m"),
+            r("Non-current assets", ""),
+            r("Goodwill", "10"),
+        ]);
+        a.header_rows = Some(1);
+        a.sub_headers = Some(vec![2]);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.page = 1;
+        b.cells = Some(vec![r("", "2024"), r("", "JPY m"), r("Patents", "4")]);
+        b.header_rows = Some(1);
+        b.continues = Some("elem-00001".into());
+        let g = graph(&[a, b]);
+        let units: Vec<&Value> = g.iter().filter(|n| n["doc:cellValue"] == "JPY m").collect();
+        assert_eq!(units.len(), 2);
+        assert!(units.iter().all(|n| n.get("doc:sectionLabel").is_none()));
+        let patents = g.iter().find(|n| n["doc:cellValue"] == "4").unwrap();
+        assert_eq!(patents["doc:sectionLabel"], "Non-current assets");
     }
 
     #[test]
