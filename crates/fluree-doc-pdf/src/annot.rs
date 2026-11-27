@@ -354,7 +354,7 @@ fn embedded_files_within(pdf: &Pdf, limits: &Limits) -> (Vec<EmbeddedFile>, Vec<
         let Some(annots) = p.raw().get::<Array<'_>>(b"Annots") else {
             continue;
         };
-        for entry in annots.raw_iter() {
+        for entry in crate::array_entries(&annots) {
             entries += 1;
             if specs.len() > limits.files || entries > MAX_ANNOTATION_ENTRIES {
                 break 'pages;
@@ -487,7 +487,7 @@ fn name_tree<'a>(xref: &'a XRef, root: &Dict<'a>, out: &mut Vec<Dict<'a>>) -> us
             continue;
         };
         let mut found = Vec::new();
-        for kid in kids.raw_iter() {
+        for kid in crate::array_entries(&kids) {
             entries += 1;
             if entries > MAX_ANNOTATION_ENTRIES {
                 break;
@@ -996,6 +996,32 @@ mod tests {
         let (files, skipped) = embedded_files_within(&pdf, &limits);
         assert_eq!(files.len(), 1);
         assert!(skipped.is_empty(), "{skipped:?}");
+    }
+
+    #[test]
+    fn an_attachment_list_or_a_name_tree_that_does_not_read_is_read_up_to_where_it_stops() {
+        // A lone sign skips as a number but does not read as one: the
+        // array's own iterator panicked on it, in a page's `/Annots` and in
+        // a name tree's `/Kids`. What is before it is read.
+        let pdf = objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 6 0 R >> >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots [4 0 R + ] >>".to_vec(),
+            b"<< /Subtype /FileAttachment /Rect [0 0 10 10] /FS << /F (a.txt) /EF << /F 5 0 R >> >> >>"
+                .to_vec(),
+            stream("/Type /EmbeddedFile", b"from the page"),
+            b"<< /Kids [7 0 R + ] >>".to_vec(),
+            b"<< /Names [(b) << /F (b.txt) /EF << /F 8 0 R >> >>] >>".to_vec(),
+            stream("/Type /EmbeddedFile", b"from the tree"),
+        ]);
+        let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
+        let (files, skipped) = embedded_files(&pdf);
+        let mut names: Vec<_> = files
+            .iter()
+            .filter_map(|f| f.info.filename.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a.txt", "b.txt"], "{skipped:?}");
     }
 
     #[test]
