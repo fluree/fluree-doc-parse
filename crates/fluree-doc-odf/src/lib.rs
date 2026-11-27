@@ -247,6 +247,15 @@ struct Aside {
 /// is read after its paragraph ([`frames_in`]).
 fn para_text(t: &Tree, id: usize, asides: &mut Vec<Aside>) -> String {
     let mut s = String::new();
+    para_text_into(t, id, asides, &mut s);
+    s
+}
+
+/// [`para_text`], written at the end of `s`. Each element's text is written
+/// where it goes, not gathered into a string of its own and copied into
+/// its parent's: a run of text under 5,000 nested spans was copied once
+/// for each.
+fn para_text_into(t: &Tree, id: usize, asides: &mut Vec<Aside>, s: &mut String) {
     for &c in &t.node(id).children {
         let n = t.node(c);
         match n.name.as_str() {
@@ -260,11 +269,13 @@ fn para_text(t: &Tree, id: usize, asides: &mut Vec<Aside>) -> String {
                 } else {
                     "footnote"
                 };
-                let label = t
-                    .find(c, "note-citation")
+                // Its citation and body are its own children: looked for
+                // through the whole note, a note in a note in a note was
+                // walked again at each.
+                let label = child(t, c, "note-citation")
                     .map(|n| t.all_text(n).trim().to_string())
                     .unwrap_or_default();
-                if let Some(body) = t.find(c, "note-body") {
+                if let Some(body) = child(t, c, "note-body") {
                     asides.push(Aside {
                         evidence,
                         label,
@@ -273,8 +284,7 @@ fn para_text(t: &Tree, id: usize, asides: &mut Vec<Aside>) -> String {
                 }
             }
             "annotation" => {
-                let label = t
-                    .find(c, "creator")
+                let label = child(t, c, "creator")
                     .map(|n| format!("{}:", t.all_text(n).trim()))
                     .filter(|l| l.len() > 1)
                     .unwrap_or_default();
@@ -291,13 +301,12 @@ fn para_text(t: &Tree, id: usize, asides: &mut Vec<Aside>) -> String {
             // A block in a cell: apart from its neighbours.
             "p" | "h" | "list" | "list-item" | "list-header" => {
                 s.push(' ');
-                s.push_str(&para_text(t, c, asides));
+                para_text_into(t, c, asides, s);
                 s.push(' ');
             }
-            _ => s.push_str(&para_text(t, c, asides)),
+            _ => para_text_into(t, c, asides, s),
         }
     }
-    s
 }
 
 /// The frames a paragraph holds, anchored to it or to a character in it,
@@ -335,6 +344,11 @@ fn tidy(s: &str) -> String {
     out
 }
 
+/// The element child of `id` named `name`.
+fn child(t: &Tree, id: usize, name: &str) -> Option<usize> {
+    t.elements(id).find(|&c| t.node(c).name == name)
+}
+
 /// Refuse the block `id` where what is left of `budget` could not hold its
 /// text, before the copies it is made through (its runs joined, then
 /// tidied) are made: each as long as the text under it, which one run of a
@@ -342,6 +356,35 @@ fn tidy(s: &str) -> String {
 /// made, tidied, and no longer than this.
 fn room_for_text(t: &Tree, id: usize, budget: &Budget) -> Result<(), TooLarge> {
     budget.clone().spend_chars(t.text_chars(id))
+}
+
+/// [`room_for_text`] for a block [`para_text`] reads: its text, not a
+/// note's, a comment's or a frame's, each read as a block of its own,
+/// which checks its own; and a space for each element, the most it adds
+/// (`text:s`, a tab, or a block in a cell set apart by two). Checked with
+/// the text of the notes or frames it holds, nested in one another, the
+/// text was walked again at each level.
+///
+/// A table cell's text is each of its children's [`para_text`]: `cell`
+/// says `id` is one, whose children are read whole whatever they are.
+fn room_for_para(t: &Tree, id: usize, cell: bool, budget: &Budget) -> Result<(), TooLarge> {
+    // Each node with whether it is read whole.
+    let mut stack = vec![(id, true)];
+    let mut spaces = 0usize;
+    let mut cost = budget.clone();
+    while let Some((n, whole)) = stack.pop() {
+        let node = t.node(n);
+        if !whole && matches!(node.name.as_str(), "note" | "annotation" | "frame") {
+            continue;
+        }
+        if !node.name.is_empty() {
+            spaces += 2;
+        }
+        cost.spend_chars(node.text.chars())?;
+        let whole = cell && n == id;
+        stack.extend(node.children.iter().map(|&c| (c, whole)));
+    }
+    cost.spend_chars(std::iter::repeat_n(' ', spaces))
 }
 
 /// A table as a `doco:Table`: its rows, inside header rows or not, each
@@ -372,7 +415,7 @@ fn table(
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(1)
                 .clamp(1, 1024);
-            room_for_text(t, c, budget)?;
+            room_for_para(t, c, true, budget)?;
             let text = t
                 .elements(c)
                 .map(|p| tidy(&para_text(t, p, asides)))
@@ -525,7 +568,7 @@ fn flow(
                     .and_then(|v| v.parse::<usize>().ok())
                     .unwrap_or(1)
                     .clamp(1, 6);
-                room_for_text(t, c, budget)?;
+                room_for_para(t, c, false, budget)?;
                 let text = tidy(&para_text(t, c, asides));
                 if !text.is_empty() {
                     out.push(paragraph(
@@ -539,7 +582,7 @@ fn flow(
                 frames_after(c, out, asides, budget)?;
             }
             "p" => {
-                room_for_text(t, c, budget)?;
+                room_for_para(t, c, false, budget)?;
                 let text = tidy(&para_text(t, c, asides));
                 if text.is_empty() {
                     frames_after(c, out, asides, budget)?;

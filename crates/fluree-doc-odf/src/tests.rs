@@ -593,3 +593,36 @@ fn a_part_not_utf8_is_spent_at_its_replacements_before_they_are_made() {
         "{refused}"
     );
 }
+
+#[test]
+fn frames_nested_in_paragraphs_are_read_in_linear_time() {
+    // A paragraph holding a text box holding a paragraph, `n` deep, each
+    // with text of its own: each paragraph checked the room for the text
+    // of every frame under it, again at each level.
+    let nested = |n: usize| {
+        let words = "word ".repeat(20_000);
+        let mut body = String::new();
+        for _ in 0..n {
+            body.push_str(&format!("<text:p>{words}<draw:frame><draw:text-box>"));
+        }
+        for _ in 0..n {
+            body.push_str("</draw:text-box></draw:frame></text:p>");
+        }
+        text(&body)
+    };
+    let els = parse(&nested(3)).unwrap();
+    assert_eq!(els.len(), 3);
+    fluree_doc_model::scaling::assert_linear("frames nested", 20, nested, |pkg| {
+        assert!(parse(pkg).is_ok())
+    });
+}
+
+#[test]
+fn a_notes_citation_is_its_own() {
+    // The citation is the note's child: one inside its body is text.
+    let body = "<text:p>Cited<text:note><text:note-body><text:p>Body \
+                <text:note-citation>9</text:note-citation></text:p></text:note-body>\
+                <text:note-citation>1</text:note-citation></text:note></text:p>";
+    let els = parse(&text(body)).unwrap();
+    assert_eq!(els.last().unwrap().text, "1 Body 9");
+}
