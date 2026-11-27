@@ -270,9 +270,196 @@ pub fn read_pictures<R: PictureReader>(
     out
 }
 
+/// The shortest side, in pixels, of an image a document places that a
+/// model is sent: a small signature logo, a social icon or a rule is
+/// shorter, a screenshot of one line of a form is not. Measured on
+/// synthetic e-mails and documents, whose captures were 60 pixels high and
+/// more.
+pub const MIN_SHORT_SIDE_PX: u32 = 48;
+
+/// The longest side, in pixels, of such an image that a model is sent: a
+/// small logo is narrower, and a phone's screenshot is taller. The
+/// screenshots measured were 547 pixels wide and more, but a small dialog
+/// box can be narrower (380 pixels): `fdoc convert` does not send it, and
+/// lists it as not read (`Small`), for OCR to read it, without counting it
+/// on stderr.
+pub const MIN_LONG_SIDE_PX: u32 = 400;
+
+/// Whether an image a document places, of `width` × `height` pixels, is
+/// under the floor a model is sent ([`MIN_SHORT_SIDE_PX`],
+/// [`MIN_LONG_SIDE_PX`]): one OCR reads, and `fdoc render-routed` crops as
+/// `small_image`. The same either way up, so an image's size as stored
+/// ([`stored_size`]) answers it as well as its size upright.
+///
+/// An e-mail's image under it is taken for an icon of a signature (a
+/// `LinkedIn`, a `Logo`): `fluree_doc_email` keeps no alternative text on
+/// its figure.
+pub fn under_model_floor(width: u32, height: u32) -> bool {
+    width.min(height) < MIN_SHORT_SIDE_PX || width.max(height) < MIN_LONG_SIDE_PX
+}
+
+/// An image's size in pixels as stored, read from its header by hand, for a
+/// PNG, a JPEG, a classic TIFF, a GIF or a BMP: a phone photo's EXIF
+/// orientation is not applied, nor a BigTIFF's size read. `None` for any
+/// other file, or a header cut short.
+pub fn stored_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let b = bytes;
+    if b.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return png_size(b);
+    }
+    if b.starts_with(&[0xFF, 0xD8]) {
+        return jpeg_size(b);
+    }
+    if b.starts_with(b"II*\0") || b.starts_with(b"MM\0*") {
+        return tiff_size(b);
+    }
+    // A GIF's logical screen: two little-endian 16-bit numbers.
+    if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
+        let le16 = |at: usize| {
+            Some(u32::from(u16::from_le_bytes(
+                b.get(at..at + 2)?.try_into().ok()?,
+            )))
+        };
+        return Some((le16(6)?, le16(8)?));
+    }
+    // A BMP's info header: its height is negative where its rows run top
+    // down.
+    if b.starts_with(b"BM") {
+        let le32 = |at: usize| Some(i32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?));
+        return Some((le32(18)?.unsigned_abs(), le32(22)?.unsigned_abs()));
+    }
+    None
+}
+
+/// IHDR is required to be the first chunk, so its position is fixed.
+fn png_size(b: &[u8]) -> Option<(u32, u32)> {
+    if b.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    Some((be32(b.get(16..20)?), be32(b.get(20..24)?)))
+}
+
+/// Walk the marker segments to the frame header.
+///
+/// The size lives in whichever SOF marker the encoder used, and which one that
+/// is says how the image is coded rather than how big it is — baseline,
+/// progressive and the arithmetic-coded variants all carry the same four
+/// numbers in the same place.
+fn jpeg_size(b: &[u8]) -> Option<(u32, u32)> {
+    let mut i = 2usize;
+    // Bounded: a truncated or hostile file must not walk forever.
+    for _ in 0..MAX_JPEG_SEGMENTS {
+        // Markers may be padded with any number of 0xFF bytes.
+        while *b.get(i)? == 0xFF {
+            i += 1;
+        }
+        let marker = *b.get(i)?;
+        i += 1;
+        // Standalone markers carry no length.
+        if matches!(marker, 0xD8 | 0xD9 | 0x01) || (0xD0..=0xD7).contains(&marker) {
+            continue;
+        }
+        let len = be16(b.get(i..i + 2)?) as usize;
+        let is_frame = (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
+        if is_frame {
+            // length(2) precision(1) height(2) width(2)
+            let h = be16(b.get(i + 3..i + 5)?);
+            let w = be16(b.get(i + 5..i + 7)?);
+            return Some((w as u32, h as u32));
+        }
+        // Entropy-coded data follows the scan header and is not a segment.
+        if marker == 0xDA {
+            return None;
+        }
+        i += len.max(2);
+    }
+    None
+}
+
+const MAX_JPEG_SEGMENTS: usize = 512;
+const MAX_TIFF_ENTRIES: usize = 512;
+
+/// Read `ImageWidth` (256) and `ImageLength` (257) from the first IFD of a
+/// classic TIFF.
+fn tiff_size(b: &[u8]) -> Option<(u32, u32)> {
+    let little = b.starts_with(b"II*\0");
+    let u16at = |o: usize| -> Option<u16> {
+        let s = b.get(o..o + 2)?;
+        Some(if little {
+            u16::from_le_bytes([s[0], s[1]])
+        } else {
+            u16::from_be_bytes([s[0], s[1]])
+        })
+    };
+    let u32at = |o: usize| -> Option<u32> {
+        let s = b.get(o..o + 4)?;
+        Some(if little {
+            u32::from_le_bytes([s[0], s[1], s[2], s[3]])
+        } else {
+            u32::from_be_bytes([s[0], s[1], s[2], s[3]])
+        })
+    };
+    let ifd = u32at(4)? as usize;
+    let count = u16at(ifd)? as usize;
+    let (mut w, mut h) = (None, None);
+    for e in 0..count.min(MAX_TIFF_ENTRIES) {
+        let at = ifd + 2 + e * 12;
+        let tag = u16at(at)?;
+        // A SHORT sits in the low half of the value field; a LONG fills it.
+        let value = match u16at(at + 2)? {
+            3 => u16at(at + 8)? as u32,
+            4 => u32at(at + 8)?,
+            _ => continue,
+        };
+        match tag {
+            256 => w = Some(value),
+            257 => h = Some(value),
+            _ => {}
+        }
+        if let (Some(w), Some(h)) = (w, h) {
+            return Some((w, h));
+        }
+    }
+    None
+}
+
+fn be16(b: &[u8]) -> u16 {
+    u16::from_be_bytes([b[0], b[1]])
+}
+
+fn be32(b: &[u8]) -> u32 {
+    u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gifs_or_a_bmps_size_is_read_from_its_header() {
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend_from_slice(&[16, 0, 24, 0]);
+        assert_eq!(stored_size(&gif), Some((16, 24)));
+        assert_eq!(stored_size(&gif[..9]), None);
+        // A top-down BMP states a negative height.
+        let mut bmp = vec![0u8; 26];
+        bmp[..2].copy_from_slice(b"BM");
+        bmp[18..22].copy_from_slice(&640i32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&(-480i32).to_le_bytes());
+        assert_eq!(stored_size(&bmp), Some((640, 480)));
+        assert_eq!(stored_size(b"BMW,Audi\n"), None);
+        assert_eq!(stored_size(b"%PDF-1.7"), None);
+    }
+
+    #[test]
+    fn the_model_floor_is_the_same_either_way_up() {
+        assert!(under_model_floor(16, 16));
+        assert!(under_model_floor(1000, 47));
+        assert!(under_model_floor(47, 1000));
+        assert!(under_model_floor(399, 399));
+        assert!(!under_model_floor(400, 48));
+        assert!(!under_model_floor(48, 400));
+    }
 
     fn m(figure: &str, index: usize) -> Media {
         Media {

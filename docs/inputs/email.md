@@ -263,13 +263,16 @@ An image shown twice is one image, its figure drawn twice.
 A figure's text is the image's alternative text (`alt`), where the HTML
 gives it one, and nothing where the plain text marks it. A signature's
 icons carry such text (`LinkedIn`, `Logo`), which would otherwise read as
-words of nearly every corporate message: `fdoc convert` leaves out the
-alternative text of an image under the floor a model is sent (below; a
-GIF's or a BMP's size read from its header too), and keeps its figure. In
-Markdown and plain text a figure with no words prints nothing; in the
-graph, JSON and XHTML it still marks where the image is shown. In Rust,
-`email.elements` keeps every figure's alternative text, for a caller to
-judge. With no reader configured, each image the body shows is a figure all
+words of nearly every corporate message: the reader leaves out the
+alternative text of an image under the floor a model is sent (below), its
+size read from its PNG, JPEG, TIFF, GIF or BMP header, and keeps its
+figure. An image whose header gives no size keeps its text. In Markdown and
+plain text a figure with no words prints nothing; in the graph, JSON and
+XHTML it still marks where the image is shown. In Rust,
+`fluree_doc_email::parse` reads them so too: `email.elements` holds no
+alternative text for such an icon, and `fluree_doc_model::under_model_floor`
+and `stored_size` are the rule, for a caller to judge an image by it. With
+no reader configured, each image the body shows is a figure all
 the same, the elements after it numbered one further, and the graph lists
 it in [`doc:unreadImages`](../formats/doco.md#images-nothing-read)
 (`NotRead`).
