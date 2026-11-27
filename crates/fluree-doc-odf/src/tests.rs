@@ -549,3 +549,47 @@ fn a_part_past_what_the_budget_has_left_is_refused_before_it_is_read() {
         "OpenDocument file too large: bytes of parts inflated past the 4 MiB of memory a document may take"
     );
 }
+
+/// A text document whose content part is `prefix`, `bytes`, then the end of
+/// a paragraph: bytes that need not be UTF-8.
+fn text_with_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    z.start_file("mimetype", stored).unwrap();
+    write!(z, "application/vnd.oasis.opendocument.text").unwrap();
+    z.start_file("content.xml", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    write!(
+        z,
+        "<office:document-content {NS}><office:body><office:text><text:p>a"
+    )
+    .unwrap();
+    z.write_all(bytes).unwrap();
+    write!(
+        z,
+        "b</text:p></office:text></office:body></office:document-content>"
+    )
+    .unwrap();
+    z.finish().unwrap();
+    buf.into_inner()
+}
+
+#[test]
+fn a_part_not_utf8_is_spent_at_its_replacements_before_they_are_made() {
+    // Each byte that is not UTF-8 is read as U+FFFD, three bytes of it.
+    let els = parse(&text_with_bytes(b"\xff")).unwrap();
+    assert_eq!(els[0].text, "a\u{fffd}b");
+    // A megabyte of them makes three of replacements beside it: past a
+    // budget that holds the part at two bytes a byte, and more, refused
+    // as bytes of the part, before they are made.
+    let n = 1 << 20;
+    let pkg = text_with_bytes(&vec![0xff; n]);
+    let budget = (n as u64 + 1_000) * PART_BYTES + (n as u64);
+    let refused = parse_within(&pkg, &mut Budget::new(budget, u64::MAX)).unwrap_err();
+    assert!(
+        refused.to_string().contains("bytes of parts inflated"),
+        "{refused}"
+    );
+}

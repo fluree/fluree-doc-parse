@@ -181,8 +181,23 @@ fn tree(pkg: &mut Package<'_>, name: &str, budget: &mut Budget) -> Result<Option
         Err(e) => return Err(OdfError::TooLarge(e)),
     };
     budget.spend_bytes(bytes.len() as u64)?;
-    let xml = String::from_utf8(bytes)
-        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+    let xml = match String::from_utf8(bytes) {
+        Ok(xml) => xml,
+        Err(e) => {
+            // Read with each byte that is not UTF-8 replaced, a copy made
+            // beside the bytes and up to three times as long (U+FFFD is
+            // three bytes): spent at its length before it is made. A
+            // `content.xml` of 1.2 GiB of `0xFF`, a megabyte zipped, made
+            // 3.6 GB of replacements past the 2.4 its bytes were spent at.
+            let bytes = e.as_bytes();
+            let lossy = bytes.utf8_chunks().fold(0u64, |n, chunk| {
+                let bad = if chunk.invalid().is_empty() { 0 } else { 3 };
+                n.saturating_add(chunk.valid().len() as u64 + bad)
+            });
+            budget.spend_bytes(lossy)?;
+            String::from_utf8_lossy(bytes).into_owned()
+        }
+    };
     Tree::parse(&xml, budget)
         .map(Some)
         .map_err(OdfError::TooLarge)
