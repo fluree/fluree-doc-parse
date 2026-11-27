@@ -10102,18 +10102,123 @@ fn aligned_runs(rows: &[Vec<&crate::glyph::Glyph>], cells: &[Vec<f64>], page: us
             i += 1;
             continue;
         }
+        // The run's rows, past a field's value wrapped onto a line of its
+        // own.
+        let mut run_rows: Vec<Vec<&crate::glyph::Glyph>> = vec![rows[i].clone()];
+        let mut run_cells: Vec<Vec<f64>> = vec![cells[i].clone()];
         let mut j = i;
-        while j + 1 < rows.len() && cells[j + 1].len() >= 2 {
-            j += 1;
+        while j + 1 < rows.len() {
+            if cells[j + 1].len() >= 2 {
+                j += 1;
+                run_rows.push(rows[j].clone());
+                run_cells.push(cells[j].clone());
+            } else if j + 2 < rows.len()
+                && cells[j + 2].len() >= 2
+                && run_rows
+                    .iter()
+                    .zip(&run_cells)
+                    .all(|(r, c)| field_row(r, c))
+                && field_row(&rows[j + 2], &cells[j + 2])
+                && wraps_a_value(
+                    &rows[j + 1],
+                    &run_rows[run_rows.len() - 1],
+                    &run_cells[run_cells.len() - 1],
+                )
+            {
+                // Left out of the rows the columns and rows are found from:
+                // the row's band runs down to the next row's top, so the
+                // wrapped line is read into the row above, and the rows'
+                // pitch stays the rows' own.
+                j += 1;
+            } else {
+                break;
+            }
         }
-        if j - i + 1 >= MIN_ALIGNED_ROWS {
-            if let Some(g) = grid_from_cells(&rows[i..=j], &cells[i..=j], page) {
+        if run_rows.len() >= MIN_ALIGNED_ROWS {
+            if let Some(g) = grid_from_cells(&run_rows, &run_cells, page) {
                 out.push(g);
             }
         }
         i = j + 1;
     }
     out
+}
+
+/// Whether a row is a field grid's: label and value pairs across it, each
+/// label ending in a colon (`Ordering account: | A98… | Ordering address: |
+/// 6274 ASPEN CT`). Only such a grid's run goes on past a wrapped value: a
+/// run of other rows joined over the line read their pitch from rows that
+/// are not the grid's.
+fn field_row(row: &[&crate::glyph::Glyph], starts: &[f64]) -> bool {
+    if starts.len() < 2 || starts.len() % 2 != 0 {
+        return false;
+    }
+    (0..starts.len()).step_by(2).all(|k| {
+        let end = starts.get(k + 1).copied().unwrap_or(f64::MAX);
+        let label: String = row
+            .iter()
+            .filter(|g| {
+                g.bbox
+                    .is_some_and(|b| b.x0 >= starts[k] - 0.01 && b.x0 < end - 0.01)
+            })
+            .map(|g| g.text.as_str())
+            .collect();
+        label_colon(&label) == Some(true)
+    })
+}
+
+/// Whether a line of one cell is a field's value wrapped from the row
+/// above: set where one of that row's values starts, past its first
+/// column, beside a label that ends in a colon (`Ordering address:` over
+/// `6274 ASPEN CT`, then `ANN ARBOR, MI 48161` under the street), within
+/// that value's column, and no field of its own. A line that starts a
+/// column of figures, a row's label of its own, or a field, is a row.
+fn wraps_a_value(
+    line: &[&crate::glyph::Glyph],
+    above: &[&crate::glyph::Glyph],
+    starts: &[f64],
+) -> bool {
+    let Some(x) = line
+        .iter()
+        .filter_map(|g| g.bbox)
+        .map(|b| b.x0)
+        .reduce(f64::min)
+    else {
+        return false;
+    };
+    let fs = line.first().map_or(1.0, |g| g.font_size.max(1.0) as f64);
+    let Some(k) = starts
+        .iter()
+        .position(|s| (s - x).abs() <= fs * FIELD_ALIGN_TOLERANCE)
+    else {
+        return false;
+    };
+    if k == 0 {
+        return false;
+    }
+    // A value's later line: no field of its own (`ACRN: AC`), and within
+    // its column, short of the next one's start.
+    let text: String = line.iter().map(|g| g.text.as_str()).collect();
+    if label_colon(&text).is_some() {
+        return false;
+    }
+    let right = line
+        .iter()
+        .filter_map(|g| g.bbox)
+        .map(|b| b.x1)
+        .fold(f64::MIN, f64::max);
+    if starts.get(k + 1).is_some_and(|&next| right > next - 0.01) {
+        return false;
+    }
+    let label: String = above
+        .iter()
+        .filter(|g| {
+            g.bbox
+                .is_some_and(|b| b.x0 >= starts[k - 1] - 0.01 && b.x0 < starts[k] - 0.01)
+        })
+        .map(|g| g.text.as_str())
+        .collect();
+    label_colon(&label) == Some(true)
 }
 
 /// Column boundaries for rows that all break into the same number of
