@@ -790,8 +790,9 @@ fn values_past_stub(l: &Line) -> bool {
 }
 
 /// The item rows over a block of totals, where the region's figure rows
-/// end in one: lines under the fullest rows, or under a row of their sums
-/// that sets most of their cells, each setting at most half their cells, labels of a few words and an amount under one of the
+/// end in one: lines under the fullest rows (with `past_stub`, or under a
+/// row of their sums that sets most of their cells), each setting at most
+/// half their cells, labels of a few words and an amount under one of the
 /// items' columns, one of its labels running across a gutter of the
 /// fullest rows (`Totaal
 /// exclusief BTW` across `Aantal | Prijs/st`). Such labels close the items'
@@ -803,18 +804,23 @@ fn items_over_totals<'a>(
     lines: &[&'a Line],
     x0: f64,
     x1: f64,
+    past_stub: bool,
 ) -> Option<(Vec<&'a Line>, Vec<f64>)> {
     let most = lines.iter().map(|l| l.chunks.len()).max()?;
     let last = lines.iter().rposition(|l| l.chunks.len() == most)?;
-    // A row of the items' sums under them, setting most of their cells
-    // (`Total | 1 | 278.61 | 40.39 | 319.00`), votes with the items; the
-    // block of totals may start under it (`Grand Total | 319.00`).
-    let start = last
-        + 1
-        + lines[last + 1..]
+    // With `past_stub`, a row of the items' sums under them, setting most
+    // of their cells (`Total | 1 | 278.61 | 40.39 | 319.00`), votes with
+    // the items, and the block of totals may start under it (`Grand Total |
+    // 319.00`).
+    let sums = if past_stub {
+        lines[last + 1..]
             .iter()
             .take_while(|l| l.chunks.len() * 2 > most)
-            .count();
+            .count()
+    } else {
+        0
+    };
+    let start = last + 1 + sums;
     let block: Vec<&&Line> = lines[start..]
         .iter()
         .take_while(|l| {
@@ -836,9 +842,14 @@ fn items_over_totals<'a>(
     // Each a label or two of a few words and its amount, under an amount
     // of the items: lines of prose ending in a year or a page (a list of
     // references, a crystal's data) are no totals.
+    // With `past_stub`, set over the items' figures too, past the items'
+    // own labels: a row labelled in the stub (`Elliott Strunk | $5,000`
+    // under a name spread across the line over it) is one of the items.
+    let stub_end = item_cols.first().map_or(x0, |c| c.1);
     let totals = block.iter().all(|l| {
         let (amount, labels) = l.chunks.split_last().expect("a chunk at least");
         covered(&item_cols, amount).len() == 1
+            && (!past_stub || labels.first().is_none_or(|c| c.x0 > stub_end))
             && labels
                 .iter()
                 .all(|c| c.text.split_whitespace().count() <= SECTION_WORDS)
@@ -1523,7 +1534,10 @@ fn read_beside(
         .collect();
     // A block of totals under the items casts no vote on the columns; its
     // lines are still the table's rows.
-    let items = items_over_totals(&valued, x0, x1);
+    // Where none ends the lines so, a block under a row of the items' sums,
+    // its labels set past the items' own.
+    let items = items_over_totals(&valued, x0, x1, false)
+        .or_else(|| items_over_totals(&valued, x0, x1, true));
     let totals: Vec<f64> = items.as_ref().map_or(Vec::new(), |(_, t)| t.clone());
     let cols0 = if let Some((items, _)) = items {
         columns(&items, x0, x1)
@@ -2773,8 +2787,8 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         // A block of totals under the items casts no vote here either. An
         // item's lines of words alone (its title wrapped) part its figures
         // from the totals: the block is found among the lines with figures,
-        // as the read found it.
-        match items_over_totals(&rows, x0, x1) {
+        // as the read found it, its labels set past the items' own.
+        match items_over_totals(&rows, x0, x1, false) {
             Some((items, _)) => columns(&items, x0, x1),
             None => {
                 let valued: Vec<&Line> = rows
@@ -2782,7 +2796,7 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                     .copied()
                     .filter(|l| values_past_stub(l))
                     .collect();
-                match items_over_totals(&valued, x0, x1) {
+                match items_over_totals(&valued, x0, x1, true) {
                     Some((_, block)) => {
                         let voters: Vec<&Line> = rows
                             .iter()
