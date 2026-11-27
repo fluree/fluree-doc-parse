@@ -12,6 +12,7 @@ use crate::geom::BBox;
 use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{Attachment, Element};
 use hayro_syntax::object::{Array, Dict, MaybeRef, Name, ObjRef, Stream, String as PdfString};
+use hayro_syntax::xref::XRef;
 use hayro_syntax::Pdf;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -261,6 +262,9 @@ pub const MAX_TOTAL_BYTES: u64 = 256 << 20;
 pub const MAX_DECODED_BYTES: u64 = 512 << 20;
 /// How deep the embedded-files name tree is followed.
 const MAX_TREE_DEPTH: usize = 32;
+/// The most nodes of the embedded-files name tree read: a tree of a
+/// thousand files, one to a leaf, has about two thousand.
+const MAX_TREE_NODES: usize = 10_000;
 
 /// The files the document embeds: those its catalog's `/EmbeddedFiles` name
 /// tree lists, then those `FileAttachment` annotations carry, in page order,
@@ -294,16 +298,38 @@ fn embedded_files_within(pdf: &Pdf, limits: &Limits) -> (Vec<EmbeddedFile>, Vec<
         .and_then(|c| c.get::<Dict<'_>>(b"Names"))
         .and_then(|n| n.get::<Dict<'_>>(b"EmbeddedFiles"))
     {
-        name_tree(&tree, 0, &mut specs);
+        name_tree(xref, &tree, &mut specs);
     }
-    for p in pdf.pages().iter() {
+    // The pages' `/Annots` arrays, as [`annotations`] reads them: each array
+    // once however many pages share it, each annotation once however often
+    // it is listed, and no more entries looked at than it looks at. A
+    // thousand pages sharing one array of a thousand entries is a million
+    // annotations to resolve otherwise, from a file of a few kilobytes.
+    let mut seen_arrays = HashSet::new();
+    let mut seen_annots = HashSet::new();
+    let mut entries = 0usize;
+    'pages: for p in pdf.pages().iter() {
+        if let Some(r) = p.raw().get_ref(b"Annots") {
+            if !seen_arrays.insert(r) {
+                continue;
+            }
+        }
         let Some(annots) = p.raw().get::<Array<'_>>(b"Annots") else {
             continue;
         };
-        for a in annots.iter::<Dict<'_>>() {
-            if specs.len() > limits.files {
-                break;
+        for entry in annots.raw_iter() {
+            entries += 1;
+            if specs.len() > limits.files || entries > MAX_ANNOTATION_ENTRIES {
+                break 'pages;
             }
+            let a = match entry {
+                MaybeRef::Ref(r) if !seen_annots.insert(r) => continue,
+                MaybeRef::Ref(r) => xref.get::<Dict<'_>>(r.into()),
+                MaybeRef::NotRef(o) => Dict::try_from(o).ok(),
+            };
+            let Some(a) = a else {
+                continue;
+            };
             let attachment = a
                 .get::<Name<'_>>(b"Subtype")
                 .is_some_and(|n| n.as_ref() == b"FileAttachment");
@@ -381,35 +407,76 @@ fn embedded_files_within(pdf: &Pdf, limits: &Limits) -> (Vec<EmbeddedFile>, Vec<
     (files, skipped)
 }
 
-/// The file specifications a name tree node lists, and its kids'.
-fn name_tree<'a>(node: &Dict<'a>, depth: usize, out: &mut Vec<Dict<'a>>) {
-    if depth > MAX_TREE_DEPTH || out.len() > MAX_FILES {
-        return;
-    }
-    if let Some(names) = node.get::<Array<'_>>(b"Names") {
-        // Key, value, key, value: the values are the specifications.
-        for (i, v) in names.iter::<hayro_syntax::object::Object<'_>>().enumerate() {
-            if i % 2 == 1 {
-                if let Ok(d) = Dict::try_from(v) {
-                    out.push(d);
+/// The file specifications a name tree lists, from its root down, at most
+/// [`MAX_FILES`] and one more (so that a tree listing more is told so).
+///
+/// Each node is read once, by its reference, however many `/Kids` arrays
+/// name it, at most [`MAX_TREE_NODES`] of them, and at most
+/// [`MAX_ANNOTATION_ENTRIES`] entries of their `/Names` and `/Kids` arrays
+/// are looked at in all. A tree's kids are not checked to be a tree: a
+/// node listing the same kid twice, at each of 24 levels, is 2^24 paths to
+/// its last level from a file of a kilobyte or two.
+///
+/// Gives how many nodes it read.
+fn name_tree<'a>(xref: &'a XRef, root: &Dict<'a>, out: &mut Vec<Dict<'a>>) -> usize {
+    let mut seen: HashSet<ObjRef> = HashSet::new();
+    let mut nodes = 0usize;
+    let mut entries = 0usize;
+    // Depth first, in the order the tree lists its kids.
+    let mut stack: Vec<(Dict<'a>, usize)> = vec![(root.clone(), 0)];
+    while let Some((node, depth)) = stack.pop() {
+        if nodes >= MAX_TREE_NODES || out.len() > MAX_FILES {
+            break;
+        }
+        nodes += 1;
+        if let Some(names) = node.get::<Array<'_>>(b"Names") {
+            // Key, value, key, value: the values are the specifications.
+            for (i, v) in names.iter::<hayro_syntax::object::Object<'_>>().enumerate() {
+                entries += 1;
+                if entries > MAX_ANNOTATION_ENTRIES || out.len() > MAX_FILES {
+                    return nodes;
+                }
+                if i % 2 == 1 {
+                    if let Ok(d) = Dict::try_from(v) {
+                        out.push(d);
+                    }
                 }
             }
-            if out.len() > MAX_FILES {
-                return;
+        }
+        if depth >= MAX_TREE_DEPTH {
+            continue;
+        }
+        let Some(kids) = node.get::<Array<'_>>(b"Kids") else {
+            continue;
+        };
+        let mut found = Vec::new();
+        for kid in kids.raw_iter() {
+            entries += 1;
+            if entries > MAX_ANNOTATION_ENTRIES {
+                break;
             }
+            let kid = match kid {
+                MaybeRef::Ref(r) if !seen.insert(r) => continue,
+                MaybeRef::Ref(r) => xref.get::<Dict<'_>>(r.into()),
+                MaybeRef::NotRef(o) => Dict::try_from(o).ok(),
+            };
+            found.extend(kid.map(|k| (k, depth + 1)));
         }
+        stack.extend(found.into_iter().rev());
     }
-    if let Some(kids) = node.get::<Array<'_>>(b"Kids") {
-        for kid in kids.iter::<Dict<'_>>() {
-            name_tree(&kid, depth + 1, out);
-        }
-    }
+    nodes
 }
 
 /// An embedded file's stream decoded, at most `max` bytes, each byte
 /// inflated (kept or not) spent from `decodable`. Only Flate (the filter
 /// writers use for embedded files) is decoded, here, against the bound: the
 /// parser's own decoders inflate without one.
+///
+/// A stream may chain filters (`/Filter [/FlateDecode /FlateDecode ...]`),
+/// each pass inflating what the one before gave: each pass is bounded by
+/// what `decodable` has left when it starts, not by what it had before the
+/// first. A thousand passes of stored blocks, each as large as the file's
+/// bound, would otherwise each inflate that much.
 fn decode(stream: &Stream<'_>, max: u64, decodable: &mut u64) -> Result<Vec<u8>, &'static str> {
     use hayro_syntax::Filter;
     let filters = stream.filters();
@@ -420,6 +487,7 @@ fn decode(stream: &Stream<'_>, max: u64, decodable: &mut u64) -> Result<Vec<u8>,
     }
     let mut data = stream.raw_data().into_owned();
     for _ in filters.iter() {
+        let max = max.min(*decodable);
         let mut out = Vec::new();
         let read = flate2::read::ZlibDecoder::new(data.as_slice())
             .take(max + 1)
@@ -727,6 +795,136 @@ mod tests {
         assert_eq!(decode(&s, 1000, &mut decodable), Err("TooLarge"));
         assert_eq!(u64::MAX - decodable, 1001);
         assert_eq!(decode(&s, 2 << 20, &mut decodable), Err("Failed"));
+    }
+
+    /// The root of a PDF's `/EmbeddedFiles` name tree, `objects` following
+    /// the catalog (object 1) and its pages (2, 3).
+    fn tree_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
+        let mut all = vec![
+            b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 4 0 R >> >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] >>".to_vec(),
+        ];
+        all.extend_from_slice(objects);
+        objects_pdf(&all)
+    }
+
+    fn tree_root(pdf: &Pdf) -> Dict<'_> {
+        let xref = pdf.xref();
+        xref.get::<Dict<'_>>(xref.root_id())
+            .and_then(|c| c.get::<Dict<'_>>(b"Names"))
+            .and_then(|n| n.get::<Dict<'_>>(b"EmbeddedFiles"))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_name_tree_whose_kids_repeat_is_read_once_a_node() {
+        // Twenty-four levels, each node listing the next twice: 2^24 paths
+        // to the leaf, which names one file. Read as a tree, it took
+        // seconds a level, doubling; each node is read once.
+        let levels = 24;
+        let mut objects: Vec<Vec<u8>> = (0..levels)
+            .map(|i| format!("<< /Kids [{n} 0 R {n} 0 R] >>", n = i + 5).into_bytes())
+            .collect();
+        objects.push(format!("<< /Names [(a) {} 0 R] >>", levels + 5).into_bytes());
+        objects.push(b"<< /Type /Filespec /F (a.txt) /EF << /F 99 0 R >> >>".to_vec());
+        let pdf = Pdf::new(std::sync::Arc::new(tree_pdf(&objects))).unwrap();
+        let mut specs = Vec::new();
+        let nodes = name_tree(pdf.xref(), &tree_root(&pdf), &mut specs);
+        assert_eq!(nodes, levels + 1);
+        assert_eq!(specs.len(), 1);
+    }
+
+    #[test]
+    fn a_name_tree_is_read_no_further_than_its_node_bound() {
+        // A root whose kids are each a node of their own, more of them than
+        // are read: the walk stops at the bound.
+        let kids = MAX_TREE_NODES + 10;
+        let list: String = (0..kids).map(|i| format!("{} 0 R ", i + 5)).collect();
+        let mut objects = vec![format!("<< /Kids [{list}] >>").into_bytes()];
+        objects.extend((0..kids).map(|_| b"<< /Names [] >>".to_vec()));
+        let pdf = Pdf::new(std::sync::Arc::new(tree_pdf(&objects))).unwrap();
+        let mut specs = Vec::new();
+        assert_eq!(
+            name_tree(pdf.xref(), &tree_root(&pdf), &mut specs),
+            MAX_TREE_NODES
+        );
+    }
+
+    #[test]
+    fn a_shared_annots_array_lists_its_attachments_once() {
+        // Three pages sharing one `/Annots` array, whose one file attachment
+        // it lists twice: one file, not three or six specifications, and
+        // none refused as one too many.
+        let pdf = objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots 6 0 R >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots 6 0 R >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots 6 0 R >>".to_vec(),
+            b"[7 0 R 7 0 R]".to_vec(),
+            b"<< /Subtype /FileAttachment /Rect [0 0 10 10] /FS << /F (a.txt) /EF << /F 8 0 R >> >> >>"
+                .to_vec(),
+            stream("/Type /EmbeddedFile", b"text"),
+        ]);
+        let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
+        let limits = Limits { files: 1, ..LIMITS };
+        let (files, skipped) = embedded_files_within(&pdf, &limits);
+        assert_eq!(files.len(), 1);
+        assert!(skipped.is_empty(), "{skipped:?}");
+    }
+
+    #[test]
+    fn annots_are_looked_at_no_further_than_their_entry_bound() {
+        // A file attachment past the entries looked at is not reached.
+        let pdf = objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            [
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots [".to_vec(),
+                b"0 ".repeat(MAX_ANNOTATION_ENTRIES),
+                b"4 0 R] >>".to_vec(),
+            ]
+            .concat(),
+            b"<< /Subtype /FileAttachment /Rect [0 0 10 10] /FS << /F (a.txt) /EF << /F 5 0 R >> >> >>"
+                .to_vec(),
+            stream("/Type /EmbeddedFile", b"text"),
+        ]);
+        let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
+        let (files, _) = embedded_files(&pdf);
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn chained_filters_inflate_no_more_than_is_left() {
+        // Five Flate passes of stored blocks, each giving about 1,000 bytes:
+        // within the file's bound each, past what the document may still
+        // inflate together. Bounded by what is left on each pass, the third
+        // is refused, and no more than that is inflated.
+        let mut data = vec![7u8; 1000];
+        for _ in 0..5 {
+            let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::none());
+            e.write_all(&data).unwrap();
+            data = e.finish().unwrap();
+        }
+        let filters = "/FlateDecode ".repeat(5);
+        let pdf = objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] >>".to_vec(),
+            stream(&format!("/Type /EmbeddedFile /Filter [{filters}]"), &data),
+        ]);
+        let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
+        let s = pdf
+            .xref()
+            .get::<Stream<'_>>(hayro_syntax::object::ObjectIdentifier::new(4, 0))
+            .unwrap();
+        let mut decodable = 2500;
+        assert_eq!(decode(&s, 10_000, &mut decodable), Err("TooLarge"));
+        assert_eq!(decodable, 0);
+        // With room for all five, it decodes.
+        let mut decodable = 10_000;
+        assert_eq!(decode(&s, 10_000, &mut decodable).unwrap(), vec![7u8; 1000]);
     }
 
     #[test]

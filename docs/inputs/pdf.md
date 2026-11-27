@@ -1070,7 +1070,12 @@ out. Each is decoded within bounds: at most 1,000 files, 64 MiB each and
 no bound. A file is decoded once however many entries name it, and what
 decoding inflates is counted whether the file is kept or refused, at most
 512 MiB for the document, so entries naming streams that inflate past
-their bound cannot make a small file costly. A file encoded otherwise than
+their bound cannot make a small file costly; a stream that chains Flate
+filters inflates each pass within what is left of it. The files are found
+as the notes are: each node of the `/EmbeddedFiles` name tree read once
+however many nodes list it as a kid, at most 10,000 of them, and each page's
+annotation list once however many pages share it, at most 200,000 entries
+in all. A file encoded otherwise than
 with Flate (or not encoded), one past a bound, or one that does not inflate
 is named in a warning, once, and left out. In a library, `fluree_doc_pdf::annot::annotations` and
 `embedded_files` return both.
