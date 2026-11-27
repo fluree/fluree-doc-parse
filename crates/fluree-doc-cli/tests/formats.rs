@@ -31,8 +31,13 @@ fn convert(dir: &Path, input: &Path, format: &str, args: &[&str]) -> Output {
 
 /// The input converted to each output format, which must all succeed.
 fn every_format(dir: &Path, input: &Path) -> [(String, String); 4] {
+    every_format_with(dir, input, &[])
+}
+
+/// [`every_format`], with `args`.
+fn every_format_with(dir: &Path, input: &Path, args: &[&str]) -> [(String, String); 4] {
     ["md", "json", "doco", "text"].map(|f| {
-        let o = convert(dir, input, f, &[]);
+        let o = convert(dir, input, f, args);
         assert!(
             o.status.success(),
             "{f}: {}",
@@ -278,7 +283,7 @@ fn a_word_files_footnotes_and_comments_reach_every_output() {
     z.finish().unwrap();
     let input = dir.join("memo.docx");
     std::fs::write(&input, buf.into_inner()).unwrap();
-    let out = every_format(&dir, &input);
+    let out = every_format_with(&dir, &input, &["--comments"]);
     assert_parity(
         &out,
         "doco:Paragraph",
@@ -291,6 +296,11 @@ fn a_word_files_footnotes_and_comments_reach_every_output() {
     for evidence in ["\"footnote\"", "\"comment\""] {
         assert!(out[1].1.contains(evidence), "{}", out[1].1);
         assert!(out[2].1.contains(evidence), "{}", out[2].1);
+    }
+    // The comments are read only when asked for; the footnotes always.
+    for (format, out) in every_format(&dir, &input) {
+        assert!(out.contains("1 Survey of Alex Sample."), "{format}: {out}");
+        assert!(!out.contains("Source?"), "{format}: {out}");
     }
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -357,13 +367,19 @@ fn a_pdfs_notes_and_embedded_files_reach_every_output() {
     );
     let input = dir.join("report.pdf");
     std::fs::write(&input, pdf).unwrap();
-    let out = every_format(&dir, &input);
+    let out = every_format_with(&dir, &input, &["--comments"]);
     assert_parity(
         &out,
         "doco:Paragraph",
         &["Quarterly report", "Sam Example: Check this total"],
     );
     assert!(out[1].1.contains("\"annotation\""), "{}", out[1].1);
+    // The notes are read only when asked for.
+    let plain = every_format(&dir, &input);
+    for (format, out) in &plain {
+        assert!(out.contains("Quarterly report"), "{format}: {out}");
+        assert!(!out.contains("Check this total"), "{format}: {out}");
+    }
     // The embedded file is described on the document node.
     let doco: serde_json::Value = serde_json::from_str(&out[2].1).unwrap();
     let mut described = String::new();
@@ -1068,10 +1084,21 @@ fn an_rtf_document_reads_in_every_output_whatever_its_name() {
     let rtf = "{\\rtf1\\ansi{\\stylesheet{\\s1\\outlinelevel0 heading 1;}}\\pard\\s1 Orders\\par
 \\pard Alex Sample signed the orders.\\par
 \\trowd\\cellx3000\\pard\\intbl Customer\\cell Amount\\cell\\row
-\\trowd\\cellx3000\\pard\\intbl Sam\\cell 7\\cell\\row}";
+\\trowd\\cellx3000\\pard\\intbl Sam\\cell 7\\cell\\row
+\\pard Totals{\\*\\atnid SE}{\\*\\atnauthor Sam Example}\\chatn{\\*\\annotation\\pard Source?}\\par}";
     let input = dir.join("memo.rtf");
     std::fs::write(&input, rtf).unwrap();
     let out = every_format(&dir, &input);
+    // A comment is read only when asked for, as a Word file's is.
+    for (format, out) in &out {
+        assert!(!out.contains("Source?"), "{format}: {out}");
+    }
+    let o = convert(&dir, &input, "md", &["--comments"]);
+    assert!(
+        String::from_utf8_lossy(&o.stdout).contains("Sam Example: Source?"),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
     assert_parity(
         &out,
         "doco:SectionTitle",

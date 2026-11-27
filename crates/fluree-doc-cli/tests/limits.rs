@@ -577,12 +577,24 @@ fn a_note_on_a_page_past_the_page_limit_is_not_read() {
     };
     std::fs::write(&pdf, pages_pdf_with(3, 0, note)).unwrap();
     let pdf = pdf.to_str().unwrap();
-    let o = fdoc(&dir, &["convert", pdf, "--no-escalate", "-q"], &[]);
+    let o = fdoc(
+        &dir,
+        &["convert", pdf, "--no-escalate", "-q", "--comments"],
+        &[],
+    );
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(out.contains("A note on page 3"), "{out}");
     let o = fdoc(
         &dir,
-        &["convert", pdf, "--no-escalate", "-q", "--max-pages", "2"],
+        &[
+            "convert",
+            pdf,
+            "--no-escalate",
+            "-q",
+            "--comments",
+            "--max-pages",
+            "2",
+        ],
         &[],
     );
     let out = String::from_utf8_lossy(&o.stdout);

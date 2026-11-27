@@ -10,7 +10,10 @@ not for a caller setting one.
 A document at its whole budget was measured to fit in 4 GB: its budget,
 2.5 GiB, and 1.25 GiB for what the readers' own bounds let a library take
 beside it, plus its input, held whole. That is what a batch admits each
-document at ([Batches](../reference/limits.md#batches)).
+document at ([Batches](../reference/limits.md#batches)), unless
+`--job-memory` replaces the budget and the 1.25 GiB with a figure the
+caller measured; the budget is then two thirds of it, the share the
+measured 2.5 GiB is of 3.75 GiB.
 
 What a group uses is counted less the file cache the kernel reclaims
 first, `inactive_file` in its `memory.stat` (`total_inactive_file` in

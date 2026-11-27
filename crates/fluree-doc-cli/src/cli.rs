@@ -252,6 +252,14 @@ pub struct ConvertArgs {
     #[arg(long, short = 'j', default_value_t = 0, value_name = "N")]
     pub jobs: usize,
 
+    /// Memory, in MiB, each document of a batch takes beside its input, in
+    /// place of the estimate (3840 at the default limits): each waits for
+    /// room for that and its input, and is read within two thirds of it.
+    /// Given, it lifts the one-per-core bound where free memory is not
+    /// known [env: FDOC_JOB_MEMORY]
+    #[arg(long, value_name = "MIB")]
+    pub job_memory: Option<u64>,
+
     /// Directory of layout-detector sidecars (`<stem>_p<N>_page.json`) used
     /// to promote missed section titles [env: FDOC_TITLE_BOXES]
     #[arg(long, value_name = "DIR")]
@@ -354,6 +362,17 @@ pub struct ConvertArgs {
     /// flag it counts as a failed input, and the exit status is non-zero.
     #[arg(long)]
     pub strict: bool,
+
+    /// Also read the notes reviewers left: a PDF's annotations (sticky
+    /// notes, free text, the comments on highlights) and the comments of a
+    /// Word, OpenDocument or RTF document
+    ///
+    /// Each is marked as what it is (`evidence` `annotation` or `comment`):
+    /// a PDF's after its page's text, a document's comments after the rest.
+    /// Off by default: they are not the document's own text, and a
+    /// highlight's note often repeats the text it marks.
+    #[arg(long)]
+    pub comments: bool,
 
     /// Save each email's attachments, and the files each PDF embeds, under
     /// DIR/<input stem>/, to convert on their own

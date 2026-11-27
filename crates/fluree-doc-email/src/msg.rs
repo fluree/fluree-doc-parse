@@ -11,6 +11,7 @@ use crate::mime::{self, Headers};
 use crate::{address, date, eml, markup, AttachedFile, Body, EmailError, Read};
 use cfb::CompoundFile;
 use encoding_rs::Encoding;
+use fluree_doc_model::budget::Budget;
 use fluree_doc_model::{Mailbox, Message};
 use std::collections::HashMap;
 use std::io::{Cursor, Read as _};
@@ -44,13 +45,18 @@ pub fn read(bytes: &[u8]) -> Result<Read, EmailError> {
     if !cf.is_stream("/__properties_version1.0") {
         return Err(EmailError::Msg("no message properties".into()));
     }
-    let m = message(&mut cf, "", 32, 0);
+    // One budget for the message and those embedded in it, spent by each
+    // HTML body read to choose the text, then by the body.
+    let mut budget = Budget::default();
+    let m = message(&mut cf, "", 32, 0, &mut budget);
     Ok(Read {
         own: m.own,
         header: m.header,
         body: m.body,
         attachments: m.attachments,
         shown: Vec::new(),
+        shown_unread: false,
+        budget,
         provenance: "msg",
     })
 }
@@ -235,7 +241,7 @@ fn encoding(cp: u32) -> &'static Encoding {
     }
 }
 
-fn message(cf: &mut Cf, dir: &str, header_len: usize, depth: usize) -> Msg {
+fn message(cf: &mut Cf, dir: &str, header_len: usize, depth: usize, budget: &mut Budget) -> Msg {
     let props = Store::open(cf, dir, header_len, None);
     let transport = props
         .string(cf, TRANSPORT_HEADERS)
@@ -298,12 +304,12 @@ fn message(cf: &mut Cf, dir: &str, header_len: usize, depth: usize) -> Msg {
         props.string(cf, BODY).map(|b| b.replace("\r\n", "\n")),
         html(cf, &props),
     ) {
-        (Some(p), Some(h)) if markup::unrendered(&p, &h) => Body::Html(h),
+        (Some(p), Some(h)) if markup::unrendered(&p, &h, budget) => Body::Html(h),
         (Some(p), _) => Body::Plain(p),
         (None, Some(h)) => Body::Html(h),
         (None, None) => Body::None,
     };
-    let attachments = attachments(cf, &props, depth);
+    let attachments = attachments(cf, &props, depth, budget);
     Msg {
         own,
         header,
@@ -375,7 +381,7 @@ fn html(cf: &mut Cf, props: &Store) -> Option<String> {
     props.string(cf, HTML)
 }
 
-fn attachments(cf: &mut Cf, props: &Store, depth: usize) -> Vec<AttachedFile> {
+fn attachments(cf: &mut Cf, props: &Store, depth: usize, budget: &mut Budget) -> Vec<AttachedFile> {
     let mut out = Vec::new();
     for dir in props.children(cf, "__attach_version1.0_") {
         let a = Store::open(cf, &dir, 8, Some(props.codepage));
@@ -390,7 +396,7 @@ fn attachments(cf: &mut Cf, props: &Store, depth: usize) -> Vec<AttachedFile> {
             }
             // A message attached whole comes back as an `.eml` of its own,
             // so it reaches its reader as any forwarded message does.
-            let inner = message(cf, &embedded, 24, depth + 1);
+            let inner = message(cf, &embedded, 24, depth + 1, budget);
             let bytes = write_eml(&inner);
             let stem = inner
                 .own

@@ -33,7 +33,8 @@ pub(crate) fn read_image(
     config: &Config,
     verbose: bool,
 ) -> Result<Readings, String> {
-    let mut read = read_images(file, &[(crop, bytes, mime)], config, verbose)?;
+    let load = &mut |_| Ok(std::borrow::Cow::Borrowed(bytes));
+    let mut read = read_images(file, &[(crop, mime)], load, config, verbose)?;
     match read.failures.pop() {
         Some((_, e)) => Err(e),
         None => Ok(read.readings),
@@ -55,14 +56,18 @@ pub(crate) struct ImagesRead {
 /// reads one, with one reader for them all and up to
 /// `escalation.concurrency` of them in flight, as a document's crops are
 /// read: a message of many pictures pays for one sign-in, not one each, and
-/// does not wait on each picture in turn. `images` are `(crop, bytes, mime)`.
+/// does not wait on each picture in turn. `images` are `(crop, mime)`;
+/// `load` reads the bytes of the `i`-th, as it is about to be sent
+/// ([`in_batches`]), so no more of them are held at once than one batch.
 ///
 /// Returns what came of each image: its reading, keyed by crop, that it
-/// held no text, or why it could not be read. Fails as a whole only when
-/// the reader cannot be opened.
-pub(crate) fn read_images(
+/// held no text, or why it could not be read (its bytes among them). Fails
+/// as a whole only when the reader cannot be opened, before any image's
+/// bytes are read.
+pub(crate) fn read_images<'b>(
     file: &Path,
-    images: &[(&str, &[u8], &str)],
+    images: &[(&str, &str)],
+    load: &mut dyn FnMut(usize) -> Result<std::borrow::Cow<'b, [u8]>, String>,
     config: &Config,
     verbose: bool,
 ) -> Result<ImagesRead, String> {
@@ -95,10 +100,12 @@ pub(crate) fn read_images(
     };
     let prompt = escalate::prompt_for_crop(&page, &[]);
     let workers = config.escalation.concurrency.clamp(1, 32);
-    let read = read_each(images, workers, |(_, bytes, mime)| {
-        reader.read_typed(bytes, mime, &prompt)
+    let read = in_batches(images.len(), workers, HELD_BYTES, load, |batch| {
+        read_each(batch, workers, |(i, bytes)| {
+            reader.read_typed(bytes.as_ref(), images[*i].1, &prompt)
+        })
     });
-    for ((crop, _, _), got) in images.iter().zip(read) {
+    for ((crop, _), got) in images.iter().zip(read) {
         match got {
             Ok(Some(text)) => out.readings.insert(crop.to_string(), text),
             // An image with nothing printed on it is a real answer.
@@ -107,6 +114,51 @@ pub(crate) fn read_images(
         }
     }
     Ok(out)
+}
+
+/// The bytes of the images [`read_images`] holds to send at once, past the
+/// first of a batch: 64 MiB, the most one image part is read to
+/// (`MAX_MEDIA_BYTES`). With the image loaded last, a batch never holds more
+/// than twice that, however many images a document sends: a DOCX of two
+/// hundred parts of 64 MiB each, a few megabytes zipped, would otherwise be
+/// held whole, some 12.8 GiB, until its last image was read.
+const HELD_BYTES: usize = 64 << 20;
+
+/// `read` applied to the `n` items `load` gives, in batches: each of at
+/// most `workers` items, loaded one after the other until the batch holds
+/// `held` bytes or more, read, and dropped before the next batch is loaded.
+/// An item that cannot be loaded is answered with why. The answers in the
+/// order of the items.
+fn in_batches<B: AsRef<[u8]>>(
+    n: usize,
+    workers: usize,
+    held: usize,
+    load: &mut dyn FnMut(usize) -> Result<B, String>,
+    mut read: impl FnMut(&[(usize, B)]) -> Vec<Answer>,
+) -> Vec<Answer> {
+    let mut answers: Vec<Option<Answer>> = (0..n).map(|_| None).collect();
+    let mut next = 0;
+    while next < n {
+        let mut batch: Vec<(usize, B)> = Vec::new();
+        let mut bytes = 0usize;
+        while next < n && batch.len() < workers.max(1) && (batch.is_empty() || bytes < held) {
+            match load(next) {
+                Ok(b) => {
+                    bytes += b.as_ref().len();
+                    batch.push((next, b));
+                }
+                Err(e) => answers[next] = Some(Err(e)),
+            }
+            next += 1;
+        }
+        for ((i, _), got) in batch.iter().zip(read(&batch)) {
+            answers[*i] = Some(got);
+        }
+    }
+    answers
+        .into_iter()
+        .map(|a| a.expect("each item is answered"))
+        .collect()
 }
 
 /// What a reader answers for one image: its text, `None` for an image with
@@ -308,6 +360,40 @@ fn answer(crop: &str, text: Option<String>) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn images_sent_are_held_a_batch_at_a_time() {
+        // Two hundred images of 64 units each, sent four at a time with 100
+        // units held past the first: each is loaded only as its batch is
+        // read, so what is held at once stays under twice the bound, not
+        // the 12,800 units of the whole document. One that cannot be
+        // loaded is answered with why, in its place.
+        let loaded = std::cell::Cell::new(0usize);
+        let mut load = |i: usize| -> Result<Vec<u8>, String> {
+            if i == 7 {
+                return Err("gone".into());
+            }
+            loaded.set(loaded.get() + 1);
+            Ok(vec![0; 64])
+        };
+        let mut most = 0usize;
+        let mut batches = 0usize;
+        let answers = in_batches(200, 4, 100, &mut load, |batch| {
+            batches += 1;
+            let held: usize = batch.iter().map(|(_, b)| b.len()).sum();
+            most = most.max(held);
+            // Nothing past this batch has been loaded yet.
+            let last = batch.last().map_or(0, |(i, _)| *i);
+            assert!(loaded.get() <= last + 1);
+            batch.iter().map(|(i, _)| Ok(Some(i.to_string()))).collect()
+        });
+        assert_eq!(answers.len(), 200);
+        assert!(most <= 128, "{most}");
+        assert!(batches >= 100, "{batches}");
+        assert_eq!(answers[7], Err("gone".into()));
+        assert_eq!(answers[8], Ok(Some("8".into())));
+        assert_eq!(answers[199], Ok(Some("199".into())));
+    }
 
     #[test]
     fn images_are_read_side_by_side_and_answered_in_order() {

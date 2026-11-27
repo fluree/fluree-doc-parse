@@ -364,3 +364,24 @@ fn an_image_that_does_not_decode_is_listed_for_its_own_page_only() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_batch_reads_each_document_within_the_memory_it_is_told_one_takes() {
+    // A page whose tree takes about 13 MB of the budget: read on a whole
+    // budget, refused within two thirds of 6 MiB.
+    let dir = scratch("job-memory");
+    let page = dir.join("page.html");
+    std::fs::write(&page, format!("<p>x</p>{}", "<i></i>".repeat(50_000))).unwrap();
+    let out = dir.join("out");
+    let out = out.to_str().unwrap();
+    let o = convert(&dir, &[&page], &["--out-dir", out]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let o = convert(&dir, &[&page], &["--out-dir", out, "--job-memory", "6"]);
+    assert!(!o.status.success(), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("of memory a document may take"),
+        "{}",
+        stderr(&o)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

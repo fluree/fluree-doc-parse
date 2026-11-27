@@ -213,6 +213,17 @@ let els = &email.elements;                        //   plus email.info, email.at
 Those elements have `bbox: None` — see [Measured vs declared
 structure](../concepts/geometry-vs-declared.md).
 
+A reader counts what it makes against one budget per document
+(`fluree_doc_model::budget`), at the costs of the largest output, DoCO,
+which writes each table cell as a node of its own. A caller converting to
+Markdown, XHTML, JSON or the text says so around the reading, and a table
+too large for DoCO still reads:
+
+```rust
+use fluree_doc_model::budget::{converting_to, Output};
+let els = converting_to(Output::Flat, || fluree_doc_xlsx::parse(&bytes))?;
+```
+
 A text file may be Markdown under another name; `fluree_doc_text::is_markdown`
 tells, as `fdoc` asks before choosing a reader. The HTML and plain-text
 readers read the headings a statute or contract shows without declaring them
@@ -261,8 +272,8 @@ stable — the same promise [`fdoc dev`](../cli/dev.md) makes about its output.
 ## Upgrading
 
 What a caller of these crates has to change, by the work that changed it,
-and what replaces each call removed or changed. No public struct is
-`#[non_exhaustive]`, and most have every field public, so each field one
+and what replaces each call removed or changed. Only `ExtractOptions` is
+`#[non_exhaustive]`; the other structs mostly have every field public, so each field one
 gains breaks a caller building it with a struct literal: build
 `DocoOptions`, `Notes` and `escalate::CropHints` with
 `..Default::default()`, as the example above does, rather than field by
@@ -321,7 +332,19 @@ build them.
   (`ExtractOptions::probe_images` off, `extract_bytes_with`).
 - `fluree_doc_model::DocoOptions` and `Notes` gain `unread_regions` and
   `warnings`. `Notes` is no longer `Eq`, only `PartialEq`: a region's box is
-  floating-point.
+  floating-point. `==` still compares two of them; code that needs
+  `Notes: Eq` (a generic bound `T: Eq`, or a struct of its own deriving
+  `Eq` with a `Notes` field) breaks, and derives `PartialEq` only.
+- `document::routing_is_consulted(&opts)` is gone: the analysis now routes
+  every page, to number its regions once, whatever reads the verdict. What
+  it answered, whether anything downstream acts on the routing, is
+  `opts.emit_anchors || opts.layout_prefix.is_some()`, as `fdoc convert`
+  now asks it when it decides whether to probe the images.
+- `ExtractOptions` gains `key_images` (on by default): each placement's
+  `key`, which an OCR engine reads an image drawn again once by. A caller
+  that reads with no engine turns it off, so no image stream is hashed and
+  no stencil decoded for it; `ExtractOptions` is `#[non_exhaustive]`, so
+  this breaks no caller.
 - New: `fluree_doc_pdf::unread_regions` and `parse_warnings`, which fill
   them; `route::Routing`, `route::Declined`, `route::declined_regions` (and
   `_for`, `_numbered`), `route::ocr_regions_for`; `ocr::copies`,
@@ -378,14 +401,21 @@ build them.
 ### OCR readings and their confidence
 
 - `DocoOptions` and `Notes` gain `ocr_readings` (`ocr`, on `Notes`), listed
-  as `doc:ocrReadings`.
+  as `doc:ocrReadings`. A literal that names every field of either no
+  longer compiles: add the field, or end it with `..Default::default()`,
+  which both implement and which keeps a literal compiling through later
+  additions.
 - New in this release, nothing to change from main; listed for a caller
   of this work's earlier pull requests:
   - The OCR parses of `fluree_doc_docx`, `fluree_doc_xlsx` and
     `fluree_doc_image` (`ImageElements`, `PlacedRead`) gain `ocr`, and
     `ImageElements` gains `refused`.
-  - `ocr::Injected` gains `min_conf`, `engine` and `regions`;
-    `ocr::readings` lists the readings an output holds;
+  - `ocr::Injected` gains `min_conf`, `engine`, `regions` and `noise`
+    (an `ocr::Noise`: the words a region's reading held when it was set
+    aside as noise, and their confidence; `ocr::noise_of` gives it for a
+    picture's reading); `ocr::readings` lists the readings an output holds,
+    and `fluree_doc_model::OcrReading` is one of them, its `set_aside`
+    saying why a reading's words are not in the output (`noise`);
     `WordReading::scores_out_of_range` and `words_with_text` count the
     scores outside 0-1 a warning names.
   - A reading none of whose words land on what it read, or a region's most
@@ -394,6 +424,12 @@ build them.
     refused so is `Failed` in `doc:unreadImages`.
 
 ### Limits on what a document may take
+
+The budget itself, what each reader spends and the calls it changed (the
+readers that now return a `Result`, `converting_to`, `within`, the
+`Package` reads), are listed in [Changes for library
+callers](../reference/crate-map.md#changes-for-library-callers); what the
+limits on it changed:
 
 - Each reader's error gains `TooLarge(fluree_doc_model::budget::TooLarge)`:
   `ExtractError`, `DocxError`, `PptxError`, `XlsxError`, `CsvError`,
@@ -484,3 +520,21 @@ starts at the defaults: call `limited_to` in it too. A reader's own bounds
 page) are not among the limits a caller sets. `Limit::Pages` is a document
 listing more pages than a reader holds before it reads any (250,000, or
 the page limit where that is more).
+
+## A document's budget
+
+Each reader's entry point makes the document's budget
+(`fluree_doc_model::budget::Budget::default()`) from three settings of the
+thread that calls it: the limits (`budget::limited_to`, above), the output
+the document is converted to (`budget::converting_to`), whose costs it
+counts at, and the share of memory `budget::within` leaves it, the least
+of that share and the memory limit. All three are thread-local. A caller
+that runs readers on a pool of its own (rayon, a blocking pool) sets them
+inside each task, on the worker thread: set on the thread that hands the
+work out, they do not reach the reader, which counts at DoCO's costs with
+the default limits. See [Limits](../reference/limits.md).
+
+Pages read as parts of one document can share its budget, as an e-mail's
+HTML versions do: `fluree_doc_html::parse_within`, `parse_message_within`
+and `cid_ids_within` take a `&mut Budget` and leave it with what the page
+leaves; a page refused spends all its work, so the next is refused at once.

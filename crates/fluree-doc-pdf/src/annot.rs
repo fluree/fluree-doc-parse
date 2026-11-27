@@ -12,6 +12,7 @@ use crate::geom::BBox;
 use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{Attachment, Element};
 use hayro_syntax::object::{Array, Dict, MaybeRef, Name, ObjRef, Stream, String as PdfString};
+use hayro_syntax::xref::XRef;
 use hayro_syntax::Pdf;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -170,6 +171,41 @@ fn text(d: &Dict<'_>, key: &[u8], max: usize) -> Option<String> {
     Some(out.chars().take(max).collect())
 }
 
+/// Leave out each text markup note (a highlight, an underline, a strike-out
+/// or a squiggly line) whose text is the page's own text it marks.
+///
+/// A viewer that marks text often copies it into the markup's `/Contents`,
+/// so a highlighted `Net revenue rose 4%` carries `Net revenue rose 4%` as
+/// its note, and read as a note it would say the page's words a second
+/// time. The note is left out when its letters and digits, case aside, are
+/// found among those of the page's text under its rectangle and make at
+/// least half of them: a note of its own (`Check this total`) or a word
+/// that only happens to be on the line is kept.
+pub fn drop_quoting_markups(notes: &mut Vec<Annotation>, pages: &[crate::extract::Page]) {
+    notes.retain(|n| !quotes_its_page(n, pages));
+}
+
+fn quotes_its_page(n: &Annotation, pages: &[crate::extract::Page]) -> bool {
+    if !MARKUPS.contains(&n.subtype.as_str()) {
+        return false;
+    }
+    let Some(page) = pages.iter().find(|p| p.index == n.page) else {
+        return false;
+    };
+    let visible = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let said = visible(&n.contents);
+    let marked = visible(&crate::link::anchor_text(page, n.bbox));
+    !said.is_empty() && marked.contains(&said) && 2 * said.len() >= marked.len()
+}
+
+/// The text markup subtypes: they mark the page's text where they sit.
+const MARKUPS: [&str; 4] = ["Highlight", "Underline", "StrikeOut", "Squiggly"];
+
 /// The notes as elements: a paragraph each, where it sits on its page,
 /// `evidence` `annotation`, its text opening with its author
 /// (`Sam Example: Check this total`) as a transcript turn opens with its
@@ -272,6 +308,9 @@ pub const MAX_TOTAL_BYTES: u64 = fluree_doc_model::budget::scaled(256 << 20);
 pub const MAX_DECODED_BYTES: u64 = fluree_doc_model::budget::scaled(512 << 20);
 /// How deep the embedded-files name tree is followed.
 const MAX_TREE_DEPTH: usize = 32;
+/// The most nodes of the embedded-files name tree read: a tree of a
+/// thousand files, one to a leaf, has about two thousand.
+const MAX_TREE_NODES: usize = 10_000;
 
 /// The files the document embeds: those its catalog's `/EmbeddedFiles` name
 /// tree lists, then those `FileAttachment` annotations carry, in page order,
@@ -305,16 +344,38 @@ fn embedded_files_within(pdf: &Pdf, limits: &Limits) -> (Vec<EmbeddedFile>, Vec<
         .and_then(|c| c.get::<Dict<'_>>(b"Names"))
         .and_then(|n| n.get::<Dict<'_>>(b"EmbeddedFiles"))
     {
-        name_tree(&tree, 0, &mut specs);
+        name_tree(xref, &tree, &mut specs);
     }
-    for p in pdf.pages().iter() {
+    // The pages' `/Annots` arrays, as [`annotations`] reads them: each array
+    // once however many pages share it, each annotation once however often
+    // it is listed, and no more entries looked at than it looks at. A
+    // thousand pages sharing one array of a thousand entries is a million
+    // annotations to resolve otherwise, from a file of a few kilobytes.
+    let mut seen_arrays = HashSet::new();
+    let mut seen_annots = HashSet::new();
+    let mut entries = 0usize;
+    'pages: for p in pdf.pages().iter() {
+        if let Some(r) = p.raw().get_ref(b"Annots") {
+            if !seen_arrays.insert(r) {
+                continue;
+            }
+        }
         let Some(annots) = p.raw().get::<Array<'_>>(b"Annots") else {
             continue;
         };
-        for a in annots.iter::<Dict<'_>>() {
-            if specs.len() > limits.files {
-                break;
+        for entry in crate::array_entries(&annots) {
+            entries += 1;
+            if specs.len() > limits.files || entries > MAX_ANNOTATION_ENTRIES {
+                break 'pages;
             }
+            let a = match entry {
+                MaybeRef::Ref(r) if !seen_annots.insert(r) => continue,
+                MaybeRef::Ref(r) => xref.get::<Dict<'_>>(r.into()),
+                MaybeRef::NotRef(o) => Dict::try_from(o).ok(),
+            };
+            let Some(a) = a else {
+                continue;
+            };
             let attachment = a
                 .get::<Name<'_>>(b"Subtype")
                 .is_some_and(|n| n.as_ref() == b"FileAttachment");
@@ -392,35 +453,76 @@ fn embedded_files_within(pdf: &Pdf, limits: &Limits) -> (Vec<EmbeddedFile>, Vec<
     (files, skipped)
 }
 
-/// The file specifications a name tree node lists, and its kids'.
-fn name_tree<'a>(node: &Dict<'a>, depth: usize, out: &mut Vec<Dict<'a>>) {
-    if depth > MAX_TREE_DEPTH || out.len() > MAX_FILES {
-        return;
-    }
-    if let Some(names) = node.get::<Array<'_>>(b"Names") {
-        // Key, value, key, value: the values are the specifications.
-        for (i, v) in names.iter::<hayro_syntax::object::Object<'_>>().enumerate() {
-            if i % 2 == 1 {
-                if let Ok(d) = Dict::try_from(v) {
-                    out.push(d);
+/// The file specifications a name tree lists, from its root down, at most
+/// [`MAX_FILES`] and one more (so that a tree listing more is told so).
+///
+/// Each node is read once, by its reference, however many `/Kids` arrays
+/// name it, at most [`MAX_TREE_NODES`] of them, and at most
+/// [`MAX_ANNOTATION_ENTRIES`] entries of their `/Names` and `/Kids` arrays
+/// are looked at in all. A tree's kids are not checked to be a tree: a
+/// node listing the same kid twice, at each of 24 levels, is 2^24 paths to
+/// its last level from a file of a kilobyte or two.
+///
+/// Gives how many nodes it read.
+fn name_tree<'a>(xref: &'a XRef, root: &Dict<'a>, out: &mut Vec<Dict<'a>>) -> usize {
+    let mut seen: HashSet<ObjRef> = HashSet::new();
+    let mut nodes = 0usize;
+    let mut entries = 0usize;
+    // Depth first, in the order the tree lists its kids.
+    let mut stack: Vec<(Dict<'a>, usize)> = vec![(root.clone(), 0)];
+    while let Some((node, depth)) = stack.pop() {
+        if nodes >= MAX_TREE_NODES || out.len() > MAX_FILES {
+            break;
+        }
+        nodes += 1;
+        if let Some(names) = node.get::<Array<'_>>(b"Names") {
+            // Key, value, key, value: the values are the specifications.
+            for (i, v) in names.iter::<hayro_syntax::object::Object<'_>>().enumerate() {
+                entries += 1;
+                if entries > MAX_ANNOTATION_ENTRIES || out.len() > MAX_FILES {
+                    return nodes;
+                }
+                if i % 2 == 1 {
+                    if let Ok(d) = Dict::try_from(v) {
+                        out.push(d);
+                    }
                 }
             }
-            if out.len() > MAX_FILES {
-                return;
+        }
+        if depth >= MAX_TREE_DEPTH {
+            continue;
+        }
+        let Some(kids) = node.get::<Array<'_>>(b"Kids") else {
+            continue;
+        };
+        let mut found = Vec::new();
+        for kid in crate::array_entries(&kids) {
+            entries += 1;
+            if entries > MAX_ANNOTATION_ENTRIES {
+                break;
             }
+            let kid = match kid {
+                MaybeRef::Ref(r) if !seen.insert(r) => continue,
+                MaybeRef::Ref(r) => xref.get::<Dict<'_>>(r.into()),
+                MaybeRef::NotRef(o) => Dict::try_from(o).ok(),
+            };
+            found.extend(kid.map(|k| (k, depth + 1)));
         }
+        stack.extend(found.into_iter().rev());
     }
-    if let Some(kids) = node.get::<Array<'_>>(b"Kids") {
-        for kid in kids.iter::<Dict<'_>>() {
-            name_tree(&kid, depth + 1, out);
-        }
-    }
+    nodes
 }
 
 /// An embedded file's stream decoded, at most `max` bytes, each byte
 /// inflated (kept or not) spent from `decodable`. Only Flate (the filter
 /// writers use for embedded files) is decoded, here, against the bound: the
 /// parser's own decoders inflate without one.
+///
+/// A stream may chain filters (`/Filter [/FlateDecode /FlateDecode ...]`),
+/// each pass inflating what the one before gave: each pass is bounded by
+/// what `decodable` has left when it starts, not by what it had before the
+/// first. A thousand passes of stored blocks, each as large as the file's
+/// bound, would otherwise each inflate that much.
 fn decode(stream: &Stream<'_>, max: u64, decodable: &mut u64) -> Result<Vec<u8>, &'static str> {
     use hayro_syntax::Filter;
     let filters = stream.filters();
@@ -431,6 +533,7 @@ fn decode(stream: &Stream<'_>, max: u64, decodable: &mut u64) -> Result<Vec<u8>,
     }
     let mut data = stream.raw_data().into_owned();
     for _ in filters.iter() {
+        let max = max.min(*decodable);
         let mut out = Vec::new();
         let read = flate2::read::ZlibDecoder::new(data.as_slice())
             .take(max + 1)
@@ -667,6 +770,68 @@ mod tests {
     }
 
     #[test]
+    fn a_markup_quoting_the_text_it_marks_is_left_out() {
+        // A page reading `Net revenue rose 4% in May` at y 100, glyphs of
+        // five points.
+        let line = "Net revenue rose 4% in May";
+        let bb = |x0, y0, x1, y1| BBox { x0, y0, x1, y1 };
+        let glyphs = line
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| *c != ' ')
+            .map(|(i, c)| {
+                let x = 5.0 * i as f64;
+                crate::glyph::Glyph {
+                    text: c.to_string(),
+                    bbox: Some(bb(x, 100.0, x + 5.0, 110.0)),
+                    page: 0,
+                    origin: (x, 108.0),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    weight: None,
+                    italic: false,
+                    advance: Some(5.0),
+                    draw_index: i,
+                    ocr: None,
+                }
+            })
+            .collect();
+        let page = crate::extract::Page {
+            glyphs,
+            ..crate::image::page_of(600, 800, false).pages.remove(0)
+        };
+        // Over `Net revenue rose 4%`.
+        let over = bb(0.0, 98.0, 95.0, 112.0);
+        let note = |subtype: &str, contents: &str| Annotation {
+            page: 0,
+            subtype: subtype.into(),
+            bbox: over,
+            author: None,
+            contents: contents.into(),
+        };
+        let mut notes = vec![
+            note("Highlight", "Net revenue rose 4%"),
+            note("Underline", "net  revenue rose 4 %"),
+            note("Highlight", "Check this total"),
+            note("Highlight", "revenue"),
+            note("Text", "Net revenue rose 4%"),
+        ];
+        drop_quoting_markups(&mut notes, std::slice::from_ref(&page));
+        let kept: Vec<_> = notes
+            .iter()
+            .map(|n| (n.subtype.as_str(), n.contents.as_str()))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                ("Highlight", "Check this total"),
+                ("Highlight", "revenue"),
+                ("Text", "Net revenue rose 4%")
+            ]
+        );
+    }
+
+    #[test]
     fn notes_go_after_their_pages_text() {
         let el = |page, text: &str| Element {
             page,
@@ -795,6 +960,162 @@ mod tests {
         assert_eq!(decode(&s, 1000, &mut decodable), Err("TooLarge"));
         assert_eq!(u64::MAX - decodable, 1001);
         assert_eq!(decode(&s, 2 << 20, &mut decodable), Err("Failed"));
+    }
+
+    /// The root of a PDF's `/EmbeddedFiles` name tree, `objects` following
+    /// the catalog (object 1) and its pages (2, 3).
+    fn tree_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
+        let mut all = vec![
+            b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 4 0 R >> >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] >>".to_vec(),
+        ];
+        all.extend_from_slice(objects);
+        objects_pdf(&all)
+    }
+
+    fn tree_root(pdf: &Pdf) -> Dict<'_> {
+        let xref = pdf.xref();
+        xref.get::<Dict<'_>>(xref.root_id())
+            .and_then(|c| c.get::<Dict<'_>>(b"Names"))
+            .and_then(|n| n.get::<Dict<'_>>(b"EmbeddedFiles"))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_name_tree_whose_kids_repeat_is_read_once_a_node() {
+        // Twenty-four levels, each node listing the next twice: 2^24 paths
+        // to the leaf, which names one file. Read as a tree, it took
+        // seconds a level, doubling; each node is read once.
+        let levels = 24;
+        let mut objects: Vec<Vec<u8>> = (0..levels)
+            .map(|i| format!("<< /Kids [{n} 0 R {n} 0 R] >>", n = i + 5).into_bytes())
+            .collect();
+        objects.push(format!("<< /Names [(a) {} 0 R] >>", levels + 5).into_bytes());
+        objects.push(b"<< /Type /Filespec /F (a.txt) /EF << /F 99 0 R >> >>".to_vec());
+        let pdf = Pdf::new(std::sync::Arc::new(tree_pdf(&objects))).unwrap();
+        let mut specs = Vec::new();
+        let nodes = name_tree(pdf.xref(), &tree_root(&pdf), &mut specs);
+        assert_eq!(nodes, levels + 1);
+        assert_eq!(specs.len(), 1);
+    }
+
+    #[test]
+    fn a_name_tree_is_read_no_further_than_its_node_bound() {
+        // A root whose kids are each a node of their own, more of them than
+        // are read: the walk stops at the bound.
+        let kids = MAX_TREE_NODES + 10;
+        let list: String = (0..kids).map(|i| format!("{} 0 R ", i + 5)).collect();
+        let mut objects = vec![format!("<< /Kids [{list}] >>").into_bytes()];
+        objects.extend((0..kids).map(|_| b"<< /Names [] >>".to_vec()));
+        let pdf = Pdf::new(std::sync::Arc::new(tree_pdf(&objects))).unwrap();
+        let mut specs = Vec::new();
+        assert_eq!(
+            name_tree(pdf.xref(), &tree_root(&pdf), &mut specs),
+            MAX_TREE_NODES
+        );
+    }
+
+    #[test]
+    fn a_shared_annots_array_lists_its_attachments_once() {
+        // Three pages sharing one `/Annots` array, whose one file attachment
+        // it lists twice: one file, not three or six specifications, and
+        // none refused as one too many.
+        let pdf = objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots 6 0 R >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots 6 0 R >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots 6 0 R >>".to_vec(),
+            b"[7 0 R 7 0 R]".to_vec(),
+            b"<< /Subtype /FileAttachment /Rect [0 0 10 10] /FS << /F (a.txt) /EF << /F 8 0 R >> >> >>"
+                .to_vec(),
+            stream("/Type /EmbeddedFile", b"text"),
+        ]);
+        let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
+        let limits = Limits { files: 1, ..LIMITS };
+        let (files, skipped) = embedded_files_within(&pdf, &limits);
+        assert_eq!(files.len(), 1);
+        assert!(skipped.is_empty(), "{skipped:?}");
+    }
+
+    #[test]
+    fn an_attachment_list_or_a_name_tree_that_does_not_read_is_read_up_to_where_it_stops() {
+        // A lone sign skips as a number but does not read as one: the
+        // array's own iterator panicked on it, in a page's `/Annots` and in
+        // a name tree's `/Kids`. What is before it is read.
+        let pdf = objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 6 0 R >> >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots [4 0 R + ] >>".to_vec(),
+            b"<< /Subtype /FileAttachment /Rect [0 0 10 10] /FS << /F (a.txt) /EF << /F 5 0 R >> >> >>"
+                .to_vec(),
+            stream("/Type /EmbeddedFile", b"from the page"),
+            b"<< /Kids [7 0 R + ] >>".to_vec(),
+            b"<< /Names [(b) << /F (b.txt) /EF << /F 8 0 R >> >>] >>".to_vec(),
+            stream("/Type /EmbeddedFile", b"from the tree"),
+        ]);
+        let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
+        let (files, skipped) = embedded_files(&pdf);
+        let mut names: Vec<_> = files
+            .iter()
+            .filter_map(|f| f.info.filename.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a.txt", "b.txt"], "{skipped:?}");
+    }
+
+    #[test]
+    fn annots_are_looked_at_no_further_than_their_entry_bound() {
+        // A file attachment past the entries looked at is not reached.
+        let pdf = objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            [
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots [".to_vec(),
+                b"0 ".repeat(MAX_ANNOTATION_ENTRIES),
+                b"4 0 R] >>".to_vec(),
+            ]
+            .concat(),
+            b"<< /Subtype /FileAttachment /Rect [0 0 10 10] /FS << /F (a.txt) /EF << /F 5 0 R >> >> >>"
+                .to_vec(),
+            stream("/Type /EmbeddedFile", b"text"),
+        ]);
+        let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
+        let (files, _) = embedded_files(&pdf);
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn chained_filters_inflate_no_more_than_is_left() {
+        // Five Flate passes of stored blocks, each giving about 1,000 bytes:
+        // within the file's bound each, past what the document may still
+        // inflate together. Bounded by what is left on each pass, the third
+        // is refused, and no more than that is inflated.
+        let mut data = vec![7u8; 1000];
+        for _ in 0..5 {
+            let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::none());
+            e.write_all(&data).unwrap();
+            data = e.finish().unwrap();
+        }
+        let filters = "/FlateDecode ".repeat(5);
+        let pdf = objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] >>".to_vec(),
+            stream(&format!("/Type /EmbeddedFile /Filter [{filters}]"), &data),
+        ]);
+        let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
+        let s = pdf
+            .xref()
+            .get::<Stream<'_>>(hayro_syntax::object::ObjectIdentifier::new(4, 0))
+            .unwrap();
+        let mut decodable = 2500;
+        assert_eq!(decode(&s, 10_000, &mut decodable), Err("TooLarge"));
+        assert_eq!(decodable, 0);
+        // With room for all five, it decodes.
+        let mut decodable = 10_000;
+        assert_eq!(decode(&s, 10_000, &mut decodable).unwrap(), vec![7u8; 1000]);
     }
 
     #[test]

@@ -89,7 +89,8 @@ tab-separated text (an export named `.xls`, as many systems write one), or
 an Office package or XPS document renamed. An Excel 2003 XML workbook
 (SpreadsheetML), whose `<Table>` is no web page's, is refused by name:
 `unsupported format (an Excel 2003 XML spreadsheet)`. An Office package, an XPS
-document or a web page is recognised on stdin too. Any other file named as a
+document, a web page or delimited text is recognised on stdin too, and in a
+file named with no extension. Any other file named as a
 format a reader takes goes to that reader, which says what is wrong with it:
 never to the PDF reader, whose `parse: Invalid` would read as a corrupt
 PDF.

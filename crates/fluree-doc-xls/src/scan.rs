@@ -23,7 +23,7 @@
 //! information, if small) in a compound file of its own for calamine to
 //! open.
 
-use crate::{XlsError, MAX_CELLS, MAX_STREAM_BYTES, MAX_TEXT_CHARS};
+use crate::{XlsError, MAX_CELLS, MAX_SHEETS, MAX_STREAM_BYTES, MAX_TEXT_CHARS};
 use fluree_doc_model::budget::{Meter, TooLarge};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
@@ -385,6 +385,11 @@ fn globals<'a>(stream: &'a [u8], budget: &mut Meter) -> Result<Globals<'a>, XlsE
                 if d.len() < 6 {
                     return Err(short("sheet"));
                 }
+                if g.sheets.len() >= MAX_SHEETS {
+                    return Err(XlsError::TooLarge(TooLarge::fixed(format!(
+                        "more than {MAX_SHEETS} sheet records"
+                    ))));
+                }
                 let pos = u32_at(d, 0).unwrap_or(0) as usize;
                 g.sheets.push((pos, &d[4..]));
             }
@@ -403,12 +408,14 @@ fn globals<'a>(stream: &'a [u8], budget: &mut Meter) -> Result<Globals<'a>, XlsE
 }
 
 /// Read the sheet at `pos` as calamine does: its first record its `BOF`,
-/// nested substreams skipped, to its `EOF`.
+/// nested substreams skipped, to its `EOF`. Each byte of the records walked
+/// is spent from `walked`.
 fn sheet(
     stream: &[u8],
     pos: usize,
     g: &Globals<'_>,
     budget: &mut Meter,
+    walked: &mut Meter,
 ) -> Result<SheetRead, XlsError> {
     let mut s = SheetRead::default();
     let not_a_sheet = || malformed("a sheet's offset is not where a sheet starts");
@@ -430,6 +437,7 @@ fn sheet(
     // goes there.
     let mut formula_at = (0u32, 0u32);
     while let Some((r, next)) = record(stream, at)? {
+        walked.spend_len(next - at).map_err(too_large)?;
         at = next;
         let d = r.data;
         if depth > 0 {
@@ -551,11 +559,20 @@ pub(crate) fn walk(stream: &[u8]) -> Result<Scanned, XlsError> {
     let mut cells = Meter::new(MAX_CELLS, "cells");
     let mut area = Meter::new(MAX_CELLS, "cells laid out");
     let mut merges = Meter::new(MAX_CELLS, "merged ranges");
+    // The sheets' records walked, each sheet once: sheets lie apart in the
+    // stream, so their walks cover it at most once. Sheets laid inside each
+    // other (each a `BOF` further in, the next skipped as a nested
+    // substream) are each walked to the end, the square of the stream in
+    // all; past twice the stream, the workbook is refused.
+    let mut walked = Meter::new(
+        2 * stream.len() as u64,
+        "bytes of sheet records walked, twice the stream",
+    );
     for &(pos, _) in &g.sheets {
         if let Some(s) = read.get(&pos) {
             chars.spend(s.chars).map_err(too_large)?;
         } else {
-            read.insert(pos, sheet(stream, pos, &g, &mut chars)?);
+            read.insert(pos, sheet(stream, pos, &g, &mut chars, &mut walked)?);
             order.push(pos);
         }
         let s = &read[&pos];

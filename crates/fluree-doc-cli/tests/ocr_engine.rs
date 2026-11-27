@@ -261,6 +261,71 @@ fn a_scan_whose_text_runs_up_reads_upright_where_its_text_is() {
     );
 }
 
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn an_upright_scan_reads_as_it_stands() {
+    // An upright page of words and numbers written with the digits that
+    // read as other digits turned a half (1068 as 8901), read clean and
+    // degraded (a scan at 25 ppi under heavy noise) until the reading is
+    // poor enough to be read again turned. Neither takes a line from the
+    // turned reading: every line is read level, so nothing turns the page,
+    // and the clean page reads as written.
+    use fluree_doc_vision::OcrEngine;
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let lines = [
+        "Invoice number 1068",
+        "Account holder Margaret",
+        "Quantity 6",
+        "1068",
+        "8691",
+        "Policy holder Holloway",
+    ];
+    for (scale, noise) in [(2.0, 0), (0.35, 110)] {
+        let bytes = scan_image(&lines, scale, 0);
+        let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        let mut image = None;
+        fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| image = Some(c.pixels));
+        let image = noisy(image.unwrap(), noise);
+        let reading = engine.read(&image).unwrap();
+        let read: Vec<&str> = reading.words.iter().map(|w| w.text.as_str()).collect();
+        for w in &reading.words {
+            assert!(w.angle.unwrap().abs() < 5.0, "{scale}: {w:?}");
+        }
+        if noise == 0 {
+            assert_eq!(read, lines);
+            continue;
+        }
+        // Its lines holding a letter read under 0.8 on the median: the
+        // reading the engine read again turned.
+        let mut words: Vec<f64> = reading
+            .words
+            .iter()
+            .filter(|w| w.text.chars().any(char::is_alphabetic))
+            .map(|w| w.conf.unwrap())
+            .collect();
+        words.sort_by(f64::total_cmp);
+        assert!(
+            words.len() >= 3 && words[words.len() / 2] < 0.8,
+            "{read:?} {words:?}"
+        );
+    }
+}
+
+/// `image`, grey, each pixel moved up to `noise` levels lighter or darker,
+/// the same way on every run.
+fn noisy(mut image: fluree_doc_vision::Pixels, noise: u32) -> fluree_doc_vision::Pixels {
+    assert_eq!(image.layout, fluree_doc_vision::Layout::Rgba8);
+    let mut seed = 12345u32;
+    for px in image.data.chunks_exact_mut(4) {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        let n = ((seed >> 16) % (2 * noise + 1)) as i32 - noise as i32;
+        let v = (i32::from(px[0]) + n).clamp(0, 255) as u8;
+        px[..3].fill(v);
+    }
+    image
+}
+
 /// A scratch directory for one test.
 fn scratch(test: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fdoc-ocr-cli-{}-{test}", std::process::id()));

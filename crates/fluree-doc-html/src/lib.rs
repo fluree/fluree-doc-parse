@@ -277,11 +277,41 @@ impl Hasher for ByAddress {
 /// read as section titles: see [`fluree_doc_model::outline`]. A mail body,
 /// read through [`parse_with_quote_depth`], is not.
 pub fn parse(src: &str) -> Result<Vec<Element>, TooLarge> {
-    let mut elements = read(src, false)?.0;
+    parse_within(src, &mut Budget::default())
+}
+
+/// [`parse`], spending `budget`, which is left with what the page leaves
+/// of it. The pages of one document share its budget this way, as the
+/// HTML versions of an e-mail do; a page refused spends all of it, since
+/// the parser did that much work before it stopped.
+pub fn parse_within(src: &str, budget: &mut Budget) -> Result<Vec<Element>, TooLarge> {
+    let mut elements = shared(budget, |b| read_within(src, false, b))?.0;
     if fluree_doc_model::outline::infer_headings(&mut elements) {
         number(&mut elements);
     }
     Ok(elements)
+}
+
+/// Run `read` on a copy of `budget`, then leave `budget` with what the
+/// copy has left; or, where `read` refuses, with nothing left to work: the
+/// parser and walk ran to where they stopped, and a document that asks
+/// for another read of the same size is refused at once, not after as
+/// long again.
+fn shared<T>(
+    budget: &mut Budget,
+    read: impl FnOnce(&mut Budget) -> Result<T, TooLarge>,
+) -> Result<T, TooLarge> {
+    let mut copy = budget.clone();
+    match read(&mut copy) {
+        Ok(t) => {
+            *budget = copy;
+            Ok(t)
+        }
+        Err(e) => {
+            let _ = budget.spend_work(u64::MAX);
+            Err(e)
+        }
+    }
 }
 
 fn number(elements: &mut [Element]) {
@@ -368,10 +398,22 @@ pub fn parse_with_quote_depth(src: &str) -> Result<(Vec<Element>, Vec<usize>), T
 /// The content ids of the images a message's HTML shows from its own parts
 /// (`<img src="cid:…">`), as [`parse_with_quote_depth`] reads them: the
 /// scheme in any case, percent signs decoded, an image the page does not
-/// draw left out. What tells which of a message's files its HTML shows. A
-/// page too large to read shows none: reading it is refused.
+/// draw left out, and so is one outside the content the page marks as its
+/// main, which the body is read for alone. What tells which of a message's
+/// files its HTML shows. A page too large to read shows none: reading it is
+/// refused.
 pub fn cid_ids(src: &str) -> Vec<String> {
-    dom(src).map(|(dom, _)| ids_in(&dom)).unwrap_or_default()
+    cid_ids_within(src, &mut Budget::default()).unwrap_or_default()
+}
+
+/// [`cid_ids`], spending `budget` as [`parse_within`] does, and saying
+/// when the page is too large to read rather than showing none.
+pub fn cid_ids_within(src: &str, budget: &mut Budget) -> Result<Vec<String>, TooLarge> {
+    shared(budget, |b| {
+        let (dom, left) = build(src, b.clone())?;
+        *b = left;
+        Ok(ids_in(&dom))
+    })
 }
 
 /// What [`parse_message`] reads in a message's HTML body: its elements,
@@ -381,66 +423,80 @@ pub type MessageBody = (Vec<Element>, Vec<usize>, Vec<String>);
 /// [`parse_with_quote_depth`] and [`cid_ids`] from one parse of the page:
 /// what a message's HTML body is read for.
 pub fn parse_message(src: &str) -> Result<MessageBody, TooLarge> {
-    let (dom, budget) = dom(src)?;
-    let (elements, depths) = read_dom(&dom, budget, true)?;
-    Ok((elements, depths, ids_in(&dom)))
+    parse_message_within(src, &mut Budget::default())
+}
+
+/// [`parse_message`], spending `budget` as [`parse_within`] does.
+pub fn parse_message_within(src: &str, budget: &mut Budget) -> Result<MessageBody, TooLarge> {
+    shared(budget, |b| {
+        let (dom, left) = build(src, b.clone())?;
+        *b = left;
+        let (elements, depths) = read_dom(&dom, b, true)?;
+        Ok((elements, depths, ids_in(&dom)))
+    })
 }
 
 fn ids_in(dom: &RcDom) -> Vec<String> {
     let facts = Facts::of(&dom.document);
     let mut found = Vec::new();
-    for c in dom.document.children.borrow().iter() {
-        cid_images(c, &facts, &mut found);
+    for root in read_roots(dom, &facts) {
+        for c in root.children.borrow().iter() {
+            cid_images(c, &facts, &mut found);
+        }
     }
     found.into_iter().map(|(id, _)| id).collect()
 }
 
-/// The page's tree, and the budget what is read of it is spent from
-/// ([`build`]).
-fn dom(src: &str) -> Result<(RcDom, Budget), TooLarge> {
-    build(src, Budget::default())
+/// What a page is read for: the content it marks as its main, where some of
+/// it holds text, else the whole page. What lies outside a main is the site
+/// around the document. One whose main holds no text has marked it wrongly,
+/// and is read whole.
+fn read_roots(dom: &RcDom, facts: &Facts) -> Vec<Handle> {
+    let mut mains = Vec::new();
+    find_mains(&dom.document, facts, &mut mains);
+    mains.retain(|m| has_text(m, facts));
+    if mains.is_empty() {
+        vec![dom.document.clone()]
+    } else {
+        mains
+    }
 }
 
 /// The walk, with or without a message's own images.
 fn read(src: &str, cid_images: bool) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
-    read_within(src, cid_images, Budget::default())
+    read_within(src, cid_images, &mut Budget::default())
 }
 
-/// [`read`], against `budget`.
+/// [`read`], against `budget`, which is left with what the page leaves.
 fn read_within(
     src: &str,
     cid_images: bool,
-    budget: Budget,
+    budget: &mut Budget,
 ) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
-    let (dom, budget) = build(src, budget)?;
+    let (dom, left) = build(src, budget.clone())?;
+    *budget = left;
     read_dom(&dom, budget, cid_images)
 }
 
+/// The walk of a page's tree, spending `budget`, which is left with what
+/// the walk leaves.
 fn read_dom(
     dom: &RcDom,
-    budget: Budget,
+    budget: &mut Budget,
     cid_images: bool,
 ) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
     let facts = Facts::of(&dom.document);
     let mut out = Out {
         cid_images,
-        budget,
+        budget: budget.clone(),
         facts,
         ..Out::default()
     };
-    // A page that marks its main content is read for that alone: what lies
-    // outside it is the site around the document. One whose main holds no
-    // text has marked it wrongly, and is read whole.
-    let mut mains = Vec::new();
-    find_mains(&dom.document, &out.facts, &mut mains);
-    mains.retain(|m| has_text(m, &out.facts));
-    if mains.is_empty() {
-        walk(&dom.document, &mut out);
-    } else {
-        for m in &mains {
-            walk(m, &mut out);
-        }
+    // A page that marks its main content is read for that alone.
+    for root in read_roots(dom, &out.facts) {
+        walk(&root, &mut out);
     }
+    *budget = out.budget.clone();
     if let Some(e) = out.over {
         return Err(e);
     }
@@ -478,7 +534,13 @@ fn build(src: &str, mut budget: Budget) -> Result<(RcDom, Budget), TooLarge> {
             at += 1;
         }
         input.push_back(StrTendril::from_slice(&rest[..at]));
-        while let TokenizerResult::Script(_) = tokenizer.feed(&input) {}
+        // The tokenizer pauses on a `<script>` it has closed and on a
+        // charset a `<meta>` declares, with the rest of the chunk still
+        // queued: the page is decoded already, so neither changes what is
+        // read, and it is fed again until it has read all it was given.
+        // Stopped at a charset, a short page lost everything after its
+        // `<meta charset>`, its whole body.
+        while !matches!(tokenizer.feed(&input), TokenizerResult::Done) {}
         rest = &rest[at..];
     }
     tokenizer.end();
@@ -959,12 +1021,21 @@ fn attribute_steps(src: &str) -> u64 {
         match b.get(i) {
             Some(b'!') if b[i..].starts_with(b"!--") => {
                 // From the opening's own dashes, which `<!-->` and `<!--->`
-                // end on.
-                let end = [&b"-->"[..], b"--!>"]
-                    .iter()
-                    .filter_map(|pat| find(i + 1, pat).map(|e| e + pat.len()))
-                    .min();
-                i = end.unwrap_or(b.len());
+                // end on, to the first `--` a `>` or `!>` follows: one pass
+                // forward. Looked for each on its own, the ending a page
+                // never writes (`--!>`) was looked for to the end of the
+                // page from every comment: 600 KB of `<!-- c -->` took 78 s.
+                let mut at = i + 1;
+                i = loop {
+                    let Some(e) = find(at, b"--") else {
+                        break b.len();
+                    };
+                    match b.get(e + 2) {
+                        Some(b'>') => break e + 3,
+                        Some(b'!') if b.get(e + 3) == Some(&b'>') => break e + 4,
+                        _ => at = e + 1,
+                    }
+                };
             }
             Some(b'!' | b'?') => {
                 i = find(i, b">").map_or(b.len(), |e| e + 1);
@@ -2374,6 +2445,12 @@ fn emit_table(table: &Handle, out: &mut Out) {
 
     let mut rows: Vec<Vec<(String, usize, usize)>> = Vec::new();
     let mut kinds: Vec<RowKind> = Vec::new();
+    // The text of the cells gathered so far, at its cost: each cell's is
+    // checked to fit in what is left of the budget with them before it is
+    // gathered, and spent with the table ([`spend_table`]). Gathered
+    // unchecked, a table's text was all copied before any of it was
+    // counted.
+    let mut gathered = 0u64;
     for tr in &trs {
         let mut cells = Vec::new();
         let mut marks = Vec::new();
@@ -2383,6 +2460,12 @@ fn emit_table(table: &Handle, out: &mut Out) {
                 Some("td") => false,
                 _ => continue,
             };
+            let mut count = Gather::new(&out.facts, false);
+            count.children(&cell);
+            gathered = gathered.saturating_add(count.cost);
+            if !out.spend(|b| b.clone().spend_text_cost(gathered)) {
+                return;
+            }
             // A table cell's text becomes a grid position, which has no
             // room for an anchor span; the link is dropped with it.
             let text = text_of(&cell, &out.facts).0;
@@ -2606,6 +2689,41 @@ mod tests {
     }
 
     #[test]
+    fn pages_read_within_one_budget_share_it() {
+        let page = "<p>x</p>".repeat(1_000);
+        let mut probe = Budget::new(MAX_MEMORY, MAX_WORK);
+        super::parse_within(&page, &mut probe).unwrap();
+        let one = MAX_MEMORY - probe.memory_left();
+        let mut budget = Budget::new(one * 3 / 2, MAX_WORK);
+        assert!(super::parse_within(&page, &mut budget).is_ok());
+        assert!(super::parse_message_within(&page, &mut budget).is_err());
+        // A page refused spent the work it was read with: what follows is
+        // refused at once, not after as long again.
+        assert!(super::cid_ids_within("<p>x</p>", &mut budget).is_err());
+    }
+
+    #[test]
+    fn a_short_page_is_read_past_the_charset_it_declares() {
+        // All of it in the parser's first chunk: the tokenizer pauses at
+        // each declared charset with the rest of the chunk still queued.
+        for meta in [
+            "<meta charset=\"utf-8\">",
+            "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">",
+        ] {
+            let src = format!(
+                "<!DOCTYPE html><html><head>{meta}<title>X</title></head>\
+                 <body><h1>Head</h1><p>Hello world</p></body></html>"
+            );
+            assert!(src.len() < FEED_BYTES);
+            let els = parse(&src);
+            let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+            assert_eq!(texts, ["Head", "Hello world"], "{meta}");
+            let (els, _, _) = super::parse_message(&src).unwrap();
+            assert_eq!(els.len(), 2, "{meta}");
+        }
+    }
+
+    #[test]
     fn a_messages_own_image_is_a_figure_where_it_is_drawn() {
         let src = "<p>See below.</p><p><img src=\"cid:shot1%40example.org\" alt=\"  Record \n screen \"></p>\
                    <table><tr><td>Name</td><td>Logo <img src=\"CID:logo@x\"></td></tr>\
@@ -2643,6 +2761,25 @@ mod tests {
         assert_eq!(ids, cid_ids(src));
         // Read as a page, not a message, no image is anything.
         assert!(parse(src).iter().all(|e| e.kind != "doco:Figure"));
+    }
+
+    #[test]
+    fn a_messages_image_outside_its_main_content_is_not_shown() {
+        // A body that marks its main content is read for that alone: an
+        // image of the template around it is not shown in the message, so
+        // no figure draws it and the e-mail reader is not told it is shown
+        // (it would draw it at the end of the message).
+        let src = "<div><img src=\"cid:banner@x\"></div>\
+                   <main><p>Totals below.</p><p><img src=\"cid:shot@x\"></p></main>\
+                   <footer><img src=\"cid:logo@x\"></footer>";
+        let (els, _, ids) = parse_message(src).unwrap();
+        let figures: Vec<&str> = els.iter().filter_map(|e| e.figure.as_deref()).collect();
+        assert_eq!(figures, ["cid:shot@x"]);
+        assert_eq!(ids, ["shot@x"]);
+        assert_eq!(cid_ids(src), ["shot@x"]);
+        // A main with no text is no main: the page is read whole.
+        let src = "<main><img src=\"cid:shot@x\"></main><p>Hi <img src=\"cid:logo@x\"></p>";
+        assert_eq!(cid_ids(src), ["shot@x", "logo@x"]);
     }
 
     #[test]
@@ -3501,6 +3638,29 @@ mod tests {
         }
         // Before any of them, a script's text is passed over.
         assert_eq!(attribute_steps(&format!("<script>{tag}</script><svg>")), 0);
+        // A comment's dashes run on to its end, which may come late.
+        for comment in [
+            "<!-- a -- b ---->",
+            "<!-- a --- b --!>",
+            "<!-- a -!> -- >-->",
+        ] {
+            assert_eq!(attribute_steps(&format!("{comment}{tag}")), 3, "{comment}");
+        }
+        assert_eq!(attribute_steps(&format!("<!-- a -- {tag}")), 0);
+    }
+
+    #[test]
+    fn comments_are_passed_over_in_one_pass() {
+        // Each comment's ending was looked for to the end of the page in
+        // both its forms: 600 KB of comments took 78 s.
+        assert_linear(
+            "comments",
+            20_000,
+            |n| "<!-- c -->".repeat(n),
+            |page| {
+                std::hint::black_box(attribute_steps(page));
+            },
+        );
     }
 
     #[test]
@@ -3531,8 +3691,29 @@ mod tests {
     /// [`read_within`] a budget of `memory`, its work unbounded, at the
     /// costs of the output converted to.
     fn within(src: &str, memory: u64) -> Result<Vec<Element>, TooLarge> {
-        let budget = Budget::new(memory, u64::MAX).for_output(output());
-        read_within(src, false, budget).map(|(e, _)| e)
+        let mut budget = Budget::new(memory, u64::MAX).for_output(output());
+        read_within(src, false, &mut budget).map(|(e, _)| e)
+    }
+
+    #[test]
+    fn a_tables_cell_text_is_checked_before_it_is_gathered() {
+        // Two cells of 300 KB each, in a budget that holds the page's tree
+        // and little more: refused for the text before it is copied out of
+        // the tree, not once the table holding it is made.
+        let long = "w".repeat(300_000);
+        let page = format!(
+            "<table><tr><th>Name</th><th>Note</th></tr><tr><td>{long}</td><td>{long}</td></tr></table>"
+        );
+        assert_eq!(kinds(&parse(&page)), ["doco:Table"]);
+        let (_, left) = build(
+            &page,
+            Budget::new(MAX_MEMORY, u64::MAX).for_output(output()),
+        )
+        .unwrap();
+        let tree = MAX_MEMORY - left.memory_left();
+        let err = within(&page, tree + 100_000).unwrap_err().to_string();
+        assert!(err.contains("text past"), "{err}");
+        assert!(within(&page, tree + 20 * MAX_MEMORY / 1000).is_ok());
     }
 
     #[test]
@@ -3596,8 +3777,8 @@ mod tests {
         // Within a sixty-fourth of the steps, as a test is built
         // unoptimized: 5,000 deep is past them, as 23,000 are past all.
         let steps = |page: &str| {
-            let budget = Budget::new(MAX_MEMORY, MAX_WORK >> 6);
-            read_within(page, false, budget).map(|(e, _)| e)
+            let mut budget = Budget::new(MAX_MEMORY, MAX_WORK >> 6);
+            read_within(page, false, &mut budget).map(|(e, _)| e)
         };
         let nested = format!("{}x{}", "<div>".repeat(5_000), "</div>".repeat(5_000));
         let misnested: String = (0..5_000)
@@ -3622,7 +3803,7 @@ mod tests {
 
     /// [`read_within`] `work` steps, as [`nesting_the_parser_walks_is_spent_as_steps`].
     fn within_steps(page: &str, work: u64) -> Result<Vec<Element>, TooLarge> {
-        read_within(page, false, Budget::new(MAX_MEMORY, work)).map(|(e, _)| e)
+        read_within(page, false, &mut Budget::new(MAX_MEMORY, work)).map(|(e, _)| e)
     }
 
     /// The fewest steps `page` is read within.

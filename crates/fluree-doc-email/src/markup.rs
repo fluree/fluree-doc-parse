@@ -13,18 +13,25 @@
 //! about markup. Then the HTML alternative shows them as text too, so only
 //! markup that the HTML does not show counts.
 
+use fluree_doc_model::budget::Budget;
+
 /// Does this plain text carry markup that the HTML alternative does not
 /// show as text? One piece is enough: a sender's converter that left one
-/// left the rest of its rendering undone too.
-pub fn unrendered(plain: &str, html: &str) -> bool {
+/// left the rest of its rendering undone too. The HTML is read within
+/// `budget`, the message's.
+///
+/// An HTML alternative too large to read within it is not preferred: the
+/// plain text is read in its place, rather than the message refused for a
+/// body it need not read.
+pub fn unrendered(plain: &str, html: &str, budget: &mut Budget) -> bool {
     let marks = marks(plain);
     if marks.is_empty() {
         return false;
     }
-    // A page too large to read shows nothing; reading the message refuses
-    // it then.
-    let shown = fluree_doc_html::parse(html)
-        .unwrap_or_default()
+    let Ok(shown) = fluree_doc_html::parse_within(html, budget) else {
+        return false;
+    };
+    let shown = shown
         .into_iter()
         .map(|e| e.text)
         .collect::<Vec<_>>()
@@ -156,6 +163,10 @@ fn rule(s: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unrendered(plain: &str, html: &str) -> bool {
+        super::unrendered(plain, html, &mut Budget::default())
+    }
 
     #[test]
     fn references_tags_and_rules_are_found() {

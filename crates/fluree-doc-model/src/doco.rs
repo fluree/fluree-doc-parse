@@ -546,16 +546,21 @@ fn column_headers(
         return names;
     }
     let mut paths: Vec<Vec<&str>> = vec![Vec::new(); ncols];
+    // The labels on each column's path, looked up rather than searched for
+    // along it: a header of thousands of rows made that the square of
+    // their number in each column.
+    let mut on_path: Vec<std::collections::HashSet<&str>> =
+        vec![std::collections::HashSet::new(); ncols];
     for (r, row) in rows.iter().enumerate().take(n_header) {
         // The cell holding the label over column `c`, carried along the
         // row rather than walked back to from each column.
         let mut owner = 0;
-        for (c, path) in paths.iter_mut().enumerate() {
+        for (c, (path, seen)) in paths.iter_mut().zip(&mut on_path).enumerate() {
             if c == 0 || !continues_left(r, c) {
                 owner = c;
             }
             let label = row.get(owner).map(|t| t.trim()).unwrap_or("");
-            if !label.is_empty() && !path.contains(&label) {
+            if !label.is_empty() && seen.insert(label) {
                 path.push(label);
             }
         }
@@ -833,28 +838,57 @@ pub fn table_copies(e: &Element) -> Copies {
 /// The column names [`to_doco`] gives a table of its own header: its
 /// header rows, their merges read as the writer reads them (`subs`, each
 /// row's band), named by [`column_headers`]. Only the header rows are
-/// copied, and the rows a value merged down from them runs into.
+/// copied.
+///
+/// A value merged down from the header into the rows below it is joined
+/// from all its fragments, those below the header too. They are gathered
+/// once per column into one row set under the header, which the value
+/// runs into, rather than the rows below copied and the value repeated
+/// into each: a `<th rowspan=20000>` of 300 KB made 6 GB of copies here,
+/// before the budget, which counts them by cost alone, refused the table.
 fn header_names(e: &Element, raw: &[Vec<String>], n_header: usize, subs: &[bool]) -> Vec<String> {
     let Some(cols) = raw.first().map(Vec::len).filter(|_| n_header > 0) else {
         return Vec::new();
     };
     let flag = |m: &Option<Vec<bool>>, i: usize| m.as_ref().and_then(|m| m.get(i)) == Some(&true);
-    // Past the header, to the first row no value runs down into: a run
-    // ends above it, so the rows above read as in the whole table.
-    let mut rows = n_header;
-    while rows < raw.len() && (0..cols).any(|c| flag(&e.merged_down, rows * cols + c)) {
-        rows += 1;
-    }
-    let k = rows * cols;
-    let mut head = raw[..rows].to_vec();
+    let k = n_header * cols;
+    let mut head = raw[..n_header].to_vec();
     if e.merged_down.is_some() || e.merged_left.is_some() || e.sub_headers.is_some() {
-        let first = |m: &Option<Vec<bool>>| (0..k).map(|i| flag(m, i)).collect();
+        let mut continues_above: Vec<bool> = (0..k).map(|i| flag(&e.merged_down, i)).collect();
+        let mut continues_left: Vec<bool> = (0..k).map(|i| flag(&e.merged_left, i)).collect();
+        let mut full_width_row = subs[..n_header].to_vec();
+        // Below the header, each column's run on from it, its fragments
+        // joined as `denormalize` joins them: in one row, they join the
+        // header's fragments into the same value.
+        let mut below = vec![String::new(); cols];
+        let mut runs_on = vec![false; cols];
+        for (c, (tail, on)) in below.iter_mut().zip(&mut runs_on).enumerate() {
+            let mut r = n_header;
+            while r < raw.len() && flag(&e.merged_down, r * cols + c) {
+                let t = raw[r].get(c).map_or("", |t| t.trim());
+                if !t.is_empty() {
+                    if !tail.is_empty() {
+                        tail.push(' ');
+                    }
+                    tail.push_str(t);
+                }
+                *on = true;
+                r += 1;
+            }
+        }
+        if runs_on.iter().any(|&on| on) {
+            head.push(below);
+            continues_above.extend(runs_on);
+            continues_left.extend(std::iter::repeat_n(false, cols));
+            full_width_row.push(false);
+        }
         let m = crate::merges::Merges {
-            continues_above: first(&e.merged_down),
-            continues_left: first(&e.merged_left),
-            full_width_row: subs[..rows].to_vec(),
+            continues_above,
+            continues_left,
+            full_width_row,
         };
         crate::merges::denormalize(&mut head, &m);
+        head.truncate(n_header);
     }
     let left = e
         .merged_left
@@ -3365,6 +3399,7 @@ mod tests {
                     words: 12,
                     mean_confidence: Some(0.9812),
                     min_confidence: Some(0.4),
+                    set_aside: None,
                 },
                 OcrReading {
                     page: None,
@@ -3374,6 +3409,7 @@ mod tests {
                     words: 3,
                     mean_confidence: None,
                     min_confidence: None,
+                    set_aside: Some("noise".into()),
                 },
             ],
             ..opts()
@@ -3386,7 +3422,7 @@ mod tests {
             json!([
                 {"pageIndex": 0, "crop": "r1", "engine": "oar-ocr", "words": 12,
                  "meanConfidence": 0.9812, "minConfidence": 0.4},
-                {"image": "m2", "crop": "full", "words": 3}
+                {"image": "m2", "crop": "full", "words": 3, "setAside": "noise"}
             ])
         );
     }
@@ -3967,6 +4003,63 @@ mod tests {
                 "{t:?}: {shown} shown, {raw} + {copies:?}"
             );
             assert!(copies.merged <= copies.text, "{copies:?}");
+            // The header is named as the whole table, denormalized, names it.
+            let subs = t.sub_header_rows(n);
+            for n_header in 1..=t.header_rows.unwrap_or(1).min(n) {
+                let mut whole = t.cells.clone().unwrap();
+                let flag = |m: &Option<Vec<bool>>| {
+                    (0..n * cols)
+                        .map(|i| m.as_ref().is_some_and(|m| m[i]))
+                        .collect()
+                };
+                let m = crate::merges::Merges {
+                    continues_above: flag(&t.merged_down),
+                    continues_left: flag(&t.merged_left),
+                    full_width_row: subs.clone(),
+                };
+                crate::merges::denormalize(&mut whole, &m);
+                assert_eq!(
+                    header_names(&t, t.cells.as_ref().unwrap(), n_header, &subs),
+                    column_headers(&whole, n_header, t.merged_left.as_deref()),
+                    "{t:?}: {n_header} header rows"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn a_header_of_many_rows_is_named_in_linear_time() {
+        // Each row's label was looked for along the column's path so far.
+        let rows =
+            |n: usize| -> Vec<Vec<String>> { (0..n).map(|i| vec![format!("L{i}")]).collect() };
+        assert_eq!(column_headers(&rows(3), 3, None), ["L0 / L1 / L2"]);
+        let mut repeated = rows(2);
+        repeated.push(vec!["L0".into()]);
+        assert_eq!(column_headers(&repeated, 3, None), ["L0 / L1"]);
+        crate::scaling::assert_linear("a header's rows", 4_000, rows, |rows| {
+            std::hint::black_box(column_headers(rows, rows.len(), None));
+        });
+    }
+
+    #[test]
+    fn a_header_merged_down_a_long_table_is_not_copied_into_its_rows() {
+        // A label of `n` characters over `n` rows: copied into each, as the
+        // header was once named, it was `n²` of text before the budget,
+        // which counts the copies by their cost, could refuse them.
+        let table = |n: usize| {
+            let mut t = el("doco:Table", "", None);
+            let mut cells = vec![vec!["h".repeat(n), "Value".into()]];
+            cells.extend((1..n).map(|_| vec![String::new(), "1".into()]));
+            t.cells = Some(cells);
+            t.header_rows = Some(1);
+            t.merged_down = Some((0..2 * n).map(|i| i >= 2 && i % 2 == 0).collect());
+            t
+        };
+        let small = table(4);
+        let copies = table_copies(&small);
+        assert!(copies.text >= 3 * 4, "{copies:?}");
+        crate::scaling::assert_linear("a header merged down", 4_000, table, |t| {
+            std::hint::black_box(table_copies(t));
+        });
     }
 }

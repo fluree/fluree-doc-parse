@@ -12,6 +12,7 @@ eval/scanned/check.py --models DIR                      # both runs, the tables,
 eval/scanned/check.py --no-ocr                          # the routing half only: no OCR assets needed
 eval/scanned/check.py --models DIR --show letter-2.fax-std   # one document's text and its misses
 eval/scanned/check.py --models DIR --baseline eval/scanned/baseline.json
+eval/scanned/check.py --models DIR --baseline eval/scanned/baseline.json --allow-digest-mismatch   # another platform's set
 ```
 
 `DIR` is the OCR assets directory `tools/ocr-assets/build.py` builds
@@ -72,7 +73,9 @@ nodes' strings at their character offsets, so each page is read once per run
 and the time per page is the time of that one reading. A fact is found
 **strictly** when its text occurs in the text projection, whitespace runs
 compared as one space, and **as a whole word** when that occurrence is not
-part of a longer word or number.
+part of a longer word or number. That is recall only: text the engine
+invents, words no page holds, costs nothing, and only the headings gate
+anything read beyond the facts.
 
 The run without OCR is also a gate, and fails the check when:
 
@@ -102,7 +105,10 @@ not now, or when a heading other than the gold's is read now that was not
 then, or more often; on a document it does not list, which would otherwise
 pass the headings unchecked, and on one it lists that the set no longer
 holds; and on a baseline that lacks one of the three lists, whose gate would
-otherwise not run. The headings are gated on both sides
+otherwise not run; and when the set's digest is not the baseline's: another
+set's pixels read differently, so a fact lost may be theirs and not fdoc's.
+`--allow-digest-mismatch` compares all the same, with a warning, for a set
+written on another platform. The headings are gated on both sides
 because most scans read fewer than their gold: a body line turned into a
 heading brings the count nearer the gold's, and would pass a gate on the
 count. The count is recorded but not gated (it is the two lists' lengths

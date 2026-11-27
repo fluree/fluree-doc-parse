@@ -310,8 +310,9 @@ measure the skew by: give the angle. A sheet fed sideways, two thirds of
 whose text, counted in characters of words of three or more, the engine
 states at about one of ±90°, with less than a quarter of it level, or fed
 upside down, two thirds of its text at about 180° or more of it at 180°
-than level with the two together a quarter of it (an upright fax header
-over a sheet upside down, or a table set sideways on it), is read in the frame where it runs upright, as a page
+than level with the two together a quarter of it and 20 characters or more
+at 180° (an upright fax header over a sheet upside down, or a table set
+sideways on it, not a stamp or a word), is read in the frame where it runs upright, as a page
 drawn turned is when it is extracted, its boxes still on the page as displayed. Over a page that has
 its own text, a reading upside down is refused, and a sideways one has its
 words laid along their angle where they are.
