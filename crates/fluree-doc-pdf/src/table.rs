@@ -14486,6 +14486,66 @@ mod tests {
         assert!(!g.heads_its_rows(1, &names, &[], &[], &[]));
     }
 
+    #[test]
+    fn a_field_grid_goes_on_past_a_wrapped_value() {
+        // Two label:value pairs a row; one value wraps onto a line of its
+        // own under its first line; the grid goes on under it.
+        let mut gl = Vec::new();
+        for (r, cells) in [
+            (
+                0,
+                ["Message ref:", "MSG39", "Message type:", "Outgoing wire"],
+            ),
+            (1, ["Amount:", "USD 12.60", "Value date:", "11/25/2027"]),
+            (
+                2,
+                [
+                    "Ordering account:",
+                    "A9839",
+                    "Ordering address:",
+                    "6274 ASPEN CT",
+                ],
+            ),
+            (
+                4,
+                [
+                    "Beneficiary:",
+                    "VELIKOV",
+                    "Beneficiary bank:",
+                    "OSTREVAN BANK",
+                ],
+            ),
+        ] {
+            for (k, t) in cells.iter().enumerate() {
+                gl.push(word([0.0, 120.0, 300.0, 420.0][k], r, t, None));
+            }
+        }
+        gl.push(word(420.0, 3, "ANN ARBOR, MI", None));
+        let (rows, cells) = aligned_rows(&gl);
+        let grids = aligned_runs(&rows, &cells, 0);
+        assert_eq!(grids.len(), 1, "one grid, not two around the wrap");
+        let g = &grids[0];
+        assert_eq!((g.rows(), g.cols()), (4, 4));
+        let texts = g.cell_texts(&gl);
+        assert_eq!(texts[2 * 4 + 3], "6274 ASPEN CT ANN ARBOR, MI");
+        assert_eq!(texts[3 * 4 + 3], "OSTREVAN BANK");
+        // A line set where a value starts, under a row that is no field
+        // grid's (a schedule's figures), ends the run as it did.
+        let mut gl = Vec::new();
+        for (r, cells) in [
+            (0, ["0002", "1", "F2MTN7", "01 Feb 2023"]),
+            (1, ["0003", "1", "F2MTN7", "01 Feb 2023"]),
+            (3, ["0004", "1", "F2MTN7", "01 Feb 2023"]),
+        ] {
+            for (k, t) in cells.iter().enumerate() {
+                gl.push(word([0.0, 120.0, 300.0, 420.0][k], r, t, None));
+            }
+        }
+        gl.push(word(300.0, 2, "EXTENSION", None));
+        let (rows, cells) = aligned_rows(&gl);
+        assert!(aligned_runs(&rows, &cells, 0).iter().all(|g| g.rows() < 3));
+    }
+
     /// A word as one glyph run at `x`, 5pt a character, on row `r`.
     fn word(x: f64, r: usize, text: &str, weight: Option<u32>) -> crate::glyph::Glyph {
         let y = r as f64 * 20.0;
