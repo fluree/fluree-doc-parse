@@ -58,6 +58,22 @@ const SIGN_SPACE: f64 = 0.6;
 /// this are a border rule adjacent to a cell edge, not two cells.
 const MIN_CELL_EXTENT: f64 = 8.0;
 
+/// Least distance, in points, from a cell's edge for a rule drawn down
+/// through the cell to part its text ([`Grid::cell_texts_parted`]). A
+/// column's own rule stands on its edge, within a stroke's width of it.
+const PARTING_RULE_MARGIN: f64 = 3.0;
+
+/// Fewest lines, and fewest words in one of them, each side of a rule
+/// parting a cell holds ([`Grid::cell_texts_parted`]): a box of text runs
+/// over its lines in phrases, where a small table's column holds a value or
+/// a word a row.
+const PARTED_SIDE_LINES: usize = 2;
+const PARTED_LINE_WORDS: usize = 3;
+
+/// How far, in points, a glyph's ink may reach over a parting rule: the
+/// rule's stroke and the glyph's side bearing.
+const RULE_CLEARANCE: f64 = 0.5;
+
 /// Fraction of the grid's span a clustered line must cover to count. A short
 /// rule under a heading is not a table row boundary.
 const MIN_LINE_COVERAGE: f64 = 0.30;
@@ -174,6 +190,53 @@ impl Grid {
     /// constraint as column segmentation: segment first, assemble second.
     pub fn cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
         crate::cells::texts(glyphs, &self.xs, &self.ys, || self.read_cell_texts(glyphs))
+    }
+
+    /// Each cell's text as [`Self::cell_texts`] reads it, but a cell a drawn
+    /// rule parts is read a side at a time.
+    ///
+    /// A rule drawn down through a cell, with text on both sides of it
+    /// within its height, parts two boxes the grid's columns do not: a form
+    /// sizes each row's boxes on its own, so a rule drawn in one row only is
+    /// no column of the grid. Read as one, the boxes' lines were joined
+    /// across the rule, one line of each by turns (`Ordered on behalf of the
+    /// Secretary of LONDON 102 PETTY FRANCE (MOJ), Ministry of … State for
+    /// Justice:`). Read a side at a time: the lines over the rule, each
+    /// side's, left to right, then the lines under it.
+    pub fn cell_texts_parted(&self, glyphs: &[crate::glyph::Glyph], rules: &[Rule]) -> Vec<String> {
+        let mut texts = self.cell_texts(glyphs);
+        let cols = self.cols();
+        let homes = self.glyph_cells(glyphs);
+        for (cell, text) in texts.iter_mut().enumerate() {
+            let ids: Vec<usize> = (0..glyphs.len())
+                .filter(|&i| homes[i] == Some(cell))
+                .collect();
+            let (x0, x1) = (self.xs[cell % cols], self.xs[cell % cols + 1]);
+            if let Some(t) = parted_text(glyphs, &ids, rules, x0, x1) {
+                *text = t;
+            }
+        }
+        texts
+    }
+
+    /// The text of a merged block of cells, rows `rows` by columns `cols`,
+    /// read a side at a time where a rule drawn down through it parts it, as
+    /// [`Self::cell_texts_parted`] reads a cell. `None` where no rule does.
+    pub fn region_parted(
+        &self,
+        glyphs: &[crate::glyph::Glyph],
+        rules: &[Rule],
+        rows: std::ops::Range<usize>,
+        cols: std::ops::Range<usize>,
+    ) -> Option<String> {
+        let n = self.cols();
+        let homes = self.glyph_cells(glyphs);
+        let ids: Vec<usize> = (0..glyphs.len())
+            .filter(|&i| {
+                homes[i].is_some_and(|h| rows.contains(&(h / n)) && cols.contains(&(h % n)))
+            })
+            .collect();
+        parted_text(glyphs, &ids, rules, self.xs[cols.start], self.xs[cols.end])
     }
 
     fn read_cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
@@ -1286,6 +1349,56 @@ impl Grid {
         }
     }
 
+    /// Whether the grid's boxes are numbered as a form's are: numbered
+    /// fields ([`numbered_field`]), or a field's lettered parts (`a. NAME`,
+    /// `b. STREET ADDRESS`), in half its rows under the first or more, two
+    /// or more, across two columns or more, one of them numbered; and the
+    /// first row holding a numbered field of its own.
+    fn numbered_boxes(&self, rows: &[Vec<String>]) -> bool {
+        let lettered = |t: &str| {
+            let mut chars = t.chars();
+            chars.next().is_some_and(|c| c.is_ascii_lowercase())
+                && t[1..].starts_with(". ")
+                && t[3..].chars().next().is_some_and(char::is_uppercase)
+        };
+        let boxed = |t: &str| numbered_field(t) || lettered(t);
+        let below = rows.get(1..).unwrap_or(&[]);
+        let boxed_rows = below
+            .iter()
+            .filter(|r| r.iter().any(|c| boxed(c.trim())))
+            .count();
+        let columns: std::collections::BTreeSet<usize> = below
+            .iter()
+            .flat_map(|r| {
+                r.iter()
+                    .enumerate()
+                    .filter(|(_, c)| boxed(c.trim()))
+                    .map(|(i, _)| i)
+            })
+            .collect();
+        let numbered = below.iter().flatten().any(|c| numbered_field(c.trim()));
+        // The first row a box of the form too, holding a numbered field in
+        // its text (`… 1. REQUISITION NUMBER`, `18. SHIPPING POINT`): a
+        // row of plain names over numbered entries (`Institutioneel |
+        // Statistische Processen` over `1. Professionele …`, `7. …`) heads
+        // the columns it lists them in.
+        let first_boxed = rows.first().is_some_and(|r| {
+            r.iter().any(|c| {
+                let c = c.trim();
+                c.char_indices().any(|(i, ch)| {
+                    ch.is_ascii_digit()
+                        && (i == 0 || c[..i].ends_with(char::is_whitespace))
+                        && numbered_field(&c[i..])
+                })
+            })
+        });
+        numbered
+            && first_boxed
+            && boxed_rows >= 2
+            && boxed_rows * 2 >= below.len()
+            && columns.len() >= 2
+    }
+
     /// How many leading rows are column headers.
     ///
     /// Row 0 is presumed to be the header — that is overwhelmingly the layout
@@ -1338,12 +1451,40 @@ impl Grid {
         {
             return 0;
         }
+        // So is a grid whose boxes are numbered down most of its rows and
+        // across its columns, whatever its first row holds: a form's title
+        // set in the first box (`SOLICITATION/CONTRACT/ORDER … 1.
+        // REQUISITION NUMBER`) beside its page box, over `2. CONTRACT NO. |
+        // 3. AWARD DATE | 4. ORDER NUMBER`. A list numbered down one column
+        // (`1. Introduction | 3`) numbers its entries, not boxes.
+        if self.numbered_boxes(rows) {
+            return 0;
+        }
         let mut run = self.leading_fill_run(fills);
         // The run's last row is the body's first stripe where the rows from
         // it on are shaded every other row and it holds figures as they do:
         // an exposure table's `ethanol | 1000 | - | 1000` shaded under its
         // header's own cells, the next row bare, the one after shaded.
         if run >= 2 && self.stripes_from(fills, run - 1) && figures_row(&rows[run - 1]) {
+            run -= 1;
+        }
+        // The run's last row is the table's first band where it holds a
+        // label in its first cell alone, as a row further down does under a
+        // fill of its own: a funding table's `Months 1 – 12`, shaded as its
+        // header is, over the CLINs it groups, and `Months 13-24` over the
+        // next. A band labels the rows under it; it names no column.
+        let band = |r: usize| {
+            rows[r].first().is_some_and(|t| !t.trim().is_empty())
+                && rows[r].iter().skip(1).all(|t| t.trim().is_empty())
+        };
+        // Beside other columns only, and in a run that leaves rows bare: a
+        // one-column listing shaded throughout holds nothing but such rows.
+        if run >= 2
+            && run < rows.len()
+            && self.cols() >= 2
+            && band(run - 1)
+            && (run..rows.len()).any(|r| band(r) && self.band_has_fill(fills, r))
+        {
             run -= 1;
         }
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
@@ -1630,6 +1771,13 @@ impl Grid {
     ///   it. In most of the columns both fill, that would mean one type
     ///   (quantities or words) and one weight, as a field list's rows are,
     ///   whose values are figures in some fields and words in others.
+    ///
+    /// The row it is set apart from is the first under it filling two
+    /// cells or more, and more than half as many as the header names. A
+    /// section's band under the header (`MAS Contract Year 4 …`, its words
+    /// dealt into two cells by the cuts), bold or shaded as a header is,
+    /// or the header's own second line (`run` of `Longer run`) is no row of
+    /// the table's values to tell it from.
     pub(crate) fn heads_its_rows(
         &self,
         header: usize,
@@ -1639,19 +1787,22 @@ impl Grid {
         fills: &[crate::rule::Fill],
     ) -> bool {
         let n = rows.len().min(self.rows());
-        if header == 0 || header >= n {
+        let h = header;
+        if header == 0 || h >= n {
             return false;
         }
         let cols = self.cols();
         let text = |r: usize, c: usize| rows[r].get(c).map_or("", |t| t.trim());
-        let bold = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, header);
+        let filled = |r: usize| (0..cols).filter(|&c| !text(r, c).is_empty()).count();
+        let first = (h..n)
+            .find(|&r| filled(r) >= 2 && filled(r) * 2 > filled(0))
+            .unwrap_or(h);
+        let bold = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, first);
         let shaded = self.band_has_fill(fills, 0)
-            && !self.band_has_fill(fills, header)
-            && !(header + 1 < n && self.band_has_fill(fills, header + 1));
-        let under = self.rule_between(rules, header);
-        let below: Vec<Option<f64>> = (header + 1..n)
-            .map(|r| self.rule_between(rules, r))
-            .collect();
+            && !self.band_has_fill(fills, first)
+            && !(first + 1 < n && self.band_has_fill(fills, first + 1));
+        let under = self.rule_between(rules, h);
+        let below: Vec<Option<f64>> = (h + 1..n).map(|r| self.rule_between(rules, r)).collect();
         let others = below.iter().flatten().copied().fold(0.0, f64::max);
         let ruled = under.is_some_and(|u| {
             (others > 0.0 && u > others * HEAVIER_RULE)
@@ -1660,7 +1811,7 @@ impl Grid {
         let stacked = header > 1;
         let (mut typed, mut named) = (0usize, 0usize);
         for c in 0..cols {
-            let cells: Vec<&str> = (header..n)
+            let cells: Vec<&str> = (h..n)
                 .map(|r| text(r, c))
                 .filter(|t| !t.is_empty())
                 .collect();
@@ -1677,11 +1828,11 @@ impl Grid {
         }
         let contrast = typed > 0 && named * 2 > typed;
         let weights0 = self.cell_weights(glyphs, 0);
-        let weights1 = self.cell_weights(glyphs, header);
+        let weights1 = self.cell_weights(glyphs, first);
         let heavy = |(w, h): (usize, usize)| w > 0 && h * 2 > w;
         let (mut compared, mut alike) = (0usize, 0usize);
         for c in 0..cols {
-            let (a, b) = (text(0, c), text(header, c));
+            let (a, b) = (text(0, c), text(first, c));
             if a.is_empty() || b.is_empty() {
                 continue;
             }
@@ -2447,6 +2598,100 @@ const SHARED_BASELINE: f64 = 0.1;
 /// (`long-` over `term`) more often than prose does, and only the rest of
 /// the document says which of the two this is. See
 /// `document::settle_cell_breaks`.
+/// The text of glyphs `ids`, set between `x0` and `x1`, read a side at a
+/// time where a rule drawn down between those edges parts them: the lines
+/// over the rules, each side's lines left to right, then the lines under
+/// them. `None` where no rule stands there with ink on both sides of it
+/// within its height. See [`Grid::cell_texts_parted`].
+fn parted_text(
+    glyphs: &[crate::glyph::Glyph],
+    ids: &[usize],
+    rules: &[Rule],
+    x0: f64,
+    x1: f64,
+) -> Option<String> {
+    let centre = |g: &crate::glyph::Glyph| {
+        g.bbox
+            .map_or(g.origin, |b| ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5))
+    };
+    let within = |r: &Rule, i: usize| {
+        let y = centre(&glyphs[i]).1;
+        y > r.bbox.y0 && y < r.bbox.y1
+    };
+    // A side of the rule reads as text set in a box of its own: two lines
+    // or more, one of them three words or more. The rule between two boxes
+    // of text parts them; the rules of a small table set in the cell part
+    // its columns of values, which read across its rows.
+    let boxed = |r: &Rule, left: bool| {
+        let side: Vec<crate::glyph::Glyph> = ids
+            .iter()
+            .filter(|&&i| within(r, i) && (centre(&glyphs[i]).0 < r.axis_pos()) == left)
+            .map(|&i| glyphs[i].clone())
+            .collect();
+        let lines = crate::line::assemble(&side);
+        lines.len() >= PARTED_SIDE_LINES
+            && lines
+                .iter()
+                .any(|l| l.text.split_whitespace().count() >= PARTED_LINE_WORDS)
+    };
+    // The rule runs between the two: through no glyph's ink. A stroke
+    // drawn through a word is no box's edge.
+    let clear = |r: &Rule| {
+        let x = r.axis_pos();
+        !ids.iter().any(|&i| {
+            within(r, i)
+                && glyphs[i]
+                    .bbox
+                    .is_some_and(|b| b.x0 < x - RULE_CLEARANCE && b.x1 > x + RULE_CLEARANCE)
+        })
+    };
+    let parting: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| {
+            let x = r.axis_pos();
+            r.orientation == Orientation::Vertical
+                && x > x0 + PARTING_RULE_MARGIN
+                && x < x1 - PARTING_RULE_MARGIN
+                && clear(r)
+                && boxed(r, true)
+                && boxed(r, false)
+        })
+        .collect();
+    if parting.is_empty() {
+        return None;
+    }
+    let top = parting.iter().map(|r| r.bbox.y0).fold(f64::MAX, f64::min);
+    let foot = parting.iter().map(|r| r.bbox.y1).fold(f64::MIN, f64::max);
+    // Each glyph's place: over the rules, between them on the side it stands,
+    // or under them.
+    let mut groups: std::collections::BTreeMap<(u8, usize), Vec<crate::glyph::Glyph>> =
+        Default::default();
+    for &i in ids {
+        let (x, y) = centre(&glyphs[i]);
+        let key = if y <= top {
+            (0, 0)
+        } else if y >= foot {
+            (2, 0)
+        } else {
+            let side = parting
+                .iter()
+                .filter(|r| r.axis_pos() < x && y > r.bbox.y0 && y < r.bbox.y1)
+                .count();
+            (1, side)
+        };
+        groups.entry(key).or_default().push(glyphs[i].clone());
+    }
+    let lines: Vec<String> = groups
+        .values()
+        .flat_map(|gs| {
+            turned_in_order(crate::line::assemble(gs))
+                .into_iter()
+                .map(|l| l.text)
+        })
+        .collect();
+    Some(join_cell_lines(lines.iter().map(String::as_str)))
+}
+
 fn join_cell_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     use crate::block::HyphenJoin;
     let mut out = String::new();
@@ -5145,16 +5390,19 @@ pub fn detect_framed(
 }
 
 /// Whether a cell opens on a form's field number and the field's name: one
-/// or two digits and a stop, then a capital (`1. DATE OF ORDER`, `12.
-/// F.O.B. POINT`).
+/// or two digits, a box's letter where the form parts a field (`13a.`),
+/// and a stop, then a capital (`1. DATE OF ORDER`, `12. F.O.B. POINT`,
+/// `17a. CONTRACTOR/OFFEROR`).
 fn numbered_field(text: &str) -> bool {
     let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let rest = &text[digits.len()..];
+    let rest = match rest.chars().next() {
+        Some(l) if l.is_ascii_lowercase() => &rest[1..],
+        _ => rest,
+    };
     (1..=2).contains(&digits.len())
-        && text[digits.len()..].starts_with(". ")
-        && text[digits.len() + 2..]
-            .chars()
-            .next()
-            .is_some_and(char::is_uppercase)
+        && rest.starts_with(". ")
+        && rest[2..].chars().next().is_some_and(char::is_uppercase)
 }
 
 /// Whether a cell's text is a page counter and nothing else: `PAGE 1 OF
@@ -10304,6 +10552,41 @@ mod header_tests {
     }
 
     #[test]
+    fn a_shaded_first_band_is_no_header_row() {
+        // A funding table: its header shaded, its first period band shaded
+        // under it, and the next period's band shaded further down. The
+        // shaded run is the header and the first band, not a two-row header.
+        let g = grid_with_bands();
+        let row = |r: usize| fill(0.0, 100.0 + 20.0 * r as f64, 400.0, 120.0 + 20.0 * r as f64);
+        let rows: Vec<Vec<String>> = [
+            ["CLIN", "Funding Amount", "Estimated Date", "Note"],
+            ["Months 1 – 12", "", "", ""],
+            ["0001 – Storage", "TBD", "TBD", "a"],
+            ["Months 13-24", "", "", ""],
+            ["0006 – Storage", "$2,947,920.24", "December 3, 2021", "b"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1), row(3)]), 1);
+        // With no band of the kind further down, a shaded second row under
+        // the header is the header's own.
+        assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1)]), 2);
+        // A one-column listing holds such rows alone: its shading, broken
+        // once, is no band's. Its run is deeper than a header is, and it
+        // keeps the single header row it falls back to; shortened by one
+        // as though it ended on a band, it read as four header rows.
+        let one = Grid {
+            xs: vec![0.0, 400.0],
+            ys: (0..10).map(|r| 100.0 + 20.0 * r as f64).collect(),
+            ..grid_with_bands()
+        };
+        let lines: Vec<Vec<String>> = (0..9).map(|r| vec![format!("line {r}")]).collect();
+        let shaded: Vec<_> = (0..9).filter(|&r| r != 5).map(row).collect();
+        assert_eq!(one.header_rows(&lines, &[], &[], &shaded), 1);
+    }
+
+    #[test]
     fn full_shading_gives_no_contrast_and_falls_back() {
         let g = grid_with_bands();
         let fills: Vec<_> = (0..5)
@@ -12692,6 +12975,51 @@ mod header_tests {
     }
 
     #[test]
+    fn a_grid_of_numbered_boxes_is_a_form_without_a_header() {
+        // A form's first box holds its title and box 1 beside its page box;
+        // the boxes under it are numbered across the rows and columns.
+        let g = plain_grid(vec![0.0, 100.0, 200.0, 300.0], vec![0.0, 20.0, 40.0, 60.0]);
+        let rows = |r: &[[&str; 3]]| -> Vec<Vec<String>> {
+            r.iter()
+                .map(|r| r.iter().map(|t| t.to_string()).collect())
+                .collect()
+        };
+        let form = rows(&[
+            [
+                "ORDER FOR SUPPLIES 1. REQUISITION NUMBER",
+                "",
+                "PAGE OF 1 34",
+            ],
+            [
+                "2. CONTRACT NO. 47Q",
+                "3. AWARD DATE",
+                "4. ORDER NUMBER 8930",
+            ],
+            [
+                "13a. THIS CONTRACT IS",
+                "b. TELEPHONE NUMBER",
+                "14. METHOD RFQ",
+            ],
+        ]);
+        assert_eq!(g.header_rows(&form, &[], &[], &[]), 0);
+        // A list numbered down its first column numbers its entries: its
+        // first row still heads it.
+        let list = rows(&[
+            ["Section", "Pages", "Owner"],
+            ["1. Introduction", "3", "Office A"],
+            ["2. Scope", "4", "Office B"],
+        ]);
+        assert_eq!(g.header_rows(&list, &[], &[], &[]), 1);
+        // Plain names over entries numbered across the columns head them.
+        let principles = rows(&[
+            ["Institutional", "Processes", "Output"],
+            ["1. Independence", "7. Sound methods", "11. Relevance"],
+            ["2. Mandate", "8. Procedures", "12. Accuracy"],
+        ]);
+        assert_eq!(g.header_rows(&principles, &[], &[], &[]), 1);
+    }
+
+    #[test]
     fn a_page_counter_and_a_numbered_field_are_read_as_such() {
         assert!(page_counter("PAGE OF PAGES 1 30"));
         assert!(page_counter("Page 2 of 7"));
@@ -12701,6 +13029,9 @@ mod header_tests {
         assert!(numbered_field("12. F.O.B. POINT"));
         assert!(!numbered_field("1.5 mm"));
         assert!(!numbered_field("2. results were"));
+        assert!(numbered_field("17a. CONTRACTOR/OFFEROR"));
+        assert!(numbered_field("13b. RATING"));
+        assert!(!numbered_field("3ab. Notes"));
     }
 
     /// A form's frame: a head band of its title over a notice beside a page
@@ -14007,6 +14338,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_header_is_set_apart_from_its_rows_past_a_band() {
+        // A labour table's labels, bold, over a contract year's band, bold
+        // too and its words in two cells, over plain rows of figures: the
+        // labels head the rows, set apart from the first row of figures.
+        let g = grid(
+            &[0.0, 100.0, 200.0, 300.0, 400.0],
+            &[0.0, 20.0, 40.0, 60.0, 80.0],
+        );
+        let rows: Vec<Vec<String>> = [
+            ["Labor Category", "Hours", "Rate", "Amount"],
+            ["MAS Contract Year 4", "(Base period)", "", ""],
+            ["Expert 8", "0", "$407.51", "$0.00"],
+            ["Expert 7", "14", "$378.34", "$5,297.00"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        let mut gl = Vec::new();
+        for (r, row) in rows.iter().enumerate() {
+            let weight = Some(if r < 2 { 700 } else { 400 });
+            for (c, t) in row.iter().enumerate() {
+                if !t.is_empty() {
+                    gl.push(word(c as f64 * 100.0 + 5.0, r, t, weight));
+                }
+            }
+        }
+        assert!(g.heads_its_rows(1, &rows, &gl, &[], &[]));
+        // A first row set as the rows under it are, words over words in
+        // one weight, earns nothing past the band either: a list's first
+        // entry is no header.
+        let names: Vec<Vec<String>> = [
+            ["Alder", "Birch", "Cedar", "Dogwood"],
+            ["Group one", "(native)", "", ""],
+            ["Elm", "Fir", "Ginkgo", "Hazel"],
+            ["Ironwood", "Juniper", "Larch", "Maple"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert!(!g.heads_its_rows(1, &names, &[], &[], &[]));
+    }
+
     /// A word as one glyph run at `x`, 5pt a character, on row `r`.
     fn word(x: f64, r: usize, text: &str, weight: Option<u32>) -> crate::glyph::Glyph {
         let y = r as f64 * 20.0;
@@ -14164,6 +14538,94 @@ mod tests {
         };
         let gl = word_at(5.0, "Dimensions");
         assert_eq!(grid.cell_texts(&gl), ["", "Dimensions", ""]);
+    }
+
+    #[test]
+    fn a_rule_drawn_down_through_a_cell_parts_its_text() {
+        // Two boxes side by side in one cell of a form, a rule between them
+        // for their height, a line under both.
+        let mut gl = vec![
+            word(5.0, 0, "Ordered", None),
+            word(45.0, 0, "on", None),
+            word(60.0, 0, "behalf", None),
+            word(160.0, 0, "LONDON", None),
+            word(195.0, 0, "102", None),
+            word(215.0, 0, "PETTY", None),
+            word(5.0, 1, "State", None),
+            word(35.0, 1, "for", None),
+            word(55.0, 1, "Justice:", None),
+            word(160.0, 1, "Petty", None),
+            word(190.0, 1, "France", None),
+            word(5.0, 2, "Tel:", None),
+            word(30.0, 2, "Fax:", None),
+            word(160.0, 2, "Email", None),
+        ];
+        for (i, g) in gl.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: crate::geom::BBox {
+                x0: 0.0,
+                y0: -1.0,
+                x1: 300.0,
+                y1: 55.0,
+            },
+            xs: vec![0.0, 300.0],
+            ys: vec![-1.0, 55.0],
+        };
+        let rule = |x: f64, y0: f64, y1: f64| Rule {
+            bbox: crate::geom::BBox {
+                x0: x,
+                y0,
+                x1: x + 0.5,
+                y1,
+            },
+            orientation: Orientation::Vertical,
+            page: 0,
+        };
+        // Read as one, the boxes' lines take turns.
+        let whole = grid.cell_texts(&gl)[0].clone();
+        assert!(
+            whole.starts_with("Ordered on behalf LONDON 102 PETTY"),
+            "{whole}"
+        );
+        // Parted: each box whole, the left first, then the line under them.
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(150.0, -1.0, 32.0)])[0],
+            "Ordered on behalf State for Justice: LONDON 102 PETTY Petty France Tel: Fax: Email"
+        );
+        // Nor does a stroke drawn through a word: `behalf` runs 60 to 90.
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(75.0, -1.0, 32.0)])[0],
+            whole
+        );
+        // A small table set in the cell, its columns of values parted by a
+        // rule, reads across its rows.
+        let mut small = vec![
+            word(5.0, 0, "DI1", None),
+            word(160.0, 0, "Stop", None),
+            word(5.0, 1, "0", None),
+            word(160.0, 1, "Start", None),
+        ];
+        for (i, g) in small.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        assert_eq!(
+            grid.cell_texts_parted(&small, &[rule(150.0, -1.0, 32.0)]),
+            grid.cell_texts(&small)
+        );
+        // A rule on the cell's edge is its column's, and one with text on
+        // one side of it only parts nothing.
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(1.0, -1.0, 55.0)])[0],
+            whole
+        );
+        assert_eq!(
+            grid.cell_texts_parted(&gl, &[rule(250.0, -1.0, 55.0)])[0],
+            whole
+        );
     }
 
     #[test]

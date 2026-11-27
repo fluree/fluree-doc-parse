@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "luna-sbir-doe.pdf",
+    "url": "https://science.osti.gov/sbir/-/media/sbir/pdf/Success-Stories/2024/DOE-SBIR-Success-Story-LUNA-Innovations_Final.pdf",
+    "sha256": "46527260bceb4569565d5c728341af1f6e195960ea9298e014daae00ee26cc0b",
+    "about": "DOE SBIR success story, 3 pages. Page 2 sets a photo at the right of a paragraph, its two-line caption under it level with the paragraph's last narrow lines; the paragraph's last line runs on under the photo across the page."
+  },
+  "checks": [
+    {
+      "id": "sentence-whole",
+      "found": "2026-11-27",
+      "issue": "The caption's second line was joined to the paragraph's line beside it, and its first line fell between the paragraph's lines: the sentence read `measure temperature and pressure simultaneously, Hyperion si255 (black) and the ODiSI 7100 series and finally operation in a research reactor.`",
+      "text": "measure temperature and pressure simultaneously, and finally operation in a research reactor."
+    },
+    {
+      "id": "caption-whole",
+      "found": "2026-11-27",
+      "issue": "As above, for the caption.",
+      "text": "Luna’s flagship fiber optic sensing instruments; the Hyperion si255 (black) and the ODiSI 7100 series"
+    }
+  ]
+}

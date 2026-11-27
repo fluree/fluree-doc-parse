@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "noaa-psl-aqpi.pdf",
+    "url": "https://psl.noaa.gov/outreach/resources/handouts/aqpi.pdf",
+    "sha256": "f4e688bf21c3c3c313aac857bed15b8443d935742a7632f759ba42e3123066a3",
+    "about": "NOAA PSL handout, 2 pages. Page 2 sets two radar images at the right, their three-line caption under them level with a bulleted list's first item; the list runs on under the caption."
+  },
+  "checks": [
+    {
+      "id": "item-whole",
+      "found": "2026-11-27",
+      "issue": "The caption's lines fell between the item's lines: `Avoided flood damage costs from early` / `Radar imagery as seen from (left) NEXRAD …` / `warnings.`",
+      "text": "Avoided flood damage costs from early warnings."
+    },
+    {
+      "id": "caption-whole",
+      "found": "2026-11-27",
+      "issue": "As above, for the caption.",
+      "text": "Radar imagery as seen from (left) NEXRAD and (right) AQPI radar near Santa Rosa, CA. The much higher resolution provided by the AQPI radar more accurately shows areas of heavy rainfall (warm colors) and potential flooding."
+    }
+  ]
+}
