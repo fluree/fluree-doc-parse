@@ -1986,7 +1986,8 @@ impl Grid {
 
     /// Where the band `y0..y1` of the table holds values stacked one per
     /// line, a line of each beside a line of the others: the cuts between
-    /// those lines, and the columns stacked so.
+    /// those lines, and the columns stacked so, every line of theirs on one
+    /// of the values' lines (those with none, empty, among them).
     ///
     /// An invoice's totals set in one ruled cell, `TOTAL (Excluding VAT)`
     /// over `TOTAL VAT`, beside one cell of their amounts, `17,937.50` over
@@ -2014,14 +2015,11 @@ impl Grid {
         let broken_group = |c: usize| {
             lines[c].windows(2).any(|w| {
                 let (a, b) = (w[0].1.trim(), w[1].1.trim());
+                let mut rest = b.chars();
                 (1..=3).contains(&a.len())
                     && a.chars().all(|ch| ch.is_ascii_digit())
-                    && b.len() >= 3
-                    && b[..3].chars().all(|ch| ch.is_ascii_digit())
-                    && b[3..]
-                        .chars()
-                        .next()
-                        .is_none_or(|ch| ".,".contains(ch) || ch == ' ')
+                    && rest.by_ref().take(3).filter(char::is_ascii_digit).count() == 3
+                    && rest.next().is_none_or(|ch| ".,".contains(ch) || ch == ' ')
             })
         };
         // A value wrapped onto the next line ends on its joiner (`2026-08-`
@@ -2053,8 +2051,17 @@ impl Grid {
         if paired.len() < 2 || paired.iter().any(|&c| runs_on(c)) {
             return None;
         }
+        // A column with a line on some of the values' baselines and none
+        // between them stacks with them too, its cells empty in the other
+        // rows (a note mark beside some of the figures).
+        let on_bases = |c: usize| {
+            lines[c]
+                .iter()
+                .all(|l| bases.iter().any(|b| (l.0 - b).abs() <= 0.5 * l.2))
+        };
+        let stacked: Vec<usize> = (0..cols).filter(|&c| on_bases(c)).collect();
         let cuts = bases.windows(2).map(|w| (w[0] + w[1]) / 2.0).collect();
-        Some((cuts, paired))
+        Some((cuts, stacked))
     }
 
     /// Part each ruled row holding values stacked one per line
@@ -2116,7 +2123,7 @@ impl Grid {
                 b += 1;
             }
             if b - a >= 2 {
-                if let Some((cuts, paired)) = self.stacked_cuts(glyphs, self.ys[a], self.ys[b]) {
+                if let Some((cuts, stacked)) = self.stacked_cuts(glyphs, self.ys[a], self.ys[b]) {
                     let at = |i: usize| self.ys[a + 1 + i];
                     if cuts.len() == b - a - 1
                         && cuts
@@ -2124,7 +2131,7 @@ impl Grid {
                             .enumerate()
                             .all(|(i, y)| (y - at(i)).abs() <= 0.5)
                     {
-                        for c in (0..cols).filter(|c| !paired.contains(c)) {
+                        for c in (0..cols).filter(|c| !stacked.contains(c)) {
                             for k in a + 1..b {
                                 merges.continues_above[k * cols + c] = true;
                             }
@@ -10650,6 +10657,27 @@ mod header_tests {
         assert_eq!(g.stacked_merges(&glyphs, &rules, &mut m), vec![(0..2, 0)]);
         assert!(m.continues_above[3]);
         assert!(!m.continues_above[4] && !m.continues_above[5]);
+        // A note mark beside the second amount alone is that row's: its
+        // column stacks with the amounts, its first cell empty.
+        let (mut g, glyphs, rules) = stacked_box(
+            &[0.0, 150.0, 300.0, 400.0, 450.0],
+            &[
+                (5.0, 112.0, "Ordered on behalf"),
+                (5.0, 124.0, "of the office"),
+                (5.0, 136.0, "Buyer"),
+                (155.0, 115.0, "TOTAL"),
+                (155.0, 127.0, "TOTAL VAT"),
+                (305.0, 115.0, "17,937.50"),
+                (305.0, 127.0, "3,587.50"),
+                (405.0, 127.0, "a"),
+            ],
+        );
+        assert_eq!(g.split_stacked_rows(&glyphs), vec![(0, 1)]);
+        let mut m = g.merges(&rules, &[]);
+        assert_eq!(g.stacked_merges(&glyphs, &rules, &mut m), vec![(0..2, 0)]);
+        assert!(!m.continues_above[4 + 3]);
+        let texts = g.cell_texts(&glyphs);
+        assert_eq!((texts[3].as_str(), texts[7].as_str()), ("", "a"));
     }
 
     #[test]
@@ -10689,6 +10717,18 @@ mod header_tests {
             );
             assert!(g.split_stacked_rows(&glyphs).is_empty(), "{a} / {b}");
         }
+        // A figure's sign past the ASCII range (`50−60`) is read by its
+        // characters, not cut through.
+        let (mut g, glyphs, _) = stacked_box(
+            &[0.0, 150.0, 300.0],
+            &[
+                (5.0, 115.0, "Atelier"),
+                (5.0, 127.0, "Saulnier"),
+                (155.0, 115.0, "4"),
+                (155.0, 127.0, "50\u{2212}60"),
+            ],
+        );
+        let _ = g.split_stacked_rows(&glyphs);
         // Nor a label's second line run on in lower case.
         let (mut g, glyphs, _) = stacked_box(
             &[0.0, 150.0, 300.0],
