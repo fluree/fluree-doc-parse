@@ -2051,13 +2051,17 @@ impl Grid {
         if paired.len() < 2 || paired.iter().any(|&c| runs_on(c)) {
             return None;
         }
-        // A column with a line on some of the values' baselines and none
-        // between them stacks with them too, its cells empty in the other
-        // rows (a note mark beside some of the figures).
+        // A column with lines on some of the values' baselines, a later
+        // one among them, and none between them stacks with them too, its
+        // cells empty in the other rows (a note mark beside the second
+        // figure). One line on the first baseline alone is a label over all
+        // the band's rows (`Al` beside `INAA` over `WDXRF`).
         let on_bases = |c: usize| {
-            lines[c]
+            let at: Option<Vec<usize>> = lines[c]
                 .iter()
-                .all(|l| bases.iter().any(|b| (l.0 - b).abs() <= 0.5 * l.2))
+                .map(|l| bases.iter().position(|b| (l.0 - b).abs() <= 0.5 * l.2))
+                .collect();
+            at.is_some_and(|at| at.is_empty() || at.iter().any(|&i| i > 0))
         };
         let stacked: Vec<usize> = (0..cols).filter(|&c| on_bases(c)).collect();
         let cuts = bases.windows(2).map(|w| (w[0] + w[1]) / 2.0).collect();
@@ -2093,13 +2097,16 @@ impl Grid {
     ///
     /// The parted bands are found again as the split found them: rows
     /// between boundaries a rule runs along, the boundaries inside them
-    /// unruled, and exactly where the values' lines part.
+    /// unruled, inside one of the bands `parted` (`y0..y1`) the split
+    /// parted, and exactly where the values' lines part. Rows the table
+    /// set apart itself are none of them.
     ///
     /// Returns each block merged so: its rows, and its column.
     pub fn stacked_merges(
         &self,
         glyphs: &[crate::glyph::Glyph],
         rules: &[Rule],
+        parted: &[(f64, f64)],
         merges: &mut Merges,
     ) -> Vec<(std::ops::Range<usize>, usize)> {
         let mut blocks = Vec::new();
@@ -2122,7 +2129,11 @@ impl Grid {
             while b < rows && !ruled(b) {
                 b += 1;
             }
-            if b - a >= 2 {
+            let inner = &self.ys[a + 1..b];
+            let split = parted
+                .iter()
+                .any(|&(y0, y1)| inner.iter().all(|&y| y > y0 && y < y1));
+            if b - a >= 2 && split {
                 if let Some((cuts, stacked)) = self.stacked_cuts(glyphs, self.ys[a], self.ys[b]) {
                     let at = |i: usize| self.ys[a + 1 + i];
                     if cuts.len() == b - a - 1
@@ -10654,7 +10665,10 @@ mod header_tests {
         );
         // The block beside them spans both rows, read whole.
         let mut m = g.merges(&rules, &[]);
-        assert_eq!(g.stacked_merges(&glyphs, &rules, &mut m), vec![(0..2, 0)]);
+        assert_eq!(
+            g.stacked_merges(&glyphs, &rules, &[(100.0, 140.0)], &mut m),
+            vec![(0..2, 0)]
+        );
         assert!(m.continues_above[3]);
         assert!(!m.continues_above[4] && !m.continues_above[5]);
         // A note mark beside the second amount alone is that row's: its
@@ -10674,10 +10688,33 @@ mod header_tests {
         );
         assert_eq!(g.split_stacked_rows(&glyphs), vec![(0, 1)]);
         let mut m = g.merges(&rules, &[]);
-        assert_eq!(g.stacked_merges(&glyphs, &rules, &mut m), vec![(0..2, 0)]);
+        assert_eq!(
+            g.stacked_merges(&glyphs, &rules, &[(100.0, 140.0)], &mut m),
+            vec![(0..2, 0)]
+        );
         assert!(!m.continues_above[4 + 3]);
         let texts = g.cell_texts(&glyphs);
         assert_eq!((texts[3].as_str(), texts[7].as_str()), ("", "a"));
+        // A label of one line level with the first values spans their rows
+        // (`Al` beside `INAA` over `WDXRF`); rows the table set apart
+        // itself, not parted here, are left as they are.
+        let (mut g, glyphs, rules) = stacked_box(
+            &[0.0, 150.0, 300.0, 400.0],
+            &[
+                (5.0, 115.0, "Al"),
+                (155.0, 115.0, "INAA"),
+                (155.0, 127.0, "WDXRF"),
+                (305.0, 115.0, "1.15"),
+                (305.0, 127.0, "0.13"),
+            ],
+        );
+        assert_eq!(g.split_stacked_rows(&glyphs), vec![(0, 1)]);
+        let mut m = g.merges(&rules, &[]);
+        assert!(g.stacked_merges(&glyphs, &rules, &[], &mut m).is_empty());
+        assert_eq!(
+            g.stacked_merges(&glyphs, &rules, &[(100.0, 140.0)], &mut m),
+            vec![(0..2, 0)]
+        );
     }
 
     #[test]

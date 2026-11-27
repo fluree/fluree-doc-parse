@@ -3533,6 +3533,9 @@ struct PageLayout {
     /// Per grid, rows whose text crosses a column boundary read from
     /// alignment rather than drawn; see [`Grid::split_by_alignment`].
     spanning_rows: Vec<Vec<usize>>,
+    /// Per grid, the bands (`y0..y1`) of rows parted where they stack their
+    /// values one a line; see [`Grid::split_stacked_rows`].
+    stacked_bands: Vec<Vec<(f64, f64)>>,
     prose_columns: Vec<Vec<Line>>,
     /// Per prose column, the page column it is a stretch of, and whether it
     /// sets its own measure; see [`crate::region::Group`].
@@ -5747,25 +5750,32 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // Then a row stacking its values one a line is parted into rows
         // (`Grid::split_stacked_rows`), the spanning rows numbered on past
         // the rows added over them.
-        let spanning_rows: Vec<Vec<usize>> = timed(&mut timings.tables, || {
-            grids
-                .iter_mut()
-                .map(|g| {
-                    let spanning = g.split_by_alignment(&p.glyphs);
-                    let added = g.split_stacked_rows(&p.glyphs);
-                    spanning
-                        .into_iter()
-                        .map(|r| {
-                            r + added
-                                .iter()
-                                .filter(|&&(at, _)| at < r)
-                                .map(|&(_, n)| n)
-                                .sum::<usize>()
-                        })
-                        .collect()
-                })
-                .collect()
-        });
+        let (spanning_rows, stacked_bands): (Vec<Vec<usize>>, Vec<Vec<(f64, f64)>>) =
+            timed(&mut timings.tables, || {
+                grids
+                    .iter_mut()
+                    .map(|g| {
+                        let spanning = g.split_by_alignment(&p.glyphs);
+                        let before = g.ys.clone();
+                        let added = g.split_stacked_rows(&p.glyphs);
+                        let bands = added
+                            .iter()
+                            .map(|&(r, _)| (before[r], before[r + 1]))
+                            .collect();
+                        let spanning = spanning
+                            .into_iter()
+                            .map(|r| {
+                                r + added
+                                    .iter()
+                                    .filter(|&&(at, _)| at < r)
+                                    .map(|&(_, n)| n)
+                                    .sum::<usize>()
+                            })
+                            .collect();
+                        (spanning, bands)
+                    })
+                    .unzip()
+            });
 
         // A line of dot leaders alone, inside a table's box, is the gutter
         // between a label the table reads and its value, left between their
@@ -5862,6 +5872,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grids,
             grid_sources,
             spanning_rows,
+            stacked_bands,
             prose_columns: cols,
             prose_sources,
             route,
@@ -6892,7 +6903,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     let mut m = g.merges(&page.rules, &page.fills);
                     g.text_merges(&page.glyphs, &page.rules, &mut m);
                     g.group_label_merges(&page.glyphs, &page.rules, &mut m);
-                    stacked = g.stacked_merges(&page.glyphs, &page.rules, &mut m);
+                    stacked = g.stacked_merges(
+                        &page.glyphs,
+                        &page.rules,
+                        &layout.stacked_bands[gi],
+                        &mut m,
+                    );
                     m
                 }
             };
