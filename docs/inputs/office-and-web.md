@@ -220,8 +220,10 @@ A `.doc` (or `.dot`) is read for its text, through its piece table: the
 after a fast save, one byte a character (Windows-1252) or two (UTF-16), and
 the piece table says which run of the document each holds. What is read:
 
-- The main text, as paragraphs at Word's paragraph marks; a line break keeps
-  its line, and a page break parts lines.
+- The main text, as paragraphs at Word's paragraph marks, and at the
+  section marks ending its sections (a section break ends a paragraph, as
+  in Word); a line break keeps its line, and a page break inside a
+  paragraph parts lines.
 - **Tables**, by each paragraph's own properties (in a table; the end of a
   row), as `doco:Table`s of their cells, a cell's paragraphs joined.
 - A field shows its result (`PAGE` its last page number), not its code;

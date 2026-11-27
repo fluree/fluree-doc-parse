@@ -1019,3 +1019,45 @@ fn a_run_of_characters_finds_its_first_piece_by_search() {
         assert_eq!((got[0].c, got[0].cp), ((b'a' + (i % 26) as u8) as char, i));
     }
 }
+
+#[test]
+fn a_section_mark_ends_its_paragraph_and_a_page_break_does_not() {
+    // Two sections, the first ending in its section mark at position 12
+    // (the `PlcfSed` saying the second starts at 13), and a manual page
+    // break inside the last paragraph, at no section's end.
+    let doc = doc_with(
+        &stories(&["Last of one.\u{c}First of two.", "Page\u{c}break kept."]),
+        0x00C1,
+        0x0200,
+    );
+    let none = {
+        let mut d = vec![0u8; 12];
+        d[2..6].copy_from_slice(&u32::MAX.to_le_bytes());
+        d
+    };
+    let sed = |cps: &[u32]| plc_of(cps, &vec![none.clone(); cps.len().saturating_sub(1)]);
+    let texts = |parts: &[(usize, Vec<u8>)]| -> Vec<String> {
+        let bytes = with_tables(&doc, parts, &[]);
+        parse(&bytes).unwrap().into_iter().map(|e| e.text).collect()
+    };
+    assert_eq!(
+        texts(&[(6, sed(&[0, 13, 44]))]),
+        ["Last of one.", "First of two.", "Page\nbreak kept."]
+    );
+    // No `PlcfSed`, or one that does not read: every `\x0c` parts lines,
+    // as before, and nothing panics.
+    let joined = ["Last of one.\nFirst of two.", "Page\nbreak kept."];
+    assert_eq!(texts(&[]), joined);
+    assert_eq!(texts(&[(6, vec![1, 2, 3])]), joined);
+    let mut cut = sed(&[0, 13, 44]);
+    cut.truncate(10);
+    assert_eq!(texts(&[(6, cut)]), joined);
+    // Positions that go backwards, at zero or past every character: a
+    // section mark is still only a `\x0c` at one of them, found however
+    // they are ordered.
+    assert_eq!(
+        texts(&[(6, sed(&[u32::MAX, 40, 35, 30, 20, 13, 0]))]),
+        ["Last of one.", "First of two.", "Page\nbreak kept."]
+    );
+    assert_eq!(texts(&[(6, sed(&[0, 0, u32::MAX]))]), joined);
+}

@@ -9,7 +9,9 @@
 //! document saved by Word's "fast save", whose text is no longer in order.
 //!
 //! **What is read.** The main text, split into paragraphs at Word's
-//! paragraph marks, a line break keeping its line; tables, by each
+//! paragraph marks and at the section marks ending its sections (by the
+//! `PlcfSed`), a line break keeping its line and a page break inside a
+//! paragraph parting lines; tables, by each
 //! paragraph's properties (in a table, the end of a row), as tables of
 //! cells; footnotes, endnotes and comments after the body, marked by their
 //! `evidence` as the DOCX reader marks them, a note opening with its number.
@@ -1032,6 +1034,32 @@ fn anchors(table: &[u8], plc: (u32, u32)) -> std::collections::HashMap<u32, u32>
     out
 }
 
+/// The positions of the section marks: each section's last character, the
+/// one before the next section's start, as the `PlcfSed` bounds them,
+/// sorted for [`ends_section`]. Empty where the `PlcfSed` does not read.
+fn section_ends(table: &[u8], sed: (u32, u32)) -> Vec<u32> {
+    let Some(p) = Plc::new(table, sed, 12) else {
+        return Vec::new();
+    };
+    let mut out: Vec<u32> = (1..=p.n).filter_map(|i| p.cp(i).checked_sub(1)).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// A section mark ends its paragraph as a paragraph mark does: a `\x0c` at
+/// the end of a section (at one of `ends`) is read as one. Anywhere else a
+/// `\x0c` is a page break inside a paragraph, and stays one, a line break:
+/// a document whose second section opens on a new page would otherwise run
+/// the last paragraph of the first section on into the first of the next.
+fn ends_section(c: Char, ends: &[u32]) -> Char {
+    if c.c == '\u{c}' && ends.binary_search(&c.cp).is_ok() {
+        Char { c: '\r', ..c }
+    } else {
+        c
+    }
+}
+
 /// Roman numerals in lower case, as Word numbers endnotes by default.
 fn roman(mut n: u32) -> String {
     let mut out = String::new();
@@ -1156,7 +1184,11 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Parsed, DocError> {
         let found = box_elements(6, (c0, c1), "doc", budget)?;
         boxes.push((mom.get(&spid).copied(), found));
     }
-    let body = place(lay_out(story(0), &props, None, "doc", budget)?, boxes);
+    // The `PlcfSed` bounds the main text's sections only: its positions
+    // are the body's.
+    let sections = section_ends(&table, fib.sed);
+    let body = story(0).map(|c| ends_section(c, &sections));
+    let body = place(lay_out(body, &props, None, "doc", budget)?, boxes);
     // Headers and footers, those Word shows, each story once and its
     // paragraphs once: a first page's header and the rest's often share
     // lines. A header's text box anchored in a story not shown is not.
