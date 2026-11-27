@@ -255,6 +255,11 @@ pub fn unread_regions(
 /// context, which reads whatever it reads (a reference is not followed, a
 /// string is decrypted or not but read either way), and the array's own
 /// iterator is taken no further than those that read.
+///
+/// Each entry is read as it is asked for, not the whole array first: a
+/// link or an outline item asks for its destination's first entry, and
+/// 20,000 links sharing one destination of 100,000 entries read it whole
+/// each time, 48 s.
 pub(crate) fn array_entries<'a>(
     array: &hayro_syntax::object::Array<'a>,
 ) -> impl Iterator<Item = hayro_syntax::object::MaybeRef<hayro_syntax::object::Object<'a>>> {
@@ -262,15 +267,15 @@ pub(crate) fn array_entries<'a>(
     use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
     let ctx = ReaderContext::dummy();
     let mut r = Reader::new(array.data());
-    let mut readable = 0;
-    loop {
+    let mut raw = array.raw_iter();
+    std::iter::from_fn(move || {
         r.skip_white_spaces_and_comments();
         if r.at_end() || r.read_with_context::<MaybeRef<Object<'_>>>(&ctx).is_none() {
-            break;
+            return None;
         }
-        readable += 1;
-    }
-    array.raw_iter().take(readable)
+        raw.next()
+    })
+    .fuse()
 }
 
 /// What the PDF interpreter reported on each page ([`Page::warnings`]),
@@ -352,6 +357,29 @@ mod tests {
         assert!(matches!(entries[0], MaybeRef::Ref(_)));
         assert_eq!(array_entries(&read(b"[+ ]")).count(), 0);
         assert_eq!(array_entries(&read(b"[1 2 (x)]")).count(), 3);
+    }
+
+    #[test]
+    fn an_arrays_first_entry_is_read_alone() {
+        use hayro_syntax::object::Array;
+        use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
+        // A destination of n entries, its first asked for n times, as n
+        // links sharing it ask: the array was read whole each time.
+        let ctx = ReaderContext::dummy();
+        fluree_doc_model::scaling::assert_linear(
+            "a shared destination's first entry",
+            2_000,
+            |n| format!("[3 0 R{}]", " 1".repeat(n)).into_bytes(),
+            |src| {
+                let array = Reader::new(src)
+                    .read_with_context::<Array<'_>>(&ctx)
+                    .unwrap();
+                let n = src.len() / 2;
+                for _ in 0..n {
+                    assert!(array_entries(&array).next().is_some());
+                }
+            },
+        );
     }
     use crate::extract::{ImagePlacement, OcrRead};
     use fluree_doc_model::Element;
