@@ -475,7 +475,8 @@ fn longer_side(b: &BBox) -> f64 {
 /// page it rarely pays. An OCR engine runs here and bills nothing, and a
 /// pasted capture an inch high still holds a date or an account number.
 /// What it reads in any region is held to the noise rule
-/// ([`crate::ocr::MIN_PICTURE_CONFIDENCE`]), a net behind the probe. A
+/// ([`crate::ocr::MIN_PICTURE_CONFIDENCE`]; in a small region, also
+/// [`crate::ocr::MIN_FRAGMENTS_CONFIDENCE`]), a net behind the probe. A
 /// region the pixel probe does not take for text ([`Declined::NotTexty`])
 /// is read by neither: the probe is what tells a reader where text is.
 /// Numbered after the routed regions, so a model's crop names (`r0`, `r1`,

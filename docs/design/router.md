@@ -101,8 +101,10 @@ from a capture, and what an engine reads in a photograph is noise.
 
 What an engine reads in a region, routed or small, is still held to a noise
 rule, a net behind the probe for a photograph or a gradient it took for
-text: a mean confidence under 0.5, or under 0.8 with most of its words
-fragments of one or two letters or figures, or one fragment, or one word
+text: a mean confidence under 0.5, or, in a small region only, under 0.8
+with most of its words fragments of one or two letters or figures (a
+routed one may be a raster table of one- and two-digit cells), or one
+fragment, or one word
 read under 0.8, boxed over nearly all of the region
 (`ocr::MIN_PICTURE_CONFIDENCE`, `MIN_FRAGMENTS_CONFIDENCE`,
 `NOISE_BOX_SHARE`); the region stays unread. A reading of a whole page is

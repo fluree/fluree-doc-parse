@@ -275,6 +275,10 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
                 shown,
                 area,
                 replaces,
+                routed: match &routes[pi] {
+                    Route::VlmRegions(r) => r.len(),
+                    _ => 0,
+                },
             })
         })
         .collect();
@@ -445,7 +449,8 @@ pub const MIN_PICTURE_CONFIDENCE: f64 = 0.5;
 /// short tokens of a reading boxed word by word (a sidecar from an engine
 /// that boxes words, where a line of prose holds `a`, `of`, `to`) count
 /// as fragments more often than the built-in engine's lines do: read with
-/// a mean under this, such text can be set aside.
+/// a mean under this, such text can be set aside. Judged in a small region
+/// only, not in one the router routes ([`noise`]).
 pub const MIN_FRAGMENTS_CONFIDENCE: f64 = 0.8;
 
 /// Share of a reading's words over which they are mostly fragments
@@ -470,18 +475,32 @@ const NOISE_BOX_SHARE: f64 = 0.9;
 /// Whether `words`, read in a picture of `area` (square PDF units), are an
 /// engine's noise rather than text: their mean confidence is under
 /// [`MIN_PICTURE_CONFIDENCE`], or under [`MIN_FRAGMENTS_CONFIDENCE`] with
-/// more than [`FRAGMENT_SHARE`] of them fragments, or one of them is boxed
-/// over [`NOISE_BOX_SHARE`] of the picture and is a fragment or is read
-/// under [`MIN_FRAGMENTS_CONFIDENCE`]. A reading with no confidence (none
-/// given, or scored outside 0-1) is judged by its boxes alone, a word with
-/// no confidence as one read unsurely. No words are no noise.
-fn noise(words: &[&Placed], area: f64) -> bool {
+/// more than [`FRAGMENT_SHARE`] of them fragments (when `fragments_judged`),
+/// or one of them is boxed over [`NOISE_BOX_SHARE`] of the picture and is a
+/// fragment or is read under [`MIN_FRAGMENTS_CONFIDENCE`]. A reading with no
+/// confidence (none given, or scored outside 0-1) is judged by its boxes
+/// alone, a word with no confidence as one read unsurely. No words are no
+/// noise.
+///
+/// The fragments are judged in a small region only, one the router sends
+/// no model: a region it routes is a tenth of the page or more, and a
+/// raster table of one- and two-digit cells there (a timetable, a grid of
+/// scores) is mostly fragments, which read under
+/// [`MIN_FRAGMENTS_CONFIDENCE`] would set the whole table aside. A routed
+/// region is held to the confidence floor and to the one word boxed over
+/// all of it, which set aside the grass, photographs and gradients
+/// measured. The price: dense foliage a tenth of the page or more that the
+/// probe takes for text (read at a mean of 0.57 to 0.63) is taken, as it
+/// was before the rule; losing a table of figures costs more than a line
+/// of strokes under a picture.
+fn noise(words: &[&Placed], area: f64, fragments_judged: bool) -> bool {
     let confs: Vec<f64> = words.iter().filter_map(|w| w.conf).collect();
     let fragments = words.iter().filter(|w| fragment(&w.text)).count();
     let fragmented = fragments as f64 > FRAGMENT_SHARE * words.len() as f64;
     let unsure = !confs.is_empty() && {
         let mean = confs.iter().sum::<f64>() / (confs.len() as f64);
-        mean < MIN_PICTURE_CONFIDENCE || (fragmented && mean < MIN_FRAGMENTS_CONFIDENCE)
+        mean < MIN_PICTURE_CONFIDENCE
+            || (fragments_judged && fragmented && mean < MIN_FRAGMENTS_CONFIDENCE)
     };
     let over_all = words.iter().any(|w| {
         let (bx, by) = quad_bounds(&w.quad);
@@ -529,7 +548,8 @@ fn noise_in_regions(p: &Page, t: &Target, reading: &WordReading) -> Vec<usize> {
             .filter(|(r, _, _)| r == i)
             .map(|(_, _, w)| *w)
             .collect();
-        if noise(&words, region.width() * region.height()) {
+        let fragments_judged = *i >= t.routed;
+        if noise(&words, region.width() * region.height(), fragments_judged) {
             gone.extend(landed.iter().filter(|(r, _, _)| r == i).map(|(_, k, _)| *k));
         }
     }
@@ -545,6 +565,10 @@ struct Target {
     area: Area,
     /// The page's own glyphs are the thing that is wrong (`BrokenText`).
     replaces: bool,
+    /// How many of the page's regions the router routes: those numbered
+    /// under it are the routed ones, the others the small ones an engine
+    /// alone reads ([`route::ocr_regions`]).
+    routed: usize,
 }
 
 /// Lay one reading the router let in on its page.
@@ -3508,6 +3532,44 @@ mod tests {
                 .collect(),
             rules: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_routed_table_of_figures_is_not_set_aside_as_fragments() {
+        // The page of prose with a raster table of one- and two-digit cells
+        // where the photograph was: routed (r0), the capture after it (r1).
+        let mut doc = prose_with_a_photograph();
+        doc.pages[0].images[1].texty = Some(true);
+        let table = doc.pages[0].images[1].bbox;
+        let capture = doc.pages[0].images[0].bbox;
+        assert_eq!(
+            route::ocr_regions(&doc.pages[0]),
+            [table, capture],
+            "the table routed, the capture after it"
+        );
+        // Six rows of four cells, every one a fragment, read at 0.7 in the
+        // mean: under the fragments' floor, over the picture's.
+        let cells: Vec<(String, [f64; 4])> = (0..24)
+            .map(|k| {
+                let (x, y) = (80.0 + 120.0 * (k % 4) as f64, 460.0 + 22.0 * (k / 4) as f64);
+                (format!("{}", 3 + 7 * k % 90), [x, y, x + 14.0, y + 12.0])
+            })
+            .collect();
+        let cells: Vec<(&str, [f64; 4])> = cells.iter().map(|(t, b)| (t.as_str(), *b)).collect();
+        let r = inject(&mut doc, &[(0, Crop::Region(0), scored(&cells, Some(0.7)))]);
+        assert_eq!((r[0].taken, r[0].dropped), (24, 0), "{:?}", r[0]);
+
+        // The same figures read in the small capture are set aside: the
+        // net behind the probe for foliage it took for text.
+        let mut doc = prose_with_a_photograph();
+        doc.pages[0].images[1].texty = Some(true);
+        let figures = [
+            ("12", [60.0, 382.0, 72.0, 398.0]),
+            ("4", [80.0, 382.0, 86.0, 398.0]),
+            ("37", [100.0, 382.0, 112.0, 398.0]),
+        ];
+        let r = inject(&mut doc, &[(0, Crop::Region(1), scored(&figures, Some(0.7)))]);
+        assert_eq!((r[0].taken, r[0].dropped), (0, 3), "{:?}", r[0]);
     }
 
     #[test]
