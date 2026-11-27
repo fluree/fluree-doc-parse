@@ -102,11 +102,19 @@ confident of. When the median confidence of a reading's level lines, or of
 its tall ones, is under 0.8 (three lines at least, and only the lines
 holding a letter when three of them do), the engine reads the image again
 turned a half, where both read right. The reading more
-confident by over 0.15 on average is kept, and any of its lines the other
-reading reads more confidently by that much, over the same place, is taken
-from that one; a tall line of two characters or more, read turned a
-quarter in both, is taken from whichever reads it more confidently. An upright page holding a table whose
-text runs up keeps its text and takes the table's. When two thirds of the
+confident by over 0.15 on average is kept. A line of three letters or more,
+one of them a capital, one of `b d f h k l t` or a letter of another script,
+is taken from the other reading when that one reads it more confidently by
+that much, over the same place; a tall one, read turned a quarter in both,
+when it reads it more confidently at all. Numbers and shorter words read as
+something else turned a half, often confidently (`1068` as `8901` at 0.99):
+they follow the lines that tell, taken from the other reading only where
+most of the lines running their way were, so an upright page read poorly
+keeps its numbers as read upright; a tall one, where no line running its
+way tells (a table of numbers alone, set sideways), is taken as a tall line
+that tells is. An
+upright page holding a table whose text runs up keeps its text and takes
+the table's. When two thirds of the
 text, counted in characters, runs one way sideways and less than a quarter
 of it is level, or two thirds of it runs upside down, or more of it upside
 down than level with the two together a quarter of it (a sheet fed upside
@@ -138,9 +146,9 @@ on its text. With fewer, the numbers decide: a table of numbers with less
 text than that, upside down or running up, is read again only if its
 numbers read poorly, and otherwise comes out as wrong numbers with no
 warning. Numbers written with the digits 0, 1, 6, 8 and 9 alone read as
-other numbers turned a half with a confidence of about 1 (806 as 908), so
-on a page read again, such a number in a table running down may be taken
-from the turned reading. A page is read again turned on the median
+other numbers turned a half with a confidence of about 1 (806 as 908): a
+table of such numbers alone set sideways, with no line of words running its
+way, may come out as other numbers. A page is read again turned on the median
 confidence of its tall lines: text running up next to more tall lines of
 words read well (a block running down beside it) is not read again and
 comes out as noise, and neither is a single line running up (a label set

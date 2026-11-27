@@ -548,7 +548,7 @@ type ReadPass<'a> = dyn FnMut(&Pass, image::RgbImage) -> Read + 'a;
 /// with little confidence. Turned a half, both read right (text running up
 /// then runs down), so such a page is read again turned a half, by the same
 /// plan (it is the same size), its quads mapped back onto the image as
-/// given, and each line is taken from the reading that reads it better.
+/// given, and the two readings are made one line by line ([`merge`]).
 fn read_upright(
     plan: &OcrPlan,
     read: &mut ReadPass<'_>,
@@ -853,7 +853,7 @@ fn lines_from(regions: &[oar_ocr::domain::TextRegion]) -> Vec<Line> {
 }
 
 /// Which way a line's quad runs: what decides how the pipeline reads it.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Run {
     /// At least twice as long as thick: read as it stands.
     Level,
@@ -929,12 +929,26 @@ fn mean_confidence(lines: &[Line]) -> Option<f64> {
 
 /// A reading and the reading of the image turned a half, its quads mapped
 /// back, made one. The reading more confident by over [`TURNED_MARGIN`] on
-/// the whole is the base, the one given otherwise; a base line is replaced
-/// by the other reading's line over the same place when that one is more
-/// confident by over the margin, or at all for a tall line of two characters
-/// or more. A page upside down is read turned; an upright page holding a
-/// table whose text runs up keeps its text and takes the table's from the
-/// turned reading.
+/// the whole is the base, the one given otherwise. A page upside down is
+/// read turned; an upright page holding a table whose text runs up keeps its
+/// text and takes the table's from the turned reading.
+///
+/// Each base line is paired with the other reading's line over the same
+/// place, if any. Only a line whose text tells which way up it was read
+/// ([`tells_its_way_up`]) is judged on its confidence: it is taken from the
+/// other reading when more confident by over the margin, or at all for a
+/// tall line (read turned a quarter in both readings, its text running down
+/// in one and up in the other, neither is the likelier). A number, or a
+/// word of a letter or two, reads as something else turned a half, often
+/// confidently (`1068` as `8901` at 0.99, a lone `6` as `9`): it follows
+/// the lines of its run that tell, taken from the other reading only when
+/// most of them were. On an upright page read poorly, its numbers stay as
+/// read upright, and lines taken turned, which carry their angle upside
+/// down, are only the ones that read better turned. A tall line in a run
+/// where no line tells (a table of numbers alone, set sideways) is judged
+/// on its confidence as one that tells is: kept as first read, it would be
+/// the wrong way up whenever the other reading is the right one, and taken
+/// either way it runs sideways, so it never turns a page a half.
 fn merge(given: Vec<Line>, turned: Vec<Line>) -> Vec<Line> {
     let turned_wins = match (mean_confidence(&turned), mean_confidence(&given)) {
         (Some(t), Some(g)) => t > g + TURNED_MARGIN,
@@ -947,39 +961,92 @@ fn merge(given: Vec<Line>, turned: Vec<Line>) -> Vec<Line> {
         (given, turned)
     };
     let mut other: Vec<Option<Line>> = other.into_iter().map(Some).collect();
-    for line in &mut base {
+    // Each base line and the other reading's line over the same place.
+    let mut pairs: Vec<(usize, Line)> = Vec::new();
+    for (b, line) in base.iter().enumerate() {
         let best = other
             .iter()
             .enumerate()
             .filter_map(|(i, o)| o.as_ref().map(|o| (i, overlap(&line.quad, &o.quad))))
             .filter(|&(_, v)| v >= SAME_LINE)
             .max_by(|a, b| a.1.total_cmp(&b.1));
-        let Some((i, _)) = best else { continue };
-        let conf = |l: &Line| l.conf.unwrap_or(0.0);
-        // A tall line is read turned a quarter in both readings, its text
-        // running down in one and up in the other: neither is the likelier,
-        // and the more confident reading of it is taken. A single character
-        // reads poorly either way, so it keeps the base's unless clearly
-        // beaten.
-        let even = |o: &Line| run_of(&line.quad) == Run::Tall && o.text.trim().chars().count() >= 2;
-        if other[i].as_ref().is_some_and(|o| {
-            let margin = if even(o) { 0.0 } else { TURNED_MARGIN };
-            conf(o) > conf(line) + margin
-        }) {
-            *line = other[i].take().expect("a line not taken yet");
+        if let Some((i, _)) = best {
+            pairs.push((b, other[i].take().expect("a line not paired yet")));
+        }
+    }
+    // The pairs whose line tells decide, run by run: how many of them, and
+    // how many take the other reading's line.
+    let mut told = [(0usize, 0usize); 3];
+    let mut take = vec![false; pairs.len()];
+    for (k, (b, o)) in pairs.iter().enumerate() {
+        if tells_its_way_up(&o.text) {
+            let run = run_of(&base[*b].quad);
+            take[k] = beats(o, &base[*b], run);
+            told[run as usize].0 += 1;
+            told[run as usize].1 += usize::from(take[k]);
+        }
+    }
+    // Whether the lines of a run that tell were mostly taken; nothing when
+    // none tells.
+    let decided = |run: Run| {
+        let (n, taken) = told[run as usize];
+        (n > 0).then_some(taken * 2 > n)
+    };
+    for (k, (b, o)) in pairs.iter().enumerate() {
+        if !tells_its_way_up(&o.text) {
+            let run = run_of(&base[*b].quad);
+            take[k] = decided(run).unwrap_or(run == Run::Tall && beats(o, &base[*b], run));
+        }
+    }
+    for ((b, o), take) in pairs.into_iter().zip(take) {
+        if take {
+            base[b] = o;
         }
     }
     base
 }
 
+/// Whether `o` reads its place better than `line`, read the other way up,
+/// for a line running `run`: more confidently by over [`TURNED_MARGIN`],
+/// or at all for a tall line of two characters or more, which both
+/// readings read turned a quarter. A single character reads poorly either
+/// way, and keeps the base's unless clearly beaten.
+fn beats(o: &Line, line: &Line, run: Run) -> bool {
+    let conf = |l: &Line| l.conf.unwrap_or(0.0);
+    let even = run == Run::Tall && o.text.trim().chars().count() >= 2;
+    let margin = if even { 0.0 } else { TURNED_MARGIN };
+    conf(o) > conf(line) + margin
+}
+
+/// Whether a line's text tells which way up it was read: three letters or
+/// more, one of them a capital, a lowercase letter rising over the others
+/// (`b d f h k l t`) or a letter of another script. Turned a half, such a
+/// line reads as noise, so the recognizer's confidence says which reading
+/// is right. Digits do not tell: `0`, `1` and `8` read the same turned, `6`
+/// and `9` as each other, and the recognizer reads a number either way up,
+/// confidently. Nor do a letter or two, or lowercase letters of one height
+/// alone (`sun` reads `uns` turned, `now` `mou`).
+fn tells_its_way_up(text: &str) -> bool {
+    let letters = || text.chars().filter(|c| c.is_alphabetic());
+    letters().count() >= 3
+        && letters().any(|c| {
+            !c.is_ascii_lowercase() || matches!(c, 'b' | 'd' | 'f' | 'h' | 'k' | 'l' | 't')
+        })
+}
+
 /// The overlap of two quads' bounds, over their union.
 fn overlap(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> f64 {
-    let bounds = |q: &[(f64, f64); 4]| {
-        q.iter().fold(
-            [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
-            |[x0, y0, x1, y1], &(x, y)| [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
-        )
-    };
+    let (inter, a, b) = intersection(a, b);
+    let union = a + b - inter;
+    if union > 0.0 {
+        inter / union
+    } else {
+        0.0
+    }
+}
+
+/// The area two quads' bounds share, and the area of each.
+fn intersection(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> (f64, f64, f64) {
     let (a, b) = (bounds(a), bounds(b));
     let area = |r: [f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
     let inter = area([
@@ -988,12 +1055,7 @@ fn overlap(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> f64 {
         a[2].min(b[2]),
         a[3].min(b[3]),
     ]);
-    let union = area(a) + area(b) - inter;
-    if union > 0.0 {
-        inter / union
-    } else {
-        0.0
-    }
+    (inter, area(a), area(b))
 }
 
 /// Fewest lines of one run that can tell a page was read the wrong way up.
@@ -1685,5 +1747,134 @@ mod tests {
         assert_eq!(overlap(&a, &a), 1.0);
         assert_eq!(overlap(&a, &line(100.0, 1.0).quad), 0.0);
         assert!(overlap(&a, &line(5.0, 1.0).quad) > SAME_LINE);
+    }
+
+    /// `lines` as the reading of their image turned a half gives them,
+    /// mapped back onto the image as given, as `read_upright` maps them:
+    /// the turned image's top left of each line is its bottom right here,
+    /// so its quad starts there, upside down.
+    fn turned_back(lines: Vec<Line>) -> Vec<Line> {
+        lines
+            .into_iter()
+            .map(|l| Line {
+                quad: [l.quad[2], l.quad[3], l.quad[0], l.quad[1]],
+                ..l
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_upright_page_read_poorly_keeps_its_numbers() {
+        // An upright fax read with little confidence, so it is read again
+        // turned a half: its words read as noise turned, its numbers as
+        // other numbers, more confidently than upright.
+        let mut given = page(0.75);
+        given
+            .iter_mut()
+            .for_each(|l| l.text = "Invoice total due".into());
+        let mut turned = page(0.4);
+        turned
+            .iter_mut()
+            .for_each(|l| l.text = "anp lelol aoionuI".into());
+        for (i, (up, down)) in [("1068", "8901"), ("1689", "6891"), ("806", "908")]
+            .into_iter()
+            .enumerate()
+        {
+            let y = 200.0 + 30.0 * i as f64;
+            given.push(Line {
+                text: up.into(),
+                ..line(y, 0.8)
+            });
+            turned.push(Line {
+                text: down.into(),
+                ..line(y, 0.99)
+            });
+        }
+        // A lone digit, boxed about square.
+        let square = |text: &str, conf: f64| Line {
+            quad: [
+                (400.0, 400.0),
+                (418.0, 400.0),
+                (418.0, 420.0),
+                (400.0, 420.0),
+            ],
+            text: text.into(),
+            conf: Some(conf),
+        };
+        given.push(square("6", 0.8));
+        turned.push(square("9", 0.99));
+        assert!(worth_turning(&given));
+        let merged = merge(given, turned_back(turned));
+        let texts: Vec<&str> = merged.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            texts[5..],
+            ["1068", "1689", "806", "6"],
+            "the numbers as read upright"
+        );
+        // No line is taken turned: nothing upside down to turn the page for.
+        for l in &merged {
+            assert_eq!(quad_box(l.quad).1, 0.0, "{}", l.text);
+        }
+        // The page turned is read turned, numbers and all.
+        let mut given = page(0.4);
+        given.push(Line {
+            text: "8901".into(),
+            ..line(200.0, 0.99)
+        });
+        let mut turned = page(0.97);
+        turned.push(Line {
+            text: "1068".into(),
+            ..line(200.0, 0.8)
+        });
+        let merged = merge(given, turned);
+        assert_eq!(merged[5].text, "1068");
+    }
+
+    #[test]
+    fn digits_follow_the_lines_that_tell_which_way_up_they_read() {
+        // A table running up on an upright page: its cells of words read
+        // better turned, so its cells of numbers are taken turned too, the
+        // upright reading's more confident though they are.
+        let mut given = page(0.97);
+        given.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.4)));
+        given.push(Line {
+            text: "88109".into(),
+            ..tall(500.0, 0.99)
+        });
+        let mut turned = page(0.3);
+        turned.extend((0..4).map(|i| tall(300.0 + 30.0 * i as f64, 0.95)));
+        turned.push(Line {
+            text: "60138".into(),
+            ..tall(500.0, 0.9)
+        });
+        let merged = merge(given, turned);
+        assert_eq!(merged[9].text, "60138");
+        // A table of numbers alone running up: nothing tells, so each is
+        // taken from the reading that reads it more confidently, as a cell
+        // of words would be; and the turned reading reads them better.
+        let numbers = |conf: f64, text: &str| -> Vec<Line> {
+            (0..4)
+                .map(|i| Line {
+                    text: text.into(),
+                    ..tall(300.0 + 30.0 * i as f64, conf)
+                })
+                .collect()
+        };
+        let mut given = page(0.97);
+        given.extend(numbers(0.9, "88109"));
+        let mut turned = page(0.3);
+        turned.extend(numbers(0.95, "60138"));
+        let merged = merge(given, turned);
+        assert!(merged[5..].iter().all(|l| l.text == "60138"));
+    }
+
+    #[test]
+    fn only_letters_that_change_turned_tell_which_way_up_a_line_reads() {
+        for tells in ["Invoice", "SKU-60138", "total", "Échéance", "数量合计"] {
+            assert!(tells_its_way_up(tells), "{tells}");
+        }
+        for not in ["1068", "6", "No", "sun now", "806 / 908", "Ab 12"] {
+            assert!(!tells_its_way_up(not), "{not}");
+        }
     }
 }
