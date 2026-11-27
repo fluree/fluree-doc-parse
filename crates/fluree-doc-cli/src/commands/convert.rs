@@ -780,6 +780,11 @@ fn convert_attachments(
 /// A safe, unique file name for an attachment: its own name with any path
 /// taken off, or a numbered stand-in, and unique within its email.
 ///
+/// A name is the sender's bytes: a control character (a NUL, which no file
+/// system takes, a line break) is written `_`, and a name is cut to
+/// [`MAX_FILE_NAME_BYTES`], its extension kept, so that one file's name
+/// cannot fail the whole input when it is saved.
+///
 /// A name of the form `--parse-attachments` writes a conversion under
 /// (`<sha256>.<format>`, beside the saved files) is the sender's to choose,
 /// and would pass a file of theirs off as another's conversion: it is saved
@@ -791,7 +796,13 @@ fn file_name(
 ) -> String {
     let base = name
         .and_then(|n| n.rsplit(['/', '\\']).next())
-        .map(|n| n.trim().trim_start_matches('.').to_string())
+        .map(|n| {
+            let n: String = n
+                .chars()
+                .map(|c| if c.is_control() { '_' } else { c })
+                .collect();
+            shortened(n.trim().trim_start_matches('.'))
+        })
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("attachment-{}", index + 1));
     let base = if names_a_conversion(&base) {
@@ -809,6 +820,31 @@ fn file_name(
         n += 1;
     }
     candidate
+}
+
+/// The most bytes of an attachment's name kept: most file systems take 255,
+/// and a name made unique (`name (2).pdf`) is a few bytes longer.
+const MAX_FILE_NAME_BYTES: usize = 200;
+
+/// `name`, at most [`MAX_FILE_NAME_BYTES`] of it, cut on a character and
+/// keeping a short extension (`.pdf`).
+fn shortened(name: &str) -> String {
+    if name.len() <= MAX_FILE_NAME_BYTES {
+        return name.to_string();
+    }
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e)
+        .filter(|e| !e.is_empty() && e.len() <= 16)
+        .map_or(String::new(), |e| format!(".{e}"));
+    let mut stem = String::new();
+    for c in name.chars() {
+        if stem.len() + c.len_utf8() + ext.len() > MAX_FILE_NAME_BYTES {
+            break;
+        }
+        stem.push(c);
+    }
+    stem + &ext
 }
 
 /// Whether `name` is one a conversion's output could take: 64 hexadecimal
@@ -2803,6 +2839,28 @@ mod tests {
         ] {
             assert_eq!(file_name(Some(&name), 0, &mut taken), saved, "{name}");
         }
+    }
+
+    #[test]
+    fn an_attachments_name_is_one_a_file_system_takes() {
+        let mut taken = std::collections::HashSet::new();
+        // A NUL, which no file system takes, failed the whole input.
+        assert_eq!(
+            file_name(Some("orders\0.csv"), 0, &mut taken),
+            "orders_.csv"
+        );
+        assert_eq!(file_name(Some("a\nb.txt"), 1, &mut taken), "a_b.txt");
+        // A name past what a file system takes is cut, its extension kept.
+        let long = format!("{}.pdf", "é".repeat(400));
+        let saved = file_name(Some(&long), 2, &mut taken);
+        assert!(saved.len() <= MAX_FILE_NAME_BYTES, "{}", saved.len());
+        assert!(saved.ends_with("é.pdf"), "{saved}");
+        let dir = std::env::temp_dir().join(format!("fdoc-names-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["orders_.csv", "a_b.txt", saved.as_str()] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
