@@ -31,6 +31,14 @@ Sets, each written to corpus/<set>/ as <page>.pdf and <page>-<dpi>.png:
   blue-ink, red-ink, grey-ink, inverted, white-on-blue, yellow-paper,
   gradient, photo-bg, noise, blur, fax, skew, jpeg
                          plain-1.2's 200 dpi images recoloured or degraded
+  mixed-small, mixed-large, mixed-twotext
+                         one PDF each of born-digital pages and a page that is
+                         only an image of other pages, as a memo carries a
+                         scanned screenshot: two pages shown at half size
+                         (more lines, at half the type, than the page of
+                         text), one page shown at its size in type a fifth
+                         larger than the text's, or two pages of text before
+                         a half-size image; written as <page>.pdf, read whole
 
 Each set's meta.json lists its pages' headings and short lines. Names and
 figures are invented; the run writes the same bytes on every machine with
@@ -111,6 +119,96 @@ def pdf(path, font, lines, mode, heads=()):
     out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
     out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
     path.write_bytes(bytes(out))
+
+
+def content(font, lines, mode="plain", heads=()):
+    """The content stream drawing `lines` (x, y, size, text) in `font`."""
+    ops = []
+    for x, y, size, text in lines:
+        t = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        f = "F2" if mode == "bold" and text in heads else "F1"
+        ops.append(f"BT /{f} {size:.2f} Tf {x:.2f} {y:.2f} Td ({t}) Tj ET")
+    return "\n".join(ops).encode("latin-1")
+
+
+def mixed_pdf(path, font, texts, gray):
+    """A Letter PDF of a page of text for each of `texts` (lines as for
+    [`pdf`]), then a page that is only the image `gray`, drawn over all of it."""
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", None,
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /%s /Encoding /WinAnsiEncoding >>" % font.encode()]
+    kids = []
+    for lines in texts:
+        body = zlib.compress(content(font, lines))
+        objs.append(b"<< /Length %d /Filter /FlateDecode >>\nstream\n" % len(body) + body + b"\nendstream")
+        objs.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R "
+                    b"/Resources << /Font << /F1 3 0 R >> >> >>" % (len(objs)))
+        kids.append(len(objs))
+    h, w = gray.shape
+    pixels = zlib.compress(gray.tobytes())
+    objs.append(b"<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray "
+                b"/BitsPerComponent 8 /Length %d /Filter /FlateDecode >>\nstream\n" % (w, h, len(pixels))
+                + pixels + b"\nendstream")
+    image = len(objs)
+    draw = b"q 612 0 0 792 0 0 cm /Im1 Do Q"
+    objs.append(b"<< /Length %d >>\nstream\n" % len(draw) + draw + b"\nendstream")
+    objs.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R "
+                b"/Resources << /XObject << /Im1 %d 0 R >> >> >>" % (len(objs), image))
+    kids.append(len(objs))
+    objs[1] = b"<< /Type /Pages /Kids [%s] /Count %d >>" % (
+        b" ".join(b"%d 0 R" % k for k in kids), len(kids))
+    out, offsets = bytearray(b"%PDF-1.7\n"), []
+    for i, o in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % i + o + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+    path.write_bytes(bytes(out))
+
+
+def write_mixed(out, tmp):
+    """The mixed sets: each document a page or two of text at one size and a
+    page that is an image of other pages, at 200 dpi. Its headings and short
+    lines are all of its pages', the image's as well as the text's: a page
+    read whole is the document's, judged against its own body."""
+    dpi = 200
+    by = {}
+    for page, font, lines, heads, shorts in pages(1.2, "plain", seed=23):
+        by[page] = (font, lines, heads, shorts)
+    def shot(names, scale):
+        canvas = Image.new("L", (int(8.5 * dpi), 11 * dpi), 255)
+        for i, n in enumerate(names):
+            font, lines, _, _ = by[n]
+            one = tmp / f"{n}.pdf"
+            pdf(one, font, lines, "plain")
+            im = render(one, dpi)
+            if scale != 1.0:
+                im = im.resize((int(im.width * scale), int(im.height * scale)), Image.LANCZOS)
+            canvas.paste(im, (i * im.width, 0))
+        return np.asarray(canvas)
+    made = 0
+    for name, text_pt, shown, scale in (("mixed-small", 11, (10, 10), 0.5),
+                                         ("mixed-large", 10, (12,), 1.0),
+                                         ("mixed-twotext", 11, (10, 10), 0.5)):
+        d = out / name
+        d.mkdir(parents=True, exist_ok=True)
+        meta = []
+        for fam in UPRIGHT:
+            for variant in range(3):
+                texts = [f"{fam}-{text_pt}-{variant}"]
+                if name == "mixed-twotext":
+                    texts.append(f"{fam}-{text_pt}-{(variant + 1) % 3}")
+                imgs = [f"{fam}-{pt}-{(variant + 1 + i) % 3}" for i, pt in enumerate(shown)]
+                font = by[texts[0]][0]
+                doc = f"{fam}-{variant}"
+                mixed_pdf(d / f"{doc}.pdf", font, [by[t][1] for t in texts], shot(imgs, scale))
+                meta.append({"page": doc, "font": font, "dpis": ["pdf"], "text_pages": texts, "image_pages": imgs,
+                             "headings": [h for n in texts + imgs for h in by[n][2]],
+                             "short": [x for n in texts + imgs for x in by[n][3]]})
+                made += 1
+        (d / "meta.json").write_text(json.dumps({"set": name, "mixed": True, "pages": meta}, indent=1))
+    return made
 
 
 def pages(scale, mode, seed=11):
@@ -223,7 +321,10 @@ def main():
         # The born-digital twin is plain-1.2's PDF.
         (out / name / "meta.json").write_text(json.dumps(
             {"set": name, "scale": 1.2, "twin": "plain-1.2", "pages": meta}, indent=1))
-    print(f"{3 + 5 + len(made)} sets in {out}")
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        write_mixed(out, Path(tmp))
+    print(f"{3 + 6 + len(made) + 3} sets in {out}")
 
 
 if __name__ == "__main__":

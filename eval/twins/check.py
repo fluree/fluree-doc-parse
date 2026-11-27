@@ -14,6 +14,12 @@ what they are read against, not a gate.
   eval/twins/check.py --models DIR --baseline eval/twins/baseline.json
   eval/twins/check.py --models DIR --write-baseline eval/twins/baseline.json
 
+A mixed set (`"mixed": true` in its meta.json) is of PDFs, each a page of text
+and a page that is only an image: each is converted by OCR whole, and its
+born-digital count is the same PDF read without OCR, its page of text alone.
+Its headings and short lines are all of its pages', each page judged against
+its own body.
+
 `--baseline` fails on a set whose images read fewer headings, or more short
 lines or other lines as headings, than it records, and on a set it does not
 hold.
@@ -114,6 +120,20 @@ def main():
         tmp = Path(tmp)
         for name in sets:
             meta = json.loads((a.corpus / name / "meta.json").read_text())
+            if meta.get("mixed"):
+                pdfs = sorted((a.corpus / name).glob("*.pdf"))
+                mds = {}
+                for tag, models in (("born", None), ("ocr", a.models)):
+                    out = tmp / f"{tag}-{name}"
+                    out.mkdir()
+                    convert(a.fdoc, pdfs, out, a.jobs, models)
+                    mds[tag] = [(p, (out / f"{p['page']}.md").read_text()) for p in meta["pages"]]
+                b, _ = count(meta["pages"], mds["born"], False)
+                c, t = count(meta["pages"], mds["ocr"], False)
+                key = f"{name}@pdf"
+                results[key] = c
+                rows.append((key, t, b, c))
+                continue
             twin = meta.get("twin", name)
             mark = name == "superscript"
             if twin not in born_done:

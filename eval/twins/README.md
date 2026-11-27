@@ -40,9 +40,19 @@ go by only in its pixels.
 | `yellow-paper`, `gradient`, `photo-bg` | a coloured paper, a ground that runs from white to grey, a soft photo-like ground |
 | `noise`, `blur`, `jpeg`, `fax`, `skew` | sensor noise and specks, a 1.2 px blur, a quality-25 JPEG, a fax's threshold, the page turned 1.5 degrees |
 
+| `mixed-small` | one PDF each: a page of text at 11 pt, then a page that is only an image showing two pages at 10 pt side by side at half size, as a memo carries a scanned screenshot: more lines than the page of text, at half its type |
+| `mixed-large` | a page of text at 10 pt, then an image of a page at 12 pt at its size: type a fifth larger than the text's |
+| `mixed-twotext` | two pages of text at 11 pt, then `mixed-small`'s half-size image |
+
 The variants of `plain-1.2` are its images changed; their born-digital twin
 is `plain-1.2`'s PDF. Each set's `meta.json` lists its pages' headings and
-short lines.
+short lines. A mixed set's documents are read whole, by OCR where a page is
+pixels: their headings and short lines are all of their pages', and the
+born-digital count beside them is the same PDF read without OCR, its pages
+of text alone. What the mixed sets hold OCR to is that a page read whole
+does not change how the document's own text reads: each page is judged
+against its own body, so the text's prose stays prose and the image's
+headings, set a fifth larger than its own lines, are headings.
 
 ## The check
 

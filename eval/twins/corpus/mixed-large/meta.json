@@ -1,0 +1,401 @@
+{
+ "set": "mixed-large",
+ "mixed": true,
+ "pages": [
+  {
+   "page": "helv-0",
+   "font": "Helvetica",
+   "dpis": [
+    "pdf"
+   ],
+   "text_pages": [
+    "helv-10-0"
+   ],
+   "image_pages": [
+    "helv-12-1"
+   ],
+   "headings": [
+    "What this statement covers",
+    "Fees",
+    "Payments received this year",
+    "Claims",
+    "What this statement covers",
+    "Coverage",
+    "Changes to your policy",
+    "Contacts",
+    "Payments received this year",
+    "Terms",
+    "Payments received this year",
+    "Exclusions",
+    "What this statement covers",
+    "Payments"
+   ],
+   "short": [
+    "Subtotal",
+    "Signed",
+    "Credit",
+    "Date",
+    "Credit",
+    "Signed",
+    "Signed",
+    "Amount",
+    "Notes",
+    "Total",
+    "Signed",
+    "Amount",
+    "Subtotal"
+   ]
+  },
+  {
+   "page": "helv-1",
+   "font": "Helvetica",
+   "dpis": [
+    "pdf"
+   ],
+   "text_pages": [
+    "helv-10-1"
+   ],
+   "image_pages": [
+    "helv-12-2"
+   ],
+   "headings": [
+    "What this statement covers",
+    "Coverage",
+    "Payments received this year",
+    "Fees",
+    "Payments received this year",
+    "Payments",
+    "Changes to your policy",
+    "Changes to your policy",
+    "Payments",
+    "Changes to your policy",
+    "Fees",
+    "Changes to your policy",
+    "Contacts",
+    "Payments received this year"
+   ],
+   "short": [
+    "Signed",
+    "Reference",
+    "Subtotal",
+    "Credit",
+    "Paid",
+    "Phone",
+    "Total",
+    "Balance",
+    "Date",
+    "Amount",
+    "Total",
+    "Paid"
+   ]
+  },
+  {
+   "page": "helv-2",
+   "font": "Helvetica",
+   "dpis": [
+    "pdf"
+   ],
+   "text_pages": [
+    "helv-10-2"
+   ],
+   "image_pages": [
+    "helv-12-0"
+   ],
+   "headings": [
+    "What this statement covers",
+    "Summary",
+    "How to contact our office",
+    "Payments",
+    "How to contact our office",
+    "Claims",
+    "What this statement covers",
+    "What this statement covers",
+    "Summary",
+    "Changes to your policy",
+    "Exclusions",
+    "How to contact our office",
+    "Contacts"
+   ],
+   "short": [
+    "Notes",
+    "Date",
+    "Bill to:",
+    "Bill to:",
+    "Bill to:",
+    "Signed",
+    "Subtotal",
+    "Bill to:",
+    "Signed",
+    "Balance",
+    "Paid",
+    "Date"
+   ]
+  },
+  {
+   "page": "times-0",
+   "font": "Times-Roman",
+   "dpis": [
+    "pdf"
+   ],
+   "text_pages": [
+    "times-10-0"
+   ],
+   "image_pages": [
+    "times-12-1"
+   ],
+   "headings": [
+    "What this statement covers",
+    "Contacts",
+    "Payments received this year",
+    "Payments",
+    "Payments received this year",
+    "Payments",
+    "What this statement covers",
+    "Coverage",
+    "Payments received this year",
+    "Summary",
+    "What this statement covers",
+    "Summary",
+    "What this statement covers",
+    "Payments",
+    "Changes to your policy"
+   ],
+   "short": [
+    "Subtotal",
+    "Phone",
+    "Balance",
+    "Amount",
+    "Balance",
+    "Bill to:",
+    "Subtotal",
+    "Subtotal",
+    "Reference",
+    "Amount",
+    "Phone",
+    "Ship to:",
+    "Subtotal",
+    "Debit"
+   ]
+  },
+  {
+   "page": "times-1",
+   "font": "Times-Roman",
+   "dpis": [
+    "pdf"
+   ],
+   "text_pages": [
+    "times-10-1"
+   ],
+   "image_pages": [
+    "times-12-2"
+   ],
+   "headings": [
+    "What this statement covers",
+    "Summary",
+    "How to contact our office",
+    "Exclusions",
+    "What this statement covers",
+    "Fees",
+    "Changes to your policy",
+    "How to contact our office",
+    "Terms",
+    "Changes to your policy",
+    "Fees",
+    "Payments received this year",
+    "Coverage"
+   ],
+   "short": [
+    "Balance",
+    "Bill to:",
+    "Signed",
+    "Credit",
+    "Reference",
+    "Reference",
+    "Notes",
+    "Bill to:",
+    "Ship to:",
+    "Paid",
+    "Ship to:",
+    "Signed"
+   ]
+  },
+  {
+   "page": "times-2",
+   "font": "Times-Roman",
+   "dpis": [
+    "pdf"
+   ],
+   "text_pages": [
+    "times-10-2"
+   ],
+   "image_pages": [
+    "times-12-0"
+   ],
+   "headings": [
+    "Changes to your policy",
+    "Coverage",
+    "What this statement covers",
+    "Exclusions",
+    "Payments received this year",
+    "Coverage",
+    "Changes to your policy",
+    "How to contact our office",
+    "Terms",
+    "How to contact our office",
+    "Claims",
+    "What this statement covers",
+    "Fees"
+   ],
+   "short": [
+    "Date",
+    "Subtotal",
+    "Amount",
+    "Amount",
+    "Debit",
+    "Subtotal",
+    "Credit",
+    "Phone",
+    "Paid",
+    "Total",
+    "Bill to:",
+    "Debit",
+    "Reference"
+   ]
+  },
+  {
+   "page": "cour-0",
+   "font": "Courier",
+   "dpis": [
+    "pdf"
+   ],
+   "text_pages": [
+    "cour-10-0"
+   ],
+   "image_pages": [
+    "cour-12-1"
+   ],
+   "headings": [
+    "What this statement covers",
+    "Fees",
+    "How to contact our office",
+    "Coverage",
+    "How to contact our office",
+    "Contacts",
+    "Changes to your policy",
+    "Contacts",
+    "What this statement covers",
+    "Fees",
+    "Payments received this year",
+    "Contacts",
+    "Changes to your policy",
+    "Payments",
+    "Changes to your policy"
+   ],
+   "short": [
+    "Balance",
+    "Balance",
+    "Notes",
+    "Subtotal",
+    "Credit",
+    "Signed",
+    "Subtotal",
+    "Subtotal",
+    "Balance",
+    "Signed",
+    "Phone",
+    "Ship to:",
+    "Phone"
+   ]
+  },
+  {
+   "page": "cour-1",
+   "font": "Courier",
+   "dpis": [
+    "pdf"
+   ],
+   "text_pages": [
+    "cour-10-1"
+   ],
+   "image_pages": [
+    "cour-12-2"
+   ],
+   "headings": [
+    "What this statement covers",
+    "Terms",
+    "Payments received this year",
+    "Exclusions",
+    "Payments received this year",
+    "Claims",
+    "Payments received this year",
+    "Exclusions",
+    "How to contact our office",
+    "Fees",
+    "Changes to your policy",
+    "Fees",
+    "How to contact our office",
+    "Terms"
+   ],
+   "short": [
+    "Credit",
+    "Notes",
+    "Reference",
+    "Balance",
+    "Notes",
+    "Credit",
+    "Reference",
+    "Amount",
+    "Balance",
+    "Debit",
+    "Debit",
+    "Phone",
+    "Subtotal"
+   ]
+  },
+  {
+   "page": "cour-2",
+   "font": "Courier",
+   "dpis": [
+    "pdf"
+   ],
+   "text_pages": [
+    "cour-10-2"
+   ],
+   "image_pages": [
+    "cour-12-0"
+   ],
+   "headings": [
+    "Changes to your policy",
+    "Terms",
+    "How to contact our office",
+    "Claims",
+    "What this statement covers",
+    "Terms",
+    "Changes to your policy",
+    "Contacts",
+    "Payments received this year",
+    "Terms",
+    "What this statement covers",
+    "Coverage",
+    "How to contact our office",
+    "Contacts",
+    "How to contact our office"
+   ],
+   "short": [
+    "Reference",
+    "Notes",
+    "Notes",
+    "Debit",
+    "Credit",
+    "Reference",
+    "Phone",
+    "Bill to:",
+    "Paid",
+    "Date",
+    "Paid",
+    "Reference",
+    "Notes",
+    "Ship to:"
+   ]
+  }
+ ]
+}
