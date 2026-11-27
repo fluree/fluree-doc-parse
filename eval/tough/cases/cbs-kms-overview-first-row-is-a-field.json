@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "cbs-kwaliteitsmanagement-principes.pdf",
+    "url": "https://www.cbs.nl/-/media/_pdf/2025/49/kwaliteitsmanagement-cbs-prinicpes-en-uitgangspunten.pdf",
+    "sha256": "fbdb1c72171fdf5e30be0439e7ed784e82e3a8696a88e2cef8297ea87f65f283",
+    "about": "Statistics Netherlands (CBS) quality-management principles (19 pages, Dutch): a ruled two-column overview, a group label bold beside each group's first item, the other items plain."
+  },
+  "checks": [
+    {
+      "id": "kms-overview-first-row-is-a-field",
+      "found": "2026-11-27",
+      "issue": "The overview on page 16 has no header row. Its first row, `Klantgerichtheid | Stakeholdersmanagement`, set as each group's first row is (bold label, plain item), was taken for the column header.",
+      "cell": {"value": "Stakeholdersmanagement", "row": "Klantgerichtheid", "column": ""}
+    },
+    {
+      "id": "kms-overview-names-no-item-by-the-first",
+      "found": "2026-11-27",
+      "issue": "Every item was named by the first one.",
+      "no_column_header": "Stakeholdersmanagement"
+    }
+  ]
+}
