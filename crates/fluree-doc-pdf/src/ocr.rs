@@ -4067,6 +4067,52 @@ mod tests {
     }
 
     #[test]
+    fn a_poster_s_columns_under_a_word_set_huge_read_one_after_the_other() {
+        // A poster read whole: a title and a word set huge across the top,
+        // then two columns of numbered panels. Its boxes sized by their
+        // letters, the huge word is laid as tall as its box, a dozen of the
+        // body's lines high; with the title it filled nearly a third of the
+        // page's rows in the gutter, and the columns read line across line
+        // ([`crate::column`] counts a glyph at most two rows high).
+        let mut words = vec![
+            word("TEN THINGS WORTH KNOWING", [100.0, 40.0, 1120.0, 120.0]),
+            word("POSTER", [140.0, 150.0, 1080.0, 420.0]),
+        ];
+        // Each panel's number in the margin left of its text, the right
+        // column's lines set half a line lower than the left's, and ragged.
+        for (col, x, drop) in [("left", 80.0, 0.0), ("right", 660.0, 17.0)] {
+            for panel in 0..4 {
+                let top = 520.0 + panel as f64 * 250.0 + drop;
+                words.push(word(
+                    &format!("{}", panel + 1),
+                    [x, top, x + 30.0, top + 50.0],
+                ));
+                for line in 0..5 {
+                    let y = top + 30.0 + line as f64 * 34.0;
+                    let len = [470.0, 430.0, 455.0, 400.0, 220.0][line];
+                    words.push(word(
+                        &format!("the {col} panel goes on with line {line}"),
+                        [x + 60.0, y, x + 60.0 + len, y + 24.0],
+                    ));
+                }
+            }
+        }
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
+        };
+        let injected = inject(&mut doc, &[(0, Crop::Page, px(words))]);
+        let text: Vec<String> = analysed(&mut doc, &injected)
+            .into_iter()
+            .map(|e| e.text)
+            .collect();
+        let text = text.join("\n");
+        let last_left = text.rfind("left panel").expect("the left column");
+        let first_right = text.find("right panel").expect("the right column");
+        assert!(last_left < first_right, "{text}");
+    }
+
+    #[test]
     fn a_region_reading_s_rules_are_placed_cut_to_it_and_kept_apart() {
         // The screenshot of the test below, its reading carrying the rules
         // its pixels draw: one across the crop, margin to margin, and one
