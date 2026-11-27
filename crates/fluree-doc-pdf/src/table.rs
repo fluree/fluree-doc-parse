@@ -2970,6 +2970,21 @@ impl Grid {
     /// the outermost rows and columns that actually hold content bounds the
     /// table to its real extent.
     pub fn trim_to_content(&mut self, glyphs: &[crate::glyph::Glyph]) {
+        self.trim_to_content_ruled(glyphs, &[]);
+    }
+
+    /// [`Grid::trim_to_content`], reading the page's `rules` for blank rows
+    /// set inside the table.
+    ///
+    /// A table may set a blank row between its groups of rows, ruled as
+    /// every other row is: a parameter table's spacer before each
+    /// instrument's settings, or before its last field. Ended there, the
+    /// table lost the rows under it, read as paragraphs or as a table of
+    /// their own. A blank row is the table's own where every column edge
+    /// the grid draws runs through it, as it runs through the rows on both
+    /// sides of it, and the rows under it hold text. A footer's separator
+    /// below a table is joined to it by no rule.
+    pub fn trim_to_content_ruled(&mut self, glyphs: &[crate::glyph::Glyph], rules: &[Rule]) {
         let (rows, cols) = (self.rows(), self.cols());
         if rows == 0 || cols == 0 {
             return;
@@ -2986,8 +3001,9 @@ impl Grid {
         // The table ends at the first empty row after its content, not at the
         // last populated row anywhere in the grid. Ruling lines below a table —
         // a footer separator — extend the grid, and taking the last populated
-        // row would pull the page footer in as a final table row.
-        let r1 = (r0..rows).take_while(|&r| row_used[r]).last().unwrap_or(r0);
+        // row would pull the page footer in as a final table row. A blank row
+        // the table rules as its own is no end.
+        let r1 = self.last_row_through_spacers(&row_used, r0, rules, glyphs);
         let c0 = col_used.iter().position(|x| *x).unwrap_or(0);
         let c1 = col_used.iter().rposition(|x| *x).unwrap_or(cols - 1);
 
@@ -2999,6 +3015,125 @@ impl Grid {
             x1: self.xs[self.xs.len() - 1],
             y1: self.ys[self.ys.len() - 1],
         };
+    }
+
+    /// The last row of the rows holding text from `r0` on, read on past
+    /// each run of blank rows the table rules as its own: two columns or
+    /// more, every column edge drawn down through the blank rows and
+    /// through the rows with text either side of them. See
+    /// [`Grid::trim_to_content_ruled`].
+    ///
+    /// The rows taken in past a blank one must each hold their text as a
+    /// table's cells do ([`Grid::row_holds_text`]). A chart's gridlines
+    /// rule every band of the plot, blank or not, and run on down through
+    /// its legend; the legend's words straddle the gridlines.
+    fn last_row_through_spacers(
+        &self,
+        used: &[bool],
+        r0: usize,
+        rules: &[Rule],
+        glyphs: &[crate::glyph::Glyph],
+    ) -> usize {
+        let rows = used.len();
+        let first = (r0..rows).take_while(|&r| used[r]).last().unwrap_or(r0);
+        let drawn = |r: usize| {
+            let mid = (self.ys[r] + self.ys[r + 1]) / 2.0;
+            self.cols() >= 2
+                && self.xs.iter().all(|&x| {
+                    rules.iter().any(|rule| {
+                        rule.orientation == Orientation::Vertical
+                            && (rule.axis_pos() - x).abs() <= EDGE_TOLERANCE
+                            && rule.bbox.y0 <= mid
+                            && rule.bbox.y1 >= mid
+                    })
+                })
+        };
+        let mut last = first;
+        let mut r = first + 1;
+        while r < rows {
+            if used[r] {
+                last = r;
+                r += 1;
+                continue;
+            }
+            let mut e = r;
+            while e < rows && !used[e] && drawn(e) {
+                e += 1;
+            }
+            if e == r || e == rows || !used[e] || !drawn(last) || !drawn(e) {
+                break;
+            }
+            r = e;
+        }
+        // A table has begun over the blank row, two rows of it, and goes on
+        // under it in a row of two cells or more: one line over a blank
+        // band is as often a chart's labels over its plot, and a column of
+        // single values under one its legend. Every row taken in holds its
+        // text as a cell does.
+        let filled = |r: usize| {
+            let (top, bottom) = (self.ys[r], self.ys[r + 1]);
+            self.xs
+                .windows(2)
+                .filter(|w| {
+                    glyphs.iter().any(|g| {
+                        !g.text.trim().is_empty() && {
+                            let (x, y) = g.center();
+                            x > w[0] && x < w[1] && y > top && y < bottom
+                        }
+                    })
+                })
+                .count()
+        };
+        let taken: Vec<usize> = (first + 1..=last).filter(|&r| used[r]).collect();
+        if last > first
+            && first > r0
+            && taken.iter().any(|&r| filled(r) >= 2)
+            && taken.iter().all(|&r| self.row_holds_text(glyphs, r))
+        {
+            last
+        } else {
+            first
+        }
+    }
+
+    /// Row `r` holds its text as a table's cells do: every glyph whose
+    /// middle lies in the row lies within it, and no line of text runs on
+    /// across a column edge, its glyphs either side of the edge set closer
+    /// than [`CELL_GAP_EMS`].
+    fn row_holds_text(&self, glyphs: &[crate::glyph::Glyph], r: usize) -> bool {
+        let (top, bottom) = (self.ys[r], self.ys[r + 1]);
+        let (left, right) = (self.xs[0], self.xs[self.xs.len() - 1]);
+        let inner = &self.xs[1..self.xs.len() - 1];
+        let mut row: Vec<(BBox, f64)> = glyphs
+            .iter()
+            .filter(|g| g.is_horizontal() && !g.text.trim().is_empty())
+            .filter_map(|g| Some((g.bbox?, g.font_size.max(1.0) as f64)))
+            .filter(|(b, _)| {
+                let (x, y) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                y > top && y < bottom && x > left && x < right
+            })
+            .collect();
+        // A glyph's ink may reach a little past the rule over or under it.
+        let outside = |b: &BBox| {
+            let slack = 0.2 * (b.y1 - b.y0);
+            b.y0 < top - slack || b.y1 > bottom + slack
+        };
+        if row.iter().any(|(b, _)| outside(b)) {
+            return false;
+        }
+        row.sort_by(|a, b| a.0.x0.total_cmp(&b.0.x0));
+        !inner.iter().any(|&x| {
+            row.iter().any(|(a, size)| {
+                (a.x0 < x - 0.5 && a.x1 > x + 0.5)
+                    || row.iter().any(|(b, _)| {
+                        let same_line = (a.y1.min(b.y1) - a.y0.max(b.y0)) > 0.5 * (a.y1 - a.y0);
+                        (a.x0 + a.x1) / 2.0 < x
+                            && (b.x0 + b.x1) / 2.0 > x
+                            && same_line
+                            && b.x0 - a.x1 < CELL_GAP_EMS * size
+                    })
+            })
+        })
     }
 
     /// The column groups ruled along row boundary `k`: each piece of rule
@@ -3432,6 +3567,12 @@ impl Grid {
 /// Segments of rule along one boundary at most this far apart are one
 /// piece, drawn in parts.
 const RULE_JOIN: f64 = 1.0;
+
+/// Glyphs either side of a column edge set closer than this, in ems of the
+/// left one's size, are one line run on across the edge: a word space is a
+/// quarter to a third of an em, and a cell's padding either side of its
+/// rule sets the values of two cells further apart than that.
+const CELL_GAP_EMS: f64 = 0.4;
 
 /// A run of columns a piece of rule along a row boundary runs under, and
 /// the piece's extent.
@@ -11942,6 +12083,97 @@ mod tests {
             g.rows()
         );
         assert!(cells.iter().all(|c| !c.contains("footer")));
+    }
+
+    /// A two-column grid of five 20 pt rows from y = 100, text in rows 0, 1
+    /// and 3, its column edges drawn down every row but the blank ones
+    /// named in `bare`.
+    fn spacer_table(bare: &[usize]) -> (Grid, Vec<Rule>, Vec<crate::glyph::Glyph>) {
+        use crate::geom::BBox as B;
+        let xs = [68.0, 183.0, 297.0];
+        let ys = [100.0, 120.0, 140.0, 160.0, 180.0, 200.0];
+        let mut r = Vec::new();
+        for y in ys {
+            r.push(h(68.0, 297.0, y));
+        }
+        for (i, w) in ys.windows(2).enumerate() {
+            for (k, x) in xs.iter().enumerate() {
+                let side = k == 0 || k + 1 == xs.len();
+                if !bare.contains(&i) || side {
+                    r.push(v(w[0], w[1], *x));
+                }
+            }
+        }
+        let g = detect(&r, 0).remove(0);
+        let mk = |x: f64, y: f64| crate::glyph::Glyph {
+            text: "x".into(),
+            bbox: Some(B {
+                x0: x,
+                y0: y,
+                x1: x + 6.0,
+                y1: y + 10.0,
+            }),
+            page: 0,
+            origin: (x, y + 10.0),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            italic: false,
+            advance: None,
+            draw_index: 0,
+            ocr: None,
+        };
+        let glyphs = [0usize, 1, 3]
+            .iter()
+            .flat_map(|&row| {
+                let y = ys[row] + 5.0;
+                [mk(80.0, y), mk(200.0, y)]
+            })
+            .collect();
+        (g, r, glyphs)
+    }
+
+    #[test]
+    fn a_blank_row_ruled_as_the_tables_own_does_not_end_it() {
+        let (mut g, rules, glyphs) = spacer_table(&[]);
+        assert_eq!(g.rows(), 5);
+        g.trim_to_content_ruled(&glyphs, &rules);
+        assert_eq!(g.rows(), 4, "the row under the blank one is the table's");
+        // The trailing blank row ends it: nothing with text follows.
+        assert!((g.bbox.y1 - 180.0).abs() < 1.0, "ends at {}", g.bbox.y1);
+    }
+
+    #[test]
+    fn a_blank_row_only_the_frame_runs_through_ends_the_table() {
+        let (mut g, rules, glyphs) = spacer_table(&[2]);
+        g.trim_to_content_ruled(&glyphs, &rules);
+        assert_eq!(g.rows(), 2, "the column rule stops at the blank row");
+        // Read without the page's rules, the table ends at its first blank
+        // row, as it always has.
+        let (mut g, _, glyphs) = spacer_table(&[]);
+        g.trim_to_content(&glyphs);
+        assert_eq!(g.rows(), 2);
+    }
+
+    #[test]
+    fn a_legend_under_a_charts_gridlines_is_no_row_of_it() {
+        // The gridlines run on through the blank band and the legend under
+        // it, whose words run across a gridline.
+        let (mut g, rules, mut glyphs) = spacer_table(&[]);
+        glyphs.retain(|gl| gl.origin.1 < 160.0);
+        for x0 in [176.0, 182.5, 189.0] {
+            let mut gl = glyphs[0].clone();
+            gl.bbox = Some(BBox {
+                x0,
+                y0: 165.0,
+                x1: x0 + 6.0,
+                y1: 175.0,
+            });
+            gl.origin = (x0, 175.0);
+            glyphs.push(gl);
+        }
+        g.trim_to_content_ruled(&glyphs, &rules);
+        assert_eq!(g.rows(), 2, "the legend is no row of the grid");
     }
 
     #[test]
