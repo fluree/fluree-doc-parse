@@ -1355,8 +1355,11 @@ impl Grid {
             rows[r].first().is_some_and(|t| !t.trim().is_empty())
                 && rows[r].iter().skip(1).all(|t| t.trim().is_empty())
         };
+        // Beside other columns only, and in a run that leaves rows bare: a
+        // one-column listing shaded throughout holds nothing but such rows.
         if run >= 2
-            && run <= rows.len()
+            && run < rows.len()
+            && self.cols() >= 2
             && band(run - 1)
             && (run..rows.len()).any(|r| band(r) && self.band_has_fill(fills, r))
         {
@@ -10340,6 +10343,18 @@ mod header_tests {
         // With no band of the kind further down, a shaded second row under
         // the header is the header's own.
         assert_eq!(g.header_rows(&rows, &[], &[], &[row(0), row(1)]), 2);
+        // A one-column listing shaded throughout holds such rows alone, and
+        // keeps the single header the full shading falls back to.
+        let one = Grid {
+            xs: vec![0.0, 400.0],
+            ..grid_with_bands()
+        };
+        let lines: Vec<Vec<String>> = ["int f(int n) {", "if (n < 2) {", "return n;", "}", "}"]
+            .iter()
+            .map(|t| vec![t.to_string()])
+            .collect();
+        let all: Vec<_> = (0..5).map(row).collect();
+        assert_eq!(one.header_rows(&lines, &[], &[], &all), 1);
     }
 
     #[test]
