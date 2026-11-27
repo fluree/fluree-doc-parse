@@ -919,6 +919,8 @@ fn parse_body(
     // stolen by the outer one; nested tables are flattened in reading order,
     // which is what a flat cell grid can express.
     let mut table_depth = 0usize;
+    // Whether the subtitle a document may have is read ([`flush_para`]).
+    let mut subtitled = false;
     let mut rows: Vec<Row> = Vec::new();
     let mut row = Row::default();
     let mut cell = Cell::default();
@@ -1276,7 +1278,7 @@ fn parse_body(
                             let at = out.len();
                             let (level, label) = (para.level, para.label.clone());
                             let list = para.list.clone().unwrap_or_default();
-                            flush_para(&mut out, &mut para, title_styles, budget)?;
+                            flush_para(&mut out, &mut para, title_styles, &mut subtitled, budget)?;
                             // Whether it reads as a title is a question about
                             // the element it became: a paragraph's lines after
                             // a blank one are paragraphs of their own.
@@ -1342,7 +1344,7 @@ fn parse_body(
         }
         buf.clear();
     }
-    flush_para(&mut out, &mut para, title_styles, budget)?;
+    flush_para(&mut out, &mut para, title_styles, &mut subtitled, budget)?;
     out.append(&mut figures);
     promote_numbered_titles(&mut out, &outline);
     for (i, e) in out.iter_mut().enumerate() {
@@ -1507,10 +1509,15 @@ struct Numbered {
     capitals: bool,
 }
 
+/// Make `para` into elements at the end of `out`. `subtitled` says whether
+/// a subtitle is among them already, kept rather than looked for in `out`
+/// at each paragraph after a title: a title and a subtitle repeated made
+/// that a scan of everything before for each.
 fn flush_para(
     out: &mut Vec<Element>,
     para: &mut Para,
     title_styles: &TitleStyles,
+    subtitled: &mut bool,
     budget: &mut Budget,
 ) -> Result<(), TooLarge> {
     let p = std::mem::take(para);
@@ -1553,9 +1560,9 @@ fn flush_para(
     }
     .filter(|&kind| {
         kind != "doco:Subtitle"
-            || (out.last().is_some_and(|e| e.kind == "doco:Title")
-                && !out.iter().any(|e| e.kind == "doco:Subtitle"))
+            || (out.last().is_some_and(|e| e.kind == "doco:Title") && !*subtitled)
     });
+    *subtitled |= declared == Some("doco:Subtitle");
     let e = if let Some(kind) = declared {
         element(kind, title, None)
     } else if let Some(level) = heading_level(&p.style) {
@@ -3699,6 +3706,44 @@ mod tests {
         )
         .unwrap();
         assert_eq!(els[0].kind, "doco:Title");
+    }
+
+    #[test]
+    fn titles_and_subtitles_repeated_are_read_in_linear_time() {
+        // A paragraph in the Subtitle style after a title looked for a
+        // subtitle among everything read before it, past `n` paragraphs
+        // to the one found after them.
+        let body = |n: usize| {
+            let pair = format!(
+                "{}{}",
+                para(Some("Title"), "Annual Report"),
+                para(Some("Subtitle"), "Fiscal year 2026")
+            );
+            doc(&format!(
+                "{}{}",
+                para(None, "Text").repeat(n),
+                pair.repeat(n)
+            ))
+        };
+        let kinds: Vec<String> = parse_document_xml(&body(2))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "doco:Paragraph",
+                "doco:Paragraph",
+                "doco:Title",
+                "doco:Subtitle",
+                "doco:Title",
+                "doco:Paragraph"
+            ]
+        );
+        fluree_doc_model::scaling::assert_linear("titles and subtitles", 5_000, body, |x| {
+            assert!(parse_document_xml(x).is_ok())
+        });
     }
 
     #[test]

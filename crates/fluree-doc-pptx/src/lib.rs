@@ -503,6 +503,10 @@ fn parse_slide<'c>(
     // The cell slots the table's cells and rows were spent at as they were
     // read, which its grid's spending counts as its own.
     let mut held = 0u64;
+    // Whether the deck's subtitle is read, kept rather than looked for in
+    // `out` at each paragraph of its shape: a subtitle of many paragraphs
+    // made that a scan of the slide for each.
+    let mut subtitled = false;
 
     loop {
         match r.read_event_into(&mut buf) {
@@ -576,6 +580,7 @@ fn parse_slide<'c>(
                                 shape,
                                 (para_bullet || para_level > 0).then_some(para_level),
                             ),
+                            &mut subtitled,
                             budget,
                         )?;
                         para_bullet = false;
@@ -605,7 +610,13 @@ fn parse_slide<'c>(
                 }
                 "sp" => {
                     // A shape's title-ness does not leak into the next shape.
-                    flush(&mut out, &mut text, (page, shape, None), budget)?;
+                    flush(
+                        &mut out,
+                        &mut text,
+                        (page, shape, None),
+                        &mut subtitled,
+                        budget,
+                    )?;
                     shape = Shape::Body;
                 }
                 _ => {}
@@ -614,7 +625,13 @@ fn parse_slide<'c>(
         }
         buf.clear();
     }
-    flush(&mut out, &mut text, (page, Shape::Body, None), budget)?;
+    flush(
+        &mut out,
+        &mut text,
+        (page, Shape::Body, None),
+        &mut subtitled,
+        budget,
+    )?;
     // A subtitle follows its title, whichever shape the slide lists first:
     // the subtitle and what the slide lists after it, up to the title, go
     // after the title. With no title it subtitles nothing, and is text.
@@ -686,6 +703,7 @@ fn flush(
     out: &mut Vec<Element>,
     buf: &mut String,
     (page, shape, item): (usize, Shape, Option<usize>),
+    subtitled: &mut bool,
     budget: &mut Budget,
 ) -> Result<(), TooLarge> {
     let t = std::mem::take(buf)
@@ -697,7 +715,8 @@ fn flush(
     }
     let e = if shape == Shape::DeckTitle {
         element("doco:Title", t, None, page)
-    } else if shape == Shape::DeckSubtitle && !out.iter().any(|e| e.kind == "doco:Subtitle") {
+    } else if shape == Shape::DeckSubtitle && !*subtitled {
+        *subtitled = true;
         element("doco:Subtitle", t, None, page)
     } else if shape == Shape::SlideTitle {
         element("doco:SectionTitle", t, Some(1), page)
@@ -790,6 +809,24 @@ mod tests {
 
     fn para(text: &str) -> String {
         format!("<a:p><a:r><a:t>{text}</a:t></a:r></a:p>")
+    }
+
+    #[test]
+    fn a_subtitle_of_many_paragraphs_is_read_in_linear_time() {
+        // Each paragraph after the first looked for a subtitle among the
+        // slide's elements so far, past a title of `n` paragraphs.
+        fluree_doc_model::scaling::assert_linear(
+            "a subtitle's paragraphs",
+            5_000,
+            |n| {
+                slide(&format!(
+                    "{}{}",
+                    shape(Some("ctrTitle"), &para("Quarterly Review").repeat(n)),
+                    shape(Some("subTitle"), &para("Q3 2026").repeat(n))
+                ))
+            },
+            |x| assert!(parse_slide_xml(x, 0).is_ok()),
+        );
     }
 
     #[test]
