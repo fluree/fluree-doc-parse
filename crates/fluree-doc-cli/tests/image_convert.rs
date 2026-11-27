@@ -1138,12 +1138,13 @@ fn a_stamp_ocr_read_a_word_in_is_read_and_asks_no_model() {
 }
 
 #[test]
-fn a_photo_ocr_took_one_doubtful_word_in_is_read_by_the_model() {
+fn a_photo_ocr_took_one_doubtful_word_in_is_kept_and_asks_no_model() {
     // A photograph OCR took one "word" in, at a confidence a placed
-    // picture's reading is noise under: the configured model is asked, as
-    // for an image OCR took nothing in (its key unusable here, so it is
-    // known to be asked without a call leaving the machine). Without a
-    // model, OCR's word is the output.
+    // picture's reading is noise under: the image is still read, its word
+    // in the output and its confidence reported, and the configured model
+    // is not asked. Its key is unusable here, so asking it would fail (or
+    // warn) without a call leaving the machine: OCR's confidence is
+    // reported, it routes nothing.
     let dir = scratch("photo-doubt");
     let input = dir.join("photo.png");
     let img = image::GrayImage::from_fn(600, 400, |x, y| {
@@ -1171,37 +1172,26 @@ fn a_photo_ocr_took_one_doubtful_word_in_is_read_by_the_model() {
     };
     let home = dir.join("fdoc-home");
     unusable_model(&home);
-    let out = run(&home);
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains("note: photo: OCR read only words it doubts; the configured model reads it"),
-        "{err}"
-    );
-    // The model failing, OCR's reading is kept, its word with it.
-    assert!(out.status.success(), "{err}");
-    assert!(
-        err.contains("warning: photo: the configured model could not read it:"),
-        "{err}"
-    );
-    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(doc.to_string().contains("\"Il\""), "{doc}");
-    assert_eq!(
-        document(&doc)["doc:ocrReadings"]["@value"],
-        serde_json::json!([{
-            "pageIndex": 0, "crop": "full", "words": 1,
-            "meanConfidence": 0.21, "minConfidence": 0.21
-        }]),
-        "{doc}"
-    );
     let bare = dir.join("no-model");
     std::fs::create_dir_all(&bare).unwrap();
-    let out = run(&bare);
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "{err}");
-    assert!(!err.contains("configured model"), "{err}");
-    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(doc.to_string().contains("\"Il\""), "{doc}");
-    assert!(document(&doc).get("doc:unreadPages").is_none(), "{doc}");
+    // With a model configured or without one, the same output.
+    for home in [&home, &bare] {
+        let out = run(home);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{err}");
+        assert!(!err.contains("configured model"), "{err}");
+        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(doc.to_string().contains("\"Il\""), "{doc}");
+        assert!(document(&doc).get("doc:unreadPages").is_none(), "{doc}");
+        assert_eq!(
+            document(&doc)["doc:ocrReadings"]["@value"],
+            serde_json::json!([{
+                "pageIndex": 0, "crop": "full", "words": 1,
+                "meanConfidence": 0.21, "minConfidence": 0.21
+            }]),
+            "{doc}"
+        );
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 

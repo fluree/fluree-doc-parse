@@ -712,9 +712,32 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
         out.push_str("</figure>\n");
     }
     if let Some(note) = notes.summary() {
-        out.push_str(&format!("<!-- {} -->\n", note.replace("--", "—")));
+        out.push_str(&format!("<!-- {} -->\n", comment_safe(&note)));
     }
     out.push_str("</body></html>\n");
+    out
+}
+
+/// `text` made safe to sit in an HTML or XML comment, which may not hold
+/// `--`: each `-` of such a run becomes a hyphen (U+2010), so a flag the
+/// text names (`--probe-images`) still reads as itself, where a dash in its
+/// place (`—probe-images`) read as punctuation.
+fn comment_safe(text: &str) -> String {
+    if !text.contains("--") {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_run = false;
+    while let Some(c) = chars.next() {
+        if c == '-' && (in_run || chars.peek() == Some(&'-')) {
+            out.push('\u{2010}');
+            in_run = chars.peek() == Some(&'-');
+        } else {
+            out.push(c);
+            in_run = false;
+        }
+    }
     out
 }
 
@@ -871,6 +894,11 @@ pub fn to_markdown_with_options(
                     out.push_str(&format!("{indent}- {text}\n"));
                 }
             }
+            // A figure with no words of its own (no alternative text, no
+            // label) prints nothing: a blank paragraph would say nothing
+            // either. What was read in its image follows it as paragraphs
+            // of their own.
+            "doco:Figure" if e.text.trim().is_empty() => {}
             _ => {
                 // A list's last item ends its line and no more. A paragraph
                 // set straight under it is a lazy continuation of the item
@@ -893,7 +921,7 @@ pub fn to_markdown_with_options(
         }
     }
     if let Some(note) = notes.summary() {
-        out.push_str(&format!("\n<!-- {} -->\n", note.replace("--", "—")));
+        out.push_str(&format!("\n<!-- {} -->\n", comment_safe(&note)));
     }
     out
 }
@@ -928,6 +956,22 @@ mod tests {
             depth,
             ..Element::new("doc:ListItem", text, "rust", "layout")
         }
+    }
+
+    #[test]
+    fn a_figure_with_no_words_prints_nothing_in_markdown() {
+        let figure = |text: &str| Element {
+            figure: Some("figure-0-1".into()),
+            ..Element::new("doco:Figure", text, "eml", "eml")
+        };
+        let els = [para("Before", vec![]), figure(""), para("After", vec![])];
+        assert_eq!(to_markdown(&els), "Before\n\nAfter\n\n");
+        let els = [
+            para("Before", vec![]),
+            figure("Org chart"),
+            para("After", vec![]),
+        ];
+        assert_eq!(to_markdown(&els), "Before\n\nOrg chart\n\nAfter\n\n");
     }
 
     #[test]
@@ -1370,6 +1414,16 @@ mod tests {
     }
 
     #[test]
+    fn a_comment_holds_no_double_hyphen_and_a_flag_still_reads() {
+        assert_eq!(
+            comment_safe("probe (--probe-images), a well-known one---or not"),
+            "probe (\u{2010}\u{2010}probe-images), a well-known one\u{2010}\u{2010}\u{2010}or not"
+        );
+        assert!(!comment_safe("a --- b -- c -").contains("--"));
+        assert_eq!(comment_safe("page 3 at 56,582"), "page 3 at 56,582");
+    }
+
+    #[test]
     fn an_unread_region_is_declared_with_its_page_and_box() {
         use crate::element::{Notes, UnreadPage, UnreadRegion};
         use crate::geom::BBox;
@@ -1421,7 +1475,9 @@ mod tests {
         };
         assert_eq!(mixed.summary(), one.summary());
 
-        // Images not examined are said once, by page, after what is missing.
+        // Images not examined are listed, not warned about: a plain run
+        // examines none, and the Markdown and XHTML carry no comment for
+        // them, alone or beside what is missing.
         let unprobed = |page| UnreadRegion {
             reason: "Unprobed".into(),
             ..region(page, 40.0)
@@ -1430,26 +1486,15 @@ mod tests {
             unread_regions: vec![unprobed(4), unprobed(0), unprobed(1)],
             ..Default::default()
         };
-        assert_eq!(
-            alone.summary().as_deref(),
-            Some(
-                "fluree-doc-parse: 3 images on pages 1–2, 5 were not examined: a parse \
-                 that probes images (--probe-images, or OCR) can tell whether they hold text."
-            )
-        );
+        assert_eq!(alone.summary(), None);
+        let e = para("Review memo", vec![]);
+        assert!(!to_markdown_with(std::slice::from_ref(&e), &alone).contains("<!--"));
+        assert!(!to_xhtml_with(std::slice::from_ref(&e), &alone).contains("<!--"));
         let after = Notes {
             unread_regions: vec![unprobed(0), region(2, 582.0)],
             ..Default::default()
         };
-        assert_eq!(
-            after.summary().as_deref(),
-            Some(
-                "fluree-doc-parse: 1 raster region carries content no reader \
-                 transcribed: page 3 at 56,582,556,732. This output is missing it. \
-                 1 image on page 1 was not examined: a parse that probes images \
-                 (--probe-images, or OCR) can tell whether it holds text."
-            )
-        );
+        assert_eq!(after.summary(), one.summary());
 
         // Listed in page order, then down the page; after unread pages.
         let both = Notes {

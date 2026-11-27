@@ -271,6 +271,29 @@ fn a_signatures_logo_is_not_sent_to_the_model_and_a_screenshot_is() {
 }
 
 #[test]
+fn with_no_escalate_no_image_is_sent_to_the_configured_model() {
+    // A screenshot a model configured would be sent (and refuse, here):
+    // `--no-escalate` keeps it on the machine.
+    let dir = scratch("no-escalate");
+    let input = dir.join("mail.eml");
+    std::fs::write(&input, eml_of("image/png", &screen(600, 200))).unwrap();
+    with_model(&dir);
+    let out = convert(&dir, &input, &["-f".as_ref(), "doco".as_ref()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("the configured model"), "{err}");
+    let out = convert(
+        &dir,
+        &input,
+        &["-f".as_ref(), "doco".as_ref(), "--no-escalate".as_ref()],
+    );
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("the configured model"), "{err}");
+    assert_eq!(reasons(&out.stdout), ["NotRead"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_strip_too_short_to_hold_a_line_is_not_sent_to_the_model() {
     // A strip of text wide enough, but 30 pixels high: under the 48 an
     // image must have on its shorter side, as a rule or a banner is.
@@ -302,15 +325,16 @@ fn line(w: u32, h: u32) -> Vec<u8> {
 }
 
 #[test]
-fn an_image_too_thin_for_a_line_of_text_is_read_by_nothing() {
-    // The floor a PDF's region is held to (10 pixels on its short side):
-    // a strip of 9 is not read, its words written or not, and listed as
-    // the probe's; one of 10 is read.
+fn words_written_for_an_image_are_read_whatever_the_probe_makes_of_it() {
+    // A strip of 9 pixels is under the floor a PDF's region is held to (10
+    // on its short side), and the pixel probe does not take it for text;
+    // the words written for it are read all the same, as one of 10 is: a
+    // reading supplied costs neither OCR nor a model's call.
     let dir = scratch("thin");
     let input = dir.join("mail.eml");
     let words = dir.join("words");
     std::fs::create_dir_all(&words).unwrap();
-    for (h, read) in [(9, false), (10, true)] {
+    for h in [9, 10] {
         std::fs::write(&input, eml_of("image/png", &line(700, h))).unwrap();
         let reading = serde_json::json!({
             "width": 700, "height": h,
@@ -329,12 +353,8 @@ fn an_image_too_thin_for_a_line_of_text_is_read_by_nothing() {
         );
         assert!(out.status.success());
         let text = String::from_utf8_lossy(&out.stdout);
-        assert_eq!(text.contains("4417-0093"), read, "{h}: {text}");
-        let reasons = reasons(&out.stdout);
-        assert_eq!(reasons.is_empty(), read, "{h}: {reasons:?}");
-        if !read {
-            assert_eq!(reasons, ["NotTexty"]);
-        }
+        assert!(text.contains("4417-0093"), "{h}: {text}");
+        assert!(reasons(&out.stdout).is_empty(), "{h}");
     }
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -863,5 +883,68 @@ fn a_text_file_that_is_no_message_is_converted_as_text() {
     );
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(said.contains("The budget is agreed."), "{said}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_signatures_icons_lend_the_body_no_words_and_an_empty_figure_prints_nothing() {
+    // An HTML message showing a screenshot with alternative text, a
+    // signature's icons (a PNG and a GIF, each named by its alternative
+    // text, as most corporate mail has them) and an image with none. The
+    // icons are under the floor a model is sent: their figures keep their
+    // place, without the words. The screenshot keeps its own; the image
+    // with none prints no empty paragraph.
+    let dir = scratch("icons");
+    let input = dir.join("mail.eml");
+    let gif: &[u8] = b"GIF89a\x10\x00\x10\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00\
+\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b";
+    let mut m = b"From: a@example.org\r\n\
+Subject: Record\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"rel\"\r\n\
+\r\n\
+--rel\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<p>See the screen below.</p>\
+<p><img src=\"cid:shot@x\" alt=\"Record screen\"></p>\
+<p><img src=\"cid:plain@x\"></p>\
+<p>That is all.</p>\
+<p>Ann Smith <img src=\"cid:in@x\" alt=\"LinkedIn\"> <img src=\"cid:logo@x\" alt=\"Logo\"></p>\r\n"
+        .to_vec();
+    for (id, ct, bytes) in [
+        ("shot@x", "image/png", screen(600, 200)),
+        ("plain@x", "image/png", screen(600, 200)),
+        ("in@x", "image/png", screen(24, 24)),
+        ("logo@x", "image/gif", gif.to_vec()),
+    ] {
+        m.extend(
+            format!(
+                "--rel\r\nContent-Type: {ct}\r\nContent-ID: <{id}>\r\n\
+                 Content-Transfer-Encoding: binary\r\n\r\n"
+            )
+            .bytes(),
+        );
+        m.extend(bytes);
+        m.extend(b"\r\n");
+    }
+    m.extend(b"--rel--\r\n");
+    std::fs::write(&input, &m).unwrap();
+    let out = convert(&dir, &input, &["-f".as_ref(), "md".as_ref()]);
+    assert!(out.status.success());
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(md.contains("Record screen"), "{md}");
+    assert!(!md.contains("LinkedIn") && !md.contains("Logo"), "{md}");
+    assert!(!md.contains("\n\n\n"), "{md:?}");
+    // The figures are all there, in the graph.
+    let out = convert(&dir, &input, &["-f".as_ref(), "json".as_ref()]);
+    let els: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let figures = els
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["type"] == "doco:Figure")
+        .count();
+    assert_eq!(figures, 4);
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -110,8 +110,8 @@ pub fn parse_with_ocr(
     bytes: &[u8],
     engine: &dyn fluree_doc_vision::OcrEngine,
 ) -> Result<OcrParse, DocxError> {
-    let (mut elements, info, media) = parse_with_media(bytes)?;
     let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
+    let (mut elements, info, media) = parse_package(&mut pkg)?;
     let r = fluree_doc_image::read_placed(media, &mut |part| read_media(&mut pkg, part), engine);
     fluree_doc_image::place_after_figures(&mut elements, r.read);
     Ok(OcrParse {
@@ -151,7 +151,25 @@ pub fn parse_with_media_options(
     bytes: &[u8],
     options: &Options,
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
-    let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
+    parse_package_options(&mut Package::open(bytes).map_err(DocxError::Zip)?, options)
+}
+
+/// [`parse_with_media`] from a package already opened, for a caller that
+/// goes on to read the images' bytes from it ([`read_media`]): opening it
+/// reads the archive's whole directory, once. Read with the default
+/// [`Options`]: no comments.
+pub fn parse_package(
+    pkg: &mut Package<'_>,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
+    parse_package_options(pkg, &Options::default())
+}
+
+/// [`parse_package`], with what is read beyond the printed text as
+/// `options` says.
+pub fn parse_package_options(
+    pkg: &mut Package<'_>,
+    options: &Options,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
     let main = pkg.main_part("word/document.xml");
     let xml = pkg.read(&main).ok_or(DocxError::NoDocument)?;
     // Styles refine what a table's first row is and which paragraphs are
@@ -179,7 +197,7 @@ pub fn parse_with_media_options(
             .map_err(DocxError::Zip)
     };
     let settings = pkg.related(&main, "settings", "word/settings.xml");
-    let settings_xml = aside(&mut pkg, &settings)?;
+    let settings_xml = aside(pkg, &settings)?;
     let even_odd = settings_xml
         .as_deref()
         .is_some_and(|x| toggled_on(x, "evenAndOddHeaders"));
@@ -235,7 +253,7 @@ pub fn parse_with_media_options(
         .filter(|k| options.comments || k.item != "comment")
     {
         let part = pkg.related(&main, kind.rel, kind.fallback);
-        let Some(part_xml) = aside(&mut pkg, &part)? else {
+        let Some(part_xml) = aside(pkg, &part)? else {
             continue;
         };
         notes.extend(read_notes(
@@ -263,7 +281,7 @@ pub fn parse_with_media_options(
     // file outside it, a relationship not defined) is still listed, so it
     // is counted among those not read; a part that is not there is listed
     // under the name it was given, and fails to read.
-    let names = fluree_doc_ooxml::PartNames::new(&pkg);
+    let names = fluree_doc_ooxml::PartNames::new(pkg);
     let by_id = fluree_doc_ooxml::by_id(&rels);
     let media = figure_rids
         .into_iter()
@@ -2051,6 +2069,7 @@ mod tests {
                 words: 1,
                 mean_confidence: Some(0.9),
                 min_confidence: Some(0.9),
+                set_aside: None,
             }]
         );
         let els = read.elements;

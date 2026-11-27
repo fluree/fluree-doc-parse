@@ -241,13 +241,17 @@ what the router made of it:
 | `Region` | its pixels look like text or a table, and it covers a tenth of the page or more | a model (`r{i}`), an OCR engine | yes |
 | `Small` | its pixels look like text, but it covers under a tenth of the page; half an inch (36 units) or more on its longer side | an OCR engine only (`small_region`) | no |
 | `NotTexty` | a tenth of the page or more, but the pixel probe does not take it for text: a photograph, a chart, an illustration | nothing | no |
-| `Unprobed` | not examined: a plain run decodes no image, and a run without OCR none under a tenth of the page, so nothing tells a capture of text from a photograph; half an inch or more on its longer side, at any share of the page | nothing in this run | once, by page |
+| `Unprobed` | not examined: a plain run decodes no image, and a run without OCR none under a tenth of the page, so nothing tells a capture of text from a photograph; half an inch or more on its longer side, at any share of the page | nothing in this run | no |
 
 The images are probed only by a run that acts on the verdict: escalation,
 OCR (`--ocr`, `--ocr-words`), the anchors or the layout sidecars, or
 `--probe-images`. The decode is most of what an image costs, so a plain run
 skips it and lists each image the text layer does not cover as `Unprobed`;
 a run that probes lists the same images as `Region`, `Small` or `NotTexty`.
+A run that probes and reads no image (escalation without OCR) leaves the
+images under a tenth of the page unexamined in the same way. `Unprobed` is
+listed here only: a plain run reads no image by design, so it warns about
+none, and the Markdown and XHTML carry no comment for them.
 
 The router sends a model only to `Region`; it declines `Small` and
 `NotTexty`. An
@@ -263,11 +267,14 @@ screen among them.
 What an engine reads in any region (`r{i}`, routed or small) is held to a
 noise rule all the same, a net behind the probe for a photograph or a
 gradient it took for text: the reading is set aside when its words' mean
-confidence is under 0.5; or it is under 0.8 and more than two thirds of
-them are fragments of one or two letters or figures (`1`, `I`, `J`), as an
-engine reads foliage, whose noise it may score as surely as a date stamped
-in a landscape; or one word is boxed over nine tenths of the region or
-more and is a fragment or read under 0.8. A crop of one line of text, or a
+confidence is under 0.5; or, in a small region only, it is under 0.8 and
+more than two thirds of them are fragments of one or two letters or
+figures (`1`, `I`, `J`), as an engine reads foliage, whose noise it may
+score as surely as a date stamped in a landscape; or one word is boxed
+over nine tenths of the region or more and is a fragment or read under
+0.8. A routed region is not judged by its fragments: a raster table of
+one- and two-digit cells is mostly fragments, and is kept however surely
+it is read over 0.5. A crop of one line of text, or a
 sign whose one word fills it, read surely, is kept. A reading scored on no
 scale, or with a score outside 0-1, is judged by its boxes alone. The
 region then stays listed. A reading of the whole page (`full`) is not
@@ -278,7 +285,8 @@ under 0.8 in the mean, such text can be set aside.
 Unread, the declined regions are listed anyway so a caller can decide: crop
 and read them, or take them for the logo, photograph or ornament they are as
 often as not. For the same reason only `Region` is in the stderr warning and
-the Markdown and XHTML comment, so a letterhead or a photograph never warns.
+the Markdown and XHTML comment, so a letterhead or a photograph, examined or
+not, never warns.
 An image under a tenth of the page that does not look like text either (an
 icon, a bullet, a small photograph) is not listed at all, nor any image the
 page's own text covers. Nor is a texty one under half an inch on its longer
@@ -346,39 +354,37 @@ where no Content-ID names that part alone, never its file name, which two
 images can share. An image several figures draw (a logo
 or a screenshot pasted more than once) is read once, under the name of the
 first figure drawing it, and listed unread once for each figure. `reason` is
-`NotRead` (nothing was asked to read it, or no reading of it was supplied),
-`Missing` (the file does not hold it: a link to an outside file, a
-relationship the file does not define), `UnsupportedFormat` (not a PNG, JPEG
-or TIFF: a vector drawing kept as EMF or WMF, a GIF), `PastAllowance` (past
-what one document may have read: 256 images, 512 million pixels as their
-headers state them), `Small` (nothing else read it, and the configured model
-is not sent it: under 400 pixels on its longer side or 48 on its shorter),
-`NotTexty` (the pixel probe a PDF's regions are routed by does not take it
-for text, a photograph, a chart or a logo, or it is too thin for a line of
-text, under 10 pixels on its shorter side, as a region must have them, and
-nothing read it; or the probe did, OCR read it, and what it read was noise,
-by the rule an OCR reading of a [region](#regions-nothing-read) is held to,
-and nothing else read it) or `Failed` (its reading failed, the part it names
-is not there, or its reading was set aside because its words could not be
-placed on it, which is told before the reading is judged noise, or its part
-is empty or ends before its format can be told; stderr says why). An
-image read that held no text was read, and is not listed, whether OCR or a
-model read it: no router judged its pixels to hold content, as it judges a
-page's or a region's, which a reading with no text leaves listed
-([the rule](../reference/vocabulary.md)).
+one of seven:
+
+| `reason` | the image | counted on stderr |
+|---|---|---|
+| `NotRead` | nothing was asked to read it, no reading of it was supplied, or the configured model was not sent it, past `escalation.max_crops` | yes |
+| `Missing` | the file does not hold it: a link to an outside file, a relationship the file does not define | yes |
+| `UnsupportedFormat` | not a PNG, JPEG or TIFF: a vector drawing kept as EMF or WMF, a GIF | no |
+| `PastAllowance` | past what one document may have read: 256 images, 512 million pixels as their headers state them (an image whose header does not parse is charged a pixel per byte) | yes |
+| `Small` | nothing else read it, and the configured model is not sent it: under 400 pixels on its longer side or 48 on its shorter | no |
+| `NotTexty` | nothing else read it, and the configured model is not sent it, as the pixel probe does not take it for text (a photograph, a chart, a logo); or OCR read it, and what it read was noise, as a photograph or a gradient read for text gives: the rule a [`NotTexty` region](#regions-nothing-read)'s reading is held to, and the reading is listed with `setAside: "noise"` ([OCR readings](#ocr-readings)) | no |
+| `Failed` | its reading failed, or was set aside because its words could not be placed on it (told before the reading is judged noise), the part it names is not there or cannot be read, its part is empty or ends before its format can be told, or its header does not parse, so the configured model is not sent it; stderr says why | yes |
+
+An image read that held no text was read, and is not listed. The pixel
+probe gates the model's call alone, which is billed and sends the image
+off the machine: an OCR engine (`--ocr`) reads a placed picture whatever
+the probe makes of it, and a reading supplied for it (`--ocr-words`,
+`--tier-results`) is taken whatever it shows.
+
+The list is written whatever reads the images, with no reader at all: a
+pipeline keeping the graph learns which pictures hold text it does not have.
 
 Unlike an unread page, it adds no comment to Markdown or XHTML: most
 documents carry a logo or a photo with no text in it, and a warning on each
-would be noise. The note on stderr counts them, except those no engine
-decodes (`UnsupportedFormat`, told by the image's first bytes whatever is
-configured, and never warned about), those under the model's floor
-(`Small`, which `--verbose` names, with `--ocr` to read them) and those
-the pixel probe does not take for text or whose OCR reading was noise
-(`NotTexty`): nearly every
-signed e-mail carries a logo, a GIF or a small PNG, a vector drawing
-has no text to read anyway, and a photograph is what it is as often as
-not, so these are listed here only, as a PDF's `Small` and `NotTexty`
-regions are.
+would be noise. The note on stderr counts them, except those the table marks
+as not counted: no engine decodes them (`UnsupportedFormat`, told by the
+image's first bytes whatever is configured, and never warned about), they
+are under the model's floor (`Small`, which `--verbose` names, with `--ocr`
+to read them) or they are not taken for text (`NotTexty`): nearly every
+signed e-mail carries a logo, a GIF or a small PNG, a vector drawing has no
+text to read anyway, and a photograph is what it is as often as not, so
+these are listed here only, as a PDF's `Small` and `NotTexty` regions are.
 
 ## OCR readings
 
@@ -388,7 +394,9 @@ regions are.
                        "@value": [
     { "pageIndex": 0, "crop": "full", "engine": "pp-ocrv6-small/oar-ocr", "words": 212,
       "meanConfidence": 0.9843, "minConfidence": 0.3121 },
-    { "pageIndex": 2, "crop": "r1", "words": 9 } ] } }
+    { "pageIndex": 2, "crop": "r1", "words": 9 },
+    { "image": "m1", "crop": "full", "words": 2, "meanConfidence": 0.28,
+      "minConfidence": 0.1, "setAside": "noise" } ] } }
 ```
 
 Present only when an OCR reading (`--ocr`, `--ocr-words`) was taken into the
@@ -405,14 +413,15 @@ and `minConfidence` are over the words (or lines) taken, to four decimals,
 and absent when the engine gave no score. One score outside 0-1 (Tesseract's
 0-100, not divided) leaves the whole reading without them, with a warning on
 stderr: its other scores are on that scale too, and could not be told apart
-from 0-1 ones. A reading whose words are not in the output is not listed: one
-set aside (not routed to a reader, superseded by the page's whole reading,
+from 0-1 ones. A reading whose words are not in the output is not listed,
+but for one set aside as noise (`setAside`, below): one
+refused (not routed to a reader, superseded by the page's whole reading,
 unplaceable: all of its words land off what it read (the page, or its region
 with the crop's margin) or have no usable box, or most of them do in a
 region's reading or in a whole reading of a page whose text is all pixels),
 and one a model's reading replaced (a page or a picture read whole through
-`--tier-results` or the configured model). One that took no word is, with
-`words: 0`, unless a model's reading replaced its page or read every region
+`--tier-results` or the configured model). One that took no word is listed, with
+`words: 0`, and one set aside as noise with what it held, unless a model's reading replaced its page or read every region
 the reading was to read: its region, for a region's reading; every region an
 OCR engine reads on its page, for a whole reading of a page of text. Those
 include the small regions no model is sent (`Small`), so a whole reading of a
@@ -429,10 +438,14 @@ readings from bad better (Tesseract's did in those measurements). Whatever
 the engine, nothing is routed on it, and the one rule applied is a net
 behind the pixel probe, for a photograph or a gradient it took for text: a
 reading of a region (`r{i}`) or of a picture whose mean is under 0.5, or
-under 0.8 with most of its words fragments, or with one fragment, or one
+under 0.8 with most of its words fragments (a small region's or a
+picture's: a routed region is not judged by its fragments), or with one
+fragment, or one
 word read under 0.8, boxed over nearly all of it, is noise, set aside before
 it is taken ([regions](#regions-nothing-read), [images](#images-nothing-read)),
-and listed here with `words: 0`. A reading of a whole page (`full`) or of an
+and listed here with `setAside: "noise"`: `words`, `meanConfidence` and
+`minConfidence` are then those of the words it held, none of which is in the
+output, so the confidence that made it noise shows. A reading of a whole page (`full`) or of an
 image read as a file is not judged: a scan's lines are words. A consumer that wants a second reading where OCR
 may be wrong is better served by comparing two engines than by a cut on this
 number.

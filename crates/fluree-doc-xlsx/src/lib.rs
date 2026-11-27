@@ -144,8 +144,8 @@ pub fn parse_with_ocr(
     bytes: &[u8],
     engine: &dyn fluree_doc_vision::OcrEngine,
 ) -> Result<OcrParse, XlsxError> {
-    let (mut elements, info, media) = parse_with_media(bytes)?;
     let mut pkg = Package::open(bytes).map_err(XlsxError::Zip)?;
+    let (mut elements, info, media) = parse_package(&mut pkg)?;
     let r = fluree_doc_image::read_placed(media, &mut |part| read_media(&mut pkg, part), engine);
     fluree_doc_image::place_after_figures(&mut elements, r.read);
     Ok(OcrParse {
@@ -166,7 +166,15 @@ pub fn parse_with_ocr(
 pub fn parse_with_media(
     bytes: &[u8],
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), XlsxError> {
-    let mut pkg = Package::open(bytes).map_err(XlsxError::Zip)?;
+    parse_package(&mut Package::open(bytes).map_err(XlsxError::Zip)?)
+}
+
+/// [`parse_with_media`] from a package already opened, for a caller that
+/// goes on to read the images' bytes from it ([`read_media`]): opening it
+/// reads the archive's whole directory, once.
+pub fn parse_package(
+    pkg: &mut Package<'_>,
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), XlsxError> {
     let main = pkg.main_part("xl/workbook.xml");
     let workbook = pkg.read(&main).ok_or(XlsxError::NoWorkbook)?;
     let rels = pkg.relationships(&main);
@@ -190,7 +198,7 @@ pub fn parse_with_media(
         .transpose()?
         .unwrap_or_default();
     let (sheets, date1904) = parse_workbook_xml(&workbook)?;
-    let names = PartNames::new(&pkg);
+    let names = PartNames::new(pkg);
     let mut budget = Budget::default();
 
     let mut out = Vec::new();
@@ -3963,6 +3971,7 @@ mod tests {
                 words: 1,
                 mean_confidence: Some(0.9),
                 min_confidence: Some(0.9),
+                set_aside: None,
             }]
         );
         // The second picture's part is not in the package: named, it fails

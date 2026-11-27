@@ -89,7 +89,10 @@ pub struct ImagePlacement {
     /// with one key show the same pixels the same way: a form's checkbox
     /// drawn two hundred times is one image an OCR engine reads once
     /// ([`crate::ocr::copies`]). `None` when not known: a stencil of more
-    /// than [`MAX_KEYED_STENCIL_PX`] pixels, which is not decoded for it.
+    /// than [`MAX_KEYED_STENCIL_PX`] pixels, which is not decoded for it;
+    /// and every one when extraction keys none
+    /// ([`ExtractOptions::key_images`] off): each region is then read on
+    /// its own.
     ///
     /// `None` too when its box shows more than the image, or less, since a
     /// crop of it would show something else than the image's pixels: when
@@ -119,6 +122,13 @@ pub struct ExtractOptions {
     /// with an engine turns it on. Off by default; nothing is probed while
     /// [`ExtractOptions::probe_images`] is off.
     pub probe_small_images: bool,
+    /// Key each placement by what it shows ([`ImagePlacement::key`]), so an
+    /// OCR engine reads an image drawn again once ([`crate::ocr::copies`]).
+    /// The key hashes a raster image's encoded stream (decrypted, in an
+    /// encrypted file) and decodes a small stencil, at every placement:
+    /// a caller that reads with no engine turns it off, and every key is
+    /// `None`. On by default.
+    pub key_images: bool,
 }
 
 impl Default for ExtractOptions {
@@ -126,6 +136,7 @@ impl Default for ExtractOptions {
         Self {
             probe_images: true,
             probe_small_images: false,
+            key_images: true,
         }
     }
 }
@@ -426,6 +437,9 @@ struct Collector<'a> {
 struct Probes {
     /// No image is probed: nothing will read the result.
     off: bool,
+    /// No placement is keyed ([`ImagePlacement::key`]): no OCR engine will
+    /// read the copies ([`ExtractOptions::key_images`] off).
+    unkeyed: bool,
     /// The images too small to be routed to a model are probed too: an OCR
     /// engine will read them ([`ExtractOptions::probe_small_images`]).
     small: bool,
@@ -1052,7 +1066,11 @@ impl<'a> Device<'a> for Collector<'a> {
                     || c.y1 < b.y1 - OVERLAP_EPS
             })
         });
-        let key = if cut { None } else { image_key(&i, t) };
+        let key = if cut || self.probes.unkeyed {
+            None
+        } else {
+            image_key(&i, t)
+        };
         self.images.push(ImagePlacement {
             bbox,
             texty,
@@ -2256,6 +2274,7 @@ pub fn extract_bytes_with(
     let mut italics = std::collections::HashMap::new();
     let mut probes = Probes {
         off: !options.probe_images,
+        unkeyed: !options.key_images,
         small: options.probe_small_images,
         ..Probes::default()
     };
@@ -2503,8 +2522,14 @@ fn read_upright(page: &mut Page) {
 
 /// Turn every coordinate a page carries by `turn` degrees (90, 180 or 270)
 /// counter-clockwise, and record the turn in [`Page::rotation`], on top of
-/// any it had, so the display frame stays where it was.
+/// any it had, so the display frame stays where it was. A turn is taken
+/// modulo 360 (-90 is 270); one of no quarter turn, or of a part of one,
+/// leaves the page as it is.
 pub(crate) fn turn_page(page: &mut Page, turn: i32) {
+    let turn = turn.rem_euclid(360);
+    if !matches!(turn, 90 | 180 | 270) {
+        return;
+    }
     let (w, h) = (page.width, page.height);
     let point = |p: (f64, f64)| turn_point(w, h, turn, p);
     let rect = |b: BBox| turn_box(w, h, turn, b);
@@ -2555,12 +2580,15 @@ pub(crate) fn turn_page(page: &mut Page, turn: i32) {
 }
 
 /// Where a point of a page `w` × `h` lands once the page is turned by `turn`
-/// degrees (90, 180 or 270) counter-clockwise, as [`turn_page`] turns it.
+/// degrees (90, 180 or 270) counter-clockwise, as [`turn_page`] turns it:
+/// modulo 360, and where it is for any other turn, which [`turn_page`]
+/// does not make.
 pub(crate) fn turn_point(w: f64, h: f64, turn: i32, (x, y): (f64, f64)) -> (f64, f64) {
-    match turn {
+    match turn.rem_euclid(360) {
         90 => (y, w - x),
         180 => (w - x, h - y),
-        _ => (h - y, x),
+        270 => (h - y, x),
+        _ => (x, y),
     }
 }
 
@@ -2821,6 +2849,34 @@ mod tests {
         let mut v: PageInk = (0..body).map(|_| Some((1u128, Some(0.50)))).collect();
         v.extend((0..heavy).map(|_| Some((2u128, Some(ratio)))));
         vec![v]
+    }
+
+    #[test]
+    fn a_page_turns_by_quarter_turns_only() {
+        let (w, h, p) = (600.0, 800.0, (100.0, 50.0));
+        assert_eq!(turn_point(w, h, 90, p), (50.0, 500.0));
+        assert_eq!(turn_point(w, h, 180, p), (500.0, 750.0));
+        assert_eq!(turn_point(w, h, 270, p), (750.0, 100.0));
+        assert_eq!(turn_point(w, h, -90, p), (750.0, 100.0));
+        // No turn, a whole one, or a part of a quarter: the point stays.
+        for turn in [0, 360, 45, -10] {
+            assert_eq!(turn_point(w, h, turn, p), p, "{turn}");
+        }
+        for turn in [0, 360, 45] {
+            let mut pg = page(1);
+            pg.glyphs[0].origin = p;
+            turn_page(&mut pg, turn);
+            assert_eq!((pg.width, pg.height, pg.rotation), (w, h, 0), "{turn}");
+            assert_eq!(pg.glyphs[0].origin, p, "{turn}");
+        }
+        // A quarter, and back by a quarter the other way.
+        let mut pg = page(1);
+        pg.glyphs[0].origin = p;
+        turn_page(&mut pg, 90);
+        assert_eq!((pg.width, pg.height, pg.rotation), (h, w, 90));
+        turn_page(&mut pg, -90);
+        assert_eq!((pg.width, pg.height, pg.rotation), (w, h, 0));
+        assert_eq!(pg.glyphs[0].origin, p);
     }
 
     #[test]
@@ -3674,6 +3730,22 @@ mod probe_tests {
         // An image a model is sent is probed either way.
         let doc = extract_bytes(striped_page_drawn(40)).expect("pdf");
         assert_eq!(doc.pages[0].images[0].texty, Some(true));
+    }
+
+    #[test]
+    fn an_image_is_keyed_only_for_an_engine_that_reads_its_copies() {
+        let keyed = extract_bytes(striped_page()).expect("pdf");
+        assert!(keyed.pages[0].images[0].key.is_some());
+        // A plain run: nothing probed, nothing keyed, the stream neither
+        // decoded nor hashed.
+        let options = ExtractOptions {
+            probe_images: false,
+            key_images: false,
+            ..ExtractOptions::default()
+        };
+        let plain = extract_bytes_with(striped_page(), &options).expect("pdf");
+        assert_eq!(plain.pages[0].images[0].texty, None);
+        assert_eq!(plain.pages[0].images[0].key, None);
     }
 }
 

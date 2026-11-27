@@ -115,16 +115,12 @@ prose — with its page and its box, in PDF units, top-left origin:
      transcribed: page 3 at 56,582,556,732. This output is missing it. -->
 ```
 
-A plain run decodes no image (see
-[`Unprobed`](doco.md#regions-nothing-read)), so it cannot tell a screenshot
-from a photograph; it says how many images it did not examine, by page:
+A plain run decodes no image, so it cannot tell a screenshot from a
+photograph: the images it did not examine are listed in
+[`doc:unreadRegions`](doco.md#regions-nothing-read) as `Unprobed`, and get
+no comment here.
 
-```html
-<!-- fluree-doc-parse: 2 images on pages 1, 4 were not examined: a parse
-     that probes images (--probe-images, or OCR) can tell whether they hold text. -->
-```
-
-One comment says all of these when there are several. A comment rather than text, so
+One comment says both when there are both. A comment rather than text, so
 extracting text from this file does not read a sentence this library wrote
 as though the document had said it. The machine-readable forms are
 [`doc:unreadPages`](doco.md#pages-nothing-read) and

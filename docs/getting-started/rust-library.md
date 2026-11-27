@@ -267,8 +267,8 @@ stable — the same promise [`fdoc dev`](../cli/dev.md) makes about its output.
 ## Upgrading
 
 What a caller of these crates has to change, by the work that changed it,
-and what replaces each call removed or changed. No public struct is
-`#[non_exhaustive]`, and most have every field public, so each field one
+and what replaces each call removed or changed. Only `ExtractOptions` is
+`#[non_exhaustive]`; the other structs mostly have every field public, so each field one
 gains breaks a caller building it with a struct literal: build
 `DocoOptions`, `Notes` and `escalate::CropHints` with
 `..Default::default()`, as the example above does, rather than field by
@@ -327,7 +327,19 @@ build them.
   (`ExtractOptions::probe_images` off, `extract_bytes_with`).
 - `fluree_doc_model::DocoOptions` and `Notes` gain `unread_regions` and
   `warnings`. `Notes` is no longer `Eq`, only `PartialEq`: a region's box is
-  floating-point.
+  floating-point. `==` still compares two of them; code that needs
+  `Notes: Eq` (a generic bound `T: Eq`, or a struct of its own deriving
+  `Eq` with a `Notes` field) breaks, and derives `PartialEq` only.
+- `document::routing_is_consulted(&opts)` is gone: the analysis now routes
+  every page, to number its regions once, whatever reads the verdict. What
+  it answered, whether anything downstream acts on the routing, is
+  `opts.emit_anchors || opts.layout_prefix.is_some()`, as `fdoc convert`
+  now asks it when it decides whether to probe the images.
+- `ExtractOptions` gains `key_images` (on by default): each placement's
+  `key`, which an OCR engine reads an image drawn again once by. A caller
+  that reads with no engine turns it off, so no image stream is hashed and
+  no stencil decoded for it; `ExtractOptions` is `#[non_exhaustive]`, so
+  this breaks no caller.
 - New: `fluree_doc_pdf::unread_regions` and `parse_warnings`, which fill
   them; `route::Routing`, `route::Declined`, `route::declined_regions` (and
   `_for`, `_numbered`), `route::ocr_regions_for`; `ocr::copies`,
@@ -384,14 +396,21 @@ build them.
 ### OCR readings and their confidence
 
 - `DocoOptions` and `Notes` gain `ocr_readings` (`ocr`, on `Notes`), listed
-  as `doc:ocrReadings`.
+  as `doc:ocrReadings`. A literal that names every field of either no
+  longer compiles: add the field, or end it with `..Default::default()`,
+  which both implement and which keeps a literal compiling through later
+  additions.
 - New in this release, nothing to change from main; listed for a caller
   of this work's earlier pull requests:
   - The OCR parses of `fluree_doc_docx`, `fluree_doc_xlsx` and
     `fluree_doc_image` (`ImageElements`, `PlacedRead`) gain `ocr`, and
     `ImageElements` gains `refused`.
-  - `ocr::Injected` gains `min_conf`, `engine` and `regions`;
-    `ocr::readings` lists the readings an output holds;
+  - `ocr::Injected` gains `min_conf`, `engine`, `regions` and `noise`
+    (an `ocr::Noise`: the words a region's reading held when it was set
+    aside as noise, and their confidence; `ocr::noise_of` gives it for a
+    picture's reading); `ocr::readings` lists the readings an output holds,
+    and `fluree_doc_model::OcrReading` is one of them, its `set_aside`
+    saying why a reading's words are not in the output (`noise`);
     `WordReading::scores_out_of_range` and `words_with_text` count the
     scores outside 0-1 a warning names.
   - A reading none of whose words land on what it read, or a region's most
