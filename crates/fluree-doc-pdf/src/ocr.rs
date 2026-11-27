@@ -3568,7 +3568,10 @@ mod tests {
             ("4", [80.0, 382.0, 86.0, 398.0]),
             ("37", [100.0, 382.0, 112.0, 398.0]),
         ];
-        let r = inject(&mut doc, &[(0, Crop::Region(1), scored(&figures, Some(0.7)))]);
+        let r = inject(
+            &mut doc,
+            &[(0, Crop::Region(1), scored(&figures, Some(0.7)))],
+        );
         assert_eq!((r[0].taken, r[0].dropped), (0, 3), "{:?}", r[0]);
     }
 
