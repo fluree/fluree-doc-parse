@@ -459,6 +459,20 @@ body text, a box laid out around paragraphs, a drawing's labels.
   a head over each column of points, keeps the grid a table. So do rules
   across it, one above and one below within the grid's own height: there
   the grid is part of one row of a ruled table whose cells hold points.
+
+  Lists that line up so with nothing to corroborate a table are refused as
+  one, and read as the page's prose. Where the page's text runs on below
+  them in one column across their gutter, the page has no gutter between
+  them, and their lines were read across both lists by turns, an item's
+  wrapped line parted from it by the other list's item. Each column of such
+  a run that is a bulleted list is read as a box: the page reads boxes side
+  by side each whole, left to right, so each list reads under its own head.
+  A column is a list where two lines or more open on a bullet and every
+  other line is its head (the first) or set in past the bullets. Columns
+  part at the middle of each gutter, so a bullet hanging left of its column
+  is its list's. A list's last item may wrap past the run's last row: lines
+  set where its items' wrapped lines are, a line's leading apart, carry it
+  on.
 - **A box round paragraphs.** A ruled box whose one row under its labels
   holds a paragraph (sixty words or more in a cell) is a page laid out in
   columns, not a table.

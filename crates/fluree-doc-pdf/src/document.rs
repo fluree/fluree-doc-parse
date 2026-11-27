@@ -5180,6 +5180,145 @@ fn side_of(
     (cut.rows() >= 2 && held >= 2 && ruled).then_some(cut)
 }
 
+/// Fewest items a column of aligned rows holds to be a list ([`list_boxes`]):
+/// one bullet is an item, not a list.
+const LIST_COLUMN_ITEMS: usize = 2;
+
+/// Farthest, in the list's own font size, from one line's foot to the top
+/// of the next that carries its item on past the rows alignment read: a
+/// wrapped line's leading, short of a paragraph's gap.
+const LIST_TAIL_LEADING: f64 = 1.0;
+
+/// The boxes of bulleted lists set side by side, a list to each column of a
+/// run of rows alignment lined up but refused as a table
+/// ([`table::detect_aligned_with_refused`]).
+///
+/// Where two lists' lines fall level, the page has no gutter between them
+/// where its text runs on below them in one column, and the lists' lines
+/// were read across both by turns: a flyer's `What is the ACS?` items
+/// between its `ACS Webpage` items, each item's wrapped line parted from it.
+/// Given each list's box, the page reads them as boxes side by side, each
+/// whole, left to right, each under its own head.
+///
+/// Every column must be a bulleted list: [`LIST_COLUMN_ITEMS`] lines or
+/// more open on a bullet, every other line its head (its first) or set in
+/// past the bullets. A column's bullets may hang left of it: columns are
+/// parted at the middle of each gutter, and the outer ones run on outward.
+/// A list's last item may wrap past the run's last row: lines set where its
+/// items' wrapped lines are, a leading apart, carry it on.
+fn list_boxes(refused: &[Grid], glyphs: &[Glyph]) -> Vec<crate::geom::BBox> {
+    let mut out = Vec::new();
+    for g in refused.iter().filter(|g| g.cols() >= 2 && g.rows() >= 2) {
+        let cells = g.glyph_cells(glyphs);
+        let cols = g.cols();
+        // Each column's ink, from the glyphs its cells read.
+        let mut ink: Vec<(f64, f64)> = vec![(f64::MAX, f64::MIN); cols];
+        for (gl, home) in glyphs.iter().zip(&cells) {
+            if let (Some(i), Some(b)) = (home, gl.bbox) {
+                let e = &mut ink[i % cols];
+                *e = (e.0.min(b.x0), e.1.max(b.x1));
+            }
+        }
+        if ink.iter().any(|e| e.0 > e.1) {
+            continue;
+        }
+        let parts: Vec<(f64, f64)> = (0..cols)
+            .map(|c| {
+                let lo = if c == 0 {
+                    f64::MIN
+                } else {
+                    (ink[c - 1].1 + ink[c].0) / 2.0
+                };
+                let hi = if c + 1 == cols {
+                    f64::MAX
+                } else {
+                    (ink[c].1 + ink[c + 1].0) / 2.0
+                };
+                (lo, hi)
+            })
+            .collect();
+        let boxes: Vec<Option<crate::geom::BBox>> = parts
+            .iter()
+            .map(|&side| list_column(glyphs, side, (g.bbox.y0, g.bbox.y1)))
+            .collect();
+        if boxes.iter().all(Option::is_some) {
+            out.extend(boxes.into_iter().flatten());
+        }
+    }
+    out
+}
+
+/// The box of the bulleted list set between `x0` and `x1` over the rows
+/// `band`, its last item carried on below them; see [`list_boxes`].
+fn list_column(
+    glyphs: &[Glyph],
+    (x0, x1): (f64, f64),
+    band: (f64, f64),
+) -> Option<crate::geom::BBox> {
+    let at = |lo: f64, hi: f64| -> Vec<crate::line::Line> {
+        let side: Vec<Glyph> = glyphs
+            .iter()
+            .filter(|q| {
+                q.bbox.is_some_and(|b| {
+                    let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                    cx >= x0 && cx < x1 && cy >= lo && cy <= hi
+                })
+            })
+            .cloned()
+            .collect();
+        crate::line::assemble(&side)
+    };
+    let lines = at(band.0 - 1.0, band.1 + 1.0);
+    let opens = |l: &crate::line::Line| {
+        l.text
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(block::is_bullet)
+    };
+    let bullets: Vec<f64> = lines
+        .iter()
+        .filter(|l| opens(l))
+        .map(|l| l.bbox.x0)
+        .collect();
+    if bullets.len() < LIST_COLUMN_ITEMS {
+        return None;
+    }
+    let edge = bullets.iter().copied().fold(f64::MAX, f64::min);
+    let carried = |l: &crate::line::Line| l.bbox.x0 > edge + 1.0;
+    let top = lines.iter().map(|l| l.bbox.y0).fold(f64::MAX, f64::min);
+    if !lines
+        .iter()
+        .all(|l| opens(l) || carried(l) || l.bbox.y0 <= top)
+    {
+        return None;
+    }
+    let mut kept: Vec<crate::line::Line> = lines;
+    kept.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+    // The wrapped lines' indent: where an item's text carries on.
+    let indents: Vec<f64> = kept
+        .iter()
+        .filter(|l| !opens(l) && carried(l))
+        .map(|l| l.bbox.x0)
+        .collect();
+    let fs = kept
+        .iter()
+        .map(|l| l.font_size as f64)
+        .fold(0.0, f64::max)
+        .max(1.0);
+    let mut foot = kept.last().map_or(band.1, |l| l.bbox.y1);
+    let mut tail = at(band.1 + 1.0, band.1 + 4.0 * fs);
+    tail.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+    for l in tail {
+        let wraps = indents.iter().any(|x| (l.bbox.x0 - x).abs() <= 2.0);
+        if l.bbox.y0 > foot - 1.0 && l.bbox.y0 - foot <= LIST_TAIL_LEADING * fs && wraps {
+            foot = l.bbox.y1;
+            kept.push(l);
+        }
+    }
+    kept.iter().map(|l| l.bbox).reduce(|a, b| a.union(&b))
+}
+
 /// Alignment's tables, each read across the page's gutter between two of
 /// its columns of text read again on each side of the gutter alone.
 fn aligned_by_columns<'a>(
@@ -5447,9 +5586,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let col_lines = || -> &[table::TextRun] {
             page_runs.get_or_init(|| crate::textgrid::runs(text_lines()))
         };
-        let page_aligned = timed(&mut timings.tables, || {
-            let found = table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index);
-            aligned_by_columns(found, &p.glyphs, p, col_lines)
+        let (page_aligned, side_lists) = timed(&mut timings.tables, || {
+            let (found, refused) =
+                table::detect_aligned_with_refused(&p.glyphs, &p.rules, &p.fills, p.index);
+            (
+                aligned_by_columns(found, &p.glyphs, p, col_lines),
+                list_boxes(&refused, &p.glyphs),
+            )
         });
         // Alignment is read again below from the glyphs outside the grids
         // (`glyphs_outside_grids`, which keeps them in order). Where no grid
@@ -6117,7 +6260,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let pictures: Vec<crate::geom::BBox> = p.images.iter().map(|im| im.bbox).collect();
         // Drawn boxes, outlined or filled: a stretch's lines read box by
         // box where they stand in boxes side by side.
-        let frames: Vec<crate::geom::BBox> = p.fills.iter().map(|f| f.bbox).collect();
+        // Bulleted lists set side by side ([`list_boxes`]) are read as boxes
+        // side by side are, each list whole.
+        let frames: Vec<crate::geom::BBox> = p
+            .fills
+            .iter()
+            .map(|f| f.bbox)
+            .chain(side_lists.iter().copied())
+            .collect();
         // Boxes drawn to be seen: shaded, not white, or outlined, and not
         // the page's background nor a tint laid under most of it.
         let panels: Vec<crate::geom::BBox> = p
@@ -10040,6 +10190,74 @@ mod tests {
             ys,
         };
         (grid, glyphs)
+    }
+
+    #[test]
+    fn lists_side_by_side_alignment_refused_are_read_as_boxes() {
+        // Two bulleted lists under their heads, their items level: the
+        // left's bullets hang outside the run's edge, and its last item wraps
+        // past the run's last row.
+        let word = |x0: f64, y: f64, t: &str| Glyph {
+            text: t.into(),
+            bbox: Some(BBox {
+                x0,
+                y0: y - 8.0,
+                x1: x0 + 5.0 * t.chars().count() as f64,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x0, y),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            italic: false,
+            advance: Some(5.0 * t.chars().count() as f64),
+            draw_index: 0,
+            ocr: None,
+        };
+        let page = |right_bulleted: bool| {
+            let b = |x: f64, y: f64| word(x, y, "•");
+            let mut gl = vec![
+                word(40.0, 10.0, "Survey"),
+                b(40.0, 22.0),
+                word(50.0, 22.0, "Ongoing survey"),
+                word(50.0, 34.0, "of the nation"),
+                b(40.0, 46.0),
+                word(50.0, 46.0, "Geographies include"),
+                word(50.0, 58.0, "tracts and more."),
+                word(340.0, 10.0, "Webpage"),
+                word(350.0, 22.0, "Available online"),
+                word(350.0, 34.0, "Includes resources"),
+                word(350.0, 46.0, "for data users"),
+            ];
+            if right_bulleted {
+                gl.push(b(340.0, 22.0));
+                gl.push(b(340.0, 34.0));
+            }
+            for (i, g) in gl.iter_mut().enumerate() {
+                g.draw_index = i;
+            }
+            gl
+        };
+        let run = Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 45.0,
+                y0: 0.0,
+                x1: 450.0,
+                y1: 50.0,
+            },
+            xs: vec![45.0, 330.0, 450.0],
+            ys: vec![0.0, 14.0, 26.0, 38.0, 50.0],
+        };
+        let boxes = list_boxes(std::slice::from_ref(&run), &page(true));
+        assert_eq!(boxes.len(), 2, "{boxes:?}");
+        // The left list holds its hanging bullets and its wrapped last line.
+        assert!(boxes[0].x0 <= 40.0 && boxes[0].y1 >= 58.0, "{:?}", boxes[0]);
+        assert!(boxes[1].x0 >= 330.0, "{:?}", boxes[1]);
+        // A column that is no list, and no boxes.
+        assert!(list_boxes(std::slice::from_ref(&run), &page(false)).is_empty());
     }
 
     #[test]
