@@ -10132,6 +10132,8 @@ fn aligned_runs(rows: &[Vec<&crate::glyph::Glyph>], cells: &[Vec<f64>], page: us
         // own.
         let mut run_rows: Vec<Vec<&crate::glyph::Glyph>> = vec![rows[i].clone()];
         let mut run_cells: Vec<Vec<f64>> = vec![cells[i].clone()];
+        // The foot of a last value wrapped under the last row.
+        let mut wrapped_foot: Option<f64> = None;
         let mut j = i;
         while j + 1 < rows.len() {
             if cells[j + 1].len() >= 2 {
@@ -10170,18 +10172,27 @@ fn aligned_runs(rows: &[Vec<&crate::glyph::Glyph>], cells: &[Vec<f64>], page: us
                 && within_pitch(&run_rows, &rows[j + 1])
             {
                 // The grid's last value wrapped, under its last row: the
-                // grid's foot stands under the row's own, so the line is read
-                // into it. Its rows' tops, and so their pitch, stay as they
-                // were.
-                let wrapped = rows[j + 1].clone();
-                run_rows.last_mut().unwrap().extend(wrapped);
+                // grid's foot is moved down under the line, so it is read
+                // into the row. The grid is found from the rows alone: a
+                // last band two lines deep, counted as a pitch, made the
+                // rows' pitch two lines, and rows a line apart read as one
+                // row's wrapped lines (`By: Name: Title:`).
+                wrapped_foot = rows[j + 1]
+                    .iter()
+                    .filter_map(|g| g.bbox.map(|b| b.y1))
+                    .reduce(f64::max);
                 j += 1;
+                break;
             } else {
                 break;
             }
         }
         if run_rows.len() >= MIN_ALIGNED_ROWS {
-            if let Some(g) = grid_from_cells(&run_rows, &run_cells, page) {
+            if let Some(mut g) = grid_from_cells(&run_rows, &run_cells, page) {
+                if let (Some(y1), Some(foot)) = (wrapped_foot, g.ys.last_mut()) {
+                    *foot = foot.max(y1 + 1.0);
+                    g.bbox.y1 = *foot;
+                }
                 out.push(g);
             }
         }
@@ -14605,6 +14616,29 @@ mod tests {
         let (rows, cells) = aligned_rows(&gl);
         let texts = aligned_runs(&rows, &cells, 0)[0].cell_texts(&gl);
         assert_eq!(texts[2 * 4 + 1], "2874 ELM BLVD");
+        // A signature block: three fields a line apart, two more a blank
+        // line apart, the last one's value wrapped. The wrapped line deepens
+        // the last row only; the rows a line apart stay rows of their own.
+        let mut gl = Vec::new();
+        for (r, label, value) in [
+            (0, "By:", "____________"),
+            (1, "Name:", "Jordan Lee"),
+            (2, "Title:", "Member"),
+            (4, "Email:", "jl@example.com"),
+            (6, "Address:", "12 Harbor Way"),
+        ] {
+            gl.push(word(0.0, r, label, None));
+            gl.push(word(60.0, r, value, None));
+        }
+        gl.push(word(60.0, 7, "Portland ME 04101", None));
+        let (rows, cells) = aligned_rows(&gl);
+        let grids = aligned_runs(&rows, &cells, 0);
+        assert_eq!(grids.len(), 1);
+        assert_eq!(grids[0].ys.len(), 6);
+        let texts = grids[0].cell_texts(&gl);
+        assert_eq!(texts[1], "____________");
+        assert_eq!(texts[2 * 2], "Title:");
+        assert_eq!(texts[4 * 2 + 1], "12 Harbor Way Portland ME 04101");
     }
 
     #[test]
