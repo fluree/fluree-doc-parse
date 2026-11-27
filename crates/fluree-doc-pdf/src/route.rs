@@ -385,17 +385,25 @@ pub fn declined_regions_numbered(
         return Vec::new();
     };
     let mut text = None;
-    let mut seen = std::collections::HashSet::new();
+    // Each box listed once, by where in `out` it is; `None` for a box an
+    // image not listed (a checkbox, say) was drawn in first.
+    let mut listed: std::collections::HashMap<[u64; 4], Option<usize>> =
+        std::collections::HashMap::new();
+    // Each box an OCR engine reads, counted as [`ocr_extras`] counts them:
+    // apart from `listed`, which an image of any kind enters. A photograph
+    // listed first in a box (unprobed, or not texty) must not hide a
+    // stencil drawn over it in that box, which an engine reads: the boxes
+    // after it would be numbered one short of the engine's.
+    let mut read_boxes = std::collections::HashSet::new();
     let mut read = routed.len();
-    let mut out = Vec::new();
+    let mut out: Vec<(BBox, Declined, Option<usize>)> = Vec::new();
     for p in &page.images[..=last] {
         let worth = match p.texty {
             Some(true) => true,
             Some(false) => large(p),
             None => sized(p),
         };
-        if !worth || !holds_a_line(p) || routed.contains(&p.bbox) || !seen.insert(box_key(&p.bbox))
-        {
+        if !worth || !holds_a_line(p) || routed.contains(&p.bbox) {
             continue;
         }
         if !text
@@ -404,24 +412,32 @@ pub fn declined_regions_numbered(
         {
             continue;
         }
-        match p.texty {
+        let key = box_key(&p.bbox);
+        let number = (p.texty == Some(true) && read_boxes.insert(key)).then(|| {
+            read += 1;
+            read - 1
+        });
+        let why = match p.texty {
+            None => Declined::Unprobed,
+            Some(false) => Declined::NotTexty,
+            // A checkbox or an icon; or, texty and large, a region the
+            // page's routing does not route, which only a routing kept from
+            // before the page changed can leave.
+            Some(true) if large(p) || !sized(p) => {
+                listed.entry(key).or_insert(None);
+                continue;
+            }
+            Some(true) => Declined::Small,
+        };
+        match listed.get(&key) {
             None => {
-                out.push((p.bbox, Declined::Unprobed, None));
-                continue;
+                listed.insert(key, Some(out.len()));
+                out.push((p.bbox, why, number));
             }
-            Some(false) => {
-                out.push((p.bbox, Declined::NotTexty, None));
-                continue;
-            }
-            Some(true) => {}
-        }
-        let number = read;
-        read += 1;
-        // A checkbox or an icon; or, texty and large, a region the page's
-        // routing does not route, which only a routing kept from before the
-        // page changed can leave.
-        if !large(p) && sized(p) {
-            out.push((p.bbox, Declined::Small, Some(number)));
+            // An engine reads the box after all: say so, with its number,
+            // where an image under it was listed as read by nothing.
+            Some(&Some(at)) if number.is_some() => out[at] = (p.bbox, why, number),
+            Some(_) => {}
         }
     }
     out
@@ -753,6 +769,39 @@ mod tests {
         let p = page_with(1500, 0, vec![(small, false)]);
         assert!(ocr_regions(&p).is_empty());
         assert!(declined_regions(&p).is_empty());
+    }
+
+    #[test]
+    fn a_photograph_under_its_mask_takes_no_number_from_the_regions_after_it() {
+        // A small photograph not probed (a run that probes no image that
+        // small), then a stencil drawn over it in its box, which is texty
+        // whatever it holds, then a capture a date's height high. An engine
+        // reads the stencil's box and the capture: the capture is its
+        // second region, and the box, listed as unexamined first, is read.
+        let photo = b(50.0, 100.0, 250.0, 160.0);
+        let small = b(300.0, 100.0, 500.0, 130.0);
+        let mut p = page_with(1500, 0, vec![(photo, false), (photo, true), (small, true)]);
+        p.images[0].texty = None;
+        let route = decide(&p).0;
+        assert_eq!(route, Route::Deterministic);
+        assert_eq!(ocr_regions_for(&p, &route), vec![photo, small]);
+        assert_eq!(
+            declined_regions_numbered(&p, &route),
+            [
+                (photo, Declined::Small, Some(0)),
+                (small, Declined::Small, Some(1))
+            ]
+        );
+        // Alone, the photograph is listed as not examined, with no number.
+        let mut p = page_with(1500, 0, vec![(photo, false), (small, true)]);
+        p.images[0].texty = None;
+        assert_eq!(
+            declined_regions_numbered(&p, &decide(&p).0),
+            [
+                (photo, Declined::Unprobed, None),
+                (small, Declined::Small, Some(0))
+            ]
+        );
     }
 
     #[test]
