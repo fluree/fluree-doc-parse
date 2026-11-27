@@ -372,11 +372,34 @@ fn names_spanned_columns(
             .count()
             * 2
             >= rows.len() - 2;
+    // A boundary the ruling leaves open on every row parts columns read
+    // from their text, not a span: `Label Claim | % of Label Claim` under
+    // each ingredient, no rule between them from the header down. Only
+    // inside a group ruled off from the next in the second row too, and
+    // with the same labels under every group: a table ruled with no
+    // verticals at all leaves every boundary open, and its first row spans
+    // nothing; a row of data under a banner names no columns twice over.
+    let open_throughout = |k: usize| {
+        (1..rows.len()).all(|r| continues_left.get(r * cols + k).copied().unwrap_or(false))
+    };
+    let under =
+        |a: usize, b: usize| -> Vec<&str> { rows[1][a..b].iter().map(|t| t.trim()).collect() };
+    let repeated = spans.len() >= 2
+        && spans
+            .iter()
+            .all(|&(a, b)| under(a, b) == under(spans[0].0, spans[0].1));
+    let ruled_off = |a: usize, b: usize| {
+        repeated
+            && b - a < cols
+            && (a == 0 || !continues_left[cols + a])
+            && (b >= cols || !continues_left[cols + b])
+    };
     let labels = |a: usize, b: usize| {
         let names: Vec<&str> = rows[1][a..b].iter().map(|t| t.trim()).collect();
         let short = b - a < cols || names.iter().all(|t| t.split_whitespace().count() <= 4);
         short
-            && (a + 1..b).all(|k| !continues_left[cols + k])
+            && (a + 1..b)
+                .all(|k| !continues_left[cols + k] || (open_throughout(k) && ruled_off(a, b)))
             && names
                 .iter()
                 .all(|t| !t.is_empty() && (keyed || !table::is_numeric_cell(t)))
@@ -803,6 +826,41 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         }
         let n = prev.header_rows.unwrap_or(0).min(head.len());
         let repeats = n > 0 && rows.len() > n && (0..n).all(|r| same(&head[r], &rows[r]));
+        // The header repeated with a cell of it read on into the label under
+        // it: the stub's head drawn open into the first group's cell
+        // (`Limit Level` over `100%`, read whole as `Limit Level 100%`).
+        // What runs on past the repeated head is the first row's label,
+        // where that row's own cell is empty.
+        let run_on = |r: usize, c: usize| -> Option<String> {
+            let h: Vec<&str> = head[r].get(c)?.split_whitespace().collect();
+            let t: Vec<&str> = rows[r].get(c)?.split_whitespace().collect();
+            let rest = t.get(h.len()..)?.join(" ");
+            (!h.is_empty()
+                && t[..h.len()] == h[..]
+                && rows[n].get(c).is_some_and(|t| t.trim().is_empty())
+                && table::opens_a_label(&rest))
+            .then_some(rest)
+        };
+        let mut runs_on: Vec<(usize, usize, String)> = Vec::new();
+        let repeats_run_on = !repeats
+            && n > 0
+            && rows.len() > n
+            && (0..n).all(|r| {
+                head[r].len() == rows[r].len()
+                    && (0..rows[r].len()).all(|c| {
+                        if head[r][c]
+                            .split_whitespace()
+                            .eq(rows[r][c].split_whitespace())
+                        {
+                            return true;
+                        }
+                        run_on(r, c)
+                            .map(|rest| runs_on.push((r, c, rest)))
+                            .is_some()
+                    })
+            })
+            && !runs_on.is_empty();
+        let repeats = repeats || repeats_run_on;
         let finishes_header = prev.header_only()
             && rows.len() > 1
             && b.bold
@@ -812,7 +870,24 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         if b.styled && !repeats && !finishes_header {
             continue;
         }
+        let heads: Vec<(usize, usize, String, String)> = runs_on
+            .into_iter()
+            .filter(|_| repeats_run_on)
+            .map(|(r, c, rest)| (r, c, head[r][c].clone(), rest))
+            .collect();
         next.continues = Some(prev.id.clone());
+        if let Some(cells) = next.cells.as_mut() {
+            let cols = cells.first().map_or(0, Vec::len);
+            for (r, c, h, rest) in heads {
+                cells[r][c] = h;
+                cells[n][c] = rest;
+                if let Some(m) = next.merged_down.as_mut() {
+                    if let Some(k) = m.get_mut(n * cols + c) {
+                        *k = false;
+                    }
+                }
+            }
+        }
         next.header_rows = Some(if repeats {
             n
         } else if finishes_header {
@@ -8615,6 +8690,42 @@ mod tests {
             &["", "55°", "17,172", "17,146", "16,972"],
         ]);
         assert!(names_spanned_columns(&angles, &wide, &[]));
+        // Columns parted by their text alone, no rule between them on any
+        // row: open on every row, and no span in the second.
+        let mut unruled = vec![false; 20];
+        for r in 0..4 {
+            unruled[r * 5 + 2] = true;
+            unruled[r * 5 + 4] = true;
+        }
+        let claims = grid(&[
+            &["Sample", "Oxybenzone", "", "Octocrylene", ""],
+            &[
+                "",
+                "Label Claim",
+                "% of Label Claim",
+                "Label Claim",
+                "% of Label Claim",
+            ],
+            &["Spray 1", "6 %", "98.0", "10 %", "97.5"],
+            &["Spray 2", "6 %", "98.2", "4 %", "97.2"],
+        ]);
+        assert!(names_spanned_columns(&claims, &unruled, &[]));
+        // Ruled apart under the second row, a run across it is one label.
+        let mut ruled_below = unruled.clone();
+        for r in 2..4 {
+            ruled_below[r * 5 + 2] = false;
+            ruled_below[r * 5 + 4] = false;
+        }
+        assert!(!names_spanned_columns(&claims, &ruled_below, &[]));
+        // Labels that differ group to group under open boundaries are a
+        // row of data, as two sites' names under `Centre | Location` are.
+        let sites = grid(&[
+            &["Sample", "Oxybenzone", "", "Octocrylene", ""],
+            &["", "Lisieux", "Vittel", "Aubigny", "Orbe"],
+            &["Spray 1", "6 %", "98.0", "10 %", "97.5"],
+            &["Spray 2", "6 %", "98.2", "4 %", "97.2"],
+        ]);
+        assert!(!names_spanned_columns(&sites, &unruled, &[]));
         // A value run across the banner's columns names nothing.
         let mut run = left.clone();
         run[5 + 2] = true;
@@ -9075,6 +9186,55 @@ mod tests {
         link_continued_tables(&mut els, &[fa, fb]);
         assert_eq!(els[2].continues.as_deref(), Some("elem-00001"));
         assert_eq!(els[2].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_header_repeated_into_the_first_label_under_it_is_parted_from_it() {
+        // The stub's head repeated over the next page, its cell drawn open
+        // into the first group's label and read whole with it.
+        let opened = |first: &str| {
+            let (a, fa) = part(
+                "elem-00001",
+                0,
+                &[&["Level", "Series", "Result"], &["50%", "Run 1", "110"]],
+                1,
+                &XS,
+                false,
+                false,
+            );
+            let (mut b, fb) = part(
+                "elem-00002",
+                1,
+                &[
+                    &[first, "Series", "Result"],
+                    &["", "Run 1", "102"],
+                    &["", "Run 2", "99"],
+                ],
+                1,
+                &XS,
+                false,
+                false,
+            );
+            b.merged_down = Some(vec![
+                false, false, false, true, false, false, true, false, false,
+            ]);
+            let mut els = vec![a, b];
+            link_continued_tables(&mut els, &[fa, fb]);
+            els.remove(1)
+        };
+        let b = opened("Level 100%");
+        assert_eq!(b.continues.as_deref(), Some("elem-00001"));
+        assert_eq!(b.header_rows, Some(1));
+        let cells = b.cells.as_ref().unwrap();
+        assert_eq!(
+            (cells[0][0].as_str(), cells[1][0].as_str()),
+            ("Level", "100%")
+        );
+        assert!(!b.merged_down.as_ref().unwrap()[3]);
+        // What carries the head on is the head's own: nothing repeated.
+        let b = opened("Level (cont.)");
+        assert_eq!(b.header_rows, Some(0));
+        assert_eq!(b.cells.as_ref().unwrap()[0][0], "Level (cont.)");
     }
 
     #[test]
