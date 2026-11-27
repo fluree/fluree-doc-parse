@@ -593,7 +593,8 @@ struct Emitter<'a> {
 /// the one to the left, its last row read whole, and how many data rows it
 /// and the parts before it hold. And what names its last rows, for the rows
 /// the page break carried on: the columns' names in force there (a header
-/// restated partway down, where one is), and the band open over them; with
+/// restated partway down, where one is), and the band open over them, with
+/// the label its last row holds alone where it does; and
 /// the table's opening rows (its header and the rows over its first band,
 /// as its first part sets them), which a later page may set again.
 struct TablePart {
@@ -605,6 +606,7 @@ struct TablePart {
     rows: usize,
     names_at_end: Vec<String>,
     band_at_end: Option<String>,
+    lone_end: Option<String>,
     opening: Vec<Vec<String>>,
 }
 
@@ -1174,6 +1176,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     head_before,
                     band_before,
                     opening_before,
+                    lone_before,
                 ) = match earlier {
                     Some(p) => {
                         em.nodes[table]
@@ -1185,9 +1188,10 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             Some((p.head.clone(), p.head_left.clone(), p.header_only)),
                             p.band_at_end.clone(),
                             Some(p.opening.clone()),
+                            p.lone_end.clone(),
                         )
                     }
-                    None => (None, None, 0, None, None, None),
+                    None => (None, None, 0, None, None, None, None),
                 };
 
                 // Cell entities: data rows index from 0 below the measured
@@ -1367,6 +1371,25 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                     .join(" / ")
                             })
                             .filter(|t| !t.is_empty())
+                    };
+                    // The part before ending on a label alone, no band: part
+                    // of this part's first label, cut by the break, and the
+                    // band before it goes on. That label holds it
+                    // (`Musculoskeletal` of `Musculoskeletal pain`, a mark
+                    // `†` of `Fatigue †`) or runs on from it in lower case
+                    // (`Median in` over `months (95% CI)`). Otherwise it is a
+                    // band the reading left as a row, set at the page's foot
+                    // (`Infections` over `Upper respiratory tract
+                    // infection`), and the band before it ends there.
+                    let band_before = match (band_before, lone_before.as_deref()) {
+                        (Some(b), Some(lone)) => rows
+                            .get(n_header)
+                            .and_then(|row| row.first())
+                            .filter(|t| {
+                                t.contains(lone) || t.trim_start().starts_with(char::is_lowercase)
+                            })
+                            .map(|_| b),
+                        (b, _) => b,
                     };
                     // Rows a page break carried on from the part before are
                     // under the band open at its end, until a band or a break
@@ -1619,6 +1642,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             .map_or_else(|| header.clone(), |(_, h)| h.clone());
                         let band_at_end =
                             band_over(rows.len()).or_else(|| carried_band(rows.len()));
+                        // A last row holding its first cell alone, no band.
+                        let lone_end = (!subs.contains(&end)
+                            && rows[end].iter().skip(1).all(|t| t.trim().is_empty()))
+                        .then(|| rows[end].first().map(|t| t.trim().to_string()))
+                        .flatten()
+                        .filter(|t| !t.is_empty());
                         // The table's opening rows, as its first part set them.
                         let opening = opening_before.clone().unwrap_or_else(|| {
                             let first_band = subs.iter().copied().filter(|&s| s >= n_header).min();
@@ -1635,6 +1664,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 rows: rows_before + rows.len() - n_header,
                                 names_at_end,
                                 band_at_end,
+                                lone_end,
                                 opening,
                             },
                         );
@@ -2600,6 +2630,64 @@ mod tests {
         assert!(units.iter().all(|n| n.get("doc:sectionLabel").is_none()));
         let patents = g.iter().find(|n| n["doc:cellValue"] == "4").unwrap();
         assert_eq!(patents["doc:sectionLabel"], "Non-current assets");
+    }
+
+    #[test]
+    fn a_label_alone_at_the_foot_carries_no_band_before_it() {
+        // The page ends on a band the reading left as a row (`Infections`,
+        // no values beside it): the next page's rows are under it, not
+        // under the band before it.
+        let r = |a: &str, b: &str| vec![a.to_string(), b.into()];
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.cells = Some(vec![
+            r("Adverse Reaction", "%"),
+            r("Endocrine", ""),
+            r("Hypothyroidism", "14"),
+            r("Infections", ""),
+        ]);
+        a.header_rows = Some(1);
+        a.sub_headers = Some(vec![1]);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.page = 1;
+        b.cells = Some(vec![r("Upper respiratory tract infection", "13")]);
+        b.header_rows = Some(0);
+        b.continues = Some("elem-00001".into());
+        let g = graph(&[a, b]);
+        let urti = g.iter().find(|n| n["doc:cellValue"] == "13").unwrap();
+        assert!(urti.get("doc:sectionLabel").is_none());
+        assert_eq!(urti["doc:columnHeader"], "%");
+    }
+
+    #[test]
+    fn a_label_the_break_cut_keeps_the_band_over_it() {
+        // The page ends on the first words of a row's label (`Median in`);
+        // the next page runs on with the rest, in lower case, beside the
+        // row's values: still under the band before.
+        let r = |a: &str, b: &str| vec![a.to_string(), b.into()];
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.cells = Some(vec![
+            r("Endpoint", "Arm A"),
+            r("PFS", ""),
+            r("Number of events (%)", "507 (80%)"),
+            r("Median in", ""),
+        ]);
+        a.header_rows = Some(1);
+        a.sub_headers = Some(vec![1]);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.page = 1;
+        b.cells = Some(vec![r("months (95% CI)", "5.4 (4.3, 6.2)")]);
+        b.header_rows = Some(0);
+        b.continues = Some("elem-00001".into());
+        let g = graph(&[a, b]);
+        let median = g
+            .iter()
+            .find(|n| n["doc:cellValue"] == "5.4 (4.3, 6.2)")
+            .unwrap();
+        assert_eq!(median["doc:sectionLabel"], "PFS");
     }
 
     #[test]
