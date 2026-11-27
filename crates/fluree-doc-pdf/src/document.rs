@@ -6210,13 +6210,20 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // own number where page numbers stand (`furniture::is_folio_cell`),
             // in the grid's row nearest that edge. A table's own figure in a
             // row above its last can match the page's number, as a tax
-            // table's line 111 does on page 111.
+            // table's line 111 does on page 111. Nor where the page's number
+            // is printed outside the grid, its line's top above the grid's or
+            // under its foot: the page has its number, and a row's `4` over a
+            // foot reading `Page 4 of 6` is the row's.
             let page_h = raw.pages[pi].height.max(1.0);
+            let printed_apart = furniture::folio_outside(folio_places[pi], page_h, &g.bbox);
             let unfolio = |t: String, r0: usize, r1: usize| {
                 let last = g.ys.len().saturating_sub(1);
                 let mid = (g.ys[r0.min(last)] + g.ys[r1.min(last)]) / 2.0 / page_h;
                 let edge_row = if mid > 0.5 { r1 >= last } else { r0 == 0 };
-                if edge_row && furniture::is_folio_cell(&t, folios[pi].as_deref(), mid) {
+                if edge_row
+                    && !printed_apart
+                    && furniture::is_folio_cell(&t, folios[pi].as_deref(), mid)
+                {
                     String::new()
                 } else {
                     t
