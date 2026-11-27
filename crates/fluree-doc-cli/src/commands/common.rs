@@ -204,7 +204,8 @@ fn by_signature(data: &[u8]) -> Option<SourceKind> {
 /// document, or an Office package by the part its root relationship names
 /// as the document (`word/`, `ppt/`, `xl/`); a web page; and, where
 /// `delimited` (a file named as an Office 97-2003 one, which spreadsheet
-/// exports are), comma-, semicolon- or tab-separated text.
+/// exports are, or named as nothing), comma-, semicolon- or tab-separated
+/// text.
 fn by_content(data: &[u8], delimited: bool) -> Option<SourceKind> {
     // Excel 2003's XML workbook holds `<Table>`, which is no web page.
     if is_spreadsheet_xml(data) {
@@ -334,8 +335,12 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
         kind,
         Some(SourceKind::Xls | SourceKind::Doc | SourceKind::Ppt)
     );
+    // Delimited text is told by its content where the name is an Office
+    // 97-2003 one, which spreadsheet exports are, or says nothing (stdin, a
+    // file with no extension): read as a PDF, it would fail as a corrupt
+    // one.
     if (office_97 || kind.is_none()) && !data.starts_with(&COMPOUND_MAGIC) {
-        if let Some(k) = by_content(data, office_97) {
+        if let Some(k) = by_content(data, true) {
             return k;
         }
     }
@@ -459,33 +464,47 @@ pub(crate) fn xps_crop_plans<'x>(
     out
 }
 
-/// The most pixels the pictures an XPS document's crops are cut from may
-/// hold in all, decoded: 512 million, two gigabytes of RGBA, read one page's
-/// pictures at a time.
-pub(crate) const MAX_XPS_CROP_PIXELS: u64 = 1 << 29;
+/// The most pixels the pictures one page of an XPS document's crops are cut
+/// from may hold, decoded: 512 million, two gigabytes of RGBA. A page's
+/// pictures are held while its crops are cut, and let go at the next.
+pub(crate) const MAX_XPS_PAGE_CROP_PIXELS: u64 = 1 << 29;
+
+/// The most pixels all of a document's pictures are decoded to, one page
+/// at a time: 8 billion, the time decoding takes. A scan at 300 dpi is
+/// about 8.4 million pixels a page, so about 950 such pages are read, where
+/// a bound on the whole document as on one page read about 60.
+pub(crate) const MAX_XPS_CROP_PIXELS: u64 = 1 << 33;
 
 /// The crops `plans` lists, each handed to `each` as soon as it is cut: a
 /// page's pictures are decoded when it is reached and let go when the next
 /// is, so a document's pictures are never held at once. Each picture's size
-/// is checked against what is left of [`MAX_XPS_CROP_PIXELS`] before it is
-/// decoded; past it, no more are. Returns a message for each picture that
-/// does not decode, and one for those past the budget.
+/// is checked against what is left of [`MAX_XPS_PAGE_CROP_PIXELS`] for its
+/// page, and of [`MAX_XPS_CROP_PIXELS`] for the document, before it is
+/// decoded: past the page's, the picture is not read; past the document's,
+/// no more are. Returns a message for each picture that does not decode or
+/// is past its page's bound, and one for those past the document's.
 pub(crate) fn xps_crops(
     data: &[u8],
     plans: &[XpsCropPlan<'_>],
     each: &mut dyn FnMut(XpsCrop),
 ) -> Vec<String> {
-    xps_crops_within(data, plans, MAX_XPS_CROP_PIXELS, each)
+    xps_crops_within(
+        data,
+        plans,
+        (MAX_XPS_PAGE_CROP_PIXELS, MAX_XPS_CROP_PIXELS),
+        each,
+    )
 }
 
 fn xps_crops_within(
     data: &[u8],
     plans: &[XpsCropPlan<'_>],
-    max_pixels: u64,
+    (page_pixels, max_pixels): (u64, u64),
     each: &mut dyn FnMut(XpsCrop),
 ) -> Vec<String> {
     let mut failed = Vec::new();
     let mut left = max_pixels;
+    let mut page_left = page_pixels;
     // The first picture past the budget, and how many more were not read.
     let mut past: Option<(&str, usize)> = None;
     // This page's pictures, decoded: a page may cut several regions from
@@ -499,6 +518,7 @@ fn xps_crops_within(
         if page != Some(plan.page) {
             decoded.clear();
             page = Some(plan.page);
+            page_left = page_pixels;
         }
         let part = plan.image.part.as_str();
         let pixels = match decoded.get(part) {
@@ -510,15 +530,22 @@ fn xps_crops_within(
                 continue;
             }
             None => {
-                let mut over = false;
+                let (mut over, mut page_over) = (false, false);
                 let read = fluree_doc_xps::read_image(data, part).and_then(|bytes| {
                     let (w, h) = fluree_doc_image::upright_size(&bytes)?;
                     let n = u64::from(w) * u64::from(h);
+                    if n > page_left {
+                        page_over = true;
+                        return Err(format!(
+                            "not read, past the {page_pixels} pixels a page's pictures are read to"
+                        ));
+                    }
                     if n > left {
                         over = true;
                         return Err(String::new());
                     }
                     left -= n;
+                    page_left -= n;
                     fluree_doc_image::decode(&bytes).map(|d| d.pixels)
                 });
                 let p = match read {
@@ -526,6 +553,10 @@ fn xps_crops_within(
                     Err(_) if over => {
                         past = Some((part, 0));
                         continue;
+                    }
+                    Err(e) if page_over => {
+                        failed.push(format!("{part}: {e}"));
+                        None
                     }
                     Err(e) => {
                         failed.push(format!("{part}: {e}"));
@@ -1401,9 +1432,10 @@ mod tests {
         let xps = fluree_doc_xps::parse(&data).unwrap();
         let plans = xps_crop_plans(&xps, None);
         assert_eq!(plans.len(), 3);
-        // Room for two pictures' pixels: the third is not decoded.
+        // Room for two pictures' pixels in the document: the third is not
+        // decoded.
         let mut read = Vec::new();
-        let failed = xps_crops_within(&data, &plans, 250, &mut |c| read.push(c.page));
+        let failed = xps_crops_within(&data, &plans, (100, 250), &mut |c| read.push(c.page));
         assert_eq!(read, [0, 1]);
         assert_eq!(failed.len(), 1, "{failed:?}");
         assert!(
@@ -1411,12 +1443,24 @@ mod tests {
             "{failed:?}"
         );
         let mut read = Vec::new();
-        let failed = xps_crops_within(&data, &plans, 150, &mut |c| read.push(c.page));
+        let failed = xps_crops_within(&data, &plans, (100, 150), &mut |c| read.push(c.page));
         assert_eq!(read, [0]);
         assert!(
             failed[0].starts_with("i1.png and the crop after it: not read"),
             "{failed:?}"
         );
+        // The page's bound is a page's: each page's picture fits it, and
+        // all are read, however many pages there are.
+        let mut read = Vec::new();
+        let failed = xps_crops_within(&data, &plans, (100, 1_000), &mut |c| read.push(c.page));
+        assert_eq!(read, [0, 1, 2]);
+        assert!(failed.is_empty(), "{failed:?}");
+        // A picture past its page's bound is not read; the next page's is.
+        let mut read = Vec::new();
+        let failed = xps_crops_within(&data, &plans, (99, 1_000), &mut |c| read.push(c.page));
+        assert!(read.is_empty());
+        assert_eq!(failed.len(), 3, "{failed:?}");
+        assert!(failed[0].contains("a page's pictures"), "{failed:?}");
         // A page crop records the box its picture is drawn in.
         let b = plans[0].bbox(&data).unwrap();
         assert_eq!((b.x0, b.y0, b.x1, b.y1), (0.0, 0.0, 612.0, 792.0));
@@ -1557,6 +1601,14 @@ mod tests {
                 assert_eq!(input_kind(Path::new(name), late), SourceKind::Pdf, "{name}");
             }
         }
+        // Delimited text from stdin, or a file named as nothing, is a table.
+        for name in ["-", "export"] {
+            assert_eq!(
+                input_kind(Path::new(name), b"Customer;Amount\nAlex;12,50\nSam;7\n"),
+                SourceKind::Csv,
+                "{name}"
+            );
+        }
         let quoting = b"Header,Note\nfile 1,starts with %PDF-1.7\nfile 2,ok\n";
         assert_eq!(input_kind(Path::new("list.csv"), quoting), SourceKind::Csv);
         // A header alone is no PDF: a list of signatures, one column, one
@@ -1669,9 +1721,11 @@ mod tests {
             input_kind(Path::new("ragged.xls"), b"a\tb\nc d e\n"),
             SourceKind::Xls
         );
+        // Named as nothing, delimited text is a table too: read as a PDF,
+        // it failed as a corrupt one.
         assert_eq!(
             input_kind(Path::new("stdin"), b"a\tb\n1\t2\n"),
-            SourceKind::Pdf
+            SourceKind::Csv
         );
     }
 

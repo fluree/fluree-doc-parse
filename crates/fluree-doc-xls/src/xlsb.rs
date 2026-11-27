@@ -204,16 +204,34 @@ fn workbook(part: &[u8]) -> Result<(bool, Vec<(String, String)>), XlsError> {
     Ok((date1904, sheets))
 }
 
+/// What a cell format says of the cells set in it: whether it shows a date,
+/// and whether its font is bold.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CellFormat {
+    date: bool,
+    bold: bool,
+}
+
 /// The cell formats the styles part declares, in order: whether each
-/// shows a date. A built-in format is one by its id; a custom one by its
-/// code. An elapsed time (`[h]:mm`) is a number, as calamine reads it.
-fn date_formats(part: &[u8]) -> Result<Vec<bool>, XlsError> {
+/// shows a date, and whether its font is bold. A built-in format is a date
+/// by its id; a custom one by its code. An elapsed time (`[h]:mm`) is a
+/// number, as calamine reads it. A font is bold at a weight of 700 or more.
+fn cell_formats(part: &[u8]) -> Result<Vec<CellFormat>, XlsError> {
     let mut custom: std::collections::HashMap<u16, bool> = std::collections::HashMap::new();
     let mut out = Vec::new();
     let mut in_xfs = false;
+    let mut in_fonts = false;
+    let mut bold_fonts: Vec<bool> = Vec::new();
     for r in records(part) {
         let r = r?;
         match r.typ {
+            // BrtBeginFonts, BrtEndFonts: the fonts between, in order.
+            0x0263 => in_fonts = true,
+            0x0264 => in_fonts = false,
+            // BrtFont: its height, flags, then its weight.
+            0x002B if in_fonts => {
+                bold_fonts.push(u16_at(r.data, 4).is_some_and(|w| w >= 700));
+            }
             // BrtFmt: an id and its code.
             0x002C => {
                 let (Some(id), Some((code, _))) = (u16_at(r.data, 0), wide(r.data, 2)) else {
@@ -233,16 +251,18 @@ fn date_formats(part: &[u8]) -> Result<Vec<bool>, XlsError> {
             // BrtBeginCellXFs, BrtEndCellXFs: the cell formats between.
             0x0269 => in_xfs = true,
             0x026A => in_xfs = false,
-            // BrtXF: its number format's id second.
+            // BrtXF: its number format's id second, its font's third.
             0x002F if in_xfs => {
-                let id = u16_at(r.data, 2)
-                    .ok_or_else(|| malformed("a cell format record is cut short"))?;
-                out.push(
-                    custom
+                let (Some(id), Some(font)) = (u16_at(r.data, 2), u16_at(r.data, 4)) else {
+                    return Err(malformed("a cell format record is cut short"));
+                };
+                out.push(CellFormat {
+                    date: custom
                         .get(&id)
                         .copied()
                         .unwrap_or(matches!(id, 14..=22 | 27..=36 | 50..=58)),
-                );
+                    bold: bold_fonts.get(usize::from(font)).copied().unwrap_or(false),
+                });
             }
             _ => {}
         }
@@ -352,8 +372,8 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
         true => shared_strings(&part(&mut pkg, "xl/sharedStrings.bin")?, budget)?,
         false => Vec::new(),
     };
-    let dates = match has("xl/styles.bin") {
-        true => date_formats(&part(&mut pkg, "xl/styles.bin")?)?,
+    let formats = match has("xl/styles.bin") {
+        true => cell_formats(&part(&mut pkg, "xl/styles.bin")?)?,
         false => Vec::new(),
     };
     let rels = pkg.relationships(book).map_err(XlsError::Package)?;
@@ -366,6 +386,7 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
     }
     let mut sheets = Vec::new();
     let mut total = 0u64;
+    let mut merged = 0u64;
     // A sheet part is read once, at its first listing: listed again, under
     // any name, it would be inflated and laid out again for each.
     let mut read = std::collections::HashSet::new();
@@ -378,22 +399,49 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
         }
         let data = part(&mut pkg, target)?;
         let mut cells = Vec::new();
+        let mut merges = Vec::new();
         let mut row = 0u32;
+        // The cells end with the sheet's data; its merges come after.
+        let mut data_done = false;
         for r in records(&data) {
             let r = r?;
             match r.typ {
-                // BrtRowHdr: the row the cells after it are on; past
-                // Excel's last row, the sheet ends, as calamine reads it.
-                0x0000 => {
-                    row =
-                        u32_at(r.data, 0).ok_or_else(|| malformed("a row record is cut short"))?;
-                    if row > 0x0010_0000 {
-                        break;
+                // BrtMergeCell: a merged range, its first and last row,
+                // then its first and last column. Laid out within the grid
+                // and the sheet's cells (`grid_elements`).
+                0x00B0 => {
+                    let at = |i: usize| u32_at(r.data, 4 * i);
+                    let (Some(r0), Some(r1), Some(c0), Some(c1)) = (at(0), at(1), at(2), at(3))
+                    else {
+                        return Err(malformed("a merge record is cut short"));
+                    };
+                    merged += 1;
+                    if merged > MAX_CELLS {
+                        return Err(XlsError::TooLarge(format!(
+                            "its sheets hold more than {MAX_CELLS} merged ranges"
+                        )));
+                    }
+                    budget.spend_cells(1).map_err(too_large)?;
+                    if r0 <= r1 && c0 <= c1 {
+                        merges.push((r0, c0, r1, c1));
                     }
                     continue;
                 }
+                _ if data_done => continue,
+                // BrtRowHdr: the row the cells after it are on; past
+                // Excel's last row, the sheet's cells end, as calamine
+                // reads it.
+                0x0000 => {
+                    row =
+                        u32_at(r.data, 0).ok_or_else(|| malformed("a row record is cut short"))?;
+                    data_done = row > 0x0010_0000;
+                    continue;
+                }
                 // BrtEndSheetData.
-                0x0092 => break,
+                0x0092 => {
+                    data_done = true;
+                    continue;
+                }
                 0x0002..=0x000B => {}
                 _ => continue,
             }
@@ -406,10 +454,11 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
             if col >= MAX_COLUMNS || row >= MAX_ROWS {
                 continue;
             }
-            let date = dates
+            let format = formats
                 .get((style & 0x00FF_FFFF) as usize)
                 .copied()
-                .unwrap_or(false);
+                .unwrap_or_default();
+            let date = format.date;
             let Some(v) = cell_value(r.typ, &r.data[8..], date, date1904, &strings, budget)? else {
                 continue;
             };
@@ -428,12 +477,13 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
                 col,
                 text,
                 datum,
-                bold: false,
+                bold: format.bold,
             });
         }
         sheets.push(GridSheet {
             name,
             cells,
+            merges,
             ..GridSheet::default()
         });
     }
@@ -835,5 +885,97 @@ pub(crate) mod tests {
             out.into_inner()
         };
         assert!(matches!(parse_xlsb(&sheet_bad), Err(XlsError::Biff(_))));
+    }
+
+    #[test]
+    fn bold_cells_and_merged_ranges_are_read() {
+        // Fonts: regular, then bold (weight 700); formats: one in each.
+        let font = |weight: u16| {
+            let mut d = vec![0u8; 21];
+            d[4..6].copy_from_slice(&weight.to_le_bytes());
+            d.extend(wide("Arial"));
+            rec(0x2B, &d)
+        };
+        let xf = |font: u16| {
+            let mut d = vec![0u8; 16];
+            d[4..6].copy_from_slice(&font.to_le_bytes());
+            rec(0x2F, &d)
+        };
+        let styles = [
+            rec(0x263, &2u32.to_le_bytes()),
+            font(400),
+            font(700),
+            rec(0x264, &[]),
+            rec(0x269, &2u32.to_le_bytes()),
+            xf(0),
+            xf(1),
+            rec(0x26A, &[]),
+        ]
+        .concat();
+        let inline =
+            |col: u32, style: u32, s: &str| rec(0x06, &[head(col, style), wide(s)].concat());
+        let row = |r: u32| rec(0x00, &[r.to_le_bytes().to_vec(), vec![0; 13]].concat());
+        let merge = |r0: u32, r1: u32, c0: u32, c1: u32| {
+            rec(
+                0xB0,
+                &[r0, r1, c0, c1]
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<u8>>(),
+            )
+        };
+        // A bold header row over a region spanning both columns, merged.
+        let sheet = [
+            rec(0x91, &[]),
+            row(0),
+            inline(0, 1, "Customer"),
+            inline(1, 1, "Amount"),
+            row(1),
+            inline(0, 0, "West"),
+            row(2),
+            inline(0, 0, "Alex Sample"),
+            inline(1, 0, "12.50"),
+            rec(0x92, &[]),
+            rec(0xB1, &1u32.to_le_bytes()),
+            merge(1, 1, 0, 1),
+            rec(0xB2, &[]),
+        ]
+        .concat();
+        let mut bundle = [0u32.to_le_bytes(), 1u32.to_le_bytes()].concat();
+        bundle.extend(wide("rId1"));
+        bundle.extend(wide("S"));
+        let workbook = [rec(0x9C, &bundle), rec(0x90, &[])].concat();
+        let rels = "<Relationships><Relationship Id=\"rId1\" Target=\"worksheets/sheet1.bin\"/></Relationships>";
+        let mut buf = Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        for (name, data) in [
+            ("xl/workbook.bin", workbook),
+            ("xl/_rels/workbook.bin.rels", rels.as_bytes().to_vec()),
+            ("xl/styles.bin", styles),
+            ("xl/worksheets/sheet1.bin", sheet),
+        ] {
+            z.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(&data).unwrap();
+        }
+        z.finish().unwrap();
+        let bytes = buf.into_inner();
+        let sheets = read(&bytes, &mut Budget::default()).unwrap();
+        let bold: Vec<(&str, bool)> = sheets[0]
+            .cells
+            .iter()
+            .map(|c| (c.text.as_str(), c.bold))
+            .collect();
+        assert_eq!(
+            bold,
+            [
+                ("Customer", true),
+                ("Amount", true),
+                ("West", false),
+                ("Alex Sample", false),
+                ("12.50", false)
+            ]
+        );
+        assert_eq!(sheets[0].merges, [(1, 0, 1, 1)]);
     }
 }

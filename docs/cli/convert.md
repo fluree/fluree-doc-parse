@@ -33,6 +33,7 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--base-iri <IRI>` | what every node IRI minted by `-f doco` starts with (`<IRI>-element-3`). Default: `--doc-iri`, else `urn:fluree-doc-parse:<stem>-<first 12 hex digits of the SHA-256>`. One input only |
 | `--doc-iri <IRI>` | stamp `-f doco` nodes with `doc:sourceDocument`, the tag a re-extraction retracts by. One input only |
 | `--source-name <NAME>` | what `-f doco` records as the input's name, `doc:sourceName`. Default: the input's file name; none from stdin. One input only |
+| `--comments` | also read the notes reviewers left: a PDF's annotations, and the comments of a Word, OpenDocument or RTF document. Off by default. See [PDF](../inputs/pdf.md#annotations-and-embedded-files) |
 | `--attachments <DIR>` | save each email's attachments, and each PDF's embedded files, under `DIR/<input name>/`, to convert on their own. See [Email](../inputs/email.md#attachments) and [PDF](../inputs/pdf.md#annotations-and-embedded-files) |
 | `--parse-attachments` | with `--attachments`, also convert each email's attachments, and those of attached messages, into `DIR/<email name>/<sha256>.<format>`. See [Email](../inputs/email.md#reading-the-attachments-too) |
 | `--layout-boxes <DIR>` | layout-detector sidecars. Env: `FDOC_TITLE_BOXES` |
@@ -104,16 +105,28 @@ confident of. When the median confidence of a reading's level lines, or of
 its tall ones, is under 0.8 (three lines at least, and only the lines
 holding a letter when three of them do), the engine reads the image again
 turned a half, where both read right. The reading more
-confident by over 0.15 on average is kept, and any of its lines the other
-reading reads more confidently by that much, over the same place, is taken
-from that one; a tall line of two characters or more, read turned a
-quarter in both, is taken from whichever reads it more confidently. An upright page holding a table whose
-text runs up keeps its text and takes the table's. When two thirds of the
+confident by over 0.15 on average is kept. A line of words (three letters
+or more, one of them a capital, one of `b d f h k l t` or a letter of
+another script) is taken from the other reading when that one reads it
+more confidently by that much, over the same place; a tall one, read
+turned a quarter in both, when it reads it more confidently at all.
+Numbers and shorter words read as something else turned a half, often
+confidently (`1068` as `8901` at 0.99): they follow the lines of words
+running their way, taken from the other reading only where most of those
+were, so an upright page read poorly keeps its numbers as read upright; a
+tall one with no line of words running its way (a table of numbers alone,
+set sideways) is taken as a tall line of words is. A line only the other
+reading has, or reads whole where the kept one reads it in pieces, is
+added in place of the lines it covers when it would have been taken over
+each of them (a line of words must also read over 0.8). An upright page
+holding a table whose text runs up keeps its text and takes the table's.
+When two thirds of the
 text, counted in characters, runs one way sideways and less than a quarter
 of it is level, or two thirds of it runs upside down, or more of it upside
-down than level with the two together a quarter of it (a sheet fed upside
-down under the upright header a fax machine stamps, or carrying a table set
-sideways), the page is read in
+down than level with the two together a quarter of it and 20 characters or
+more upside down (a sheet fed upside down under the upright header a fax
+machine stamps, or carrying a table set sideways, not a stamp or a word
+read the wrong way up), the page is read in
 the frame where it runs upright, and every box is still placed on the page
 as displayed. Words of one or two characters do not count: a digit is boxed
 about as tall as wide and read at any angle. A page read upright, or with its text running down,
@@ -140,9 +153,9 @@ on its text. With fewer, the numbers decide: a table of numbers with less
 text than that, upside down or running up, is read again only if its
 numbers read poorly, and otherwise comes out as wrong numbers with no
 warning. Numbers written with the digits 0, 1, 6, 8 and 9 alone read as
-other numbers turned a half with a confidence of about 1 (806 as 908), so
-on a page read again, such a number in a table running down may be taken
-from the turned reading. A page is read again turned on the median
+other numbers turned a half with a confidence of about 1 (806 as 908): a
+table of such numbers alone set sideways, with no line of words running its
+way, may come out as other numbers. A page is read again turned on the median
 confidence of its tall lines: text running up next to more tall lines of
 words read well (a block running down beside it) is not read again and
 comes out as noise, and neither is a single line running up (a label set
@@ -233,9 +246,10 @@ whatever the page's layout.
 Files, directories, or `-` for stdin. **Stdin is read as a PDF, an email, a
 transcript, an image** (PNG, JPEG, TIFF), **a Word, Excel or PowerPoint
 97-2003 file, an Excel binary workbook, an OpenDocument file, RTF, a DOCX,
-PPTX or XLSX package, an XPS document or a web page**, which are told apart
-by their content; the other readers (Markdown, plain text, CSV) identify the
-format by extension, so they are read from a file.
+PPTX or XLSX package, an XPS document, a web page or delimited text (CSV,
+TSV)**, which are told apart by their content; the other readers (Markdown,
+plain text) identify the format by extension, so they are read from a
+file.
 
 Directories are scanned for every extension `convert` reads, including
 Word, PowerPoint and Excel's macro-enabled, template and show variants

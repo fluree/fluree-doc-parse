@@ -3399,6 +3399,7 @@ mod tests {
                     words: 12,
                     mean_confidence: Some(0.9812),
                     min_confidence: Some(0.4),
+                    set_aside: None,
                 },
                 OcrReading {
                     page: None,
@@ -3408,6 +3409,7 @@ mod tests {
                     words: 3,
                     mean_confidence: None,
                     min_confidence: None,
+                    set_aside: Some("noise".into()),
                 },
             ],
             ..opts()
@@ -3420,7 +3422,7 @@ mod tests {
             json!([
                 {"pageIndex": 0, "crop": "r1", "engine": "oar-ocr", "words": 12,
                  "meanConfidence": 0.9812, "minConfidence": 0.4},
-                {"image": "m2", "crop": "full", "words": 3}
+                {"image": "m2", "crop": "full", "words": 3, "setAside": "noise"}
             ])
         );
     }

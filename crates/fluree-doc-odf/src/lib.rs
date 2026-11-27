@@ -536,13 +536,18 @@ fn paragraph(
     Ok(element(kind, text, level, page))
 }
 
+/// The deepest a list item is nested, as its `depth`: OpenDocument styles
+/// ten levels.
+const MAX_LIST_DEPTH: usize = 9;
+
 /// The flow of a text body, a text box or a note: headings, paragraphs,
-/// lists, tables, sections.
+/// lists, tables, sections. `list` is the depth of the list it is in, if
+/// it is in one: a paragraph there is a list item at that depth.
 fn flow(
     t: &Tree,
     id: usize,
     page: usize,
-    list: bool,
+    list: Option<usize>,
     out: &mut Vec<Element>,
     asides: &mut Vec<Aside>,
     budget: &mut Budget,
@@ -556,7 +561,7 @@ fn flow(
         let mut frames = Vec::new();
         frames_in(t, c, &mut frames);
         for f in frames {
-            flow(t, f, page, false, out, asides, budget)?;
+            flow(t, f, page, None, out, asides, budget)?;
         }
         Ok(())
     };
@@ -594,15 +599,24 @@ fn flow(
                     .and_then(|s| t.roles.get(s))
                     .or((style == Some("Title")).then_some(&Role::Title));
                 let (kind, level) = match role {
-                    _ if list => ("doc:ListItem", None),
+                    _ if list.is_some() => ("doc:ListItem", None),
                     Some(Role::Title) => ("doco:Title", None),
                     Some(Role::Heading(l)) => ("doco:SectionTitle", Some(*l)),
                     None => ("doco:Paragraph", None),
                 };
-                out.push(paragraph(kind, text, level, page, budget)?);
+                let mut e = paragraph(kind, text, level, page, budget)?;
+                e.depth = list.unwrap_or(0);
+                out.push(e);
                 frames_after(c, out, asides, budget)?;
             }
-            "list" | "list-item" | "list-header" => flow(t, c, page, true, out, asides, budget)?,
+            // A list in a list's item is a level deeper.
+            "list" => {
+                let depth = list.map_or(0, |d| d + 1).min(MAX_LIST_DEPTH);
+                flow(t, c, page, Some(depth), out, asides, budget)?
+            }
+            "list-item" | "list-header" => {
+                flow(t, c, page, Some(list.unwrap_or(0)), out, asides, budget)?
+            }
             "table" => {
                 if let Some(e) = table(t, c, page, asides, budget)? {
                     out.push(e);
@@ -632,7 +646,7 @@ fn read_asides(
     for a in asides {
         let mut els = Vec::new();
         let mut nested = Vec::new();
-        flow(t, a.body, page, false, &mut els, &mut nested, budget)?;
+        flow(t, a.body, page, None, &mut els, &mut nested, budget)?;
         for (i, e) in els.iter_mut().enumerate() {
             if e.kind != "doco:Table" {
                 e.kind = "doco:Paragraph".into();
@@ -665,7 +679,7 @@ fn text_elements(
     let mut body = Vec::new();
     let mut asides = Vec::new();
     if let Some(text) = content.find(0, "text") {
-        flow(content, text, 0, false, &mut body, &mut asides, budget)?;
+        flow(content, text, 0, None, &mut body, &mut asides, budget)?;
     }
     let (notes, comments): (Vec<Aside>, Vec<Aside>) =
         asides.into_iter().partition(|a| a.evidence != "comment");
@@ -684,7 +698,7 @@ fn text_elements(
         for m in styles.elements(masters) {
             for h in styles.elements(m).filter(|&h| styles.node(h).name == name) {
                 let mut els = Vec::new();
-                flow(styles, h, 0, false, &mut els, &mut Vec::new(), budget)?;
+                flow(styles, h, 0, None, &mut els, &mut Vec::new(), budget)?;
                 for mut e in els {
                     if e.kind != "doco:Table" {
                         e.kind = "doco:Paragraph".into();
@@ -808,7 +822,7 @@ fn slide_shapes(
                     // Its paragraphs, each spent as it is read, joined.
                     let mut parts = Vec::new();
                     for b in t.elements(c) {
-                        flow(t, b, page, false, &mut parts, asides, budget)?;
+                        flow(t, b, page, None, &mut parts, asides, budget)?;
                     }
                     let text = tidy(
                         &parts
@@ -825,7 +839,7 @@ fn slide_shapes(
                 let before = out.len();
                 // A shape's own paragraphs (a custom shape holds them), or
                 // the text box or table inside a frame.
-                flow(t, c, page, false, out, asides, budget)?;
+                flow(t, c, page, None, out, asides, budget)?;
                 // A bulleted text box: its paragraphs are list items when
                 // the frame is an outline.
                 if class == "outline" {

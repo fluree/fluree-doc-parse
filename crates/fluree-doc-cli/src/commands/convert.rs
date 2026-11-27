@@ -601,20 +601,25 @@ fn read_source(
             )
         }
         SourceKind::Docx => {
+            let options = fluree_doc_docx::Options {
+                comments: args.comments,
+            };
+            let mut pkg = fluree_doc_docx::Package::open(&data)
+                .map_err(|e| fluree_doc_docx::DocxError::Zip(e).to_string())?;
             let (mut elements, info, media) =
-                fluree_doc_docx::parse_with_media(&data).map_err(|e| e.to_string())?;
+                fluree_doc_docx::parse_package_options(&mut pkg, &options)
+                    .map_err(|e| e.to_string())?;
             // The images placed in the flow: a pasted screenshot's text
             // follows its figure, read by OCR. Their bytes are only read
-            // when something is there to read them.
-            // Each image's first bytes are read from a package of their own,
-            // so its format is told without decompressing the rest.
-            let mut pkg = fluree_doc_docx::Package::open(&data)?;
-            let mut heads = fluree_doc_docx::Package::open(&data)?;
+            // when something is there to read them, from the package opened
+            // once; each image's first bytes alone tell its format, without
+            // decompressing the rest.
+            let pkg = std::cell::RefCell::new(pkg);
             let media = read_media_with(
                 src.stem,
                 media,
-                &mut |part| fluree_doc_docx::read_media_head(&mut heads, part),
-                &mut |part| fluree_doc_docx::read_media(&mut pkg, part),
+                &mut |part| fluree_doc_docx::read_media_head(&mut pkg.borrow_mut(), part),
+                &mut |part| fluree_doc_docx::read_media(&mut pkg.borrow_mut(), part),
                 cfg,
                 quiet,
             );
@@ -653,17 +658,17 @@ fn read_source(
         // A picture anchored to its cells is read as a DOCX's is, its text
         // placed after its figure.
         SourceKind::Xlsx => {
+            let mut pkg = fluree_doc_xlsx::Package::open(&data)
+                .map_err(|e| fluree_doc_xlsx::XlsxError::Zip(e).to_string())?;
             let (mut elements, info, media) =
-                fluree_doc_xlsx::parse_with_media(&data).map_err(|e| e.to_string())?;
-            // Each image's first bytes are read from a package of their own,
-            // so its format is told without decompressing the rest.
-            let mut pkg = fluree_doc_xlsx::Package::open(&data)?;
-            let mut heads = fluree_doc_xlsx::Package::open(&data)?;
+                fluree_doc_xlsx::parse_package(&mut pkg).map_err(|e| e.to_string())?;
+            // Read from the package opened once, as a DOCX's are.
+            let pkg = std::cell::RefCell::new(pkg);
             let media = read_media_with(
                 src.stem,
                 media,
-                &mut |part| fluree_doc_xlsx::read_media_head(&mut heads, part),
-                &mut |part| fluree_doc_xlsx::read_media(&mut pkg, part),
+                &mut |part| fluree_doc_xlsx::read_media_head(&mut pkg.borrow_mut(), part),
+                &mut |part| fluree_doc_xlsx::read_media(&mut pkg.borrow_mut(), part),
                 cfg,
                 quiet,
             );
@@ -740,11 +745,22 @@ fn read_source(
                 },
             )
         }
-        // A Word 97-2003 document's text, through its piece table.
-        SourceKind::Doc => (
-            fluree_doc_doc::parse(&data).map_err(|e| e.to_string())?,
-            fluree_doc_model::Notes::default(),
-        ),
+        // A Word 97-2003 document's text, through its piece table, and
+        // what its summary information declares. What it holds and this
+        // reader leaves out (headers and footers, or text boxes, whose list
+        // of stories does not read) is said, rather than lost without a
+        // word.
+        SourceKind::Doc => {
+            let read = fluree_doc_doc::parse_with_info(&data).map_err(|e| e.to_string())?;
+            if !read.left_out.is_empty() && !quiet {
+                eprintln!(
+                    "warning: {}: not read: {}",
+                    src.stem,
+                    read.left_out.join(", ")
+                );
+            }
+            (read.elements, declared(read.info))
+        }
         // An Excel 97-2003 workbook, laid out as an XLSX one is.
         SourceKind::Xls => {
             let (elements, info) =
@@ -753,6 +769,14 @@ fn read_source(
         }
         _ => return convert_bytes(data, src, cfg, args, pages, quiet),
     };
+    // The comments an OpenDocument, RTF or Word 97-2003 document carries,
+    // read with it, are left out unless asked for (`--comments`), as a
+    // DOCX's are. The ids around them are kept, so an element is named
+    // alike with and without them.
+    let mut elements = elements;
+    if !args.comments {
+        elements.retain(|e| e.evidence != "comment");
+    }
     Ok(render(&elements, src, args, Vec::new(), &notes))
 }
 
@@ -803,7 +827,6 @@ fn convert_email(
         &|part| {
             email
                 .media_bytes(part)
-                .map(<[u8]>::to_vec)
                 .ok_or_else(|| format!("{part}: not in the message"))
         },
         cfg,
@@ -834,7 +857,28 @@ fn convert_email(
         ocr: media.ocr,
         ..email.notes()
     };
+    // A signature's icons carry alternative text (`LinkedIn`, `Logo`) that
+    // would read into nearly every corporate message as words of its body.
+    // An image under the floor a model is sent is such an icon as often as
+    // not, and its figure keeps its place without them.
+    let icons: std::collections::HashSet<String> = email
+        .media
+        .iter()
+        .filter(|m| {
+            (m.source.part())
+                .and_then(|part| email.media_bytes(part))
+                .and_then(pixel_size)
+                .is_some_and(|(w, h)| under_model_floor(w, h))
+        })
+        .map(|m| m.figure.clone())
+        .collect();
     let mut elements = email.elements;
+    for e in &mut elements {
+        if e.kind == "doco:Figure" && e.figure.as_ref().is_some_and(|f| icons.contains(f)) {
+            e.text.clear();
+            e.links = None;
+        }
+    }
     fluree_doc_image::place_after_figures(&mut elements, media.read);
     Ok(render(&elements, src, args, Vec::new(), &notes))
 }
@@ -1093,6 +1137,11 @@ pub(crate) fn convert_carried(
 /// A safe, unique file name for an attachment: its own name with any path
 /// taken off, or a numbered stand-in, and unique within its email.
 ///
+/// A name is the sender's bytes: a control character (a NUL, which no file
+/// system takes, a line break) is written `_`, and a name is cut to
+/// [`MAX_FILE_NAME_BYTES`], its extension kept, so that one file's name
+/// cannot fail the whole input when it is saved.
+///
 /// A name of the form `--parse-attachments` writes a conversion under
 /// (`<sha256>.<format>`, beside the saved files) is the sender's to choose,
 /// and would pass a file of theirs off as another's conversion: it is saved
@@ -1104,7 +1153,13 @@ fn file_name(
 ) -> String {
     let base = name
         .and_then(|n| n.rsplit(['/', '\\']).next())
-        .map(|n| n.trim().trim_start_matches('.').to_string())
+        .map(|n| {
+            let n: String = n
+                .chars()
+                .map(|c| if c.is_control() { '_' } else { c })
+                .collect();
+            shortened(n.trim().trim_start_matches('.'))
+        })
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("attachment-{}", index + 1));
     let base = if names_a_conversion(&base) {
@@ -1122,6 +1177,31 @@ fn file_name(
         n += 1;
     }
     candidate
+}
+
+/// The most bytes of an attachment's name kept: most file systems take 255,
+/// and a name made unique (`name (2).pdf`) is a few bytes longer.
+const MAX_FILE_NAME_BYTES: usize = 200;
+
+/// `name`, at most [`MAX_FILE_NAME_BYTES`] of it, cut on a character and
+/// keeping a short extension (`.pdf`).
+fn shortened(name: &str) -> String {
+    if name.len() <= MAX_FILE_NAME_BYTES {
+        return name.to_string();
+    }
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e)
+        .filter(|e| !e.is_empty() && e.len() <= 16)
+        .map_or(String::new(), |e| format!(".{e}"));
+    let mut stem = String::new();
+    for c in name.chars() {
+        if stem.len() + c.len_utf8() + ext.len() > MAX_FILE_NAME_BYTES {
+            break;
+        }
+        stem.push(c);
+    }
+    stem + &ext
 }
 
 /// Whether `name` is one a conversion's output could take: 64 hexadecimal
@@ -1163,25 +1243,20 @@ fn convert_image(
     }
     // A model may read what OCR leaves unread, as on a scanned PDF page.
     let model_after = cfg.escalate && cfg.tier_results.is_none();
-    // What OCR made of it when it took no word, or only words it doubts:
-    // kept should the model fail, and its reading, empty, listed should the
-    // model read nothing either.
+    // What OCR made of it when it took no word: kept should the model fail,
+    // and its reading, empty, listed should the model read nothing either.
     let mut ocr_read = None;
     if cfg.ocr.is_some() || cfg.ocr_words.is_some() {
         match ocr_image(&data, header, src, cfg, quiet) {
-            Ok(read) if (read.read_something && !read.doubtful) || !model_after => {
+            // Whatever OCR's confidence in the words it took: it is reported
+            // (`doc:ocrReadings`), not a reason to send the image to a model.
+            // Whether a model reads an image OCR read is the run's to say.
+            Ok(read) if read.read_something || !model_after => {
                 return Ok(render_image_ocr(read, src, args, quiet));
             }
             Ok(read) => {
                 if !quiet {
-                    eprintln!(
-                        "note: {stem}: OCR read {}; the configured model reads it",
-                        if read.read_something {
-                            "only words it doubts"
-                        } else {
-                            "nothing"
-                        }
-                    );
+                    eprintln!("note: {stem}: OCR read nothing; the configured model reads it");
                 }
                 ocr_read = Some(read);
             }
@@ -1213,9 +1288,9 @@ fn convert_image(
     let page = "p0_full";
     let readings = match image_readings(stem, page, &data, format.mime(), cfg, cfg.escalate) {
         Ok(readings) => readings,
-        // OCR read it and took no word, or only words it doubts: the model
-        // failing leaves that reading, as it leaves a placed picture's, not
-        // the conversion failed. Where OCR had no reading of it (no words written for it),
+        // OCR read it and took no word: the model failing leaves that
+        // reading, as it leaves a placed picture's, not the conversion
+        // failed. Where OCR had no reading of it (no words written for it),
         // the model was its only reader, and its failure the conversion's.
         Err(e) => match ocr_read {
             Some(read) if read.readings > 0 => {
@@ -1234,6 +1309,8 @@ fn convert_image(
             bbox: Some(doc.pages[0].images[0].bbox),
             ..Element::new("doco:Paragraph", String::new(), "rust", "layout")
         });
+        // No line of OCR's to check the model's reading against: the model
+        // reads an image OCR took no word in.
         splice_image_reading(&mut elements, stem, page, readings.as_ref(), &[]);
     }
     // An image nothing read is listed unread, so the output says so too. A
@@ -1249,10 +1326,8 @@ fn convert_image(
         ..Default::default()
     };
     // The model read nothing either: OCR's reading, which took no word, is
-    // still the image's, as an empty reading of a PDF page is. One that
-    // took only words it doubts is not listed: the model, which read the
-    // image for them, found no text, and its words are not in the output.
-    if let Some(read) = ocr_read.filter(|r| elements.is_empty() && !r.read_something) {
+    // still the image's, as an empty reading of a PDF page is.
+    if let Some(read) = ocr_read.filter(|_| elements.is_empty()) {
         warn_listed_scores(read.scores, &read.notes.ocr, quiet);
         notes.ocr = read.notes.ocr;
     }
@@ -1370,22 +1445,24 @@ struct MediaRead {
 /// first figure drawing it); a model's reading someone already has
 /// (`<stem>_m<n>.json` under `--tier-results`), which replaces what OCR read
 /// as it replaces a scanned page's; else the configured model, for an image
-/// OCR did not read any text in that has the pixels a call is worth
-/// ([`declined_by_model`]), within the document's `escalation.max_crops`:
-/// the images it reads are sent together, through one reader, as a
-/// document's crops are. Before any of them, an image the pixel probe does
-/// not take for text (a photograph, a chart, a logo) is read by nothing, as
-/// a PDF's region it does not take for text is not. What was read is placed
-/// after each figure drawing the image. An image nothing read is listed,
-/// with why, once for each figure drawing it, for the output to say so, and
-/// counted in one note, unless no engine decodes its format, it is under the
-/// floor a model is sent or the probe does not take it for text
-/// (`UnsupportedFormat`, `Small`, `NotTexty`): the output's silence is not
-/// mistaken for an empty image. `bytes` reads one image's bytes by the part
-/// the file holds it under; it is called only when something is there to
-/// read them, one image at a time, and only the bytes of the images sent to
-/// the model are held until it has read them. `head` reads its first bytes,
-/// which tell its format before anything else is read.
+/// OCR did not read any text in that a call is worth ([`declined_by_model`]:
+/// its header read, over a floor of pixels, taken for text by the pixel
+/// probe), within the document's `escalation.max_crops`: the images it
+/// reads are sent together, through one reader, as a document's crops are.
+/// The probe gates the model's call alone, as it is billed and sends the
+/// image off the machine: what OCR reads and a reading supplied are taken
+/// whatever it makes of the image. What was read is placed after each
+/// figure drawing the image. An image nothing read is listed, with why
+/// ([`fluree_doc_model::UnreadImage::reason`]), once for each figure drawing
+/// it, for the output to say so, and counted in one note, unless no engine
+/// decodes its format, it is under the floor a model is sent or it is not
+/// taken for text (`UnsupportedFormat`, `Small`, `NotTexty`): the output's
+/// silence is not mistaken for an empty image. `bytes` reads one image's
+/// bytes by the part the file holds it under; it is called only when
+/// something is there to read them, one image at a time, and again for
+/// each image the model is sent, as it is sent: no image's bytes are held
+/// past its reading. `head` reads its first bytes, which tell its format
+/// before anything else is read.
 fn read_media_with(
     stem: &str,
     media: Vec<fluree_doc_model::Media>,
@@ -1459,7 +1536,7 @@ fn read_media_with(
     }
     placed.sort_by_key(|(picture, _)| order.get(&picture.tag()).copied());
     let over_budget = reader.over_budget;
-    read_by_model(stem, &mut placed, cfg, quiet);
+    read_by_model(stem, &mut placed, bytes, cfg, quiet);
     let mut out = MediaRead::default();
     for (picture, p) in placed {
         // Of a reading listed only, taken or set aside as noise: one refused,
@@ -1468,7 +1545,8 @@ fn read_media_with(
             let name = format!("{stem}_{}.json", p.tag);
             common::warn_scores_out_of_range(&name, n, words, quiet);
         }
-        // Taken, or set aside as noise and listed as one that took no word.
+        // Taken, or set aside as noise and listed as one, with its words'
+        // confidence.
         out.ocr.extend(p.ocr_read);
         match p.read {
             Some(elements) => out.read.extend(picture.after_each_figure(elements)),
@@ -1512,10 +1590,10 @@ fn read_media_with(
     // the model is sent (`Small`), as a PDF's region too small for a model
     // is: a PNG logo is as common as a GIF one, and was left out by choice,
     // not by a failure. `--verbose` names each, with `--ocr` to read it. So
-    // is one the pixel probe does not take for text, or whose OCR reading
-    // was noise (`NotTexty`), as a PDF's region the probe does not take for
-    // text is: a photograph is what it is as often as not. Counted by
-    // image, however many figures draw it.
+    // is one the pixel probe does not take for text, so no model was sent
+    // it, or whose OCR reading was noise (`NotTexty`), as a PDF's region the
+    // probe does not take for text is: a photograph is what it is as often
+    // as not. Counted by image, however many figures draw it.
     let mut unread: Vec<(&str, &str)> = out
         .unread
         .iter()
@@ -1570,27 +1648,32 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
         // An image no engine decodes and no model is sent (an EMF or WMF
         // drawing, a GIF or BMP logo), told by its first bytes before
         // anything else, whatever reads the others: listed as what it is,
-        // and nothing more of it is read. A part that ends before its
-        // format could be told (empty, or cut short) is no format at all:
-        // it failed, and is counted.
-        if let Some(h) = picture
-            .source
-            .part()
-            .and_then(|part| (self.head)(part).ok())
-            .filter(|h| fluree_doc_pdf::image::Format::sniff(h).is_none())
-        {
-            let p = if h.len() < fluree_doc_pdf::image::Format::SNIFFED {
-                let e = format!("its part holds {} byte(s), too few for an image", h.len());
-                if !self.quiet {
-                    eprintln!("warning: {name}: {e}");
-                }
-                Placed::new(tag.clone(), Some(("Failed", e)))
-            } else {
-                Placed {
-                    unsupported: true,
-                    ..Placed::new(tag.clone(), None)
-                }
-            };
+        // and nothing more of it is read. A part that cannot be read, or
+        // that ends before its format could be told (empty, or cut short),
+        // is no format at all: it failed, and is counted, whether or not
+        // anything was there to read it.
+        let failed = |e: String, quiet: bool| {
+            if !quiet {
+                eprintln!("warning: {name}: {e}");
+            }
+            Placed::new(tag.clone(), Some(("Failed", e)))
+        };
+        let verdict = match picture.source.part().map(|part| (self.head)(part)) {
+            Some(Err(e)) => Some(failed(e, self.quiet)),
+            Some(Ok(h)) if fluree_doc_pdf::image::Format::sniff(&h).is_none() => {
+                Some(if h.len() < fluree_doc_pdf::image::Format::SNIFFED {
+                    let e = format!("its part holds {} byte(s), too few for an image", h.len());
+                    failed(e, self.quiet)
+                } else {
+                    Placed {
+                        unsupported: true,
+                        ..Placed::new(tag.clone(), None)
+                    }
+                })
+            }
+            _ => None,
+        };
+        if let Some(p) = verdict {
             self.verdicts.insert(tag, p);
             return false;
         }
@@ -1600,11 +1683,17 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
     }
 
     fn pixels(&mut self, image: &[u8]) -> Result<u64, String> {
-        // An image whose size cannot be read is not charged: a model may
-        // read what the decoder refuses, and OCR fails on it anyway.
-        Ok(fluree_doc_image::header(image)
-            .map(|h| u64::from(h.width) * u64::from(h.height))
-            .unwrap_or(0))
+        // An image whose size cannot be read is charged a pixel for each of
+        // its bytes: nothing tells what decoding it would cost, and a
+        // document of many such parts (a PNG's signature, then zeros) is
+        // bounded by its bytes, as one of many images is by their pixels.
+        // It is not refused here: a reading supplied for it, or OCR's words,
+        // may still read it; no model is sent it ([`declined_by_model`]).
+        Ok(
+            fluree_doc_image::header(image).map_or(image.len() as u64, |h| {
+                u64::from(h.width) * u64::from(h.height)
+            }),
+        )
     }
 
     fn read(&mut self, picture: &fluree_doc_model::Picture, b: &[u8]) -> Result<Placed, String> {
@@ -1612,23 +1701,18 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
         let tag = picture.tag();
         let name = format!("{stem}_{tag}");
         let ocr = cfg.ocr.is_some() || cfg.ocr_words.is_some();
-        // An image the pixel probe does not take for text (a photograph, a
-        // chart, a logo), or too thin for a line of it, is read by nothing,
-        // as a PDF's region the probe does not take for text is not: OCR
-        // would read noise in it, and a model's call is billed and sends it
-        // off the machine. One that does not decode is not judged: a model
-        // may read what the decoder refuses. Decoded once, for the probe
-        // and the engine both.
-        let decoded = fluree_doc_image::decode(b);
-        if decoded
+        // Whether the configured model may be asked for it: no reading of it
+        // is supplied (`--tier-results`), which would be taken instead.
+        let model = cfg.escalate && cfg.tier_results.is_none();
+        // Decoded once, for the engine and the pixel probe both, and only
+        // for them: words written for it need only its header.
+        let mut decoded = cfg.ocr.is_some().then(|| fluree_doc_image::decode(b));
+        // What the probe makes of it, judged before the engine takes the
+        // decoded image, where a model may be sent it.
+        let probed = decoded
             .as_ref()
-            .is_ok_and(|image| !fluree_doc_image::texty(image))
-        {
-            if cfg.verbose {
-                eprintln!("{name}: not read: the pixel probe does not take it for text");
-            }
-            return Ok(Placed::new(tag, Some(("NotTexty", String::new()))));
-        }
+            .filter(|_| model)
+            .map(|d| d.as_ref().ok().map(fluree_doc_image::texty));
         // Why it is not read, should nothing read it.
         let mut failure: Option<(&'static str, String)> = None;
         // What OCR read in it: `None` where OCR did not read it.
@@ -1655,8 +1739,14 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
                         fluree_doc_image::elements_from_words(b, reading)
                     }),
                 ),
+                // Read by the engine whatever the pixel probe makes of it,
+                // as a DOCX's pictures were before the probe judged them:
+                // OCR costs nothing per image and sends nothing off the
+                // machine, and a reading that is noise is set aside below.
                 (_, Some(engine)) => Some(
                     decoded
+                        .take()
+                        .expect("decoded for the engine")
                         .and_then(|image| fluree_doc_image::read_texty(image, engine.0.as_ref())),
                 ),
                 _ => unreachable!("words or an engine"),
@@ -1670,7 +1760,8 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
                         eprintln!("ocr: {name}: the reading is noise, set aside");
                     }
                     failure = Some(("NotTexty", String::new()));
-                    // Listed all the same, as a reading that took no word.
+                    // Listed all the same, as one set aside, with the words
+                    // it held and the engine's confidence in them.
                     ocr_read.extend(image.ocr.into_iter().map(|r| fluree_doc_model::OcrReading {
                         page: None,
                         image: Some(tag.clone()),
@@ -1720,11 +1811,11 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
                 None => {}
             }
         }
-        // A model's reading: one someone already has, over what OCR read;
-        // else the configured model, for an image OCR read no text in.
+        // A model's reading: one someone already has, over what OCR read,
+        // whatever the image looks like; else the configured model, for an
+        // image OCR read no text in.
         let ocr_read_text = read.as_ref().is_some_and(|r| !r.is_empty());
-        // A reading someone already has wins, and the model is not called.
-        let live = cfg.escalate && cfg.tier_results.is_none() && !ocr_read_text;
+        let live = model && !ocr_read_text;
         let mut p = Placed {
             read,
             failure,
@@ -1736,21 +1827,30 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
         if let Some(given) = &self.given {
             p.take(stem, given, cfg.verbose);
         } else if live {
-            // Held to a floor of pixels: a small logo or an icon is not worth
-            // a model's call. OCR, which costs nothing per image, has read it
-            // already, whatever it is.
-            if let Some(why) = declined_by_model(b) {
+            // Held to what a call is worth (see `declined_by_model`): its
+            // header read, a floor of pixels, the pixel probe. OCR, which
+            // costs nothing per image, has read it already, whatever it is.
+            let probe = || probed.unwrap_or_else(|| fluree_doc_image::looks_like_text(b));
+            if let Some((why, e)) = declined_by_model(b, probe) {
                 if cfg.verbose {
-                    let hint = if ocr { "" } else { "; --ocr reads it" };
+                    let hint = if ocr || why != "Small" {
+                        ""
+                    } else {
+                        "; --ocr reads it"
+                    };
                     eprintln!("model: {name}: not sent ({why}){hint}");
                 }
-                p.failure.get_or_insert((why, String::new()));
+                if why == "Failed" && p.failure.is_none() && !quiet {
+                    eprintln!("warning: {name}: {e}");
+                }
+                p.failure.get_or_insert((why, e));
             } else if max == 0 || self.asked < max {
                 // Only an image a model is sent as it is (PNG, JPEG, TIFF):
-                // a drawing kept as EMF or WMF is not.
+                // a drawing kept as EMF or WMF is not. Its bytes are read
+                // again when it is sent, not held until then.
                 if let Some(format) = fluree_doc_pdf::image::Format::sniff(b) {
                     self.asked += 1;
-                    p.send = Some((b.to_vec(), format.mime()));
+                    p.send = Some(format.mime());
                 }
             } else {
                 self.over_budget += 1;
@@ -1774,18 +1874,58 @@ const MIN_SHORT_SIDE_PX: u32 = 48;
 /// read (`Small`), for OCR to read it, without being counted on stderr.
 const MIN_LONG_SIDE_PX: u32 = 400;
 
-/// Why an image a document places is not sent to the configured model;
-/// `None` where it is sent. `Small`: under [`MIN_SHORT_SIDE_PX`] or
-/// [`MIN_LONG_SIDE_PX`] in its own pixels, whatever holds it: an e-mail's
-/// image has no page to measure it against, and a DOCX's or an XLSX's is
-/// held to the same floor, so one picture is sent or not wherever it is
-/// pasted. The pixel probe has judged it before: a photograph or a chart
-/// it does not take for text never gets here, a capture of a few lines on
-/// a wide screen does. An image whose size cannot be read is sent: the
-/// model may read what the decoder refuses.
-fn declined_by_model(bytes: &[u8]) -> Option<&'static str> {
-    let h = fluree_doc_image::header(bytes).ok()?;
-    under_model_floor(h.width, h.height).then_some("Small")
+/// Why an image a document places is not sent to the configured model, and
+/// what went wrong where something did; `None` where it is sent.
+///
+/// - `Failed`: its header does not parse. Nothing says what it is or how
+///   large, and a part that only opens like an image (a PNG's signature,
+///   then zeros) would otherwise cost a billed request each.
+/// - `Small`: under [`MIN_SHORT_SIDE_PX`] or [`MIN_LONG_SIDE_PX`] in its own
+///   pixels, whatever holds it: an e-mail's image has no page to measure it
+///   against, and a DOCX's or an XLSX's is held to the same floor, so one
+///   picture is sent or not wherever it is pasted.
+/// - `NotTexty`: the pixel probe (`texty`, asked last, as it decodes the
+///   image) does not take it for text: a photograph, a chart, a logo, as a
+///   PDF's region the probe does not take for text is not sent. A capture
+///   of a few lines on a wide screen is sent. One whose header reads but
+///   that does not decode (`None`) is not judged, and is sent: the model may
+///   read what the decoder refuses.
+fn declined_by_model(
+    bytes: &[u8],
+    texty: impl FnOnce() -> Option<bool>,
+) -> Option<(&'static str, String)> {
+    let h = match fluree_doc_image::header(bytes) {
+        Ok(h) => h,
+        Err(e) => return Some(("Failed", format!("its header does not parse: {e}"))),
+    };
+    if under_model_floor(h.width, h.height) {
+        return Some(("Small", String::new()));
+    }
+    (texty() == Some(false)).then(|| ("NotTexty", String::new()))
+}
+
+/// An image's size in pixels, from its header: a PNG's, a JPEG's or a
+/// TIFF's upright, as it is read; a GIF's or a BMP's, which no engine reads
+/// but a message's icons are often kept as, as stored. `None` where no
+/// header says.
+fn pixel_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if let Ok(h) = fluree_doc_image::header(bytes) {
+        return Some((h.width, h.height));
+    }
+    let le16 = |at: usize| {
+        Some(u32::from(u16::from_le_bytes(
+            bytes.get(at..at + 2)?.try_into().ok()?,
+        )))
+    };
+    let le32 = |at: usize| Some(i32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some((le16(6)?, le16(8)?));
+    }
+    // A BMP's height is negative where its rows run top down.
+    if bytes.starts_with(b"BM") {
+        return Some((le32(18)?.unsigned_abs(), le32(22)?.unsigned_abs()));
+    }
+    None
 }
 
 /// Whether an image a document places, of `width` × `height` pixels, is
@@ -1797,19 +1937,21 @@ pub(crate) fn under_model_floor(width: u32, height: u32) -> bool {
 }
 
 /// [`read_media_with`] for a source that holds its images' bytes in memory
-/// (an e-mail's), whose first bytes are read with the rest.
-fn read_media(
+/// (an e-mail's): an image's first bytes are a slice of them, and only an
+/// image read is copied, one at a time.
+fn read_media<'a>(
     stem: &str,
     media: Vec<fluree_doc_model::Media>,
-    bytes: &dyn Fn(&str) -> Result<Vec<u8>, String>,
+    bytes: &dyn Fn(&str) -> Result<&'a [u8], String>,
     cfg: &TierConfig,
     quiet: bool,
 ) -> MediaRead {
+    let sniffed = fluree_doc_pdf::image::Format::SNIFFED;
     read_media_with(
         stem,
         media,
-        &mut |p| bytes(p),
-        &mut |p| bytes(p),
+        &mut |p| bytes(p).map(|b| b[..b.len().min(sniffed)].to_vec()),
+        &mut |p| bytes(p).map(<[u8]>::to_vec),
         cfg,
         quiet,
     )
@@ -1833,8 +1975,9 @@ struct Placed {
     scores: Option<(usize, usize)>,
     /// Its bytes are no image OCR or a model reads (EMF, WMF).
     unsupported: bool,
-    /// Its bytes and their MIME type, to send to the configured model.
-    send: Option<(Vec<u8>, &'static str)>,
+    /// The MIME type it is sent to the configured model as, where it is:
+    /// its bytes are read again then, not held until the model reads them.
+    send: Option<&'static str>,
 }
 
 impl Placed {
@@ -1897,25 +2040,31 @@ impl Placed {
 }
 
 /// Send the images of `placed` that are to go to the configured model
-/// together, through one reader, and take what it read of each.
+/// together, through one reader, and take what it read of each. Each
+/// image's bytes are read again by `bytes`, by its part, as it is sent
+/// ([`crate::escalate::read_images`]): a document of many large pictures
+/// is not held whole until the last is read.
 fn read_by_model(
     stem: &str,
     placed: &mut [(fluree_doc_model::Picture, Placed)],
+    bytes: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
     cfg: &TierConfig,
     quiet: bool,
 ) {
-    let sent: Vec<(&str, &[u8], &str)> = placed
+    let (sent, parts): (Vec<(&str, &str)>, Vec<&str>) = placed
         .iter()
-        .filter_map(|(_, p)| {
-            let (bytes, mime) = p.send.as_ref()?;
-            Some((p.tag.as_str(), bytes.as_slice(), *mime))
-        })
-        .collect();
+        .filter_map(|(picture, p)| Some(((p.tag.as_str(), p.send?), picture.source.part()?)))
+        .unzip();
     if sent.is_empty() {
         return;
     }
-    let got =
-        crate::escalate::read_images(std::path::Path::new(stem), &sent, &cfg.config, cfg.verbose);
+    let got = crate::escalate::read_images(
+        std::path::Path::new(stem),
+        &sent,
+        &mut |i| bytes(parts[i]).map(std::borrow::Cow::Owned),
+        &cfg.config,
+        cfg.verbose,
+    );
     // A reader that cannot be opened is said once, for the document.
     if let (Err(e), false) = (&got, quiet) {
         eprintln!("warning: {stem}: the configured model: {e}");
@@ -1990,10 +2139,6 @@ struct ImageOcr {
     /// Some word was taken, or a model's reading supplied spliced over the
     /// page.
     read_something: bool,
-    /// Every reading that took a word is noise by the confidence a placed
-    /// picture's is held to ([`fluree_doc_pdf::ocr::MIN_PICTURE_CONFIDENCE`]):
-    /// a configured model reads the image instead.
-    doubtful: bool,
     /// The OCR readings of it, taken or set aside: none where no words
     /// were written for it.
     readings: usize,
@@ -2119,20 +2264,8 @@ fn ocr_image(
     // pages of text, not an image whose few words may be all it holds.
     let read_something = injected.iter().any(|r| r.refused.is_none() && r.taken > 0)
         || a.elements.iter().any(|e| e.evidence == "page-tier");
-    // But where all OCR took is words it doubts, a photograph's one "word"
-    // at 0.21 or a whiteboard's stray letters, a configured model reads it
-    // instead, as it reads an image OCR took nothing in: the rule a placed
-    // picture's reading is held to, its words' mean confidence, which a
-    // stamp's `PAID` at 0.97 passes. Without a model, OCR's words are the
-    // output, as a scan read poorly gives its.
-    let doubtful = !a.elements.iter().any(|e| e.evidence == "page-tier")
-        && injected
-            .iter()
-            .filter(|r| r.refused.is_none() && r.taken > 0)
-            .all(|r| {
-                r.mean_conf
-                    .is_some_and(|c| c < fluree_doc_pdf::ocr::MIN_PICTURE_CONFIDENCE)
-            });
+    // However unsure OCR is of them: its confidence is reported
+    // (`doc:ocrReadings`), and routes nothing.
     let unread = if read_something {
         Vec::new()
     } else {
@@ -2152,7 +2285,6 @@ fn ocr_image(
         sizes,
         notes,
         read_something,
-        doubtful,
         readings: injected.len(),
         scores,
     })
@@ -2356,6 +2488,10 @@ fn convert_bytes(
         || opts.emit_anchors
         || opts.layout_prefix.is_some();
     eopts.probe_small_images = ocr || args.probe_images;
+    // What each image shows, so an engine reads an image drawn again once
+    // (`ocr::copies`): read by OCR alone, and a hash of every image's
+    // stream (decrypted, in an encrypted file) a run without it never uses.
+    eopts.key_images = ocr;
     let mut doc = extract_bytes_with(data, &eopts).map_err(|e| format!("extract: {e}"))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
@@ -2499,15 +2635,25 @@ fn convert_bytes(
         &fluree_doc_pdf::link::extract(&raw),
         &doc.pages,
     );
-    // The notes a reader left on the pages, after each page's own text,
-    // within what one document may make.
-    let mut budget = fluree_doc_model::budget::Budget::default();
-    let annotations = fluree_doc_pdf::annot::annotations(&raw, &mut budget)
-        .map_err(|e| format!("PDF too large: its notes, {e}"))?;
-    fluree_doc_pdf::annot::place(
-        &mut a.elements,
-        fluree_doc_pdf::annot::elements(&annotations),
-    );
+    // The notes a reader left on the pages, when asked for (`--comments`),
+    // after each page's own text, within what one document may make: past
+    // it, the page's text is still read, and the notes are left out with a
+    // warning rather than failing the document. A markup quoting the text
+    // it marks would say that text twice, and is left out.
+    if args.comments {
+        let mut budget = fluree_doc_model::budget::Budget::default();
+        match fluree_doc_pdf::annot::annotations(&raw, &mut budget) {
+            Ok(mut annotations) => {
+                fluree_doc_pdf::annot::drop_quoting_markups(&mut annotations, &doc.pages);
+                fluree_doc_pdf::annot::place(
+                    &mut a.elements,
+                    fluree_doc_pdf::annot::elements(&annotations),
+                );
+            }
+            Err(e) if !quiet => eprintln!("warning: {stem}: notes left out: {e}"),
+            Err(_) => {}
+        }
+    }
     // The files it embeds, described as an e-mail's attachments are, and
     // saved with them under `--attachments`.
     let (embedded, skipped) = fluree_doc_pdf::annot::embedded_files(&raw);
@@ -2767,11 +2913,14 @@ fn convert_xps(
             }
         }
         if !sent.is_empty() {
-            let crops: Vec<(&str, &[u8], &str)> = sent
-                .iter()
-                .map(|(c, b, m)| (c.as_str(), b.as_slice(), *m))
-                .collect();
-            match crate::escalate::read_images(Path::new(stem), &crops, &cfg.config, cfg.verbose) {
+            let crops: Vec<(&str, &str)> = sent.iter().map(|(c, _, m)| (c.as_str(), *m)).collect();
+            match crate::escalate::read_images(
+                Path::new(stem),
+                &crops,
+                &mut |i| Ok(std::borrow::Cow::Borrowed(sent[i].1.as_slice())),
+                &cfg.config,
+                cfg.verbose,
+            ) {
                 // A picture read and found to hold no text leaves its page
                 // unread, as a page of a PDF is left.
                 Ok(read) => {
@@ -2825,6 +2974,9 @@ fn convert_xps(
     unread_regions.retain(|u| asked(u.page));
     let mut ocr = fluree_doc_pdf::ocr::readings(&injected, &a.elements);
     ocr.retain(|r| r.page.is_none_or(asked));
+    // A page part that would not read, read as blank.
+    let mut warnings = fluree_doc_pdf::parse_warnings(&doc);
+    warnings.retain(|w| asked(w.page));
     let notes = fluree_doc_model::Notes {
         unread,
         unread_regions,
@@ -2836,10 +2988,16 @@ fn convert_xps(
             .collect(),
         info: xps.info.clone(),
         ocr,
+        warnings,
         ..Default::default()
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {stem}: {note}");
+    }
+    if !quiet {
+        for line in parse_warning_lines(&notes.warnings) {
+            eprintln!("warning: {stem}: {line}");
+        }
     }
     let asked_pages = doc.pages.iter().filter(|p| asked(p.index)).count();
     if let Some(why) = read_nothing(doc.pages.len(), asked_pages, &a.elements, &notes) {
@@ -2881,6 +3039,7 @@ fn parse_warning_lines(warnings: &[fluree_doc_model::ParseWarning]) -> Vec<Strin
             }
             let what = match kind {
                 "ImageDecodeFailure" => "an image could not be decoded; what it shows is missing",
+                "MissingPagePart" => "the page's part is missing or unreadable; read as blank",
                 // Any other kind the interpreter may name (it declares
                 // `UnsupportedFont`, but never reports it).
                 _ => "the parser reported a problem",
@@ -3357,6 +3516,28 @@ mod tests {
     }
 
     #[test]
+    fn an_attachments_name_is_one_a_file_system_takes() {
+        let mut taken = std::collections::HashSet::new();
+        // A NUL, which no file system takes, failed the whole input.
+        assert_eq!(
+            file_name(Some("orders\0.csv"), 0, &mut taken),
+            "orders_.csv"
+        );
+        assert_eq!(file_name(Some("a\nb.txt"), 1, &mut taken), "a_b.txt");
+        // A name past what a file system takes is cut, its extension kept.
+        let long = format!("{}.pdf", "é".repeat(400));
+        let saved = file_name(Some(&long), 2, &mut taken);
+        assert!(saved.len() <= MAX_FILE_NAME_BYTES, "{}", saved.len());
+        assert!(saved.ends_with("é.pdf"), "{saved}");
+        let dir = std::env::temp_dir().join(format!("fdoc-names-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["orders_.csv", "a_b.txt", saved.as_str()] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn parser_warnings_read_as_one_line_a_kind() {
         let w = |page, kind: &str| fluree_doc_model::ParseWarning {
             page,
@@ -3392,7 +3573,7 @@ mod tests {
             Placed::new("m2".into(), None),
         ];
         for p in &mut placed {
-            p.send = Some((Vec::new(), "image/png"));
+            p.send = Some("image/png");
         }
         let got = Ok(crate::escalate::ImagesRead {
             empty: vec!["m1".into()],
@@ -3407,7 +3588,7 @@ mod tests {
         // A reading that says, in prose, that the image holds no text has
         // nothing to place, and read it all the same.
         let mut placed = [Placed::new("m1".into(), None)];
-        placed[0].send = Some((Vec::new(), "image/png"));
+        placed[0].send = Some("image/png");
         let mut readings = fluree_doc_pdf::escalate::Readings::default();
         readings.insert(
             "m1".into(),
@@ -3420,6 +3601,121 @@ mod tests {
         settle("report", placed.iter_mut(), &got, false, true);
         assert!(placed[0].read.as_ref().is_some_and(Vec::is_empty));
         assert!(placed[0].failure.is_none());
+    }
+
+    #[test]
+    fn an_image_whose_header_does_not_parse_is_charged_and_never_sent() {
+        use fluree_doc_model::PictureReader;
+        // A PNG's signature, then zeros: it opens like an image, and no
+        // header says what it holds. Charged a pixel a byte, so a document
+        // of many is bounded by their bytes; declined for the model before
+        // the probe decodes it.
+        let fake = [&b"\x89PNG\r\n\x1a\n"[..], &[0u8; 4096]].concat();
+        let cfg = TierConfig {
+            escalate: true,
+            ..Default::default()
+        };
+        let mut head = |_: &str| Ok(Vec::new());
+        let mut reader = MediaReader {
+            stem: "report",
+            cfg: &cfg,
+            head: &mut head,
+            given: None,
+            asked: 0,
+            over_budget: 0,
+            verdicts: HashMap::new(),
+            quiet: true,
+        };
+        assert_eq!(reader.pixels(&fake), Ok(fake.len() as u64));
+        let declined = declined_by_model(&fake, || panic!("probed"));
+        assert!(
+            declined
+                .as_ref()
+                .is_some_and(|(why, e)| *why == "Failed" && e.contains("header does not parse")),
+            "{declined:?}"
+        );
+        // Read as a picture of the document: not sent, and why.
+        let picture = fluree_doc_model::Picture {
+            source: fluree_doc_model::MediaSource::Part("word/media/image1.png".into()),
+            uses: vec![fluree_doc_model::Media {
+                figure: "figure-0-1".into(),
+                source: fluree_doc_model::MediaSource::Part("word/media/image1.png".into()),
+                index: 0,
+            }],
+        };
+        let p = reader.read(&picture, &fake).unwrap();
+        assert!(p.send.is_none());
+        assert_eq!(p.failure.map(|f| f.0), Some("Failed"));
+        assert_eq!(reader.asked, 0);
+    }
+
+    #[test]
+    fn the_engine_reads_a_picture_the_probe_does_not_take_for_text_and_no_model_is_sent_it() {
+        use fluree_doc_model::PictureReader;
+        /// An engine that counts what it is asked to read, and reads nothing.
+        struct Counting(std::sync::atomic::AtomicUsize);
+        impl fluree_doc_vision::OcrEngine for Counting {
+            fn name(&self) -> &str {
+                "counting"
+            }
+            fn read(
+                &self,
+                image: &fluree_doc_vision::Pixels,
+            ) -> Result<fluree_doc_vision::WordReading, String> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(fluree_doc_vision::WordReading {
+                    coords: fluree_doc_vision::Coords::Px,
+                    width: Some(f64::from(image.width)),
+                    height: Some(f64::from(image.height)),
+                    engine: Some("counting".into()),
+                    words: Vec::new(),
+                    rules: Vec::new(),
+                })
+            }
+        }
+        // A flat grey picture over the model's floor: no text, to the probe.
+        let grey = {
+            let img = image::RgbImage::from_pixel(600, 400, image::Rgb([200, 200, 200]));
+            let mut out = Vec::new();
+            image::DynamicImage::ImageRgb8(img)
+                .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+                .unwrap();
+            out
+        };
+        assert_eq!(fluree_doc_image::looks_like_text(&grey), Some(false));
+        let engine = std::sync::Arc::new(Counting(Default::default()));
+        let cfg = TierConfig {
+            escalate: true,
+            ocr: Some(common::OcrHandle(engine.clone())),
+            ..Default::default()
+        };
+        let mut head = |_: &str| Ok(Vec::new());
+        let mut reader = MediaReader {
+            stem: "report",
+            cfg: &cfg,
+            head: &mut head,
+            given: None,
+            asked: 0,
+            over_budget: 0,
+            verdicts: HashMap::new(),
+            quiet: true,
+        };
+        let source = fluree_doc_model::MediaSource::Part("word/media/image1.png".into());
+        let picture = fluree_doc_model::Picture {
+            source: source.clone(),
+            uses: vec![fluree_doc_model::Media {
+                figure: "figure-0-1".into(),
+                source,
+                index: 0,
+            }],
+        };
+        let p = reader.read(&picture, &grey).unwrap();
+        // OCR read it, as it read every picture before the probe judged
+        // them; it found no text, and the probe keeps the model's call.
+        assert_eq!(engine.0.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert!(p.read.as_ref().is_some_and(Vec::is_empty));
+        assert!(p.send.is_none());
+        assert_eq!(p.failure.map(|f| f.0), Some("NotTexty"));
     }
 
     #[test]

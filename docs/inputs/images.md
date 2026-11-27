@@ -46,29 +46,27 @@ Either way the words land where `convert` reads them.
 
 An image given on its own is given to be read, and is read as a scanned
 page is: the pixel probe that keeps a document's photographs and charts from
-any reader does not judge it, nor does the noise rule an OCR reading of a
+the configured model does not judge it, nor does the noise rule an OCR reading of a
 picture or of a PDF region is held to. What an engine reads in it is in the
 output, however unsure, as the words of a scan read poorly are. However few
 they are, the image is read: a stamp's `PAID` may be all it holds. The floor
 a scanned PDF's page is held to (`OcrSparse`, a page read whole under 40
 characters) judges a page among pages of text, and is not applied to an
-image given alone; only an image OCR took no word in is listed unread. One
-it took only words it doubts in, their mean confidence under 0.5 (the rule
-a placed picture's reading is held to), is sent to the configured model
-where one is, as one it took nothing in: a photograph's one "word" at 0.21,
-a whiteboard's stray letters. A stamp's `PAID` at 0.97 is not. Without a
-model, OCR's words are the output.
+image given alone; only an image OCR took no word in is listed unread. OCR's confidence in
+the words it took is reported in [`doc:ocrReadings`](../formats/doco.md), and
+routes nothing: a photograph's one "word" at 0.21 is in the output as a
+stamp's `PAID` at 0.97 is, and the image is not sent to a configured model
+for it. Whether a model reads an image OCR read is the run's configuration
+to say, not OCR's confidence.
 
 Where OCR reads nothing, and a model is configured, the model reads the image
 as it would without OCR: words for other files only, a reading with no word,
 or an image too large to decode. Not with `--tier-results`: the readings
 given there are the model's, spliced over what OCR made of the image. Should
 the model fail (a key it cannot sign in with, the network), what OCR made of
-the image is kept, with a warning, and its reading, which took no word or
-only words it doubts, is listed in `doc:ocrReadings`: the conversion fails
-only where no OCR reading of the image was there to keep (no words written
-for it). Should the model find no text, a reading of words it doubts is not
-listed: a reading is never listed whose words are not in the output.
+the image is kept, with a warning, and its reading, which took no word, is
+listed in `doc:ocrReadings`: the conversion fails only where no OCR reading
+of the image was there to keep (no words written for it).
 
 Only the first page of a multi-page TIFF is read, with a warning, and the
 others are listed in [`doc:unreadPages`](../formats/doco.md) with the reason

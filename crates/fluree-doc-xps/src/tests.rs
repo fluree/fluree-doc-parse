@@ -366,3 +366,62 @@ fn a_page_of_huge_text_goes_through_the_layout_pipeline() {
         .iter()
         .any(|e| e.text.contains("normal text here")));
 }
+
+/// A document of `pages`, each part named `Pages/<n>.fpage`, those not in
+/// `held` left out of the package.
+fn pages_of(pages: &[String], held: &[usize]) -> Vec<u8> {
+    let listed: String = (0..pages.len())
+        .map(|n| format!("<PageContent Source=\"Pages/{n}.fpage\"/>"))
+        .collect();
+    let mut parts = vec![
+        (
+            "FixedDocSeq.fdseq".to_string(),
+            "<FixedDocumentSequence><DocumentReference Source=\"Documents/1/FixedDoc.fdoc\"/></FixedDocumentSequence>"
+                .to_string(),
+        ),
+        (
+            "Documents/1/FixedDoc.fdoc".to_string(),
+            format!("<FixedDocument>{listed}</FixedDocument>"),
+        ),
+    ];
+    for &n in held {
+        parts.push((format!("Documents/1/Pages/{n}.fpage"), pages[n].clone()));
+    }
+    let parts: Vec<(&str, String)> = parts.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
+    package(&parts)
+}
+
+#[test]
+fn a_missing_page_is_an_empty_page_that_says_so() {
+    let page = |text: &str| fixed_page(&glyphs(96.0, 96.0, 16.0, text));
+    let pages = [page("One"), page("Two"), page("Three")];
+    let xps = parse(&pages_of(&pages, &[0, 2])).unwrap();
+    assert_eq!(xps.doc.pages.len(), 3);
+    assert!(xps.doc.pages[1].glyphs.is_empty());
+    let warned: Vec<(usize, String)> = fluree_doc_pdf::parse_warnings(&xps.doc)
+        .into_iter()
+        .map(|w| (w.page, w.kind))
+        .collect();
+    assert_eq!(warned, [(1, MISSING_PAGE.to_string())]);
+    // A page that is there, and empty, says nothing.
+    let xps = parse(&pages_of(&[fixed_page(""), page("Two")], &[0, 1])).unwrap();
+    assert!(fluree_doc_pdf::parse_warnings(&xps.doc).is_empty());
+}
+
+#[test]
+fn pictures_count_against_the_documents_bound_as_glyphs_do() {
+    // Three pages of a picture and two glyphs: three things each. Within
+    // eight in all, the third page is refused: its picture counts, as it
+    // does on its page.
+    let page = fixed_page(&format!(
+        "{}<Path Data=\"M 0,0 L 100,0 100,100 0,100 Z\"><Path.Fill>\
+         <ImageBrush ImageSource=\"/i.png\" Viewport=\"0,0,100,100\"/></Path.Fill></Path>",
+        glyphs(200.0, 200.0, 16.0, "ab")
+    ));
+    let bytes = pages_of(&[page.clone(), page.clone(), page], &[0, 1, 2]);
+    assert!(parse_within(&bytes, 9).is_ok());
+    assert!(matches!(
+        parse_within(&bytes, 8),
+        Err(XpsError::TooLarge(_))
+    ));
+}

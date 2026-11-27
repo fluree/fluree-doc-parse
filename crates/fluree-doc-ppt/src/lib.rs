@@ -15,9 +15,12 @@
 //! a paragraph per paragraph mark, a line break kept as a line. A paragraph
 //! its properties (`StyleTextPropAtom`) give a bullet or an indent level past
 //! the first is a list item, as a PPTX's is; where they do not say, a body
-//! placeholder's text, which the master bullets, is. Where a slide's shapes
-//! hold no text (an older writer keeps it in the slide list instead) the
-//! slide list's text is read. A slide's **speaker notes**, the notes slide
+//! placeholder's text, which the master bullets, is. PowerPoint keeps a
+//! placeholder's text (the title, the body) in the slide list, the shape
+//! naming it there (`OutlineTextRefAtom`): it is read where the shape
+//! stands, among the slide's pictures, tables and text boxes. Where a
+//! slide's shapes show nothing (an older writer keeps all its text in the
+//! slide list, naming none) the slide list's text is read. A slide's **speaker notes**, the notes slide
 //! its own atom names, follow its content as paragraphs whose `evidence` is
 //! `notes`, so a consumer that wants what the audience saw leaves them out.
 //! A **table**, a group of shapes whose first says it is one, is rebuilt
@@ -25,8 +28,8 @@
 //! **Pictures** are each a figure where they stand, their alternative
 //! text its text, their bytes in the picture store ([`parse_with_media`],
 //! [`read_media`]) for an OCR engine or a model to read.
-//! **What is not**: the masters' placeholder prompts, the list level itself
-//! (the element model keeps a level on headings only), charts and embedded
+//! A list item's indent level is its `depth`.
+//! **What is not**: the masters' placeholder prompts, charts and embedded
 //! objects, and the summary information. Encrypted files fail as malformed
 //! or unsupported.
 //!
@@ -39,7 +42,9 @@
 //! where they are in the stream (slide ids that all lead to one place are
 //! one slide). Every text read, before it is decoded, every element and
 //! every table cell, before it is made, is spent from the document's
-//! [`Budget`], and past it the deck is refused. A picture shown by several
+//! [`Budget`], and past it the deck is refused; so is each record a slide's
+//! walk visits, as a step of work, so that slides laid inside each other's
+//! records cannot make the deck walked once for each. A picture shown by several
 //! shapes is listed at each, and read once.
 
 use fluree_doc_model::budget::{Budget, TooLarge};
@@ -68,6 +73,9 @@ const SLIDE_PERSIST: u16 = 0x03F3;
 const SLIDE_ATOM: u16 = 0x03EF;
 const NOTES: u16 = 0x03F0;
 const TEXT_HEADER: u16 = 0x0F9F;
+/// `OutlineTextRefAtom`: a placeholder whose text the slide list keeps, by
+/// its index among the slide's texts there.
+const OUTLINE_TEXT_REF: u16 = 0x0F9E;
 const TEXT_CHARS: u16 = 0x0FA0;
 const TEXT_BYTES: u16 = 0x0FA8;
 const STYLE_TEXT_PROP: u16 = 0x0FA1;
@@ -532,7 +540,7 @@ fn table(
     };
     for ((_, s), (c0, c1, r0, r1)) in cells.iter().zip(spans) {
         let mut found = Vec::new();
-        texts(d, s, depth + 1, (&mut 4, false), budget, &mut found)?;
+        texts(d, s, depth + 1, (&mut 4, false), &[], budget, &mut found)?;
         let text = found
             .iter()
             .filter_map(|i| match i {
@@ -594,23 +602,39 @@ fn picture(d: &[u8], shape: &Record, budget: &mut Budget) -> Result<Option<Item>
 }
 
 /// What a container shows, in order: each text atom with the header before
-/// it and the paragraph properties after it, and each table.
+/// it and the paragraph properties after it, each text of the slide list a
+/// placeholder names (`listed`, the slide's texts there), and each table.
 /// `title` makes every text a title, the shape being a title placeholder.
+/// Each record visited is a step of `budget`'s work.
 fn texts(
     d: &[u8],
     r: &Record,
     depth: usize,
     (kind, title): (&mut u32, bool),
+    listed: &[Text],
     budget: &mut Budget,
     out: &mut Vec<Item>,
 ) -> Result<(), PptError> {
     if depth > MAX_DEPTH {
         return Ok(());
     }
-    for c in children(d, r) {
+    let kids = children(d, r);
+    budget.spend_work(kids.len() as u64)?;
+    for c in kids {
         let data = &d[c.data.0..c.data.1];
         match c.typ {
             TEXT_HEADER => *kind = u32_at(data, 0).unwrap_or(4),
+            // A placeholder's text, kept in the slide list: a copy of it,
+            // spent, where the shape stands.
+            OUTLINE_TEXT_REF => {
+                if let Some(t) = u32_at(data, 0).and_then(|i| listed.get(i as usize)) {
+                    budget.spend_text(&t.text)?;
+                    out.push(Item::Text(Text {
+                        kind: if title { 0 } else { t.kind },
+                        ..t.clone()
+                    }));
+                }
+            }
             TEXT_CHARS | TEXT_BYTES => out.push(Item::Text(Text {
                 kind: if title { 0 } else { *kind },
                 text: atom_text(c.typ, data, budget)?,
@@ -628,7 +652,7 @@ fn texts(
             // is its shapes.
             GROUP if c.container => match table(d, &c, depth + 1, budget)? {
                 Some(t) => out.push(Item::Table(t)),
-                None => texts(d, &c, depth + 1, (kind, title), budget, out)?,
+                None => texts(d, &c, depth + 1, (kind, title), listed, budget, out)?,
             },
             // A shape: a placeholder that is a slide's title makes its text
             // the title, whatever its text header says (LibreOffice writes
@@ -638,9 +662,9 @@ fn texts(
                     out.push(p);
                 }
                 let title = title || title_placeholder(d, &c, depth + 1);
-                texts(d, &c, depth + 1, (kind, title), budget, out)?;
+                texts(d, &c, depth + 1, (kind, title), listed, budget, out)?;
             }
-            _ if c.container => texts(d, &c, depth + 1, (kind, title), budget, out)?,
+            _ if c.container => texts(d, &c, depth + 1, (kind, title), listed, budget, out)?,
             _ => {}
         }
     }
@@ -671,8 +695,9 @@ fn table_element(t: Table, page: usize) -> Element {
 /// properties give it a bullet or an indent level past the first, as a
 /// PPTX paragraph is; where they do not say, a body placeholder's text
 /// (`Body`, `HalfBody`, `QuarterBody`), which the master bullets, is one.
-/// Each is an element, spent from `budget` before it is made.
-fn paragraphs(t: &Text, budget: &mut Budget) -> Result<Vec<(String, bool)>, TooLarge> {
+/// Each is an element, spent from `budget` before it is made. A list item's
+/// indent level is its depth.
+fn paragraphs(t: &Text, budget: &mut Budget) -> Result<Vec<(String, bool, usize)>, TooLarge> {
     let body = matches!(t.kind, 1 | 7 | 8);
     let mut out = Vec::new();
     let mut start = 0usize;
@@ -699,7 +724,10 @@ fn paragraphs(t: &Text, budget: &mut Budget) -> Result<Vec<(String, bool)>, TooL
             Some(r) => r.bullet.unwrap_or(body) || r.indent > 0,
             None => body,
         };
-        out.push((text, listy));
+        let depth = run
+            .filter(|_| listy)
+            .map_or(0, |r| usize::from(r.indent.min(8)));
+        out.push((text, listy, depth));
     }
     Ok(out)
 }
@@ -930,25 +958,45 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
         .into_iter()
         .find(|c| c.typ == SLIDE_LIST && c.instance == 0)
     {
-        let mut kind = 4;
-        for c in children(&doc, &list) {
+        // Each header opens a text of the slide, its text and its
+        // paragraphs' properties after it: a placeholder names it by its
+        // place among them, an empty one included.
+        let entries = children(&doc, &list);
+        budget.spend_work(entries.len() as u64)?;
+        for c in entries {
             let data = &doc[c.data.0..c.data.1];
+            let Some((_, texts)) = slides.last_mut() else {
+                if c.typ == SLIDE_PERSIST {
+                    slides.push((u32_at(data, 0).unwrap_or(0), Vec::new()));
+                }
+                continue;
+            };
             match c.typ {
                 SLIDE_PERSIST => {
                     if slides.len() >= MAX_SLIDES {
                         return Err(PptError::TooLarge(format!("more than {MAX_SLIDES} slides")));
                     }
                     slides.push((u32_at(data, 0).unwrap_or(0), Vec::new()));
-                    kind = 4;
                 }
-                TEXT_HEADER => kind = u32_at(data, 0).unwrap_or(4),
+                TEXT_HEADER => texts.push(Text {
+                    kind: u32_at(data, 0).unwrap_or(4),
+                    text: String::new(),
+                    paras: Vec::new(),
+                }),
                 TEXT_CHARS | TEXT_BYTES => {
-                    if let Some((_, t)) = slides.last_mut() {
-                        t.push(Text {
-                            kind,
-                            text: atom_text(c.typ, data, budget)?,
+                    let text = atom_text(c.typ, data, budget)?;
+                    match texts.last_mut() {
+                        Some(t) if t.text.is_empty() => t.text = text,
+                        _ => texts.push(Text {
+                            kind: 4,
+                            text,
                             paras: Vec::new(),
-                        });
+                        }),
+                    }
+                }
+                STYLE_TEXT_PROP => {
+                    if let Some(t) = texts.last_mut().filter(|t| t.paras.is_empty()) {
+                        t.paras = para_runs(data, t.text.encode_utf16().count());
                     }
                 }
                 _ => {}
@@ -998,7 +1046,7 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
         let mut found = Vec::new();
         let slide = at(id).filter(|r| r.typ == SLIDE);
         if let Some(slide) = &slide {
-            texts(&doc, slide, 0, (&mut 4, false), budget, &mut found)?;
+            texts(&doc, slide, 0, (&mut 4, false), &listed, budget, &mut found)?;
         }
         // The speaker's notes: the notes slide the slide's own atom names
         // (`notesIdRef`, after its layout, placeholders and master), read
@@ -1017,7 +1065,7 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
             .filter(|r| r.typ == NOTES)
             .map(|r| {
                 let mut v = Vec::new();
-                texts(&doc, &r, 0, (&mut 2, false), budget, &mut v).map(|()| v)
+                texts(&doc, &r, 0, (&mut 2, false), &[], budget, &mut v).map(|()| v)
             })
             .transpose()?
             .unwrap_or_default();
@@ -1025,6 +1073,8 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
             Item::Text(t) => !t.text.trim().is_empty(),
             Item::Table(_) | Item::Picture(..) => true,
         };
+        // The slide's shapes, the slide list's texts they name among them;
+        // where they show nothing, and name none, the list's texts.
         let runs = if found.iter().any(shows) {
             found
         } else {
@@ -1077,7 +1127,7 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
                 }
                 continue;
             }
-            for (text, listy) in paragraphs(&t, budget)? {
+            for (text, listy, depth) in paragraphs(&t, budget)? {
                 let kind = if listy {
                     "doc:ListItem"
                 } else {
@@ -1085,6 +1135,7 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
                 };
                 out.push(Element {
                     page,
+                    depth,
                     ..Element::new(kind, text, "ppt", "ppt")
                 });
             }
@@ -1093,7 +1144,7 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
             Item::Text(t) => Some(t),
             Item::Table(_) | Item::Picture(..) => None,
         }) {
-            for (l, _) in paragraphs(&t, budget)? {
+            for (l, ..) in paragraphs(&t, budget)? {
                 out.push(Element {
                     page,
                     ..Element::new("doco:Paragraph", l, "ppt", "notes")

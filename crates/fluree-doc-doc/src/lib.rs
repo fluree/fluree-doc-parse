@@ -9,19 +9,35 @@
 //! document saved by Word's "fast save", whose text is no longer in order.
 //!
 //! **What is read.** The main text, split into paragraphs at Word's
-//! paragraph marks, a line break keeping its line; tables, by each
+//! paragraph marks and at the section marks ending its sections (by the
+//! `PlcfSed`), a line break keeping its line and a page break inside a
+//! paragraph parting lines; tables, by each
 //! paragraph's properties (in a table, the end of a row), as tables of
 //! cells; footnotes, endnotes and comments after the body, marked by their
 //! `evidence` as the DOCX reader marks them, a note opening with its number.
 //! A field shows its result, not its code. Fields that are pictures or
-//! drawn objects leave nothing.
+//! drawn objects leave nothing. Text a tracked change deleted, and hidden
+//! text, are left out by the characters' own properties (CHPX), as Word
+//! shows the document. The summary information's title and author are read
+//! ([`parse_with_info`]).
+//!
+//! Headers and footers are read as the DOCX reader reads them: those Word
+//! shows (by section, the first page's where the section has a title page,
+//! the odd pages', and the even pages' where the document sets them apart;
+//! the `PlcfHdd` lists the stories), each story once and a line two share
+//! once, the headers before the body and the footers after the notes, their
+//! `evidence` `header` and `footer`. Text boxes, the body's and the
+//! headers' (`PlcftxbxTxt`, `PlcfHdrtxbxTxt`), are read after the paragraph
+//! holding the shape they are drawn in (`PlcSpaMom`, `PlcSpaHdr`), a box
+//! kept for reuse after it was deleted left out.
 //!
 //! **What is not, in this round.** Styles: no heading, title or list is
-//! told apart from a paragraph, and no list number is computed. Headers and
-//! footers, text boxes, comment authors, a table's header row (a table's
-//! `header_rows` is left undetected), merged cells, pictures, and the
-//! document's summary information. Word 95 and earlier, and encrypted
-//! files, are refused.
+//! told apart from a paragraph, and no list number is computed. Comment
+//! authors, a table's header row (a table's `header_rows` is left
+//! undetected), merged cells, pictures, and the summary information's
+//! dates. Headers, footers and text boxes whose lists do not read,
+//! which [`Parsed::left_out`] names where they hold text. Word 95 and
+//! earlier, and encrypted files, are refused.
 //!
 //! **Bounds.** The compound file is opened by the `cfb` crate, which refuses
 //! a sector chain that loops or runs past the file. The `WordDocument`
@@ -30,7 +46,11 @@
 //! characters are read, the piece table's positions only growing, so no
 //! character is read twice; each FKP page is read once, at most
 //! [`MAX_PARA_RUNS`] runs of paragraph properties kept, and a paragraph's
-//! found by a binary search. The characters are read one at a time, never
+//! found by a binary search, as a run of characters finds its first piece.
+//! The header stories and the text boxes are read only where their
+//! positions never go backwards, each held to its story, so that none is
+//! read twice; the sections' properties are looked through once each, at
+//! most [`MAX_SEPX_BYTES`] of them. The characters are read one at a time, never
 //! held all at once: pieces may name the same stretch of the stream again,
 //! as long as their positions grow. Every character kept, note number
 //! written, cell (a row padded to the widest included) and element made is
@@ -38,7 +58,7 @@
 //! document is refused.
 
 use fluree_doc_model::budget::{Budget, TooLarge};
-use fluree_doc_model::Element;
+use fluree_doc_model::{DocumentInfo, Element};
 use std::io::{Cursor, Read};
 
 /// The most bytes the `WordDocument` stream is read to: 256 MiB (a
@@ -144,10 +164,24 @@ struct Piece {
 struct Fib {
     table: &'static str,
     /// Character counts of the stories, in the order they follow each
-    /// other: main text, footnotes, headers, (macro), comments, endnotes.
-    ccp: [u32; 6],
+    /// other: main text, footnotes, headers, (macro), comments, endnotes,
+    /// the body's text boxes (`ccpTxbx`) and the headers' (`ccpHdrTxbx`).
+    ccp: [u32; 8],
     clx: (u32, u32),
     bte_papx: (u32, u32),
+    bte_chpx: (u32, u32),
+    /// Where the table stream keeps, as `(fc, lcb)`, `(0, 0)` where the FIB
+    /// names none: the sections (`PlcfSed`), the document's properties
+    /// (`Dop`), the header and footer stories (`PlcfHdd`), the shapes
+    /// anchored in the body and in the headers (`PlcSpaMom`, `PlcSpaHdr`),
+    /// and the text boxes of each (`PlcftxbxTxt`, `PlcfHdrtxbxTxt`).
+    sed: (u32, u32),
+    dop: (u32, u32),
+    hdd: (u32, u32),
+    spa_mom: (u32, u32),
+    spa_hdr: (u32, u32),
+    txbx: (u32, u32),
+    hdr_txbx: (u32, u32),
 }
 
 fn fib(wd: &[u8]) -> Result<Fib, DocError> {
@@ -177,15 +211,41 @@ fn fib(wd: &[u8]) -> Result<Fib, DocError> {
             u32_at(wd, at + 4).ok_or_else(malformed)?,
         ))
     };
+    // The pairs past those every Word 97 file has: as many as the FIB says
+    // it holds (`cbRgFcLcb`), the others taken as absent.
+    let pairs = usize::from(u16_at(wd, 0x98).unwrap_or(0));
+    let optional = |i: usize| {
+        (i < pairs)
+            .then(|| pair(i).ok())
+            .flatten()
+            .unwrap_or((0, 0))
+    };
     Ok(Fib {
         table: if flags & 0x0200 != 0 {
             "/1Table"
         } else {
             "/0Table"
         },
-        ccp: [lw(3)?, lw(4)?, lw(5)?, lw(6)?, lw(7)?, lw(8)?],
+        ccp: [
+            lw(3)?,
+            lw(4)?,
+            lw(5)?,
+            lw(6)?,
+            lw(7)?,
+            lw(8)?,
+            lw(9)?,
+            lw(10)?,
+        ],
         clx: pair(33)?,
         bte_papx: pair(13)?,
+        bte_chpx: pair(12)?,
+        sed: optional(6),
+        dop: optional(31),
+        hdd: optional(11),
+        spa_mom: optional(40),
+        spa_hdr: optional(41),
+        txbx: optional(56),
+        hdr_txbx: optional(58),
     })
 }
 
@@ -243,27 +303,39 @@ fn pieces(table: &[u8], (fc, lcb): (u32, u32)) -> Result<Vec<Piece>, DocError> {
     Ok(out)
 }
 
-/// One character of the text, and where it sits in the `WordDocument`
-/// stream (its paragraph mark's position finds the paragraph's properties).
+/// One character of the text, where it sits in the `WordDocument` stream
+/// (its paragraph mark's position finds the paragraph's properties), and
+/// its position in the document's characters (where a shape is anchored).
 #[derive(Debug, Clone, Copy)]
 struct Char {
     c: char,
     fc: u32,
+    cp: u32,
 }
 
 /// The characters at positions `cp0..cp1`, through the pieces, which
 /// [`pieces`] leaves in order and apart, so at most `cp1 - cp0` of them,
-/// one at a time.
+/// one at a time. The first piece holding any is found by a binary search:
+/// a document of a million pieces and a hundred thousand header stories,
+/// each looking through every piece, is a hundred billion steps.
 fn chars<'a>(
     wd: &'a [u8],
     pieces: &'a [Piece],
     cp0: u32,
     cp1: u32,
 ) -> impl Iterator<Item = Char> + 'a {
-    pieces.iter().flat_map(move |p| {
+    let first = pieces.partition_point(|p| p.cp.1 <= cp0);
+    let held = pieces[first..].iter().take_while(move |p| p.cp.0 < cp1);
+    held.flat_map(move |p| {
         let (lo, hi) = (p.cp.0.max(cp0), p.cp.1.min(cp1));
-        (lo..hi.max(lo)).map_while(move |cp| {
+        let mut cp = lo;
+        std::iter::from_fn(move || {
+            if cp >= hi {
+                return None;
+            }
+            let at = cp;
             let k = cp - p.cp.0;
+            cp += 1;
             if p.compressed {
                 let fc = p.fc.saturating_add(k);
                 let &b = wd.get(fc as usize)?;
@@ -273,12 +345,30 @@ fn chars<'a>(
                     .chars()
                     .next()
                     .unwrap_or('\u{fffd}');
-                Some(Char { c, fc })
+                Some(Char { c, fc, cp: at })
             } else {
                 let fc = p.fc.saturating_add(2 * k);
-                let u = u16_at(wd, fc as usize)?;
-                let c = char::from_u32(u32::from(u)).unwrap_or('\u{fffd}');
-                Some(Char { c, fc })
+                let u = u32::from(u16_at(wd, fc as usize)?);
+                // A character past the first plane (an emoji) is two code
+                // units, a surrogate pair, each of which alone is none.
+                let low = (0xD800..0xDC00)
+                    .contains(&u)
+                    .then(|| u16_at(wd, fc as usize + 2))
+                    .flatten()
+                    .map(u32::from)
+                    .filter(|l| cp < hi && (0xDC00..0xE000).contains(l));
+                let c = match low {
+                    Some(l) => {
+                        cp += 1;
+                        char::from_u32(0x10000 + ((u - 0xD800) << 10) + (l - 0xDC00))
+                    }
+                    None => char::from_u32(u),
+                };
+                Some(Char {
+                    c: c.unwrap_or('\u{fffd}'),
+                    fc,
+                    cp: at,
+                })
             }
         })
     })
@@ -342,6 +432,96 @@ fn para_props(
     // bin table lists them.
     out.sort_by_key(|&(f0, _, _)| f0);
     Ok(out)
+}
+
+/// The stretches of the stream whose characters are deleted (a tracked
+/// deletion, `sprmCFRMarkDel`) or hidden (`sprmCFVanish`), as the CHPX
+/// FKPs say: `(fc start, fc end)`, sorted by start, for [`hidden_at`]. Each
+/// FKP page is read once, however many entries of the bin table name it.
+/// What a character style hides is not seen.
+fn hidden_runs(
+    wd: &[u8],
+    table: &[u8],
+    (fc, lcb): (u32, u32),
+) -> Result<Vec<(u32, u32)>, DocError> {
+    let mut out = Vec::new();
+    let Some(plc) = table.get(fc as usize..(fc as usize).saturating_add(lcb as usize)) else {
+        return Ok(out);
+    };
+    let n = plc.len().saturating_sub(4) / 8;
+    let mut pages = std::collections::HashSet::new();
+    let mut runs = 0usize;
+    for i in 0..n {
+        let Some(pn) = u32_at(plc, 4 * (n + 1) + 4 * i) else {
+            break;
+        };
+        if !pages.insert(pn & 0x003F_FFFF) {
+            continue;
+        }
+        let start = (pn & 0x003F_FFFF) as usize * 512;
+        let Some(page) = wd.get(start..start + 512) else {
+            continue;
+        };
+        let crun = page[511] as usize;
+        runs += crun;
+        if runs > MAX_PARA_RUNS {
+            return Err(DocError::TooLarge(format!(
+                "more than {MAX_PARA_RUNS} character property runs"
+            )));
+        }
+        for r in 0..crun {
+            let (Some(f0), Some(f1)) = (u32_at(page, 4 * r), u32_at(page, 4 * (r + 1))) else {
+                break;
+            };
+            let Some(&b) = page.get(4 * (crun + 1) + r) else {
+                break;
+            };
+            if b != 0 && chpx_hides(&page[(b as usize * 2).min(511)..511]) {
+                out.push((f0, f1));
+            }
+        }
+    }
+    out.sort_unstable();
+    Ok(out)
+}
+
+/// Whether a CHPX's properties delete or hide its characters: a toggle
+/// set on (`1`), or to the opposite of its style's (`0x81`), taken as on.
+fn chpx_hides(d: &[u8]) -> bool {
+    let Some(&cb) = d.first() else {
+        return false;
+    };
+    let Some(grp) = d.get(1..(1 + cb as usize).min(d.len())) else {
+        return false;
+    };
+    let mut at = 0usize;
+    while at + 2 <= grp.len() {
+        let op = u16_at(grp, at).unwrap_or(0);
+        at += 2;
+        let size = match (op >> 13) & 7 {
+            0 | 1 => 1,
+            2 | 4 | 5 => 2,
+            3 => 4,
+            7 => 3,
+            _ => {
+                let n = *grp.get(at).unwrap_or(&0) as usize;
+                at += 1;
+                n
+            }
+        };
+        // `sprmCFRMarkDel`, `sprmCFVanish`.
+        if matches!(op, 0x0800 | 0x083C) && matches!(grp.get(at), Some(1 | 0x81)) {
+            return true;
+        }
+        at += size;
+    }
+    false
+}
+
+/// Whether the character at `fc` is in one of `runs`.
+fn hidden_at(runs: &[(u32, u32)], fc: u32) -> bool {
+    let i = runs.partition_point(|&(f0, _)| f0 <= fc);
+    runs[..i].last().is_some_and(|&(_, f1)| fc < f1)
 }
 
 /// The properties of the paragraph whose mark is at `fc`: those of the
@@ -411,6 +591,9 @@ struct Para {
     /// `'\r'`, a paragraph mark, or `'\x07'`, a cell or row mark.
     mark: char,
     props: ParaProps,
+    /// The position of its first character, where a text box anchored in
+    /// it goes after it.
+    start: u32,
 }
 
 /// The paragraphs of a run of characters, with fields shown by their
@@ -428,19 +611,31 @@ fn paragraphs(
 ) -> Result<(), DocError> {
     let mut text = String::new();
     // Fields: whether each open one is past its separator (showing its
-    // result).
+    // result), and how many are not, which hide what they hold. Counted as
+    // they open and close, rather than by looking at every open field for
+    // each character: a file opening a million fields, then holding a
+    // million characters, cost their product.
     let mut fields: Vec<bool> = Vec::new();
+    let mut hiding = 0usize;
+    let mut start = None;
     for ch in chars {
-        let shown = fields.iter().all(|r| *r);
+        let shown = hiding == 0;
+        let para_start = *start.get_or_insert(ch.cp);
         match ch.c {
-            '\u{13}' => fields.push(false),
+            '\u{13}' => {
+                fields.push(false);
+                hiding += 1;
+            }
             '\u{14}' => {
-                if let Some(f) = fields.last_mut() {
+                if let Some(f) = fields.last_mut().filter(|f| !**f) {
                     *f = true;
+                    hiding -= 1;
                 }
             }
             '\u{15}' => {
-                fields.pop();
+                if fields.pop() == Some(false) {
+                    hiding -= 1;
+                }
             }
             '\r' | '\u{7}' => {
                 let p = props_at(props, ch.fc);
@@ -448,9 +643,12 @@ fn paragraphs(
                     text: std::mem::take(&mut text),
                     mark: ch.c,
                     props: p,
+                    start: para_start,
                 };
                 out(para, budget)?;
                 fields.clear();
+                hiding = 0;
+                start = None;
             }
             _ if !shown => {}
             '\u{2}' => {
@@ -478,6 +676,7 @@ fn paragraphs(
             text,
             mark: '\r',
             props: ParaProps::default(),
+            start: start.unwrap_or(0),
         };
         out(para, budget)?;
     }
@@ -497,32 +696,41 @@ fn tidy(s: &str) -> String {
 /// the cells their marks close. Each element and each cell is spent from
 /// the budget before it is made, a table's rows padded to its widest
 /// included.
-struct Layout<'o> {
+struct Layout {
     evidence: &'static str,
-    out: &'o mut Vec<Element>,
+    out: Vec<Element>,
+    /// The position each element of `out` starts at.
+    starts: Vec<u32>,
     rows: Vec<Vec<String>>,
     row: Vec<String>,
     cell: Vec<String>,
+    /// Where the table being read starts.
+    table_start: Option<u32>,
     /// The cells spent for `rows`, padded to `width`, and for `row`.
     spent: u64,
     width: usize,
 }
 
-impl<'o> Layout<'o> {
-    fn new(evidence: &'static str, out: &'o mut Vec<Element>) -> Self {
+impl Layout {
+    fn new(evidence: &'static str) -> Self {
         Self {
             evidence,
-            out,
+            out: Vec::new(),
+            starts: Vec::new(),
             rows: Vec::new(),
             row: Vec::new(),
             cell: Vec::new(),
+            table_start: None,
             spent: 0,
             width: 0,
         }
     }
 
-    fn element(&self, kind: &str, text: String) -> Element {
-        Element::new(kind, text, "doc", self.evidence)
+    fn push(&mut self, kind: &str, text: String, start: u32) -> &mut Element {
+        self.out
+            .push(Element::new(kind, text, "doc", self.evidence));
+        self.starts.push(start);
+        self.out.last_mut().expect("just pushed")
     }
 
     /// The row read so far is one of the table's, which spends the padding
@@ -541,6 +749,7 @@ impl<'o> Layout<'o> {
 
     fn flush_table(&mut self, budget: &mut Budget) -> Result<(), TooLarge> {
         self.end_row(budget)?;
+        let start = self.table_start.take().unwrap_or(0);
         if self.rows.is_empty() {
             return Ok(());
         }
@@ -555,17 +764,22 @@ impl<'o> Layout<'o> {
             .map(|r| r.join(" | "))
             .collect::<Vec<_>>()
             .join("\n");
-        let mut e = self.element("doco:Table", text);
-        e.cells = Some(std::mem::take(&mut self.rows));
+        let rows = std::mem::take(&mut self.rows);
+        let mut e = Element::new("doco:Table", text, "doc", self.evidence);
+        e.cells = Some(rows);
         // Each cell's column header and row label, copied by the output.
         budget.spend_copies(&e)?;
         self.out.push(e);
+        self.starts.push(start);
         (self.spent, self.width) = (0, 0);
         Ok(())
     }
 
     fn para(&mut self, p: Para, budget: &mut Budget) -> Result<(), DocError> {
         let text = tidy(&p.text);
+        if p.mark == '\u{7}' || p.props.in_table {
+            self.table_start.get_or_insert(p.start);
+        }
         if p.mark == '\u{7}' && p.props.row_end {
             self.end_row(budget)?;
             return Ok(());
@@ -594,29 +808,265 @@ impl<'o> Layout<'o> {
         self.flush_table(budget)?;
         if !text.is_empty() {
             budget.spend_elements(1)?;
-            let e = self.element("doco:Paragraph", text);
-            self.out.push(e);
+            self.push("doco:Paragraph", text, p.start);
         }
         Ok(())
     }
 
-    fn finish(mut self, budget: &mut Budget) -> Result<(), TooLarge> {
-        self.flush_table(budget)
+    fn finish(mut self, budget: &mut Budget) -> Result<Laid, TooLarge> {
+        self.flush_table(budget)?;
+        Ok(Laid {
+            elements: self.out,
+            starts: self.starts,
+        })
     }
 }
 
-/// A story's paragraphs laid out into `out`.
+/// A story's elements, and the position each starts at.
+#[derive(Default)]
+struct Laid {
+    elements: Vec<Element>,
+    starts: Vec<u32>,
+}
+
+/// A story's paragraphs laid out.
 fn lay_out(
     chars: impl IntoIterator<Item = Char>,
     props: &[(u32, u32, ParaProps)],
     notes: Option<&mut dyn FnMut() -> String>,
     evidence: &'static str,
     budget: &mut Budget,
-    out: &mut Vec<Element>,
-) -> Result<(), DocError> {
-    let mut layout = Layout::new(evidence, out);
+) -> Result<Laid, DocError> {
+    let mut layout = Layout::new(evidence);
     paragraphs(chars, props, notes, budget, &mut |p, b| layout.para(p, b))?;
     Ok(layout.finish(budget)?)
+}
+
+/// `host`'s elements with the text boxes anchored in it among them, each
+/// box (its anchor's position and its elements) before the first element
+/// that starts past its anchor: after the paragraph holding the anchor, as
+/// a DOCX's text box is read where its anchor stands. A box with no anchor
+/// found, or anchored past the last element, comes after them all.
+fn place(host: Laid, mut boxes: Vec<(Option<u32>, Vec<Element>)>) -> Vec<Element> {
+    boxes.sort_by_key(|(at, _)| at.unwrap_or(u32::MAX));
+    let mut boxes = boxes.into_iter().peekable();
+    let mut out = Vec::new();
+    for (e, start) in host.elements.into_iter().zip(host.starts) {
+        while let Some((_, b)) = boxes.next_if(|(at, _)| at.is_some_and(|a| a < start)) {
+            out.extend(b);
+        }
+        out.push(e);
+    }
+    out.extend(boxes.flat_map(|(_, b)| b));
+    out
+}
+
+/// A PLC in the table stream: `n + 1` character positions, then `n` data
+/// items of `cb` bytes each. `None` where it is absent or lies outside the
+/// stream.
+struct Plc<'a> {
+    d: &'a [u8],
+    n: usize,
+    cb: usize,
+}
+
+impl<'a> Plc<'a> {
+    fn new(table: &'a [u8], (fc, lcb): (u32, u32), cb: usize) -> Option<Self> {
+        let at = fc as usize;
+        let d = table.get(at..at.checked_add(lcb as usize)?)?;
+        let n = d.len().checked_sub(4)? / (4 + cb);
+        Some(Self { d, n, cb })
+    }
+
+    /// Position `i`, `0..=n`.
+    fn cp(&self, i: usize) -> u32 {
+        u32_at(self.d, 4 * i).unwrap_or(0)
+    }
+
+    /// Data item `i`, `0..n`.
+    fn data(&self, i: usize) -> &'a [u8] {
+        let at = 4 * (self.n + 1) + self.cb * i;
+        &self.d[at..at + self.cb]
+    }
+
+    /// Whether its positions never go backwards, so that the runs they
+    /// bound lie apart and no character is read for two of them.
+    fn ordered(&self) -> bool {
+        (0..self.n).all(|i| self.cp(i) <= self.cp(i + 1))
+    }
+}
+
+/// The most bytes of section properties (SEPX) looked through for whether
+/// a section has a title page, all sections together: a section's are a
+/// hundred bytes or so, and sections that all name sixty kilobytes of them,
+/// a few at a time apart, would otherwise be looked through again for each.
+pub const MAX_SEPX_BYTES: usize = 16 << 20;
+
+/// Whether a section's properties (a SEPX at `fc` in the `WordDocument`
+/// stream: its size, then its sprms) give it a title page
+/// (`sprmSFTitlePage`), which shows the first page's header and footer.
+/// `walked` counts the bytes looked through, `None` once past
+/// [`MAX_SEPX_BYTES`].
+fn title_page(wd: &[u8], fc: u32, walked: &mut usize) -> Option<bool> {
+    let fc = fc as usize;
+    let Some(cb) = u16_at(wd, fc) else {
+        return Some(false);
+    };
+    let grp = wd
+        .get(fc + 2..(fc + 2).saturating_add(usize::from(cb)).min(wd.len()))
+        .unwrap_or_default();
+    *walked = walked.saturating_add(grp.len());
+    if *walked > MAX_SEPX_BYTES {
+        return None;
+    }
+    let mut at = 0usize;
+    while at + 2 <= grp.len() {
+        let op = u16_at(grp, at).unwrap_or(0);
+        at += 2;
+        let size = match (op >> 13) & 7 {
+            0 | 1 => 1,
+            2 | 4 | 5 => 2,
+            3 => 4,
+            7 => 3,
+            _ => {
+                let n = *grp.get(at).unwrap_or(&0) as usize;
+                at += 1;
+                n
+            }
+        };
+        if op == 0x300A {
+            return Some(grp.get(at).is_some_and(|&v| v != 0));
+        }
+        at += size;
+    }
+    Some(false)
+}
+
+/// The header and footer stories Word shows, as ranges of positions in the
+/// headers' story: the headers', then the footers', each in the order the
+/// DOCX reader reads them, by section, its first page's (where the section
+/// has a title page), its odd pages' or only one, and its even pages'
+/// (where the document sets odd and even pages apart). A story a section
+/// leaves empty is the one before it carried on, read once already, and a
+/// story Word does not show is not read. `None` where the `PlcfHdd` does
+/// not read, or its positions go backwards, or the sections' properties are
+/// past [`MAX_SEPX_BYTES`].
+///
+/// The `PlcfHdd` holds six stories for the notes' separators, then six for
+/// each section: even pages' header, odd pages' header, even pages' footer,
+/// odd pages' footer, first page's header, first page's footer.
+fn shown_headers(wd: &[u8], table: &[u8], fib: &Fib) -> Option<[Vec<(u32, u32)>; 2]> {
+    let hdd = Plc::new(table, fib.hdd, 0)?;
+    if !hdd.ordered() {
+        return None;
+    }
+    let ccp = fib.ccp[2];
+    let sed = Plc::new(table, fib.sed, 12);
+    // `fFacingPages`, the document's first property.
+    let facing = (fib.dop.1 > 0)
+        .then(|| table.get(fib.dop.0 as usize))
+        .flatten()
+        .is_some_and(|b| b & 1 != 0);
+    let mut titles = std::collections::HashMap::new();
+    let mut walked = 0usize;
+    let mut out = [Vec::new(), Vec::new()];
+    for s in 0..hdd.n.saturating_sub(6) / 6 {
+        let base = 6 + 6 * s;
+        let story = |i: usize| (hdd.cp(base + i).min(ccp), hdd.cp(base + i + 1).min(ccp));
+        // Asked only of a section whose first page has a story, and once
+        // for each section properties named.
+        let mut title = || -> Option<bool> {
+            let Some(sepx) = sed
+                .as_ref()
+                .filter(|p| s < p.n)
+                .and_then(|p| u32_at(p.data(s), 2))
+            else {
+                return Some(false);
+            };
+            if sepx == u32::MAX {
+                return Some(false);
+            }
+            if let Some(&t) = titles.get(&sepx) {
+                return Some(t);
+            }
+            let t = title_page(wd, sepx, &mut walked)?;
+            titles.insert(sepx, t);
+            Some(t)
+        };
+        for (side, [even, odd, first]) in [(0, [0, 1, 4]), (1, [2, 3, 5])] {
+            for (i, which) in [(first, 0), (odd, 1), (even, 2)] {
+                let (c0, c1) = story(i);
+                let shown = match which {
+                    0 => c0 < c1 && title()?,
+                    1 => true,
+                    _ => facing,
+                };
+                if shown && c0 < c1 {
+                    out[side].push((c0, c1));
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The text boxes of a text box story: each one's range of positions in
+/// the story and the shape holding it (its FTXBXS `lid`), a box kept for
+/// reuse (`fReusable`, one deleted) left out. `None` where the PLC does not
+/// read or its positions go backwards.
+fn text_boxes(table: &[u8], plc: (u32, u32), ccp: u32) -> Option<Vec<(u32, u32, u32)>> {
+    let p = Plc::new(table, plc, 22)?;
+    if !p.ordered() {
+        return None;
+    }
+    let boxes = (0..p.n).filter_map(|i| {
+        let d = p.data(i);
+        let (c0, c1) = (p.cp(i).min(ccp), p.cp(i + 1).min(ccp));
+        (u16_at(d, 8) == Some(0) && c0 < c1).then(|| (u32_at(d, 14).unwrap_or(0), c0, c1))
+    });
+    Some(boxes.collect())
+}
+
+/// Where each shape is anchored, by its id: the position of its anchor in
+/// its story, as a `PlcSpaMom` or `PlcSpaHdr` gives it (a position, then an
+/// FSPA, whose first field is the shape's id). The first anchor of a shape
+/// named twice.
+fn anchors(table: &[u8], plc: (u32, u32)) -> std::collections::HashMap<u32, u32> {
+    let mut out = std::collections::HashMap::new();
+    if let Some(p) = Plc::new(table, plc, 26) {
+        for i in 0..p.n {
+            if let Some(spid) = u32_at(p.data(i), 0) {
+                out.entry(spid).or_insert(p.cp(i));
+            }
+        }
+    }
+    out
+}
+
+/// The positions of the section marks: each section's last character, the
+/// one before the next section's start, as the `PlcfSed` bounds them,
+/// sorted for [`ends_section`]. Empty where the `PlcfSed` does not read.
+fn section_ends(table: &[u8], sed: (u32, u32)) -> Vec<u32> {
+    let Some(p) = Plc::new(table, sed, 12) else {
+        return Vec::new();
+    };
+    let mut out: Vec<u32> = (1..=p.n).filter_map(|i| p.cp(i).checked_sub(1)).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// A section mark ends its paragraph as a paragraph mark does: a `\x0c` at
+/// the end of a section (at one of `ends`) is read as one. Anywhere else a
+/// `\x0c` is a page break inside a paragraph, and stays one, a line break:
+/// a document whose second section opens on a new page would otherwise run
+/// the last paragraph of the first section on into the first of the next.
+fn ends_section(c: Char, ends: &[u32]) -> Char {
+    if c.c == '\u{c}' && ends.binary_search(&c.cp).is_ok() {
+        Char { c: '\r', ..c }
+    } else {
+        c
+    }
 }
 
 /// Roman numerals in lower case, as Word numbers endnotes by default.
@@ -651,13 +1101,51 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, DocError> {
     parse_within(bytes, &mut Budget::default())
 }
 
+/// What [`parse_with_info`] reads: the elements, what the file declares
+/// about itself, and what it holds that is not read.
+#[derive(Debug, Clone)]
+pub struct Parsed {
+    pub elements: Vec<Element>,
+    /// Its summary information's title and author.
+    pub info: DocumentInfo,
+    /// What the document holds that this reader does not read, and leaves
+    /// out: `headers and footers`, `text boxes`, where the table stream's
+    /// list of their stories does not read (or, for the headers, their
+    /// sections' properties are past [`MAX_SEPX_BYTES`]). Said, so that it
+    /// is not lost without a word.
+    pub left_out: Vec<&'static str>,
+}
+
+/// [`parse`], with the title and author the summary information declares
+/// and what is left out.
+pub fn parse_with_info(bytes: &[u8]) -> Result<Parsed, DocError> {
+    read(bytes, &mut Budget::default())
+}
+
 /// [`parse`], against `budget`.
 fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Element>, DocError> {
+    read(bytes, budget).map(|p| p.elements)
+}
+
+/// The most bytes of the summary information read: a property set is a
+/// few hundred bytes; a larger one is left unread.
+const MAX_SUMMARY_BYTES: u64 = 32 << 10;
+
+/// [`parse_with_info`], against `budget`.
+fn read(bytes: &[u8], budget: &mut Budget) -> Result<Parsed, DocError> {
     let mut cf = cfb::CompoundFile::open(Cursor::new(bytes))
         .map_err(|e| DocError::Container(e.to_string()))?;
     if !cf.is_stream("/WordDocument") {
         return Err(DocError::NotWord);
     }
+    // What the file says about itself is a nicety: one too large, or that
+    // does not read, is left out.
+    let info = SUMMARY_STREAMS
+        .iter()
+        .find(|n| cf.is_stream(n))
+        .and_then(|n| stream(&mut cf, n, MAX_SUMMARY_BYTES).ok())
+        .map(|b| summary(&b))
+        .unwrap_or_default();
     let wd = stream(&mut cf, "/WordDocument", MAX_STREAM_BYTES)?;
     let fib = fib(&wd)?;
     if !cf.is_stream(fib.table) {
@@ -675,14 +1163,90 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Element>, DocEr
         )));
     }
     let props = para_props(&wd, &table, fib.bte_papx)?;
+    let hidden = hidden_runs(&wd, &table, fib.bte_chpx)?;
     // The stories, one after another in character positions.
-    let mut starts = [0u32; 7];
-    for i in 0..6 {
+    let mut starts = [0u32; 9];
+    for i in 0..8 {
         starts[i + 1] = starts[i].saturating_add(fib.ccp[i]);
     }
-    let story = |i: usize| chars(&wd, &pieces, starts[i], starts[i + 1]);
-    let mut out = Vec::new();
-    lay_out(story(0), &props, None, "doc", budget, &mut out)?;
+    // The characters at `cp0..cp1`, those a tracked deletion removed or
+    // that are hidden left out, as Word shows the document: they are not
+    // its text. A field's marks are kept, so its code and result stay told
+    // apart.
+    let text = |cp0: u32, cp1: u32| {
+        chars(&wd, &pieces, cp0, cp1)
+            .filter(|c| matches!(c.c, '\u{13}'..='\u{15}') || !hidden_at(&hidden, c.fc))
+    };
+    let story = |i: usize| text(starts[i], starts[i + 1]);
+    // Text boxes: each read once, with the elements of the story its shape
+    // is anchored in, after the paragraph holding the anchor. The body's
+    // anchors are positions in it; the headers', in the headers' story.
+    let main_boxes = text_boxes(&table, fib.txbx, fib.ccp[6]);
+    let header_boxes = text_boxes(&table, fib.hdr_txbx, fib.ccp[7]);
+    let box_elements = |story: usize, (c0, c1): (u32, u32), evidence, budget: &mut Budget| {
+        let at = |c: u32| starts[story].saturating_add(c);
+        lay_out(text(at(c0), at(c1)), &props, None, evidence, budget).map(|l| l.elements)
+    };
+    let mom = anchors(&table, fib.spa_mom);
+    let mut boxes = Vec::new();
+    for &(spid, c0, c1) in main_boxes.iter().flatten() {
+        let found = box_elements(6, (c0, c1), "doc", budget)?;
+        boxes.push((mom.get(&spid).copied(), found));
+    }
+    // The `PlcfSed` bounds the main text's sections only: its positions
+    // are the body's.
+    let sections = section_ends(&table, fib.sed);
+    let body = story(0).map(|c| ends_section(c, &sections));
+    let body = place(lay_out(body, &props, None, "doc", budget)?, boxes);
+    // Headers and footers, those Word shows, each story once and its
+    // paragraphs once: a first page's header and the rest's often share
+    // lines. A header's text box anchored in a story not shown is not.
+    let shown = shown_headers(&wd, &table, &fib);
+    let hdr_anchors = anchors(&table, fib.spa_hdr);
+    let (mut anchored, mut unanchored) = (Vec::new(), Vec::new());
+    for &(spid, c0, c1) in header_boxes.iter().flatten() {
+        match hdr_anchors.get(&spid) {
+            Some(&a) => anchored.push((a, (c0, c1))),
+            None => unanchored.push((c0, c1)),
+        }
+    }
+    anchored.sort_unstable_by_key(|&(a, _)| a);
+    let mut furniture: [Vec<Element>; 2] = Default::default();
+    for (side, evidence) in [(0, "header"), (1, "footer")] {
+        let mut seen = std::collections::HashSet::new();
+        let stories = shown.as_ref().map_or(&[][..], |s| &s[side][..]);
+        for &(c0, c1) in stories {
+            let laid = lay_out(
+                text(starts[2].saturating_add(c0), starts[2].saturating_add(c1)),
+                &props,
+                None,
+                evidence,
+                budget,
+            )?;
+            let (lo, hi) = (
+                anchored.partition_point(|&(a, _)| a < c0),
+                anchored.partition_point(|&(a, _)| a < c1),
+            );
+            let mut boxes = Vec::new();
+            for &(a, range) in &anchored[lo..hi] {
+                let found = box_elements(7, range, evidence, budget)?;
+                boxes.push((Some(starts[2].saturating_add(a)), found));
+            }
+            for e in place(laid, boxes) {
+                if seen.insert((e.kind.clone(), e.text.clone())) {
+                    furniture[side].push(e);
+                }
+            }
+        }
+    }
+    // A header's text box whose shape is not found: with the headers.
+    for range in unanchored {
+        let found = box_elements(7, range, "header", budget)?;
+        furniture[0].extend(found);
+    }
+    let [header, footer] = furniture;
+    let mut out = header;
+    out.extend(body);
     // Notes: footnotes (story 1) numbered 1, 2, …; endnotes (5) i, ii, ….
     for (i, evidence) in [(1, "footnote"), (5, "endnote")] {
         let mut n = 0u32;
@@ -694,21 +1258,117 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Element>, DocEr
                 n.to_string()
             }
         };
-        lay_out(
-            story(i),
-            &props,
-            Some(&mut next),
-            evidence,
-            budget,
-            &mut out,
-        )?;
+        let laid = lay_out(story(i), &props, Some(&mut next), evidence, budget)?;
+        out.extend(laid.elements);
     }
-    // Comments (story 4), after everything Word prints.
-    lay_out(story(4), &props, None, "comment", budget, &mut out)?;
+    // The footer, after the notes, as a DOCX's; comments (story 4) after
+    // everything Word prints.
+    out.extend(footer);
+    out.extend(lay_out(story(4), &props, None, "comment", budget)?.elements);
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
-    Ok(out)
+    // What is not read, where it says something: the headers' story where
+    // its list of stories does not read (its notes' separators say
+    // nothing), and the text boxes' stories where theirs do not.
+    let says = |mut cs: Box<dyn Iterator<Item = Char> + '_>| cs.any(|c| c.c.is_alphanumeric());
+    let mut left_out = Vec::new();
+    if shown.is_none() && says(Box::new(story(2))) {
+        left_out.push("headers and footers");
+    }
+    if (main_boxes.is_none() && says(Box::new(story(6))))
+        || (header_boxes.is_none() && says(Box::new(story(7))))
+    {
+        left_out.push("text boxes");
+    }
+    Ok(Parsed {
+        elements: out,
+        info,
+        left_out,
+    })
+}
+
+/// The summary information's stream names: the property set a compound
+/// file keeps its title and author in.
+const SUMMARY_STREAMS: [&str; 1] = ["/\u{5}SummaryInformation"];
+
+/// The title and author a summary information property set holds
+/// (`PIDSI_TITLE`, 2, and `PIDSI_AUTHOR`, 4), as strings of its code page
+/// (`PID_CODEPAGE`, 1) or UTF-16. Whatever does not read is left out.
+fn summary(b: &[u8]) -> DocumentInfo {
+    let mut info = DocumentInfo::default();
+    // The header, then the first section's id and offset.
+    let Some(section) = u32_at(b, 44).map(|o| o as usize) else {
+        return info;
+    };
+    let Some(n) = u32_at(b, section + 4).map(|n| (n as usize).min(1024)) else {
+        return info;
+    };
+    let prop = |i: usize| -> Option<(u32, usize)> {
+        let id = u32_at(b, section + 8 + 8 * i)?;
+        let at = section.checked_add(u32_at(b, section + 12 + 8 * i)? as usize)?;
+        Some((id, at))
+    };
+    let props: Vec<(u32, usize)> = (0..n).map_while(prop).collect();
+    let code_page = props
+        .iter()
+        .find(|(id, _)| *id == 1)
+        .and_then(|&(_, at)| u16_at(b, at + 4))
+        .unwrap_or(1252);
+    let text = |at: usize| -> Option<String> {
+        let len = (u32_at(b, at + 4)? as usize).min(MAX_SUMMARY_BYTES as usize);
+        let s = match u32_at(b, at)? {
+            // VT_LPSTR: bytes of the code page, a NUL at the end.
+            0x1E => {
+                let bytes = b.get(at + 8..at + 8 + len)?;
+                let bytes = bytes.split(|&c| c == 0).next().unwrap_or_default();
+                code_page_encoding(code_page)
+                    .decode_without_bom_handling(bytes)
+                    .0
+                    .into_owned()
+            }
+            // VT_LPWSTR: UTF-16 code units, a NUL at the end.
+            0x1F => {
+                let units: Vec<u16> = b
+                    .get(at + 8..at + 8 + 2 * len)?
+                    .chunks_exact(2)
+                    .map(|p| u16::from_le_bytes([p[0], p[1]]))
+                    .take_while(|&u| u != 0)
+                    .collect();
+                String::from_utf16_lossy(&units)
+            }
+            _ => return None,
+        };
+        let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!s.is_empty()).then_some(s)
+    };
+    let get = |pid: u32| {
+        props
+            .iter()
+            .find(|(id, _)| *id == pid)
+            .and_then(|&(_, at)| text(at))
+    };
+    info.title = get(2);
+    info.creators = get(4).into_iter().collect();
+    info
+}
+
+/// The encoding of a Windows code page, Windows-1252 where it is not one
+/// this reader knows.
+fn code_page_encoding(cp: u16) -> &'static encoding_rs::Encoding {
+    let label = match cp {
+        65001 => "utf-8",
+        932 => "shift_jis",
+        936 => "gbk",
+        949 => "euc-kr",
+        950 => "big5",
+        874 | 1250..=1258 => {
+            return encoding_rs::Encoding::for_label(format!("windows-{cp}").as_bytes())
+                .unwrap_or(encoding_rs::WINDOWS_1252)
+        }
+        _ => "windows-1252",
+    };
+    encoding_rs::Encoding::for_label(label.as_bytes()).unwrap_or(encoding_rs::WINDOWS_1252)
 }
 
 #[cfg(test)]

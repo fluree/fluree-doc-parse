@@ -46,8 +46,9 @@ fn a_document_reads_as_a_word_file_does() {
                 "rtf"
             ),
             ("doco:SectionTitle", Some(2), "Items", "rtf"),
-            ("doc:ListItem", None, "Bolts", "rtf"),
-            ("doc:ListItem", None, "Nuts", "rtf"),
+            // The number the list draws, as a Word file's is.
+            ("doc:ListItem", None, "1. Bolts", "rtf"),
+            ("doc:ListItem", None, "2. Nuts", "rtf"),
             (
                 "doco:Table",
                 None,
@@ -113,8 +114,8 @@ fn a_numbered_heading_is_a_heading() {
     assert_eq!(
         kinds(&parse(doc).unwrap()),
         [
-            ("doco:SectionTitle", Some(1), "Introduction", "rtf"),
-            ("doc:ListItem", None, "An item", "rtf"),
+            ("doco:SectionTitle", Some(1), "1. Introduction", "rtf"),
+            ("doc:ListItem", None, "2. An item", "rtf"),
         ]
     );
 }
@@ -270,4 +271,66 @@ fn a_long_value_merged_down_is_refused_rather_than_copied_into_each_row() {
     assert!(parse(doc(3).as_bytes()).is_ok());
     let err = parse(doc(3_000).as_bytes()).unwrap_err();
     assert!(matches!(err, RtfError::TooLarge(_)), "{err}");
+}
+
+#[test]
+fn pictures_spend_the_budget_before_they_are_made() {
+    use fluree_doc_model::budget::ELEMENT_BYTES;
+    // A thousand pictures of seven bytes each: a figure each.
+    let doc = format!("{{\\rtf1 {}}}", "{\\pict}".repeat(1_000));
+    let (els, _) = parse_within(doc.as_bytes(), Budget::new(1_000 * ELEMENT_BYTES, 0)).unwrap();
+    assert_eq!(els.len(), 1_000);
+    assert!(els.iter().all(|e| e.kind == "doco:Figure"));
+    assert!(parse_within(doc.as_bytes(), Budget::new(999 * ELEMENT_BYTES, 0)).is_err());
+}
+
+#[test]
+fn a_lists_numbers_and_levels_are_read_and_its_bullets_add_nothing() {
+    let doc = br"{\rtf1
+\pard\ls1\ilvl0 {\listtext a)\tab}First\par
+\pard\ls1\ilvl1 {\listtext\f2 \'b7\tab}Nested\par
+\pard\ls1\ilvl0 {\listtext b)\tab}Second\par
+\pard After\par}";
+    let els = parse(doc).unwrap();
+    let got: Vec<(&str, &str, usize)> = els
+        .iter()
+        .map(|e| (e.kind.as_str(), e.text.as_str(), e.depth))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("doc:ListItem", "a) First", 0),
+            ("doc:ListItem", "Nested", 1),
+            ("doc:ListItem", "b) Second", 0),
+            ("doco:Paragraph", "After", 0),
+        ]
+    );
+}
+
+#[test]
+fn header_rows_text_boxes_and_a_note_left_open_are_read() {
+    // A table whose first row repeats as its header (`\trhdr`); a text box
+    // anchored in a paragraph, read after it; a footnote the file ends
+    // inside of.
+    let doc = br"{\rtf1
+\trowd\trhdr\cellx3000\cellx6000\pard\intbl Customer\cell Amount\cell\row
+\trowd\cellx3000\cellx6000\pard\intbl Alex\cell 12.50\cell\row
+\pard Before {\shp{\*\shpinst{\sp{\sn fFilled}{\sv 0}}{\shptxt \pard Boxed text\par}}} after\par
+\pard Cited{\footnote\pard{\super\chftn} Left open";
+    let els = parse(doc).unwrap();
+    let got: Vec<(&str, &str, &str)> = els
+        .iter()
+        .map(|e| (e.kind.as_str(), e.text.as_str(), e.evidence))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("doco:Table", "Customer | Amount\nAlex | 12.50", "rtf"),
+            ("doco:Paragraph", "Before after", "rtf"),
+            ("doco:Paragraph", "Boxed text", "rtf"),
+            ("doco:Paragraph", "Cited", "rtf"),
+            ("doco:Paragraph", "1 Left open", "footnote"),
+        ]
+    );
+    assert_eq!(els[0].header_rows, Some(1));
 }

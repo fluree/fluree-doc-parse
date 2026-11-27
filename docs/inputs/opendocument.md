@@ -23,7 +23,8 @@ Read as a [Word file](office-and-web.md#docx) is:
   whose style, or a style it is based on, states an outline level or is a
   built-in heading (`Heading 2`): a heading LibreOffice imported from HTML is
   often such a paragraph. The built-in `Title` style is the `doco:Title`;
-- list items are list items, nested lists included; their numbers, which a
+- list items are list items, a list in an item's a level deeper (`depth`);
+  their numbers, which a
   list style computes, are not written;
 - tables are tables, their declared header rows (`table-header-rows`) their
   `header_rows`, a cell spanning columns or rows making the cells it covers
@@ -34,7 +35,8 @@ Read as a [Word file](office-and-web.md#docx) is:
   large rather than being written once a row;
 - footnotes and endnotes are read after the body, each opening with its
   citation (`1`, `i`), marked `evidence` `footnote` or `endnote`; comments
-  last, each opening with its author, `evidence` `comment`; the page header
+  last, each opening with its author, `evidence` `comment` (`fdoc convert`
+  keeps them only with `--comments`, as a DOCX's); the page header
   and footer of the master pages once each, before and after, as `header`
   and `footer`;
 - a text box is read where it is anchored: one anchored to a paragraph or
@@ -91,11 +93,12 @@ about 140 bytes and 9 MB of `<a b=""/>` a tree of 376 MB. What a document
 makes of it is spent from the document's budget too before it is made,
 and a paragraph or a cell whose text the budget has no room left for is
 refused before its text is copied out of the tree: each paragraph and its
-text; each table cell, a
-repeated cell each time it is copied, once, its text too, and a short
-row's padding to the table's width; and the copies DoCO writes of a table's cells (a merged
-value in each cell it covers, each cell's labels): a cell of a few
-kilobytes repeated a thousand times asks for gigabytes. A document past it
-fails as too large. In a library,
+text; each table cell, a repeated cell each time it is copied, once, its
+text too, a cell that holds text at what the output makes of it (a node of
+its own in DoCO, a cell of its row in the others), and a short row's
+padding to the table's width; a table's text; and the copies DoCO writes of
+a table's cells (a merged value in each cell it covers, each cell's labels):
+a cell of a few kilobytes repeated a thousand times asks for gigabytes. A
+document past it fails as too large. In a library,
 `fluree_doc_odf::parse_with_info` returns the elements, the declared info
 and the kind; `Format::sniff` tells the kind from the bytes.

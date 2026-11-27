@@ -329,6 +329,17 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub strict: bool,
 
+    /// Also read the notes reviewers left: a PDF's annotations (sticky
+    /// notes, free text, the comments on highlights) and the comments of a
+    /// Word, OpenDocument or RTF document
+    ///
+    /// Each is marked as what it is (`evidence` `annotation` or `comment`):
+    /// a PDF's after its page's text, a document's comments after the rest.
+    /// Off by default: they are not the document's own text, and a
+    /// highlight's note often repeats the text it marks.
+    #[arg(long)]
+    pub comments: bool,
+
     /// Save each email's attachments, and the files each PDF embeds, under
     /// DIR/<input stem>/, to convert on their own
     ///

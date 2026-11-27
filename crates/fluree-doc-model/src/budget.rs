@@ -768,6 +768,22 @@ mod tests {
     }
 
     #[test]
+    fn a_csv_records_cell_costs_its_own() {
+        // A record's cell, with its text; an empty one costs nothing
+        // beyond its slot.
+        for output in [Output::Doco, Output::Flat, Output::Text] {
+            let cell = output.csv_cell_bytes();
+            assert_eq!(filled_csv_cell_bytes(output, "a&"), cell + 7 * TEXT_BYTES);
+            assert_eq!(filled_csv_cell_bytes(output, ""), 0);
+            let need = 2 * cell + 13 * TEXT_BYTES;
+            let mut b = Budget::new(need, 0).for_output(output);
+            b.spend_csv_cell_texts(["a&", "", "\u{1}"]).unwrap();
+            assert!(b.spend_csv_cell_texts([""]).is_ok());
+            assert!(b.spend_csv_cell_texts(["y"]).is_err());
+        }
+    }
+
+    #[test]
     fn work_is_counted_apart_from_memory() {
         let mut b = Budget::new(0, 10);
         b.spend_work(10).unwrap();
