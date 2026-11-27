@@ -28,7 +28,9 @@ level, `w:numPr` marks a list item, `w:tbl` bounds a real table, and
 `w:gridSpan` / `w:vMerge` state the cell merges the PDF engine has to read
 back out of ruling geometry. A paragraph in Word's built-in Title style is the
 document's `doco:Title`, found by the style's name, which a localised Word
-keeps in English while it renames the style's id.
+keeps in English while it renames the style's id. A paragraph in the Subtitle
+style directly after it is the title's `doco:Subtitle`; elsewhere the style
+sets a paragraph.
 
 List numbering is one thing Word does not store: a clause numbered `9.1.5.`
 holds no number in its text, and Word computes it when it lays the page out.
@@ -151,7 +153,9 @@ invite consumers to treat a deck like a scanned page.
 
 A shape whose placeholder type is `title` or `ctrTitle` becomes the slide
 heading, except the `ctrTitle` on the first slide — the title slide's title —
-which is the deck's `doco:Title`; `a:tbl` is a real table with `gridSpan` / `rowSpan` merges;
+which is the deck's `doco:Title`. The first paragraph of that slide's
+`subTitle` placeholder is the deck's `doco:Subtitle`, after the title whichever
+shape the slide lists first; `a:tbl` is a real table with `gridSpan` / `rowSpan` merges;
 paragraphs with a bullet character or a non-zero outline level are list items,
 nested by their outline level (`lvl`).
 
