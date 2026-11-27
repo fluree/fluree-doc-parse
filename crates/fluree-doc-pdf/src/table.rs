@@ -1970,6 +1970,56 @@ impl Grid {
         self.shaded_across(fills, row, None)
     }
 
+    /// Rows `a` and `b` are set alike: in one size ([`SAME_SIZE`]) and one
+    /// weight, shaded or bare alike, and with the table's outer edges drawn
+    /// through both or through neither. A table sets its section bands one
+    /// way throughout; a title over it, or a header, is set apart.
+    pub(crate) fn rows_set_alike(
+        &self,
+        glyphs: &[crate::glyph::Glyph],
+        rules: &[Rule],
+        fills: &[crate::rule::Fill],
+        a: usize,
+        b: usize,
+    ) -> bool {
+        if a + 1 >= self.ys.len() || b + 1 >= self.ys.len() {
+            return false;
+        }
+        let size = |r: usize| {
+            let (top, bottom) = (self.ys[r], self.ys[r + 1]);
+            let mut sizes: Vec<f32> = glyphs
+                .iter()
+                .filter(|g| g.bbox.is_some() && !g.text.trim().is_empty())
+                .filter(|g| {
+                    let (x, y) = g.center();
+                    y > top && y < bottom && x > self.bbox.x0 && x < self.bbox.x1
+                })
+                .map(|g| g.font_size)
+                .collect();
+            sizes.sort_by(f32::total_cmp);
+            sizes.get(sizes.len() / 2).copied()
+        };
+        let edges = |r: usize| {
+            let mid = (self.ys[r] + self.ys[r + 1]) / 2.0;
+            let at = |x: f64| {
+                rules.iter().any(|rule| {
+                    rule.orientation == Orientation::Vertical
+                        && (rule.axis_pos() - x).abs() <= EDGE_TOLERANCE
+                        && rule.bbox.y0 <= mid
+                        && rule.bbox.y1 >= mid
+                })
+            };
+            (at(self.xs[0]), at(self.xs[self.xs.len() - 1]))
+        };
+        let (Some(sa), Some(sb)) = (size(a), size(b)) else {
+            return false;
+        };
+        (sa - sb).abs() <= sb * SAME_SIZE
+            && self.row_is_bold(glyphs, a) == self.row_is_bold(glyphs, b)
+            && self.band_has_fill(fills, a) == self.band_has_fill(fills, b)
+            && edges(a) == edges(b)
+    }
+
     /// Whether rows `rows` are shaded by fills of their own, across half the
     /// table at the first of them: each fill starting and ending within
     /// those rows. A background laid under the page or the whole table (a
@@ -2561,6 +2611,15 @@ pub(crate) fn crosses_gutter<'a>(
         .any(|&top| runs_past(left, top) != runs_past(right, top));
     let halves = both as f64 >= held as f64 * HALVES && level as f64 >= both as f64 * HALVES;
     (alone || !halves).then_some(gutter)
+}
+
+/// Text that stands as a label of its own, not one carrying on the label
+/// over it: `100%` or `LM` under a header's head, where `size` under
+/// `Frame`, `(7.2K rpm)` under `Business Critical` or `x = E/U` under a
+/// type's name go on with it.
+pub(crate) fn opens_a_label(s: &str) -> bool {
+    let t = s.trim();
+    !t.is_empty() && !t.starts_with(|c: char| c.is_lowercase() || c == '(' || c == '[')
 }
 
 pub(crate) fn is_numeric_cell(s: &str) -> bool {
@@ -12185,6 +12244,52 @@ mod tests {
         }
         g.trim_to_content_ruled(&glyphs, &rules);
         assert_eq!(g.rows(), 2, "the legend is no row of the grid");
+    }
+
+    #[test]
+    fn a_tables_bands_are_set_alike_and_its_rows_apart() {
+        // Two columns, five 20 pt rows from y = 100, every edge drawn.
+        let ys = [100.0, 120.0, 140.0, 160.0, 180.0, 200.0];
+        let mut rules: Vec<Rule> = ys.iter().map(|&y| h(68.0, 297.0, y)).collect();
+        for w in ys.windows(2) {
+            for x in [68.0, 183.0, 297.0] {
+                rules.push(v(w[0], w[1], x));
+            }
+        }
+        let g = detect(&rules, 0).remove(0);
+        assert_eq!(g.rows(), 5);
+        let mk = |x: f64, y: f64, size: f32, weight: u32| crate::glyph::Glyph {
+            text: "x".into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: y,
+                x1: x + 6.0,
+                y1: y + 10.0,
+            }),
+            page: 0,
+            origin: (x, y + 10.0),
+            rotation_deg: 0.0,
+            font_size: size,
+            weight: Some(weight),
+            italic: false,
+            advance: None,
+            draw_index: 0,
+            ocr: None,
+        };
+        // Bands at rows 0 and 3, bold; a field at row 1, plain; a title in
+        // a larger size at row 4.
+        let glyphs = vec![
+            mk(80.0, 105.0, 10.0, 700),
+            mk(80.0, 125.0, 10.0, 400),
+            mk(200.0, 125.0, 10.0, 400),
+            mk(80.0, 165.0, 10.0, 700),
+            mk(80.0, 185.0, 14.0, 700),
+        ];
+        assert!(g.rows_set_alike(&glyphs, &rules, &[], 0, 3));
+        assert!(!g.rows_set_alike(&glyphs, &rules, &[], 0, 1), "weight");
+        assert!(!g.rows_set_alike(&glyphs, &rules, &[], 3, 4), "size");
+        // A row with no text is set no way.
+        assert!(!g.rows_set_alike(&glyphs, &rules, &[], 0, 2));
     }
 
     #[test]

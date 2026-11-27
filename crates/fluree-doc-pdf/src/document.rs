@@ -231,6 +231,64 @@ fn table_title(
 /// The table goes on from the row under it, its layout moved up a row: its
 /// spans, the labels set down its rows and its row bands with it. The
 /// header the reading found under the band stays the header.
+/// A first row [`table_title`] reads as the table's title is the first of
+/// the table's section bands: one label across the row, as each band further
+/// down is (`Carrier Gas Settings (helium)` over `Injection parameters`,
+/// `GC parameters`; a continued table's `Gastrointestinal disorders` over
+/// `Eye disorders`). Each band names the rows under it, and read out as a
+/// title, the first named none.
+///
+/// It is the first band where a later row of the table, taken without it,
+/// is a band (the ruling leaves it open across, or it is a group's label),
+/// set as the first row is ([`table::Grid::rows_set_alike`]: size, weight,
+/// shading, drawn edges), and the row under the first names itself in its
+/// first column and does not head the table ([`table::Grid::heads_its_rows`],
+/// the test a row under a title must pass). A title set apart from the
+/// bands, or over a header, stays a title.
+fn opens_first_section(
+    g: &table::Grid,
+    trimmed: &table::Grid,
+    page: &crate::extract::Page,
+) -> bool {
+    if g.layout.is_some() || trimmed.rows() < 2 || g.rows() != trimmed.rows() + 1 {
+        return false;
+    }
+    let cols = trimmed.cols();
+    let rows: Vec<Vec<String>> = trimmed
+        .cell_texts(&page.glyphs)
+        .chunks(cols)
+        .map(<[String]>::to_vec)
+        .collect();
+    // The row under a band names itself in its first column, as the rows
+    // under every band do. A row of column names under a title leaves that
+    // corner empty (`· | · | 2024 | 2023` under `Expressed in years`).
+    if rows[0].first().is_none_or(|t| t.trim().is_empty()) {
+        return false;
+    }
+    let header = trimmed.header_rows(&rows, &page.glyphs, &page.rules, &page.fills);
+    if trimmed.heads_its_rows(header, &rows, &page.glyphs, &page.rules, &page.fills) {
+        return false;
+    }
+    let mut merges = trimmed.merges(&page.rules, &page.fills);
+    trimmed.text_merges(&page.glyphs, &page.rules, &mut merges);
+    (1..rows.len()).any(|r| {
+        section_band(&rows, &merges, r)
+            && g.rows_set_alike(&page.glyphs, &page.rules, &page.fills, 0, r + 1)
+    })
+}
+
+/// Row `r` of a ruled table is a band over a section of its rows, labelling
+/// them rather than the columns: a row the ruling leaves open across every
+/// column, set as one, with text; or a group's label ([`group_label`]).
+fn section_band(rows: &[Vec<String>], merges: &table::CellMerges, r: usize) -> bool {
+    let cols = rows.first().map_or(0, Vec::len);
+    let spans = (1..cols).all(|c| merges.continues_left.get(r * cols + c) == Some(&true));
+    (merges.full_width_row.get(r) == Some(&true)
+        && spans
+        && rows[r].iter().any(|t| !t.trim().is_empty()))
+        || group_label(rows, r)
+}
+
 fn layout_title(
     g: &table::Grid,
     lay: &table::TableLayout,
@@ -339,6 +397,71 @@ fn layout_title(
     Some((text, trimmed))
 }
 
+/// Rows opening a table nested in a table's rows: the first cell's label
+/// set down the rows under it (`Gradient` in a list of conditions), the
+/// row's other cells naming columns (`Time (min) | A% | B%`) that the rows
+/// in the label's span fill with figures. Set plain or bold, the row is
+/// the nested table's header.
+///
+/// A group's first row of data holds a figure among its values, or names
+/// nothing the rows under it fill with figures.
+fn nested_header_rows(
+    rows: &[Vec<String>],
+    continues_above: &[bool],
+    header_rows: usize,
+) -> Vec<usize> {
+    let cols = rows.first().map_or(0, Vec::len);
+    if cols < 3 || continues_above.len() != rows.len() * cols {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for r in header_rows..rows.len() {
+        let label = rows[r][0].trim();
+        if label.is_empty() || table::is_numeric_cell(label) {
+            continue;
+        }
+        // The label's span: the rows its cell runs on through, two at least.
+        let mut end = r;
+        while end + 1 < rows.len() && continues_above[(end + 1) * cols] {
+            end += 1;
+        }
+        if end < r + 2 {
+            continue;
+        }
+        let named: Vec<usize> = (1..cols)
+            .filter(|&c| !rows[r][c].trim().is_empty())
+            .collect();
+        let names: Vec<&str> = named.iter().map(|&c| rows[r][c].trim()).collect();
+        let distinct: std::collections::HashSet<&&str> = names.iter().collect();
+        // Words, more letters than digits: a count is a value (`N=175` over
+        // a subgroup's rates), a name is not (`A%`, `IL-8 (pg/mL)`).
+        let worded = |t: &str| {
+            let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+            letters > t.chars().filter(|c| c.is_ascii_digit()).count()
+        };
+        if names.len() < 2
+            || distinct.len() != names.len()
+            || names
+                .iter()
+                .any(|t| !worded(t) || table::is_numeric_cell(t))
+        {
+            continue;
+        }
+        // Figures under every name, on most of the span's rows.
+        let figures = (r + 1..=end)
+            .filter(|&k| {
+                named
+                    .iter()
+                    .all(|&c| table::is_numeric_cell(rows[k][c].trim()))
+            })
+            .count();
+        if figures * 2 > end - r {
+            out.push(r);
+        }
+    }
+    out
+}
+
 fn names_spanned_columns(
     rows: &[Vec<String>],
     continues_left: &[bool],
@@ -377,11 +500,34 @@ fn names_spanned_columns(
             .count()
             * 2
             >= rows.len() - 2;
+    // A boundary the ruling leaves open on every row parts columns read
+    // from their text, not a span: `Label Claim | % of Label Claim` under
+    // each ingredient, no rule between them from the header down. Only
+    // inside a group ruled off from the next in the second row too, and
+    // with the same labels under every group: a table ruled with no
+    // verticals at all leaves every boundary open, and its first row spans
+    // nothing; a row of data under a banner names no columns twice over.
+    let open_throughout = |k: usize| {
+        (1..rows.len()).all(|r| continues_left.get(r * cols + k).copied().unwrap_or(false))
+    };
+    let under =
+        |a: usize, b: usize| -> Vec<&str> { rows[1][a..b].iter().map(|t| t.trim()).collect() };
+    let repeated = spans.len() >= 2
+        && spans
+            .iter()
+            .all(|&(a, b)| under(a, b) == under(spans[0].0, spans[0].1));
+    let ruled_off = |a: usize, b: usize| {
+        repeated
+            && b - a < cols
+            && (a == 0 || !continues_left[cols + a])
+            && (b >= cols || !continues_left[cols + b])
+    };
     let labels = |a: usize, b: usize| {
         let names: Vec<&str> = rows[1][a..b].iter().map(|t| t.trim()).collect();
         let short = b - a < cols || names.iter().all(|t| t.split_whitespace().count() <= 4);
         short
-            && (a + 1..b).all(|k| !continues_left[cols + k])
+            && (a + 1..b)
+                .all(|k| !continues_left[cols + k] || (open_throughout(k) && ruled_off(a, b)))
             && names
                 .iter()
                 .all(|t| !t.is_empty() && (keyed || !table::is_numeric_cell(t)))
@@ -808,6 +954,41 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         }
         let n = prev.header_rows.unwrap_or(0).min(head.len());
         let repeats = n > 0 && rows.len() > n && (0..n).all(|r| same(&head[r], &rows[r]));
+        // The header repeated with a cell of it read on into the label under
+        // it: the stub's head drawn open into the first group's cell
+        // (`Limit Level` over `100%`, read whole as `Limit Level 100%`).
+        // What runs on past the repeated head is the first row's label,
+        // where that row's own cell is empty.
+        let run_on = |r: usize, c: usize| -> Option<String> {
+            let h: Vec<&str> = head[r].get(c)?.split_whitespace().collect();
+            let t: Vec<&str> = rows[r].get(c)?.split_whitespace().collect();
+            let rest = t.get(h.len()..)?.join(" ");
+            (!h.is_empty()
+                && t[..h.len()] == h[..]
+                && rows[n].get(c).is_some_and(|t| t.trim().is_empty())
+                && table::opens_a_label(&rest))
+            .then_some(rest)
+        };
+        let mut runs_on: Vec<(usize, usize, String)> = Vec::new();
+        let repeats_run_on = !repeats
+            && n > 0
+            && rows.len() > n
+            && (0..n).all(|r| {
+                head[r].len() == rows[r].len()
+                    && (0..rows[r].len()).all(|c| {
+                        if head[r][c]
+                            .split_whitespace()
+                            .eq(rows[r][c].split_whitespace())
+                        {
+                            return true;
+                        }
+                        run_on(r, c)
+                            .map(|rest| runs_on.push((r, c, rest)))
+                            .is_some()
+                    })
+            })
+            && !runs_on.is_empty();
+        let repeats = repeats || repeats_run_on;
         let finishes_header = prev.header_only()
             && rows.len() > 1
             && b.bold
@@ -817,7 +998,24 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         if b.styled && !repeats && !finishes_header {
             continue;
         }
+        let heads: Vec<(usize, usize, String, String)> = runs_on
+            .into_iter()
+            .filter(|_| repeats_run_on)
+            .map(|(r, c, rest)| (r, c, head[r][c].clone(), rest))
+            .collect();
         next.continues = Some(prev.id.clone());
+        if let Some(cells) = next.cells.as_mut() {
+            let cols = cells.first().map_or(0, Vec::len);
+            for (r, c, h, rest) in heads {
+                cells[r][c] = h;
+                cells[n][c] = rest;
+                if let Some(m) = next.merged_down.as_mut() {
+                    if let Some(k) = m.get_mut(n * cols + c) {
+                        *k = false;
+                    }
+                }
+            }
+        }
         next.header_rows = Some(if repeats {
             n
         } else if finishes_header {
@@ -6359,6 +6557,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 &scrub_texts,
                 layout.spanning_rows[gi].contains(&0),
             );
+            // Unless the band is set as the table's later bands are, over a
+            // row that does not head it: then it is the first of them, and
+            // stays in the table to label the rows under it.
+            let first_band = titled
+                .as_ref()
+                .is_some_and(|(_, trimmed)| opens_first_section(g, trimmed, &raw.pages[pi]));
+            let titled = if first_band { None } else { titled };
             let below_title;
             let (g, shift) = match &titled {
                 Some((text, trimmed)) => {
@@ -6667,6 +6872,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             if header_rows == 0 {
                 header_rows = parameter_rows(&rows);
             }
+            // A table opening on its first section's band has no header row.
+            if first_band {
+                header_rows = 0;
+            }
             // A merged cell is read whole, into its top-left cell. Its words
             // were dealt out by the grid's cuts through it, which split a
             // centred header across the row boundary under it (`time` above,
@@ -6887,24 +7096,32 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .full_width_row
                     .iter()
                     .enumerate()
-                    .filter(|(r, full)| {
-                        let spans = (1..cols).all(|c| merges.continues_left[*r * cols + c]);
-                        (**full && spans && rows[*r].iter().any(|c| !c.trim().is_empty())
-                            || group_label(&rows, *r))
-                            && *r >= header_rows
+                    .filter(|(r, _)| {
+                        (first_band && *r == 0)
+                            || section_band(&rows, &merges, *r) && *r >= header_rows
                     })
                     .map(|(r, _)| r)
                     .collect(),
             };
             let restated_headers = match explicit {
                 Some(lay) => lay.restated_headers.clone(),
-                None => g.restated_header_rows(
-                    &rows,
-                    header_rows,
-                    &sub_headers,
-                    &raw.pages[pi].glyphs,
-                    &raw.pages[pi].fills,
-                ),
+                None => {
+                    let mut restated = g.restated_header_rows(
+                        &rows,
+                        header_rows,
+                        &sub_headers,
+                        &raw.pages[pi].glyphs,
+                        &raw.pages[pi].fills,
+                    );
+                    restated.extend(
+                        nested_header_rows(&rows, &merges.continues_above, header_rows)
+                            .into_iter()
+                            .filter(|r| !sub_headers.contains(r)),
+                    );
+                    restated.sort_unstable();
+                    restated.dedup();
+                    restated
+                }
             };
             let mut spread = spread_runs(g, &raw.pages[pi].glyphs, &rows, &merges.continues_left);
             // Values the text reader saw set across the gutter between two
@@ -8563,6 +8780,37 @@ mod tests {
     }
 
     #[test]
+    fn a_table_nested_in_a_label_s_rows_opens_on_its_header() {
+        let rows = grid(&[
+            &["Flow Rate", "0.5 mL/min", "", ""],
+            &["Gradient", "Time (min)", "A%", "B%"],
+            &["", "0", "95", "5"],
+            &["", "0.7", "50", "50"],
+            &["", "8.0", "10", "90"],
+            &["Injection Volume", "5 µL", "", ""],
+        ]);
+        let mut down = vec![false; 24];
+        for r in 2..5 {
+            down[r * 4] = true;
+        }
+        assert_eq!(nested_header_rows(&rows, &down, 0), vec![1]);
+        // A subgroup's counts are values, not names.
+        let mut counts = rows.clone();
+        counts[1] = ["Responders", "N=175", "N=92", "N=40"]
+            .map(String::from)
+            .to_vec();
+        assert!(nested_header_rows(&counts, &down, 0).is_empty());
+        // A group's first row of data holds figures among its values.
+        let mut group = rows.clone();
+        group[1] = ["North", "Sales", "95", "5"].map(String::from).to_vec();
+        assert!(nested_header_rows(&group, &down, 0).is_empty());
+        // A label over one row is no span of rows to head.
+        let mut short = vec![false; 24];
+        short[2 * 4] = true;
+        assert!(nested_header_rows(&rows, &short, 0).is_empty());
+    }
+
+    #[test]
     fn a_row_naming_each_spanned_column_is_the_headers_second() {
         let mut left = vec![false; 15];
         left[2] = true;
@@ -8630,6 +8878,42 @@ mod tests {
             &["", "55°", "17,172", "17,146", "16,972"],
         ]);
         assert!(names_spanned_columns(&angles, &wide, &[]));
+        // Columns parted by their text alone, no rule between them on any
+        // row: open on every row, and no span in the second.
+        let mut unruled = vec![false; 20];
+        for r in 0..4 {
+            unruled[r * 5 + 2] = true;
+            unruled[r * 5 + 4] = true;
+        }
+        let claims = grid(&[
+            &["Sample", "Oxybenzone", "", "Octocrylene", ""],
+            &[
+                "",
+                "Label Claim",
+                "% of Label Claim",
+                "Label Claim",
+                "% of Label Claim",
+            ],
+            &["Spray 1", "6 %", "98.0", "10 %", "97.5"],
+            &["Spray 2", "6 %", "98.2", "4 %", "97.2"],
+        ]);
+        assert!(names_spanned_columns(&claims, &unruled, &[]));
+        // Ruled apart under the second row, a run across it is one label.
+        let mut ruled_below = unruled.clone();
+        for r in 2..4 {
+            ruled_below[r * 5 + 2] = false;
+            ruled_below[r * 5 + 4] = false;
+        }
+        assert!(!names_spanned_columns(&claims, &ruled_below, &[]));
+        // Labels that differ group to group under open boundaries are a
+        // row of data, as two sites' names under `Centre | Location` are.
+        let sites = grid(&[
+            &["Sample", "Oxybenzone", "", "Octocrylene", ""],
+            &["", "Lisieux", "Vittel", "Aubigny", "Orbe"],
+            &["Spray 1", "6 %", "98.0", "10 %", "97.5"],
+            &["Spray 2", "6 %", "98.2", "4 %", "97.2"],
+        ]);
+        assert!(!names_spanned_columns(&sites, &unruled, &[]));
         // A value run across the banner's columns names nothing.
         let mut run = left.clone();
         run[5 + 2] = true;
@@ -9090,6 +9374,55 @@ mod tests {
         link_continued_tables(&mut els, &[fa, fb]);
         assert_eq!(els[2].continues.as_deref(), Some("elem-00001"));
         assert_eq!(els[2].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_header_repeated_into_the_first_label_under_it_is_parted_from_it() {
+        // The stub's head repeated over the next page, its cell drawn open
+        // into the first group's label and read whole with it.
+        let opened = |first: &str| {
+            let (a, fa) = part(
+                "elem-00001",
+                0,
+                &[&["Level", "Series", "Result"], &["50%", "Run 1", "110"]],
+                1,
+                &XS,
+                false,
+                false,
+            );
+            let (mut b, fb) = part(
+                "elem-00002",
+                1,
+                &[
+                    &[first, "Series", "Result"],
+                    &["", "Run 1", "102"],
+                    &["", "Run 2", "99"],
+                ],
+                1,
+                &XS,
+                false,
+                false,
+            );
+            b.merged_down = Some(vec![
+                false, false, false, true, false, false, true, false, false,
+            ]);
+            let mut els = vec![a, b];
+            link_continued_tables(&mut els, &[fa, fb]);
+            els.remove(1)
+        };
+        let b = opened("Level 100%");
+        assert_eq!(b.continues.as_deref(), Some("elem-00001"));
+        assert_eq!(b.header_rows, Some(1));
+        let cells = b.cells.as_ref().unwrap();
+        assert_eq!(
+            (cells[0][0].as_str(), cells[1][0].as_str()),
+            ("Level", "100%")
+        );
+        assert!(!b.merged_down.as_ref().unwrap()[3]);
+        // What carries the head on is the head's own: nothing repeated.
+        let b = opened("Level (cont.)");
+        assert_eq!(b.header_rows, Some(0));
+        assert_eq!(b.cells.as_ref().unwrap()[0][0], "Level (cont.)");
     }
 
     #[test]

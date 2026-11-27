@@ -824,6 +824,25 @@ Labels set apart within their columns, each under one ruled cell across the
 table (`Area | Competence`), are the columns' own. So is a group label over
 some of the columns (`Dates` over `Start | Next review`).
 
+A band that is the first of the table's section bands is no title. A table
+that groups its rows under bands, each one label across the row, opens on its
+first band: `Carrier Gas Settings (helium)` over `Injection parameters` and
+`GC parameters` in a parameter table, or `Gastrointestinal disorders` over
+`Eye disorders` in an adverse-reactions table continued from the page
+before. Read out as a title, the band named none of the rows under it. The
+first row stays in the table, as a band labelling the rows under it, with no
+header row, when:
+
+- the row under it does not head the table, by the tests above;
+- a later row of the table is a band, as the sub-headers below are found;
+- that band is set as the first row is: in one size (to 5%) and one weight,
+  shaded or bare alike, and with the table's outer edges drawn through both
+  or through neither.
+
+A title set apart from the bands, larger, bold over plain bands, or shaded
+over bare ones (a BMC table's shaded first row over its italic bands), stays
+a title. So does one over a header.
+
 A table read from its text takes a title band the same way, under stricter
 conditions:
 
