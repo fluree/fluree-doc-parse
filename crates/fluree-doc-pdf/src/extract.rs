@@ -2356,7 +2356,7 @@ pub fn extract_bytes_with(
             ocr: None,
         };
         read_upright(&mut page);
-        synthesize_missing_boxes(&mut page.glyphs);
+        synthesize_missing_boxes(&mut page.glyphs, &page.rules);
         ink.push(dev.ink);
         pages.push(page);
     }
@@ -2550,10 +2550,17 @@ const SYNTH_WIDTH: f64 = 0.60;
 /// width leaves that space to be read.
 const MAX_SYNTH_ADVANCE: f64 = 1.25;
 
-/// Widest a boxless glyph is taken to be, in sizes, where no agreeing
-/// measures of it give its own width: `W`, `m`, a ligature or a CJK
-/// character runs to about one. Measured wider, the pen crossed a gap.
-const WIDEST_GLYPH: f64 = 1.05;
+/// Whether a vertical rule stands between `x0` and `x1` on the baseline `y`
+/// of a glyph `font` points high: a cell's border the pen crossed.
+fn ruled_between(rules: &[crate::rule::Rule], x0: f64, x1: f64, y: f64, font: f64) -> bool {
+    rules.iter().any(|r| {
+        r.orientation == crate::rule::Orientation::Vertical
+            && r.axis_pos() > x0
+            && r.axis_pos() < x1
+            && r.bbox.y0 <= y
+            && r.bbox.y1 >= y - font * 0.5
+    })
+}
 
 /// How far the middle of a character's measured widths may stand above the
 /// narrowest for its widths to agree: the pen's rounding, not the text's
@@ -2590,7 +2597,7 @@ const WIDER_THAN_ITSELF: f64 = 1.6;
 /// Whitespace keeps `bbox: None` deliberately — the span-merge and
 /// explicit-space rules key on boxless spaces, and giving a space ink
 /// would invent geometry nothing drew.
-fn synthesize_missing_boxes(glyphs: &mut [Glyph]) {
+fn synthesize_missing_boxes(glyphs: &mut [Glyph], rules: &[crate::rule::Rule]) {
     // Baseline-cluster per rotation bucket, mirroring line::assemble's
     // grouping so the synthesized runs are the runs assembly will see.
     let candidates: Vec<usize> = (0..glyphs.len())
@@ -2666,7 +2673,9 @@ fn synthesize_missing_boxes(glyphs: &mut [Glyph]) {
         .collect();
     // Each size's typical glyph width, the middle of all its measures: what
     // a glyph whose own width no agreeing measures give is taken to be,
-    // where it measures wider than any glyph is set.
+    // where a rule drawn down between it and the next glyph says the pen
+    // crossed a cell's border (a name's last letter, seen once on the page,
+    // beside the next cell's date).
     let mut by_size: std::collections::HashMap<i64, Vec<f64>> = Default::default();
     for (k, m) in keys.iter().zip(&measured) {
         if let Some(d) = *m {
@@ -2687,7 +2696,7 @@ fn synthesize_missing_boxes(glyphs: &mut [Glyph]) {
         let width = match *m {
             Some(d) => match (narrowest.get(k), typical.get(&k.1)) {
                 (Some(&own), _) if d > own * WIDER_THAN_ITSELF && d - own > font * 0.2 => own,
-                (None, Some(&t)) if d > font * WIDEST_GLYPH && t < d => t,
+                (None, Some(&t)) if t < d && ruled_between(rules, x + t, x + d, y, font) => t,
                 _ => d,
             },
             None => font * SYNTH_WIDTH,
@@ -2827,7 +2836,7 @@ mod tests {
             glyph("c", 76.22, true),
             glyph("青", 216.95, false),
         ];
-        synthesize_missing_boxes(&mut g);
+        synthesize_missing_boxes(&mut g, &[]);
         assert!((g[1].advance.unwrap() - 11.78).abs() < 0.01);
         // Nothing follows on the line: the fallback.
         assert!((g[3].advance.unwrap() - 12.0 * SYNTH_WIDTH).abs() < 0.01);
@@ -2869,7 +2878,18 @@ mod tests {
         let z = g.len();
         g.push(glyph("Z", 236.75, 46.5));
         g.extend(run("11", 247.78, 46.5, 5.25));
-        synthesize_missing_boxes(&mut g);
+        // The border between the name's cell and the date's.
+        let border = crate::rule::Rule {
+            bbox: BBox {
+                x0: 245.0,
+                y0: 36.0,
+                x1: 245.75,
+                y1: 50.0,
+            },
+            orientation: crate::rule::Orientation::Vertical,
+            page: 0,
+        };
+        synthesize_missing_boxes(&mut g, std::slice::from_ref(&border));
         // Its own width: what it measures before other digits.
         assert!(
             (g[five].advance.unwrap() - 5.25).abs() < 0.01,
@@ -2877,13 +2897,9 @@ mod tests {
             g[five].advance
         );
         assert!(g[five].bbox.unwrap().x1 < 475.0);
-        // No measures of its own: wider than any glyph is set, it takes
-        // the size's typical width.
-        assert!(
-            g[z].advance.unwrap() < 9.45 * WIDEST_GLYPH,
-            "{:?}",
-            g[z].advance
-        );
+        // No measures of its own: across the drawn border, it takes the
+        // size's typical width.
+        assert!(g[z].advance.unwrap() < 6.0, "{:?}", g[z].advance);
         // `W` measures wider than a digit, within a glyph's width: kept.
         let w = five + 1;
         assert!((g[w].advance.unwrap() - 5.5).abs() < 0.01);
@@ -2897,7 +2913,7 @@ mod tests {
             glyph("A", 31.0, 50.0),
             glyph("x", 40.5, 50.0),
         ];
-        synthesize_missing_boxes(&mut g);
+        synthesize_missing_boxes(&mut g, &[]);
         assert!(
             (g[3].advance.unwrap() - 9.5).abs() < 0.01,
             "{:?}",
