@@ -1878,6 +1878,14 @@ const FURNITURE_ROW_SLACK: f64 = 0.005;
 /// pictures and a caption: all but a caption's or a title's line or two.
 const PICTURE_PAGE_TEXT: f64 = 0.9;
 
+/// Most share of the page's height a panel spans: a tint laid under most of
+/// the page is its background, not a box set on it.
+const PANEL_PAGE_SHARE: f64 = 0.8;
+
+/// A colour channel at or above this, in all three, is white or near it: a
+/// fill painted to blank the page, not to set a box apart.
+const PANEL_WHITE: u8 = 245;
+
 /// Fraction of a block that must lie inside a figure's drawing for the
 /// block to belong to it without being taken as a label. High enough that a
 /// paragraph brushing the drawing's margin stays prose.
@@ -6007,7 +6015,41 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // Drawn boxes, outlined or filled: a stretch's lines read box by
         // box where they stand in boxes side by side.
         let frames: Vec<crate::geom::BBox> = p.fills.iter().map(|f| f.bbox).collect();
-        let groups = crate::region::read_order(cols, &p.rules, &table_boxes, &pictures, &frames);
+        // Boxes drawn to be seen: shaded, not white, or outlined, and not
+        // the page's background nor a tint laid under most of it.
+        let panels: Vec<crate::geom::BBox> = p
+            .fills
+            .iter()
+            .filter(|f| f.bbox.height() < p.height * PANEL_PAGE_SHARE)
+            // A box holding a drawing's rules or shapes is a figure's frame
+            // or a chart's plot, not a panel of text.
+            .filter(|f| {
+                let inside = |b: &crate::geom::BBox| {
+                    b.x0 >= f.bbox.x0 - 0.5
+                        && b.x1 <= f.bbox.x1 + 0.5
+                        && b.y0 >= f.bbox.y0 - 0.5
+                        && b.y1 <= f.bbox.y1 + 0.5
+                };
+                !p.rules.iter().any(|r| inside(&r.bbox))
+                    && !p.fills.iter().any(|o| o.bbox != f.bbox && inside(&o.bbox))
+            })
+            .filter(|f| match f.paint {
+                Some(crate::rule::Paint::Solid([r, g, b, a])) => {
+                    a > 0 && r.min(g).min(b) < PANEL_WHITE
+                }
+                Some(_) => true,
+                None => f.stroked,
+            })
+            .map(|f| f.bbox)
+            .collect();
+        let groups = crate::region::read_order_with_panels(
+            cols,
+            &p.rules,
+            &table_boxes,
+            &pictures,
+            &frames,
+            &panels,
+        );
         let prose_sources: Vec<(usize, bool)> =
             groups.iter().map(|g| (g.column, g.own_measure)).collect();
         let cols: Vec<Vec<Line>> = groups.into_iter().map(|g| g.lines).collect();

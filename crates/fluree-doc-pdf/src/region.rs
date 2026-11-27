@@ -77,12 +77,28 @@ pub struct Group {
 /// at the gap between them once the pair stands alone. A region of one
 /// column is cut across too, and each piece is read at a gutter only it
 /// has.
+#[cfg(test)]
 pub fn read_order(
     cols: Vec<Vec<Line>>,
     rules: &[Rule],
     tables: &[BBox],
     pictures: &[BBox],
     frames: &[BBox],
+) -> Vec<Group> {
+    read_order_with_panels(cols, rules, tables, pictures, frames, &[])
+}
+
+/// [`read_order`], with the page's `panels`: boxes drawn to be seen, shaded
+/// or outlined, a sidebar set in one beside the column's text reading
+/// apart from it ([`sidebar`], [`panel_after_its_sentence`]). A page's or
+/// a half-spread's white background is no panel.
+pub fn read_order_with_panels(
+    cols: Vec<Vec<Line>>,
+    rules: &[Rule],
+    tables: &[BBox],
+    pictures: &[BBox],
+    frames: &[BBox],
+    panels: &[BBox],
 ) -> Vec<Group> {
     let total: usize = cols.iter().map(Vec::len).sum();
     if total < 2 {
@@ -104,11 +120,106 @@ pub fn read_order(
         tables,
         pictures,
         frames,
+        panels,
         h,
     };
     let mut out = Vec::new();
     page.read(0, cols.len() - 1, f64::MIN, f64::MAX, &mut out, 0);
+    panel_after_its_sentence(&mut out, panels, h);
     out
+}
+
+/// A panel read between a paragraph and the lines it runs on into: a
+/// sidebar standing beside a column whose last paragraph goes on under the
+/// panel across the page's width (`… implementing water efficiency` /
+/// `improvements. Projects include …`). The region under the panel is cut
+/// apart from the columns beside it, and the panel was read in the middle
+/// of the sentence.
+///
+/// Where a group lies wholly in one drawn box, the group before it ends
+/// without closing a sentence (`.`, `!`, `?`, `:`), and the group after it
+/// opens in lower case at the left edge of the group before (within a
+/// line's height), the lines that run on, to the one closing the sentence,
+/// are read before the panel, and the panel after them.
+fn panel_after_its_sentence(out: &mut Vec<Group>, frames: &[BBox], h: f64) {
+    let within = |b: &BBox, f: &BBox| {
+        b.x0 >= f.x0 - 1.0 && b.x1 <= f.x1 + 1.0 && b.y0 >= f.y0 - 1.0 && b.y1 <= f.y1 + 1.0
+    };
+    let closes = |l: &Line| l.text.trim_end().ends_with(['.', '!', '?', ':']);
+    let opens_lower = |l: &Line| {
+        l.text
+            .trim_start()
+            .trim_start_matches(['(', '[', '"', '\'', '“', '‘'])
+            .chars()
+            .next()
+            .is_some_and(char::is_lowercase)
+    };
+    let mut i = 1;
+    while i + 1 < out.len() {
+        let panel = &out[i];
+        let frame = if panel.lines.len() >= PANEL_LINES
+            && panel_text(&panel.lines.iter().collect::<Vec<_>>())
+        {
+            frames
+                .iter()
+                .find(|f| panel.lines.iter().all(|l| within(&l.bbox, f)))
+        } else {
+            None
+        };
+        let (prev, next) = (&out[i - 1], &out[i + 1]);
+        let left = prev
+            .lines
+            .iter()
+            .map(|p| p.bbox.x0)
+            .fold(f64::MAX, f64::min);
+        // The paragraph stands beside the panel, level with it, and runs on
+        // under it, across under it.
+        let level = |a: &BBox, b: &BBox| a.y1.min(b.y1) - a.y0.max(b.y0) > 0.0;
+        let runs_on = frame.is_some_and(|f| {
+            prev.lines.last().is_some_and(|l| {
+                !closes(l)
+                    && words(l) >= PROSE_LINE_WORDS
+                    && level(&l.bbox, f)
+                    && (l.bbox.x1 <= f.x0 || l.bbox.x0 >= f.x1)
+            }) && next.lines.first().is_some_and(|l| {
+                opens_lower(l)
+                    && words(l) >= PROSE_LINE_WORDS
+                    && (l.bbox.x0 - left).abs() <= h
+                    && (l.bbox.y0 + l.bbox.y1) / 2.0 >= f.y1
+            }) && {
+                // A line of the sentence running on reaches under the panel.
+                let end = next
+                    .lines
+                    .iter()
+                    .position(|l| closes(l))
+                    .map_or(next.lines.len(), |k| k + 1);
+                next.lines[..end]
+                    .iter()
+                    .any(|l| l.bbox.x1 > f.x0 && l.bbox.x0 < f.x1)
+            }
+        });
+        if runs_on {
+            let mut next = out.remove(i + 1);
+            let end = next
+                .lines
+                .iter()
+                .position(|l| closes(l))
+                .map_or(next.lines.len(), |k| k + 1);
+            let rest = next.lines.split_off(end);
+            let run = Group {
+                lines: std::mem::take(&mut next.lines),
+                column: next.column,
+                own_measure: next.own_measure,
+            };
+            out.insert(i, run);
+            if !rest.is_empty() {
+                next.lines = rest;
+                out.insert(i + 2, next);
+            }
+            i += 1;
+        }
+        i += 1;
+    }
 }
 
 struct Page<'a> {
@@ -118,6 +229,7 @@ struct Page<'a> {
     tables: &'a [BBox],
     pictures: &'a [BBox],
     frames: &'a [BBox],
+    panels: &'a [BBox],
     h: f64,
 }
 
@@ -273,14 +385,32 @@ impl Page<'_> {
                     // A stretch all in drawn boxes reads box by box; any
                     // other at a gutter only it has, then block by block
                     // where two stand side by side.
-                    let parts: Vec<(Vec<Line>, bool)> = match boxed(&group, self.frames) {
-                        Some(boxes) => boxes.into_iter().map(|b| (b, true)).collect(),
-                        None => split_local(group, self.h, 3)
-                            .into_iter()
-                            .flat_map(|(lines, own)| {
-                                side_blocks(lines, own, self.h, self.frames, 2)
-                            })
-                            .collect(),
+                    let read_stretch = |group: Vec<Line>| -> Vec<(Vec<Line>, bool)> {
+                        match boxed(&group, self.frames) {
+                            Some(boxes) => boxes.into_iter().map(|b| (b, true)).collect(),
+                            None => split_local(group, self.h, 3)
+                                .into_iter()
+                                .flat_map(|(lines, own)| {
+                                    side_blocks(lines, own, self.h, self.frames, 2)
+                                })
+                                .collect(),
+                        }
+                    };
+                    // A panel set beside the column's text reads apart from
+                    // it, after the text beside it.
+                    let parts: Vec<(Vec<Line>, bool)> = match sidebar(group, self.panels) {
+                        Ok((before, panel, after)) => {
+                            // The column beside the panel is narrower than
+                            // its page column: it sets its own measure.
+                            let mut parts: Vec<(Vec<Line>, bool)> = read_stretch(before)
+                                .into_iter()
+                                .map(|(lines, _)| (lines, true))
+                                .collect();
+                            parts.push((panel, true));
+                            parts.extend(read_stretch(after));
+                            parts
+                        }
+                        Err(group) => read_stretch(group),
                     };
                     out.extend(parts.into_iter().map(|(lines, own_measure)| Group {
                         lines,
@@ -1290,6 +1420,136 @@ fn overlap(a: &BBox, b: &BBox) -> bool {
     a.x1.min(b.x1) > a.x0.max(b.x0) && a.y1.min(b.y1) > a.y0.max(b.y0)
 }
 
+/// Most share of a stretch's width a sidebar's panel takes: a box across
+/// the column is a banner or a callout in the text's flow.
+const PANEL_WIDTH: f64 = 0.75;
+
+/// Least share of a stretch's width a sidebar's panel takes: a chart's bar
+/// or a key's swatch holding a label is narrower.
+const PANEL_MIN_WIDTH: f64 = 0.2;
+
+/// Fewest lines a sidebar's panel holds, and fewest lines of the column's
+/// prose beside it: a chart's bars hold a label or a figure each.
+const PANEL_LINES: usize = 3;
+
+/// Fewest words in a line of prose; a panel's lines of text hold
+/// [`PANEL_WORDS`] or more, half of them.
+const PROSE_LINE_WORDS: usize = 5;
+const PANEL_WORDS: usize = 3;
+
+fn words(l: &Line) -> usize {
+    l.text.split_whitespace().count()
+}
+
+/// Half or more of the panel's lines are lines of words, as a sidebar's
+/// list or paragraph is: not a chart's labels and figures.
+fn panel_text(lines: &[&Line]) -> bool {
+    lines.iter().filter(|l| words(l) >= PANEL_WORDS).count() * 2 >= lines.len()
+}
+
+/// A drawn box, shaded or outlined, set beside the column's text and holding
+/// lines of its own: a fact sheet's `Highlights` beside its project summary.
+/// The page-wide pass sees one column where the text under the box runs the
+/// page's width, and read row by row, the box's lines fell between the
+/// column's. Split out of `group`: the column's lines before the panel, the
+/// panel's lines, and the column's lines after it.
+///
+/// A panel holds two lines or more wholly inside it, no line runs into it
+/// from outside, a line outside it shares a row with one inside, it is
+/// narrower than the stretch ([`PANEL_WIDTH`]), and it holds under half the
+/// stretch's lines. A banner across the column has nothing beside it; a tint
+/// laid under the page's body text holds most of it; a table's cells are
+/// read apart before this.
+///
+/// The panel reads after the column's text that stands beside it, and after
+/// the paragraph running on past its foot: the column's lines go on until
+/// one closes a sentence (`.`, `!`, `?`, `:`).
+fn sidebar(
+    group: Vec<Line>,
+    frames: &[BBox],
+) -> Result<(Vec<Line>, Vec<Line>, Vec<Line>), Vec<Line>> {
+    let upright: Vec<&Line> = group.iter().filter(|l| l.rotation_bucket == 0).collect();
+    if upright.len() < 4 {
+        return Err(group);
+    }
+    let left = upright.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+    let right = upright.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
+    let within = |b: &BBox, f: &BBox| {
+        b.x0 >= f.x0 - 1.0 && b.x1 <= f.x1 + 1.0 && b.y0 >= f.y0 - 1.0 && b.y1 <= f.y1 + 1.0
+    };
+    let level = |a: &BBox, b: &BBox| a.y1.min(b.y1) - a.y0.max(b.y0) > 0.0;
+    let panel = frames.iter().find(|f| {
+        if f.width() > (right - left) * PANEL_WIDTH {
+            return false;
+        }
+        if f.width() < (right - left) * PANEL_MIN_WIDTH {
+            return false;
+        }
+        let inside: Vec<&Line> = group.iter().filter(|l| within(&l.bbox, f)).collect();
+        let into = group
+            .iter()
+            .any(|l| overlap(&l.bbox, f) && !within(&l.bbox, f));
+        let beside = group
+            .iter()
+            .filter(|o| {
+                !overlap(&o.bbox, f)
+                    && (o.bbox.x1 <= f.x0 || o.bbox.x0 >= f.x1)
+                    && words(o) >= PROSE_LINE_WORDS
+                    && inside.iter().any(|i| level(&i.bbox, &o.bbox))
+            })
+            .count();
+        inside.len() >= PANEL_LINES
+            && panel_text(&inside)
+            && inside.len() * 2 < group.len()
+            && !into
+            && beside >= PANEL_LINES
+    });
+    let Some(f) = panel.copied() else {
+        return Err(group);
+    };
+    // At the column's edge, the column beside it one column of text: a
+    // panel between two columns, or one in a spread of two pages, is read
+    // as the region pass reads them.
+    let h = upright
+        .iter()
+        .map(|l| l.font_size as f64)
+        .fold(0.0, f64::max)
+        .max(1.0);
+    let at_edge = f.x0 <= left + h || f.x1 >= right - h;
+    let beside: Vec<Line> = group
+        .iter()
+        .filter(|l| !within(&l.bbox, &f))
+        .cloned()
+        .collect();
+    // Text over or under the panel on its own side of the column is the
+    // panel's column's (a heading over a box, the text after it): the box
+    // is part of a column, not set beside one. A line reaching across into
+    // the column beside it, the page's full width, says nothing.
+    let right_side = f.x0 - left > right - f.x1;
+    let own_side = beside.iter().any(|l| {
+        l.bbox.x1 > f.x0
+            && l.bbox.x0 < f.x1
+            && if right_side {
+                l.bbox.x0 >= f.x0 - h
+            } else {
+                l.bbox.x1 <= f.x1 + h
+            }
+    });
+    if !at_edge || own_side || local_gutter(&beside, h).is_some() {
+        return Err(group);
+    }
+    // The column's lines keep their order.
+    let (panel, mut rest): (Vec<Line>, Vec<Line>) =
+        group.into_iter().partition(|l| within(&l.bbox, &f));
+    let closes = |l: &Line| l.text.trim_end().ends_with(['.', '!', '?', ':']);
+    let mut at = rest.iter().take_while(|l| l.bbox.y0 < f.y1).count();
+    while at > 0 && at < rest.len() && !closes(&rest[at - 1]) {
+        at += 1;
+    }
+    let after = rest.split_off(at);
+    Ok((rest, panel, after))
+}
+
 /// A stretch of a column whose every upright line stands in a drawn box,
 /// the outermost boxes two or more and apart, one holding two rows of text:
 /// a box diagram, a flowchart, a page of cards. The region pass reads its
@@ -1501,6 +1761,87 @@ mod tests {
             compounds: Vec::new(),
             opens_bold: false,
         }
+    }
+
+    /// A column of prose beside a shaded panel, the column's last paragraph
+    /// running on under the panel across the page.
+    fn page_with_sidebar() -> (Vec<Line>, BBox) {
+        let mut lines: Vec<Line> = (0..8)
+            .map(|i| {
+                line(
+                    &format!("the column of prose goes on here {i} words"),
+                    50.0,
+                    100.0 + 10.0 * i as f64,
+                    330.0,
+                )
+            })
+            .collect();
+        let panel = BBox {
+            x0: 355.0,
+            y0: 95.0,
+            x1: 545.0,
+            y1: 175.0,
+        };
+        for i in 0..4 {
+            lines.push(line(
+                &format!("Highlight item number {i}"),
+                360.0,
+                102.0 + 12.0 * i as f64,
+                520.0,
+            ));
+        }
+        lines.push(line(
+            "still going on under the panel across the page.",
+            50.0,
+            180.0,
+            540.0,
+        ));
+        lines.push(line(
+            "A new paragraph across the page opens here",
+            50.0,
+            195.0,
+            540.0,
+        ));
+        lines.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        (lines, panel)
+    }
+
+    #[test]
+    fn a_panel_beside_the_column_reads_after_the_text_beside_it() {
+        let (lines, panel) = page_with_sidebar();
+        let out = texts(&read_order_with_panels(
+            vec![lines],
+            &[],
+            &[],
+            &[],
+            &[panel],
+            &[panel],
+        ));
+        let at = |t: &str| out.iter().position(|l| l.starts_with(t)).unwrap();
+        // The column, then the sentence running on under the panel, then
+        // the panel, then what follows.
+        assert!(at("the column of prose goes on here 7") < at("still going on"));
+        assert!(at("still going on") < at("Highlight item number 0"));
+        assert!(at("Highlight item number 3") < at("A new paragraph"));
+        let items: Vec<usize> = (0..4)
+            .map(|i| at(&format!("Highlight item number {i}")))
+            .collect();
+        assert!(
+            items.windows(2).all(|w| w[1] == w[0] + 1),
+            "the panel reads whole"
+        );
+    }
+
+    #[test]
+    fn a_box_in_a_column_of_its_own_is_no_sidebar() {
+        // A heading over the box on its own side: the box is part of that
+        // column.
+        let (mut lines, panel) = page_with_sidebar();
+        lines.push(line("A heading over the box", 360.0, 85.0, 500.0));
+        assert!(sidebar(lines.clone(), &[panel]).is_err());
+        // No panels, no sidebar.
+        let (lines, _) = page_with_sidebar();
+        assert!(sidebar(lines, &[]).is_err());
     }
 
     fn texts(groups: &[Group]) -> Vec<String> {
