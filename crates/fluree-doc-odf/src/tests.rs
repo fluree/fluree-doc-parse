@@ -441,3 +441,34 @@ fn a_cells_tabs_spaces_and_line_breaks_part_its_words() {
     // A cell is one line in a table, as an .xlsx cell's is.
     assert_eq!(t.cells.as_ref().unwrap()[0], ["Total 42", "A B C"]);
 }
+
+#[test]
+fn broken_or_deep_documents_read_as_far_as_they_go() {
+    // No content part: refused as such.
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    z.start_file("mimetype", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    z.write_all(b"application/vnd.oasis.opendocument.text")
+        .unwrap();
+    z.finish().unwrap();
+    assert!(matches!(parse(&buf.into_inner()), Err(OdfError::NoContent)));
+    // Not a zip at all, past its signature.
+    assert!(parse(b"PK\x03\x04 cut short").is_err());
+    // XML cut off mid-element keeps what was read before it, the
+    // paragraph it stops in included.
+    let cut = "<office:text><text:p>Kept</text:p><text:p>Cut off<text:span";
+    let els = parse(&package("text", cut, &[])).unwrap();
+    assert_eq!(texts(&els), ["Kept", "Cut off"]);
+    // Lists nested 120 deep, within the tree's bound: each item read, its
+    // depth capped.
+    let deep = format!(
+        "<office:text>{}<text:p>Deepest</text:p>{}</office:text>",
+        "<text:list><text:list-item>".repeat(120),
+        "</text:list-item></text:list>".repeat(120)
+    );
+    let els = parse(&package("text", &deep, &[])).unwrap();
+    assert_eq!(texts(&els), ["Deepest"]);
+    assert_eq!(els[0].kind, "doc:ListItem");
+    assert_eq!(els[0].depth, MAX_LIST_DEPTH);
+}
