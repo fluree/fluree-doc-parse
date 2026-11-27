@@ -374,6 +374,7 @@ mod tests {
                 first_glyph: drawn,
                 whole: true,
                 regions: Vec::new(),
+                ..Default::default()
             });
         }
     }

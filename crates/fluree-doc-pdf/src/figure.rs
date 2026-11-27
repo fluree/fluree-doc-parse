@@ -1040,9 +1040,17 @@ const MIN_FIGURE_SHARE: f64 = 0.30;
 /// Reported, never acted on here — the same contract as
 /// [`crate::heading::doubt`] and [`crate::column::doubt`]. Whether a page this
 /// describes is worth a reader is a decision about a corpus, not a page.
+///
+/// Text an OCR engine read from a picture is left out, both ways: it lies
+/// inside its picture by construction, and says nothing of how the page is
+/// laid out. Analysis marks only that text as OCR's; a page read whole is
+/// marked after, and is weighed as the page's own.
 pub fn doubt(elements: &[fluree_doc_model::Element], page: usize) -> Option<Doubt> {
     let (mut total, mut inside) = (0usize, 0usize);
-    for e in elements.iter().filter(|e| e.page == page) {
+    for e in elements
+        .iter()
+        .filter(|e| e.page == page && e.provenance != "ocr")
+    {
         let n = e.text.trim().chars().count();
         total += n;
         if e.figure.is_some() {

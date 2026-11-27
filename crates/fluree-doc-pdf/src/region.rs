@@ -275,7 +275,7 @@ impl Page<'_> {
                     // where two stand side by side.
                     let parts: Vec<(Vec<Line>, bool)> = match boxed(&group, self.frames) {
                         Some(boxes) => boxes.into_iter().map(|b| (b, true)).collect(),
-                        None => split_local(group, self.h, 2)
+                        None => split_local(group, self.h, 3)
                             .into_iter()
                             .flat_map(|(lines, own)| {
                                 side_blocks(lines, own, self.h, self.frames, 2)
@@ -725,21 +725,34 @@ fn split_at_gutters(group: Vec<Line>, h: f64, depth: usize, own: bool) -> Vec<(V
     let left = upright().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
     let right = upright().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
     let wide = |l: &Line| l.rotation_bucket == 0 && l.bbox.width() > (right - left) * SPANNER_WIDTH;
-    let spanners = group.iter().filter(|l| wide(l)).count();
-    if spanners == 0 || spanners > MAX_SPANNERS.max(group.len() / SPANNER_SHARE) {
+    // Counted line by line, or as runs, one after another, where the lines
+    // across are fewer than the lines beside one another: a caption's block
+    // of lines across the columns parts the region once, however many lines
+    // it wraps to. A column of paragraphs is mostly lines across, a run to
+    // each paragraph, and is no columns under a caption.
+    let allowed = MAX_SPANNERS.max(group.len() / SPANNER_SHARE);
+    let lines_across = group.iter().filter(|l| wide(l)).count();
+    let runs_across = group
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| wide(l) && (*i == 0 || !wide(&group[i - 1])))
+        .count();
+    let parts =
+        lines_across <= allowed || (runs_across <= allowed && lines_across * 2 < group.len());
+    if lines_across == 0 || !parts {
         return vec![(group, own)];
     }
     // The lines across, and the line alone on its row that ends one of
     // them: set as the line over it and under its start, the end of a
     // caption or title (`moyen à l'accouchement depuis 2005` under `4. Taux
     // de fécondité … conjoncturel`). A column's first line has the next
-    // column's beside it.
+    // column's beside it. A line set sideways, a diagram's label, runs down
+    // across the rows and stands on none of them.
     let alone = |i: usize| {
         let b = &group[i].bbox;
-        !group
-            .iter()
-            .enumerate()
-            .any(|(j, o)| j != i && o.bbox.y1.min(b.y1) - o.bbox.y0.max(b.y0) > 0.0)
+        !group.iter().enumerate().any(|(j, o)| {
+            j != i && o.rotation_bucket == 0 && o.bbox.y1.min(b.y1) - o.bbox.y0.max(b.y0) > 0.0
+        })
     };
     let mut across = vec![false; group.len()];
     for i in 0..group.len() {
@@ -965,9 +978,9 @@ fn split_bands(
     }
 }
 
-/// Most lines that may cross a region's gutter and part it, rather than
-/// show it has none: two, or one line in five. A title and a subtitle
-/// across the top, a callout's line joined to the column's.
+/// Most runs of lines that may cross a region's gutter and part it, rather
+/// than show it has none: two, or one in five of its lines. A title and a
+/// caption across the columns, a callout's line joined to the column's.
 const MAX_SPANNERS: usize = 2;
 const SPANNER_SHARE: usize = 5;
 
@@ -1839,6 +1852,63 @@ mod tests {
             out[4],
             "shift than the standard models trained on the one dataset."
         );
+    }
+
+    #[test]
+    fn a_captions_last_line_beside_a_sideways_label_goes_on_from_it() {
+        // A diagram's label set sideways runs down past every row beside the
+        // caption and the columns. It stands on none of those rows, so the
+        // caption's short last line is still alone on its row, and is read
+        // with the line it goes on from, not as the left column's first.
+        let mut lines = vec![
+            line(
+                "Figure 3. Timing of the cycle across both of the columns here",
+                72.0,
+                40.0,
+                525.0,
+            ),
+            line("and its standby period.", 72.0, 50.0, 200.0),
+        ];
+        let mut label = line("Measurement T Measurement T", 535.0, 30.0, 543.0);
+        label.rotation_bucket = 90;
+        label.bbox.y1 = 200.0;
+        lines.push(label);
+        lines.extend(two_columns(70.0, 8));
+        let groups = read_order(vec![lines], &[], &[], &[], &[]);
+        reads_columns_whole(&texts(&groups), 8);
+        assert!(
+            groups.iter().any(|g| {
+                g.lines.iter().any(|l| l.text.starts_with("Figure 3."))
+                    && g.lines.iter().any(|l| l.text == "and its standby period.")
+            }),
+            "{:?}",
+            groups
+                .iter()
+                .map(|g| texts(std::slice::from_ref(g)))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_captions_block_across_two_short_columns_parts_them_once() {
+        // A figure's caption wraps to six lines across both columns over
+        // eight rows of two-column text. Counted line by line, six lines
+        // across outnumbered a region this size's allowance; as one run of
+        // lines across, it parts the region once.
+        let mut lines = Vec::new();
+        for i in 0..6 {
+            lines.push(line(
+                &format!("Figure 2. Bar graphs and scatterplots showing the caption {i}"),
+                72.0,
+                40.0 + 9.0 * i as f64,
+                525.0,
+            ));
+        }
+        lines.extend(two_columns(100.0, 8));
+        let groups = read_order(vec![lines], &[], &[], &[], &[]);
+        let out = texts(&groups);
+        reads_columns_whole(&out, 8);
+        assert!(out[0].starts_with("Figure 2."), "{out:?}");
     }
 
     fn rule(x0: f64, x1: f64, y: f64) -> Rule {
