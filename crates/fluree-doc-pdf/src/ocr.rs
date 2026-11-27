@@ -476,7 +476,10 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
             let t = target.as_ref().ok()?;
             place(&doc.pages[t.pi], t.shown, reading)
                 .ok()
-                .map(|placed| (t.pi, placed))
+                .map(|mut placed| {
+                    sized_by_ink(&mut placed, &t.area);
+                    (t.pi, placed)
+                })
         })
         .map(|(pi, placed)| {
             let words: Vec<Placed> = placed.into_iter().flatten().collect();
@@ -834,6 +837,7 @@ fn inject_one(
         Ok(placed) => placed,
         Err(why) => return refused(page, crop, why),
     };
+    sized_by_ink(&mut placed, &t.area);
     // A sheet fed upside down or sideways, read by an engine that says so.
     // Line assembly reads a line rightwards, up or down, never right to
     // left, and orders lines down the page, so the page is read in the
@@ -1117,10 +1121,25 @@ fn place(
         .collect();
     // The marks an engine took for letters are no words: left out before
     // the words' type is measured against one another.
-    let mut placed = without_marks(placed);
-    size_by_ink(&mut placed);
-    weigh_by_ink(&mut placed);
-    Ok(placed)
+    Ok(without_marks(placed))
+}
+
+/// Size and weigh the words of a reading by their ink ([`size_by_ink`],
+/// [`weigh_by_ink`]) where they are the page's text: a page read whole.
+///
+/// The ink is measured to tell a heading from the body and a bold line
+/// from a plain one, and a picture's text is neither: read in a region of
+/// a page with text of its own, it is the picture's lettering, read apart
+/// and never a heading. Sized by their ink, a chart's tick labels and its
+/// legend came apart from each other differently than by their boxes, and
+/// read in another order: on ten of the twelve bench documents whose OCR
+/// reading the ink changed, all charts and diagrams pasted into a page of
+/// text, the order read further from the page's than by the boxes.
+fn sized_by_ink(placed: &mut [Option<Placed>], area: &Area) {
+    if matches!(area, Area::Page) {
+        size_by_ink(placed);
+        weigh_by_ink(placed);
+    }
 }
 
 /// `placed` without the marks an engine took for letters: a letter alone,
@@ -8835,6 +8854,35 @@ mod tests {
             ink_font: None,
             weight: None,
         })
+    }
+
+    #[test]
+    fn a_pictures_words_keep_their_boxes_and_a_pages_take_their_ink() {
+        // The same reading, read as a page whole and as a picture of a page
+        // with text of its own: the page's words are sized and weighed by
+        // their ink; the picture's, its lettering, keep what their boxes say.
+        let reading = || -> Vec<Option<Placed>> {
+            [28.5, 30.0, 31.5, 30.0, 30.0, 36.0]
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| inked(&format!("Line {i} of prose"), c))
+                .collect()
+        };
+        let mut page = reading();
+        sized_by_ink(&mut page, &Area::Page);
+        assert!(page.iter().flatten().all(|w| w.ink_font.is_some()));
+        let mut picture = reading();
+        let region = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 100.0,
+            y1: 100.0,
+        };
+        sized_by_ink(&mut picture, &Area::Regions(vec![(0, region)]));
+        assert!(picture
+            .iter()
+            .flatten()
+            .all(|w| w.ink_font.is_none() && w.weight.is_none()));
     }
 
     #[test]

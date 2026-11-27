@@ -324,6 +324,12 @@ re-saved as a JPEG, through a fax's threshold, turned 1.5 degrees,
 underlined, struck through, boxed or in italic, 91% or more (by their
 boxes, 12% to 85%; see [Twins](../benchmarks/twins.md)).
 
+The ink sizes and weighs the words of a page read whole (`full`, a scan, an
+image file). A region's reading (`r{i}`) of a page with text of its own is
+the picture's lettering, read apart and never a heading, so its words keep
+what their boxes say: sized by their ink, a chart's tick labels and legend
+came apart in another order, further from the page's.
+
 The same measure gives a word's weight, which OCR otherwise does not see: a
 heading set in bold at body size, the most common cue after size, is plain
 text on a scan without it. A word is weighed against its reading's lines of
