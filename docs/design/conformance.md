@@ -32,7 +32,10 @@ every writer reads it:
 
 DoCO is `E` serialised, and its offset contract (each element's string is
 exactly what its offsets cut from the text projection) is already enforced by
-`eval/tough`. The text projection is checked through it.
+`eval/tough`. The text projection is checked through it. The contract is on
+strings, not order. A slide's speaker notes are contained by the slide but
+follow every slide in the text, the one class where containment order and
+text order differ.
 
 ## What is compared
 

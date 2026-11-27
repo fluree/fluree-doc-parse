@@ -101,6 +101,7 @@ lossy in a specific way worth knowing:
 | `doco:Table` | `<table>` | sub-header bands; merges survive as `rowspan`/`colspan` |
 | `doco:Figure` | `<figure data-figure="…">` | **that it is an escalation anchor** |
 | `doco:Section` | — | containment is implicit in heading order |
+| a deck's `doc:SpeakerNotes` | after the slides in `<section class="speaker-notes">`, each slide's in `<section data-slide="4">` under `<h2>Slide 4: <its title></h2>` | that the slide contains them |
 | — | — | page, bbox, evidence: nowhere to put them |
 
 Consecutive figure fragments sharing a `figure` id are wrapped in one

@@ -537,6 +537,29 @@ is the signer's: an address under a name is that sender's office, not the
 office of a company the message talks about, and `doc:signer` is the join
 that keeps it there.
 
+## A slide's speaker notes are in the slide
+
+A deck's speaker notes are a `doc:SpeakerNotes` node for each slide, holding
+the notes' paragraphs and lists. The slide contains it, after its own content:
+the slide's `doco:Section`, or on a title slide, which opens no section, the
+body right after the slide's last element. `doc:notesFor` names the slide's
+node as well, and `doc:pageIndex` is the slide's.
+
+```json
+{
+  "@type": "doc:SpeakerNotes",
+  "doc:pageIndex": 3,
+  "doc:notesFor": { "@id": "…/element/41" },
+  "po:contains": ["…/element/88", "…/element/89"]
+}
+```
+
+The notes' text comes after every slide's in the [text
+projection](../concepts/text-projection.md), so the body's offsets are the
+same with notes as without. This is the one place where the graph's
+containment order and the text's order differ. Each element's offsets still
+cut exactly its string.
+
 ## Links are nodes
 
 A hyperlink becomes its own node, referenced from the element whose text

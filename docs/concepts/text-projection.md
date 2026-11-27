@@ -41,7 +41,11 @@ separate PDF viewer, which requires reconciling two coordinate systems.
 ## The projection
 
 `to_text` emits each text-bearing element's trimmed text in reading order,
-separated by blank lines. Nothing else — no headers, no page markers, no
+separated by blank lines. A deck's speaker notes come after its last slide,
+in slide order, so adding them moves no other text. In
+[DoCO](../formats/doco.md#a-slides-speaker-notes-are-in-the-slide) the slide
+contains its notes, so a walk of the graph meets the notes' offsets out of
+text order. That is the one exception. Nothing else — no headers, no page markers, no
 decoration. It is a projection *of the elements*, so anything the layout pass
 dropped (page [furniture](../design/furniture.md) on the pages it repeats on,
 watermarks) is absent from both outputs consistently.

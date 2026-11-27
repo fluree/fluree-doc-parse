@@ -62,9 +62,6 @@ pub enum MdLinks {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MarkdownOptions {
     pub links: MdLinks,
-    /// A deck's speaker notes each after their slide, as a quote, rather
-    /// than together after the last slide (see [`Element::notes_for`]).
-    pub notes_inline: bool,
 }
 
 /// A slide's name over its speaker notes: `Slide 4: <its title>`, by its
@@ -79,24 +76,6 @@ fn notes_heading(elements: &[Element], slide: usize) -> String {
         Some(t) => format!("Slide {}: {}", slide + 1, t.text),
         None => format!("Slide {}", slide + 1),
     }
-}
-
-/// A slide's speaker notes as a Markdown quote, set after the slide.
-fn md_notes_quote(notes: &[&Element], opts: &MarkdownOptions) -> String {
-    let mut out = String::from("\n> **Speaker notes**\n>\n");
-    for (k, e) in notes.iter().enumerate() {
-        let text = md_linked(e, opts);
-        if e.kind == "doc:ListItem" {
-            out.push_str(&format!("> {}- {text}\n", "  ".repeat(e.depth)));
-        } else {
-            if k > 0 {
-                out.push_str(">\n");
-            }
-            out.push_str(&format!("> {text}\n"));
-        }
-    }
-    out.push('\n');
-    out
 }
 
 /// An element's text with its links marked up as Markdown, escaped where
@@ -871,39 +850,22 @@ pub fn to_markdown_with_options(
     // list inside that item is indented to.
     let mut lists: Vec<(usize, usize, usize)> = Vec::new();
     // A deck's speaker notes: after the slides under a heading of their
-    // own, a slide's name over each slide's; or, inline, each slide's as a
-    // quote after the slide.
+    // own, a slide's name over each slide's.
     let mut notes_open = false;
-    let notes_of = |slide: usize| -> Vec<&Element> {
-        elements
-            .iter()
-            .filter(|n| n.notes_for == Some(slide))
-            .collect()
-    };
-    let mut body_slide: Option<usize> = None;
     for (i, e) in elements.iter().enumerate() {
         if let Some(slide) = e.notes_for {
-            if opts.notes_inline {
-                continue;
-            }
             if i == 0 || elements[i - 1].notes_for != Some(slide) {
                 lists.clear();
                 if !notes_open {
                     notes_open = true;
                     out.push_str("\n# Speaker notes\n\n");
                 }
-                let heading = md_text(&notes_heading(elements, slide), true);
+                let heading = notes_heading(elements, slide).replace('\n', " ");
+                let chars: Vec<char> = heading.chars().collect();
+                let m = md_escape::marks(&chars, Context::Heading, 0);
+                let heading = md_escape::apply(&chars, &m, 0..chars.len());
                 out.push_str(&format!("\n## {heading}\n\n"));
             }
-        } else if opts.notes_inline {
-            if let Some(prev) = body_slide.filter(|&p| p != e.page) {
-                let notes = notes_of(prev);
-                if !notes.is_empty() {
-                    lists.clear();
-                    out.push_str(&md_notes_quote(&notes, opts));
-                }
-            }
-            body_slide = Some(e.page);
         }
         if e.kind != "doc:ListItem" {
             lists.clear();
@@ -1026,12 +988,6 @@ pub fn to_markdown_with_options(
             }
         }
     }
-    if let Some(last) = body_slide {
-        let notes = notes_of(last);
-        if !notes.is_empty() {
-            out.push_str(&md_notes_quote(&notes, opts));
-        }
-    }
     if let Some(note) = notes.summary() {
         out.push_str(&format!("\n<!-- {} -->\n", note.replace("--", "—")));
     }
@@ -1088,20 +1044,6 @@ mod tests {
             x.contains("<section data-slide=\"2\">\n<h2>Slide 2: Two</h2>"),
             "{x}"
         );
-    }
-
-    #[test]
-    fn speaker_notes_can_follow_each_slide_instead() {
-        let opts = MarkdownOptions {
-            notes_inline: true,
-            ..Default::default()
-        };
-        let md = to_markdown_with_options(&deck(true), &Notes::default(), &opts);
-        let at = |s: &str| md.find(s).unwrap_or_else(|| panic!("{s} in {md}"));
-        assert!(at("Body one") < at("> Said over one"));
-        assert!(at("> Said over one") < at("# Two"));
-        assert!(at("Body two") < at("> - A point on two"));
-        assert!(!md.contains("# Speaker notes"));
     }
 
     fn para(text: &str, links: Vec<Link>) -> Element {
