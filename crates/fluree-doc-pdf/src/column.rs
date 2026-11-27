@@ -70,6 +70,24 @@ const ROW_FACTOR: f64 = 1.0;
 /// memory holds, and such a page is not a page of columns.
 const MAX_GRID_CELLS: f64 = 16_777_216.0;
 
+/// Most rows of the occupancy grid one glyph fills: the height of type
+/// twice the body's size. A glyph taller than that fills this much about
+/// its middle, so a display line across a gutter counts as the heading
+/// [`MIN_EMPTY_ROW_FRACTION`] lets straddle it, not as ten of them. The
+/// body, and headings up to twice its size, fill the rows they always did.
+const MAX_GLYPH_ROWS: f64 = 2.0;
+
+/// The vertical extent `y0..y1` a glyph fills in the occupancy grid of rows
+/// `row_h` tall: its own, or [`MAX_GLYPH_ROWS`] of them about its middle.
+fn tall_held(y0: f64, y1: f64, row_h: f64) -> (f64, f64) {
+    let most = MAX_GLYPH_ROWS * row_h;
+    if y1 - y0 <= most {
+        return (y0, y1);
+    }
+    let mid = (y0 + y1) * 0.5;
+    (mid - most * 0.5, mid + most * 0.5)
+}
+
 /// An x-range holding one column's content.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Column {
@@ -128,8 +146,16 @@ impl Projection {
         let mut occupied = vec![vec![false; n_rows]; n_bins];
         for g in boxed {
             let b = g.bbox.unwrap();
-            let r0 = (((b.y0 - min_y) / row_h).floor().max(0.0)) as usize;
-            let r1 = (((b.y1 - min_y) / row_h).floor().max(0.0) as usize).min(n_rows - 1);
+            // A line set large is one line of the page, however many of the
+            // body's rows its height would fill. Counted by its height, a
+            // poster's title and the word set huge under it, both across
+            // the gutter, filled 21 of the page's 78 rows there: the gutter
+            // was clear down neither nine tenths of the rows nor an unbroken
+            // three quarters of them, and the two columns of panels below
+            // read as one, line across line.
+            let (y0, y1) = tall_held(b.y0, b.y1, row_h);
+            let r0 = (((y0 - min_y) / row_h).floor().max(0.0)) as usize;
+            let r1 = (((y1 - min_y) / row_h).floor().max(0.0) as usize).min(n_rows - 1);
             let c0 = (((b.x0 - min_x) / BIN).floor().max(0.0)) as usize;
             let c1 = (((b.x1 - min_x) / BIN).ceil().max(0.0) as usize).min(n_bins);
             for c in c0..c1.max(c0 + 1) {
@@ -920,6 +946,33 @@ mod tests {
         }
         let cols = detect(&v);
         assert_eq!(cols.len(), 2, "a header must not mask the gutter: {cols:?}");
+    }
+
+    #[test]
+    fn a_word_set_huge_across_the_columns_is_one_row() {
+        // A poster's word set twenty times the body's size across the top:
+        // one line of the page, not the twenty rows its height would fill.
+        let mut v = two_column_page();
+        for i in 0..8 {
+            let x = 50.0 + i as f64 * 50.0;
+            v.push(Glyph {
+                bbox: Some(BBox {
+                    x0: x,
+                    y0: -230.0,
+                    x1: x + 50.0,
+                    y1: -30.0,
+                }),
+                origin: (x, -70.0),
+                font_size: 190.0,
+                ..g(x, 0.0, 50.0)
+            });
+        }
+        let cols = detect(&v);
+        assert_eq!(
+            cols.len(),
+            2,
+            "a huge word must not mask the gutter: {cols:?}"
+        );
     }
 
     #[test]
