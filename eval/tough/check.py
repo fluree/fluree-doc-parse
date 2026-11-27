@@ -217,6 +217,16 @@ def run_check(check, reading):
                 found.append(sorted({c["doc:columnIndex"] for c in cells}))
         ok = any(idx == list(range(want["count"])) for idx in found)
         return ok, None if ok else f"column indexes {found}"
+    if "no_table" in check:
+        # No table on this page (its place in the file, from 1): a picture
+        # whose drawing is no table's ruling, a diagram's boxes or a
+        # screen's frames, reads as no table.
+        page = check["no_table"]["page"] - 1
+        found = [
+            n for n in reading.nodes.values()
+            if n.get("@type") == "doco:Table" and n.get("doc:pageIndex") == page
+        ]
+        return not found, None if not found else f"{len(found)} table(s) on the page"
     if "running" in check:
         # A line read as running text, exactly `count` times where one is
         # given: `0` for a body line that must not be taken.
@@ -229,6 +239,12 @@ def run_check(check, reading):
         hits = norm(reading.text).count(norm(check["text"]))
         ok = hits == check["count"] if "count" in check else hits > 0
         return ok, None if ok else f"{hits} times in the text projection"
+    if "md_text" in check:
+        # In the Markdown, where a span is written once: text a span hides
+        # is lost there, and found in the text projection all the same.
+        hits = norm(reading.md()).count(norm(check["md_text"]))
+        ok = hits == check["count"] if "count" in check else hits > 0
+        return ok, None if ok else f"{hits} times in the Markdown"
     if "no_text" in check:
         hits = norm(reading.text).count(norm(check["no_text"]))
         return hits == 0, None if hits == 0 else f"{hits} times in the text projection"
@@ -357,6 +373,15 @@ def main():
         extra = convert_args(case)
         again = lambda: convert(args.fdoc, path, "doco", extra)
         reading = Reading(again(), convert(args.fdoc, path, "text", extra), again)
+        # The Markdown, read once and only for a check that asks for it.
+        markdown = {}
+
+        def md(path=path, extra=extra):
+            if "md" not in markdown:
+                markdown["md"] = convert(args.fdoc, path, "md", extra)
+            return markdown["md"]
+
+        reading.md = md
 
         results = []
         bad = reading.offsets()

@@ -258,6 +258,39 @@ the piece, and each part is read at the gutter. Turned text, a side tab's
 labels at the page's edge, is not weighed, either for the gutter or for the
 width a line must span.
 
+**A panel beside the column.** A fact sheet sets a shaded box beside its
+text (`Highlights`, a list of facts), and the text under the box runs the
+page's width. The page-wide pass then sees one column, no gutter stands
+over the stretch, and read row by row, the box's lines fell between the
+column's. A panel is a box drawn to be seen: shaded in a colour other than
+white, or outlined, and shorter than four-fifths of the page, with no rule
+or other shape drawn inside it. A white fill laid under a page or a half of
+a spread is no panel, nor is a figure's frame or a chart's plot, which hold
+the drawing's axes, lines and marks. A stretch's panel is read apart from
+the column's text when all of these hold:
+- it holds three lines or more, wholly inside it, half of them three words
+  or more, and no line runs into it from outside;
+- three lines of prose (five words or more) stand beside it, level with its
+  lines;
+- it is between a fifth and three-quarters of the stretch's width, at the
+  stretch's edge, and holds under half its lines;
+- no line over or under it stands on its own side of the column (a heading
+  over a box makes the box part of its column), and the text beside it is
+  one column, with no gutter of its own.
+
+The column's lines read first, to the panel's foot and on to the end of the
+sentence running past it, then the panel, then the rest. The column's lines
+beside the panel set their own measure: the page column's takes in the
+panel's width, and against it every line of the column would read short.
+
+Where the page-wide pass does see the panel's column, the box is read after
+the column's region, and the column's last paragraph, running on under the
+box across the page, was cut by it. A group lying wholly in a panel, three
+lines of words or more, is read after the lines that run on: when the group
+before it ends a line of prose beside the panel without closing a sentence,
+the group after it opens in lower case at that group's left edge under the
+panel's foot, and a line of the sentence it runs on reaches under the panel.
+
 **What downstream passes keep.** Blocks are assembled per group, but a
 group that is a stretch of its page column takes the column's measure: a
 two-line display title read as a region of its own reaches the column's

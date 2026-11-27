@@ -831,6 +831,7 @@ mod tests {
                     line("Account 4417-0093-21", 0.2),
                     line("Date of birth 15-OCT-1997", 0.4),
                 ],
+                rules: Vec::new(),
             })
         }
     }
@@ -930,6 +931,7 @@ mod tests {
                     conf,
                 })
                 .collect(),
+            rules: Vec::new(),
         }
     }
 

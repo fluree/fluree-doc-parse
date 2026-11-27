@@ -17,6 +17,30 @@ use hayro_interpret::{interpret_page, Context, Device, InterpreterCache, Interpr
 use kurbo::{Affine, Rect, Shape};
 use std::sync::Arc;
 
+/// Whether a path is one axis-aligned rectangle: a frame drawn `re`, or as
+/// four lines, closed.
+fn is_rect(p: &kurbo::BezPath) -> bool {
+    use kurbo::PathEl;
+    let mut pts: Vec<kurbo::Point> = Vec::new();
+    for el in p.elements() {
+        match el {
+            PathEl::MoveTo(q) if pts.is_empty() => pts.push(*q),
+            PathEl::LineTo(q) => pts.push(*q),
+            PathEl::ClosePath => {}
+            _ => return false,
+        }
+    }
+    if pts.len() == 5 && pts[0].distance(pts[4]) < 0.01 {
+        pts.pop();
+    }
+    let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+    pts.len() == 4
+        && (0..4).all(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % 4]);
+            near(a.x, b.x) || near(a.y, b.y)
+        })
+}
+
 /// Clip box for interpretation. Generous: we want every glyph the page draws,
 /// including any drawn outside the crop box, and filter later.
 const INTERPRET_BOUNDS: f64 = 20_000.0;
@@ -174,7 +198,7 @@ pub struct Page {
 /// OCR filled keeps its place, and its number, among the page's routed
 /// regions, and a crop name read before the injection still names the same
 /// region after it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct OcrRead {
     /// Glyphs whose `draw_index` is at least this were added by OCR.
     pub first_glyph: usize,
@@ -182,6 +206,15 @@ pub struct OcrRead {
     pub whole: bool,
     /// The routed regions, by index, a reading was taken for.
     pub regions: Vec<usize>,
+    /// Those regions' boxes, in the same order: where each reading's words
+    /// lie, read as one picture's whatever images draw it.
+    pub region_boxes: Vec<crate::geom::BBox>,
+    /// The rules the regions' pictures draw, read from their pixels and
+    /// placed as their words are, each cut to its region
+    /// ([`crate::ocr::read_rules`]). Not the page's ruling: a picture's
+    /// rules join the page's only once its text is read as a table by them
+    /// (`document`'s `picture_table`).
+    pub rules: Vec<crate::rule::Rule>,
 }
 
 impl Page {
@@ -302,7 +335,7 @@ type PageInk = Vec<Option<(u128, Option<f64>)>>;
 /// half-width and a little rounding, short of any text's height.
 const TIGHT_CLIP: f64 = 3.0;
 
-struct Collector {
+struct Collector<'a> {
     page: usize,
     glyphs: Vec<Glyph>,
     images: Vec<ImagePlacement>,
@@ -322,6 +355,18 @@ struct Collector {
     /// already cut to the one outside it. A shape is measured by the part of
     /// it this shows, not by its whole path; see [`Collector::visible`].
     clips: Vec<BBox>,
+    /// Parallel to `clips`: whether each clip is an axis-aligned rectangle,
+    /// its box the clip exactly.
+    clip_rects: Vec<bool>,
+    /// Parallel to `clips`: each clip's number, in the order the page sets
+    /// them.
+    clip_ids: Vec<usize>,
+    /// Clips set so far on the page.
+    clip_seq: usize,
+    /// Parallel to `glyphs`: for a glyph judged against the clip in force,
+    /// that clip's number, whether the glyph shows inside it, and whether
+    /// it puts ink down ([`Collector::clipped_out`]).
+    clip_votes: Vec<Option<(usize, bool, bool)>>,
     /// Per-glyph `(font identity, ink ratio)`, parallel to `glyphs`, for the
     /// weight inference in [`infer_weights`]: the font of every outline
     /// glyph, and the ink ratio of a letter. Kept alongside rather than on
@@ -358,7 +403,7 @@ struct Collector {
     /// see [`Collector::read_cased`].
     cased: Vec<(Spoken, usize)>,
     /// What each font's dictionary says about its face, for the document.
-    faces: crate::faces::Faces,
+    faces: crate::faces::Faces<'a>,
     /// The weight each font's glyphs are read at, once found.
     weights: std::collections::HashMap<u128, Option<u32>>,
     /// Whether each font is italic, by the interpreter's key for it.
@@ -514,7 +559,7 @@ fn is_punctuation(c: char) -> bool {
     )
 }
 
-impl Collector {
+impl<'a> Collector<'a> {
     /// The part of a drawn shape's box that can be painted: the box cut to
     /// the clips in force and to the page, or `None` when none of it shows.
     ///
@@ -605,6 +650,29 @@ impl Collector {
     /// heading set in capitals says `ecent` over the drawn `ECENT`, and only
     /// over some of its letters — and there the drawn capitals are the text
     /// a reader sees, and stay.
+    /// The glyphs a clip takes away: every glyph judged against a clip none
+    /// of whose inked glyphs shows inside it ([`Collector::draw_glyph`]).
+    fn clipped_out(&self) -> Vec<bool> {
+        let mut tally: std::collections::HashMap<usize, (usize, usize)> = Default::default();
+        for &(id, shown, inked) in self.clip_votes.iter().flatten() {
+            if inked {
+                let t = tally.entry(id).or_default();
+                t.0 += 1;
+                t.1 += usize::from(shown);
+            }
+        }
+        self.clip_votes
+            .iter()
+            .map(|v| {
+                v.is_some_and(|(id, _, _)| {
+                    tally
+                        .get(&id)
+                        .is_some_and(|&(n, shown)| n > 0 && shown == 0)
+                })
+            })
+            .collect()
+    }
+
     fn speak(&mut self, span: Spoken) {
         let end = self.glyphs.len();
         self.state(span, end, false);
@@ -763,7 +831,7 @@ fn paint_of(paint: &hayro_interpret::Paint<'_>) -> rule::Paint {
     }
 }
 
-impl<'a> Device<'a> for Collector {
+impl<'a> Device<'a> for Collector<'a> {
     fn set_soft_mask(&mut self, _m: Option<hayro_interpret::SoftMask<'a>>) {}
     fn set_blend_mode(&mut self, _b: hayro_interpret::BlendMode) {}
     fn draw_path(
@@ -896,6 +964,9 @@ impl<'a> Device<'a> for Collector {
             .push(rect.then(|| crate::geom::from_kurbo(r)));
         let outer = self.clips.last().copied().unwrap_or(self.page_box);
         let b = crate::geom::from_kurbo(c.path.bounding_box());
+        self.clip_rects.push(is_rect(&c.path));
+        self.clip_seq += 1;
+        self.clip_ids.push(self.clip_seq);
         self.clips.push(BBox {
             x0: outer.x0.max(b.x0),
             y0: outer.y0.max(b.y0),
@@ -994,6 +1065,8 @@ impl<'a> Device<'a> for Collector {
     fn pop_clip_path(&mut self) {
         self.clips.pop();
         self.rect_clips.pop();
+        self.clip_rects.pop();
+        self.clip_ids.pop();
     }
     fn pop_transparency_group(&mut self) {}
 
@@ -1022,12 +1095,22 @@ impl<'a> Device<'a> for Collector {
         transform: Affine,
         glyph_transform: Affine,
         _paint: &hayro_interpret::Paint<'a>,
-        _mode: &hayro_interpret::GlyphDrawMode,
+        mode: &hayro_interpret::GlyphDrawMode,
     ) {
         let mut text = match glyph.as_unicode() {
             Some(hayro_interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
             Some(hayro_interpret::hayro_cmap::BfString::String(s)) => s,
-            None => String::new(),
+            // No text from the font's ToUnicode map or from a name the
+            // Adobe Glyph List lists whole: the program's own name for the
+            // glyph, read by the list's rules (`h.sc`, `f_i`), if it has one;
+            // see `faces::Faces::named`.
+            None => match glyph {
+                HGlyph::Outline(o) => self
+                    .faces
+                    .named(o.font_cache_key(), o.glyph_id().to_u32())
+                    .unwrap_or_default(),
+                _ => String::new(),
+            },
         };
 
         // A letter the font's ToUnicode map gives in the other case than
@@ -1203,6 +1286,35 @@ impl<'a> Device<'a> for Collector {
         if !visible {
             return;
         }
+        // Clipped out: text drawn wholly outside the clip in force shows
+        // nowhere, as text set off the page shows nowhere. A placed
+        // graphic's text frames, cut to the graphic's frame, keep their
+        // other text out of sight (`MECHANICAL MEASURES` drawn under the
+        // page's own heading, clipped away by the illustration's frame);
+        // read, it ran through the heading a letter at a time. Each glyph
+        // votes here, and a clip whose glyphs all lie outside it takes them
+        // away at the page's end ([`Collector::clipped_out`]): a word drawn
+        // once per cell it crosses, or lettering drawn a copy per slice of a
+        // gradient, shows in part under each clip, and is kept whole.
+        // Judged only under rectangles, the frames text is placed in, whose
+        // boxes are the clips exactly. Text set invisible, an OCR'd scan's
+        // words over or under its image, is the document's text wherever
+        // it lies, and a Type3 glyph, with no box, is not judged; a space,
+        // with no ink, stands where its pen does.
+        let vote = match (self.clips.last(), self.clip_ids.last()) {
+            (Some(clip), Some(&id))
+                if self.clip_rects.iter().all(|&r| r)
+                    && !matches!(mode, hayro_interpret::GlyphDrawMode::Invisible)
+                    && matches!(glyph, HGlyph::Outline(_)) =>
+            {
+                let shown = match bbox {
+                    Some(b) => clip.intersects(&b),
+                    None => clip.contains(origin.0, origin.1),
+                };
+                Some((id, shown, bbox.is_some()))
+            }
+            _ => None,
+        };
         let draw_index = self.glyphs.len();
         if let Some((family, outline)) = unread {
             self.unread.push((draw_index, family, outline));
@@ -1231,6 +1343,7 @@ impl<'a> Device<'a> for Collector {
             self.symbols.push((draw_index, font));
         }
         self.ink.push(ink);
+        self.clip_votes.push(vote);
         self.glyphs.push(Glyph {
             text,
             bbox,
@@ -2174,6 +2287,10 @@ pub fn extract_bytes_with(
             clips: Vec::new(),
             rect_clips: Vec::new(),
             painted: Vec::new(),
+            clip_rects: Vec::new(),
+            clip_ids: Vec::new(),
+            clip_seq: 0,
+            clip_votes: Vec::new(),
             cased: Vec::new(),
             faces: std::mem::take(&mut faces),
             weights: std::mem::take(&mut weights),
@@ -2202,6 +2319,33 @@ pub fn extract_bytes_with(
         }
         dev.read_cased();
         dev.read_symbols();
+        let out = dev.clipped_out();
+        if out.iter().any(|&o| o) {
+            // Kept glyphs' new places, for the readings that name a glyph by
+            // its place.
+            let mut place = vec![None; out.len()];
+            let mut k = 0;
+            for (i, &o) in out.iter().enumerate() {
+                if !o {
+                    place[i] = Some(k);
+                    k += 1;
+                }
+            }
+            let mut i = 0;
+            dev.glyphs.retain(|_| {
+                i += 1;
+                !out[i - 1]
+            });
+            let mut i = 0;
+            dev.ink.retain(|_| {
+                i += 1;
+                !out[i - 1]
+            });
+            dev.unread = std::mem::take(&mut dev.unread)
+                .into_iter()
+                .filter_map(|(g, f, o)| place.get(g).copied().flatten().map(|n| (n, f, o)))
+                .collect();
+        }
         letters = std::mem::take(&mut dev.letters);
         faces = std::mem::take(&mut dev.faces);
         weights = std::mem::take(&mut dev.weights);
@@ -2972,6 +3116,10 @@ mod actual_text_tests {
                 y1: 800.0,
             },
             clips: Vec::new(),
+            clip_rects: Vec::new(),
+            clip_ids: Vec::new(),
+            clip_seq: 0,
+            clip_votes: Vec::new(),
             ink: Vec::new(),
             letters: crate::ligature::Letters::default(),
             unread: Vec::new(),
@@ -3024,6 +3172,10 @@ mod actual_text_tests {
                 y1: 800.0,
             },
             clips: Vec::new(),
+            clip_rects: Vec::new(),
+            clip_ids: Vec::new(),
+            clip_seq: 0,
+            clip_votes: Vec::new(),
             ink: Vec::new(),
             letters: crate::ligature::Letters::default(),
             unread: Vec::new(),
@@ -3087,7 +3239,7 @@ mod actual_text_tests {
     }
 
     /// A collector for a letter-size page with nothing drawn on it yet.
-    fn collector() -> Collector {
+    fn collector() -> Collector<'static> {
         Collector {
             page: 0,
             glyphs: Vec::new(),
@@ -3104,6 +3256,10 @@ mod actual_text_tests {
                 y1: 792.0,
             },
             clips: Vec::new(),
+            clip_rects: Vec::new(),
+            clip_ids: Vec::new(),
+            clip_seq: 0,
+            clip_votes: Vec::new(),
             ink: Vec::new(),
             letters: crate::ligature::Letters::default(),
             unread: Vec::new(),
@@ -3528,5 +3684,95 @@ mod probe_tests {
         // An image a model is sent is probed either way.
         let doc = extract_bytes(striped_page_drawn(40)).expect("pdf");
         assert_eq!(doc.pages[0].images[0].texty, Some(true));
+    }
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::extract_bytes;
+
+    /// A one-page document of `content`, its font Helvetica as `/F1`.
+    fn page(content: &str) -> Vec<u8> {
+        let objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] \
+              /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+                .to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            [
+                format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(),
+                content.as_bytes(),
+                b"\nendstream",
+            ]
+            .concat(),
+        ];
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            pdf.extend_from_slice(body);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer << /Root 1 0 R /Size {} >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
+    fn read(content: &str) -> String {
+        let doc = extract_bytes(page(content)).expect("pdf");
+        doc.pages[0]
+            .glyphs
+            .iter()
+            .map(|g| g.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn text_drawn_wholly_outside_the_clip_is_not_read() {
+        // A frame's own words inside its clip, and other words set under a
+        // clip of the page's left half but drawn in the right half: those
+        // show nowhere.
+        let text = read(
+            "q 0 0 150 200 re W n BT /F1 12 Tf 1 0 0 1 20 100 Tm (Shown) Tj ET Q \
+             q 0 0 150 200 re W n BT /F1 12 Tf 1 0 0 1 200 100 Tm (Hidden) Tj ET Q",
+        );
+        assert!(text.contains("Shown"), "{text:?}");
+        assert!(!text.contains("Hidden"), "{text:?}");
+        // Under a clip some of whose text shows, all of it stays: a word
+        // drawn once per cell it crosses, each copy cut to its cell.
+        let text = read(
+            "q 0 0 150 200 re W n \
+             BT /F1 12 Tf 1 0 0 1 20 100 Tm (Left) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 200 100 Tm (Right) Tj ET Q",
+        );
+        assert!(text.contains("Left") && text.contains("Right"), "{text:?}");
+        // A word the clip's edge cuts through shows its inside part.
+        let text = read("q 0 0 150 200 re W n BT /F1 12 Tf 1 0 0 1 140 100 Tm (Edge) Tj ET Q");
+        assert!(text.contains("Edge"), "{text:?}");
+    }
+
+    #[test]
+    fn invisible_text_outside_the_clip_is_still_read() {
+        // An OCR'd scan's words, drawn invisible: the document's text,
+        // wherever a clip leaves them.
+        let text = read(
+            "q 0 0 150 200 re W n \
+             BT 3 Tr /F1 12 Tf 1 0 0 1 200 100 Tm (Layer) Tj ET Q",
+        );
+        assert!(text.contains("Layer"), "{text:?}");
     }
 }

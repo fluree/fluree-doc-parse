@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "brother-dcp4110dw-basic-users-guide.pdf",
+    "url": "https://download.brother.com/welcome/doc003057/dcp4110dw_uke_busr_lek978004_a.pdf",
+    "sha256": "b978a7578fb7d8e78e460431fd1b7ecebd5978fd6838bfe9f25855748b88306a",
+    "ocr_words": "../fixtures/ocr-words/brother-dcp4110dw-basic-users-guide",
+    "about": "Brother DCP-4110DW Basic User's Guide. Page 50 shows two screenshots of the ControlCenter4 software: dialogs of framed fields, buttons and tabs, whose frames are long straight rules in the pixels."
+  },
+  "notes": [
+    "2026-11-26: a guard for the tables read from pictures' rules. The dialog's frames grid part of its text (2 by 13 cells), but hold under four fifths of its words and run under three quarters of its text's height, and the picture is no table. The stored reading is the built-in engine's (PP-OCRv6 small) of the picture's crop, with the rules drawn in its pixels: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`."
+  ],
+  "checks": [
+    {
+      "id": "dialog-no-table",
+      "found": "2026-11-26",
+      "issue": "A guard: a dialog's frames are no table's ruling.",
+      "no_table": {
+        "page": 50
+      }
+    },
+    {
+      "id": "dialog-text-kept",
+      "found": "2026-11-26",
+      "issue": "A guard: the dialog's words stay in the text, as the picture's.",
+      "text": "Destination Folder"
+    }
+  ]
+}

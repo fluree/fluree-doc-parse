@@ -449,13 +449,21 @@ fn read_one(engine: &dyn OcrEngine, path: &Path, out: &Path) -> Result<(String, 
             path.display()
         );
     }
-    let reading = engine
+    let mut reading = engine
         .read(&image.pixels)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| format!("{}: no file name", path.display()))?;
+    // A routed region's crop (`<doc>_p3_r0`): the rules its picture draws
+    // go with its words, as when `convert --ocr` reads it.
+    if let Some(crop) = stem
+        .rsplit_once('_')
+        .and_then(|(_, tag)| fluree_doc_pdf::ocr::Crop::from_tag(tag))
+    {
+        fluree_doc_pdf::ocr::read_rules(crop, &image.pixels, &mut reading);
+    }
     let target = out.join(format!("{stem}.json"));
     std::fs::write(&target, reading.to_json()).map_err(|e| format!("{}: {e}", target.display()))?;
     Ok((stem.to_string(), reading.words.len()))

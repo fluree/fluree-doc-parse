@@ -1,0 +1,16 @@
+{
+  "document": {
+    "file": "undesa-wesp-2025.pdf",
+    "url": "https://desapublications.un.org/file/20954/download",
+    "sha256": "3ca8c48a8a2c88293450ddf576406b0560ec9dd2ddfde655109dc4216289d890",
+    "about": "UN DESA World Economic Situation and Prospects 2025 (212 pages): report tables, a two-column table of minerals and counts."
+  },
+  "checks": [
+    {
+      "id": "table-ii-1-header-over-figures",
+      "found": "2026-11-27",
+      "issue": "Table II.1 (page 66) is two columns, minerals and a count. Its header row was read as a field, and the counts had no column name.",
+      "row": {"Critical minerals": "Cobalt, lithium", "Number of G20 economies identifying minerals as critical": "16"}
+    }
+  ]
+}

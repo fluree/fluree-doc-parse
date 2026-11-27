@@ -9,15 +9,18 @@
 //! descriptor's `/FontWeight` and `/StemV`. They are read here from the
 //! page's resources, keyed as the interpreter keys the fonts it draws with,
 //! so a glyph finds what its font's dictionary says.
+//!
+//! The names a Type 1 or CFF program gives its glyphs are read here too, for
+//! the glyphs the interpreter reads no text for ([`Faces::named`]).
 
 use std::collections::{HashMap, HashSet};
 
 use hayro_interpret::CacheKey;
 use hayro_syntax::object::dict::keys::{
     BASE_ENCODING, BASE_FONT, DESCENDANT_FONTS, DIFFERENCES, ENCODING, FIRST_CHAR, FLAGS, FONT,
-    FONT_DESC, FONT_WEIGHT, FORM, ITALIC_ANGLE, MAC_ROMAN_ENCODING, MM_TYPE1, RESOURCES,
-    STANDARD_ENCODING, STEM_V, SUBTYPE, TO_UNICODE, TRUE_TYPE, TYPE1, WIDTHS, WIN_ANSI_ENCODING,
-    XOBJECT,
+    FONT_DESC, FONT_FILE, FONT_FILE3, FONT_WEIGHT, FORM, ITALIC_ANGLE, MAC_ROMAN_ENCODING,
+    MM_TYPE1, RESOURCES, STANDARD_ENCODING, STEM_V, SUBTYPE, TO_UNICODE, TRUE_TYPE, TYPE1, WIDTHS,
+    WIN_ANSI_ENCODING, XOBJECT,
 };
 use hayro_syntax::object::{Array, Dict, Name, Object, Stream};
 use hayro_syntax::page::Page;
@@ -42,8 +45,8 @@ pub(crate) struct Face {
 
 /// The faces of the fonts a document draws with, by the interpreter's key
 /// for each font, gathered page by page.
-#[derive(Debug, Default)]
-pub(crate) struct Faces {
+#[derive(Default)]
+pub(crate) struct Faces<'a> {
     faces: HashMap<u128, Face>,
     /// Letters each font's ToUnicode map gives in the wrong case, by the
     /// interpreter's key for the font ([`recased`]).
@@ -51,11 +54,25 @@ pub(crate) struct Faces {
     /// Resource dictionaries already read, so a form every page draws is
     /// read once.
     read: HashSet<u128>,
+    /// The embedded program of each simple Type 1 font, by the interpreter's
+    /// key for the font, until a glyph drawn in it needs its names.
+    programs: HashMap<u128, Program<'a>>,
+    /// The text each program's glyph names give, by glyph ID, once read
+    /// ([`program_texts`]).
+    names: HashMap<u128, Vec<Option<String>>>,
 }
 
-impl Faces {
+/// A simple Type 1 font's embedded program: CFF (`/FontFile3`) or Type 1
+/// (`/FontFile`).
+#[derive(Clone)]
+enum Program<'a> {
+    Cff(Stream<'a>),
+    Type1(Stream<'a>),
+}
+
+impl<'a> Faces<'a> {
     /// Read the fonts a page and the forms it draws can use.
-    pub(crate) fn read(&mut self, page: &Page<'_>) {
+    pub(crate) fn read(&mut self, page: &Page<'a>) {
         let mut resources = Some(page.resources());
         while let Some(r) = resources {
             self.fonts(&r.fonts);
@@ -81,7 +98,30 @@ impl Faces {
             .map(|r| r.drawn)
     }
 
-    fn fonts(&mut self, fonts: &Dict<'_>) {
+    /// The text the font program's name for a glyph gives, for a glyph the
+    /// interpreter reads none for: `h.sc`, `one.osf`, `f_i`.
+    ///
+    /// The interpreter reads a glyph's text from the font's ToUnicode map,
+    /// else from the name its encoding or program gives the glyph, but only a
+    /// name the Adobe Glyph List lists whole (`h`, `one`, `fi`). The list's
+    /// own rules for reading a name go further: what follows the first
+    /// period is a variant of the glyph before it (`h.sc` is a small capital
+    /// h, `one.osf` an old-style 1), underscores join the glyphs of a
+    /// ligature (`f_i`), and `uniXXXX` may name several characters. A book
+    /// set with small capitals and old-style figures and no ToUnicode map
+    /// read without them: "his collection of six" lost all but its drop
+    /// cap, and a year read as nothing. Only simple Type 1 fonts with an
+    /// embedded program are read, where a glyph's ID is its place in the
+    /// program, which is where the interpreter takes its name from. A CID
+    /// font's glyphs are numbered, not named.
+    pub(crate) fn named(&mut self, key: u128, glyph: u32) -> Option<String> {
+        if let Some(program) = self.programs.remove(&key) {
+            self.names.insert(key, program_texts(&program));
+        }
+        self.names.get(&key)?.get(glyph as usize)?.clone()
+    }
+
+    fn fonts(&mut self, fonts: &Dict<'a>) {
         if !self.read.insert(fonts.cache_key()) {
             return;
         }
@@ -95,11 +135,17 @@ impl Faces {
                 {
                     e.insert(recased(&font));
                 }
+                let key = font.cache_key();
+                if !self.names.contains_key(&key) && !self.programs.contains_key(&key) {
+                    if let Some(program) = program(&font) {
+                        self.programs.insert(key, program);
+                    }
+                }
             }
         }
     }
 
-    fn forms(&mut self, x_objects: &Dict<'_>, depth: u32) {
+    fn forms(&mut self, x_objects: &Dict<'a>, depth: u32) {
         if depth >= MAX_FORM_DEPTH || !self.read.insert(x_objects.cache_key()) {
             return;
         }
@@ -119,6 +165,71 @@ impl Faces {
                     self.forms(&inner, depth + 1);
                 }
             }
+        }
+    }
+}
+
+/// A simple Type 1 font's embedded program, if it has one.
+fn program<'a>(font: &Dict<'a>) -> Option<Program<'a>> {
+    if !matches!(
+        font.get::<Name<'_>>(SUBTYPE).as_deref(),
+        Some(TYPE1 | MM_TYPE1)
+    ) {
+        return None;
+    }
+    let descriptor = font.get::<Dict<'a>>(FONT_DESC)?;
+    descriptor
+        .get::<Stream<'a>>(FONT_FILE3)
+        .map(Program::Cff)
+        .or_else(|| descriptor.get::<Stream<'a>>(FONT_FILE).map(Program::Type1))
+}
+
+/// The text a glyph's name gives by the Adobe Glyph List's rules: the
+/// name up to its first period, each part between underscores read as a
+/// listed name, `uniXXXX` (one or more characters) or `uXXXX`. A name that
+/// gives none, a subsetter's `g12` or `.notdef`, gives `None`.
+fn name_text(name: &str) -> Option<String> {
+    let text: String = read_fonts::ps::agl::name_to_chars(name).collect();
+    (!text.is_empty()).then_some(text)
+}
+
+/// The text each glyph's name in a program gives ([`name_text`]), by glyph
+/// ID; see [`Faces::named`].
+fn program_texts(program: &Program<'_>) -> Vec<Option<String>> {
+    match program {
+        Program::Cff(stream) => {
+            let Ok(data) = stream.decoded() else {
+                return Vec::new();
+            };
+            let Ok(font) = read_fonts::ps::cff::CffFontRef::new(&data, 0, None) else {
+                return Vec::new();
+            };
+            let Some(charset) = font.charset().filter(|_| !font.is_cid()) else {
+                return Vec::new();
+            };
+            let mut texts = vec![None; font.num_glyphs() as usize];
+            for (gid, sid) in charset.iter() {
+                let name = font.string(sid).and_then(|b| std::str::from_utf8(b).ok());
+                if let (Some(slot), Some(name)) = (texts.get_mut(gid.to_u32() as usize), name) {
+                    *slot = name_text(name);
+                }
+            }
+            texts
+        }
+        Program::Type1(stream) => {
+            let Ok(data) = stream.decoded() else {
+                return Vec::new();
+            };
+            let Ok(font) = read_fonts::ps::type1::Type1Font::new(&data) else {
+                return Vec::new();
+            };
+            let mut texts = vec![None; font.num_glyphs() as usize];
+            for (gid, name) in font.glyph_names() {
+                if let Some(slot) = texts.get_mut(gid.to_u32() as usize) {
+                    *slot = name_text(name);
+                }
+            }
+            texts
         }
     }
 }
@@ -414,6 +525,31 @@ fn tokens(style: &str) -> impl Iterator<Item = &str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_glyph_name_read_by_the_glyph_lists_rules() {
+        for (name, text) in [
+            // A variant: a small capital, an old-style figure, an alternate.
+            ("h.sc", "h"),
+            ("one.osf", "1"),
+            ("T.swash", "T"),
+            // A ligature's glyphs, joined by underscores.
+            ("f_i", "fi"),
+            ("f_f_l", "ffl"),
+            // A listed ligature, and characters by their code points.
+            ("fi", "\u{FB01}"),
+            ("uni00660069", "fi"),
+            ("u1D400", "\u{1D400}"),
+            ("uni0066.sc", "f"),
+        ] {
+            assert_eq!(name_text(name).as_deref(), Some(text), "{name}");
+        }
+        // Names that say nothing of the character: a subsetter's, the
+        // missing glyph's, code points not in uppercase hex.
+        for name in ["g12", ".notdef", "", "uni00e9", "glyph7"] {
+            assert_eq!(name_text(name), None, "{name}");
+        }
+    }
 
     #[test]
     fn an_italic_face_by_its_name() {
