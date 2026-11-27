@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "google-2024-environmental-report.pdf",
+    "url": "https://www.gstatic.com/gumdrop/sustainability/google-2024-environmental-report.pdf",
+    "sha256": "29ade2be2f75e33b94e88fc676a31aaaab205e4ae7f146bc284c57d93d858645",
+    "about": "Google 2024 Environmental Report (86 pages, InDesign). The page number stands at the foot of every page; charts on pages 14 and 34 set their axis years along the foot a little above it, and page 78 sets bar values there."
+  },
+  "notes": [
+    "2026-11-27 (#536): every bare number in the foot band is one page-number group. Placed at the median of every copy, the group sat within reach of page 14's years, which were dropped as page numbers, and the report's own page numbers were not found."
+  ],
+  "checks": [
+    {
+      "id": "axis-years-kept",
+      "found": "2026-11-27",
+      "issue": "Page 14's axis years, set at the page number's height, were dropped as page numbers.",
+      "text": "2010 2012 2014 2016 2018 2020 2022"
+    },
+    {
+      "id": "page-numbers-found",
+      "found": "2026-11-27",
+      "issue": "The page numbers were not found: the group's place was the charts'.",
+      "folio": {"page": 34, "value": "33"}
+    }
+  ]
+}

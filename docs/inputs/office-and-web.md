@@ -462,6 +462,23 @@ record over two rows (`rowspan="2"` on every column, the second row a lone
 spacer cell) reads one row per record, and the spans over the dropped rows
 close up. A row in which a span starts, even an empty one, stays.
 
+A body row of one cell across the table is a band over the rows beneath it
+(`Food` over the dishes), and their cells carry its text as
+`doc:sectionLabel`. It labels them up to the next such row it does not stand
+over, and it is a band only where those rows hold data:
+
+- A band set more prominently than the band right under it groups it: bolder
+  or in `<th>`, underlined, upright over italic, larger, or set further out.
+  A group over its sub-groups labels their rows too, and they carry both
+  (`Power / Average (W)`).
+- Rows of one cell set alike are siblings, and none labels another. A list
+  set in a table is rows of its own: in a subsidiaries' list, the companies
+  under each bold country, which labels them. Of title lines set alike over
+  a table, the last labels its rows and the others are rows of their own.
+- A row that opens on a note's mark (`(1)`, `a)`, `*`, `Note:`) under rows
+  of data is a note to them, and a row of its own.
+- A blank row holds no data, and the last row labels nothing.
+
 Under a header of several rows, a column's `doc:columnHeader` is its labels
 from the top down, joined with ` / ` (`Three months ended September 30, /
 2018`). A label spanning columns names each of them, so a value set beside

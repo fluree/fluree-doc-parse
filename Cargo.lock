@@ -931,6 +931,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "clap_complete",
+ "fluree-doc-conform",
  "fluree-doc-docx",
  "fluree-doc-email",
  "fluree-doc-html",
@@ -956,6 +957,16 @@ dependencies = [
  "toml_edit",
  "ureq",
  "zip",
+]
+
+[[package]]
+name = "fluree-doc-conform"
+version = "0.1.0"
+dependencies = [
+ "fluree-doc-html",
+ "fluree-doc-markdown",
+ "fluree-doc-model",
+ "serde",
 ]
 
 [[package]]
@@ -1007,6 +1018,7 @@ dependencies = [
 name = "fluree-doc-markdown"
 version = "0.1.0"
 dependencies = [
+ "fluree-doc-html",
  "fluree-doc-model",
  "pulldown-cmark",
 ]
@@ -1054,6 +1066,7 @@ version = "0.1.0"
 dependencies = [
  "fluree-doc-model",
  "fluree-doc-ooxml",
+ "fluree-doc-xlsx",
  "quick-xml",
  "zip",
 ]
