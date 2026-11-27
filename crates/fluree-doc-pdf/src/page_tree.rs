@@ -37,7 +37,11 @@
 //! walk makes, whichever version its cross-reference table picks: a node
 //! named twice is counted twice, and a cycle, which the parser cuts where
 //! it meets an object already on its path, is counted as though every path
-//! through it were walked.
+//! through it were walked. The walk starts at the object a catalog names by
+//! `/Pages`, so only what is reachable from one is measured: a structure
+//! tree's array of a million references, or a name tree's `/Kids`, are no
+//! pages. Where no dictionary naming `/Pages` is seen (a catalog packed in
+//! an object stream the measure cannot decode), every node is measured.
 //!
 //! What the measure does not see is listed in `docs/reference/limits.md`
 //! (*A PDF's page tree*); the parser walking the tree with a bound of its
@@ -125,7 +129,8 @@ pub fn open(data: impl Into<Arc<Vec<u8>>>) -> Result<Pdf, ExtractError> {
 }
 
 /// What the measure found: no less than the parser's walk of the tree
-/// makes, whichever version of each object it reads.
+/// makes, whichever version of each object it reads, from whichever
+/// catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shape {
     /// The most `/Pages` nodes on one path down the tree.
@@ -1109,6 +1114,9 @@ struct Graph {
     /// The objects some version of which is a dictionary: a page, where a
     /// kid names one.
     dicts: HashSet<i32>,
+    /// The objects a dictionary names by `/Pages`: where the parser's walk
+    /// starts, from the catalog it reads, whichever version that is.
+    roots: HashSet<i32>,
 }
 
 impl Graph {
@@ -1144,6 +1152,11 @@ impl Graph {
     /// `/Pages`, or a reference that may resolve to it; its `/Kids` either
     /// way, as the root is walked whatever its type.
     fn dict(&mut self, d: &Dict<'_>, nesting: usize) -> Option<Node> {
+        // A catalog names the root by reference (the parser takes no other):
+        // any dictionary that does is taken for one.
+        if let Some(MaybeRef::Ref(r)) = d.get_raw::<Object<'_>>(b"Pages") {
+            self.roots.insert(r.obj_number);
+        }
         let level = match d.get_raw::<Name<'_>>(b"Type") {
             Some(MaybeRef::NotRef(n)) => &*n == b"Pages",
             Some(MaybeRef::Ref(_)) => true,
@@ -1194,8 +1207,9 @@ impl Graph {
         })
     }
 
-    /// The depth and the pages, over every node: no less than the parser's
-    /// walk from the root makes.
+    /// The depth and the pages: no less than the parser's walk from the
+    /// root makes. Those of the nodes a catalog names (each version), what
+    /// they reach included; where no catalog is seen, the most of any node.
     ///
     /// Over the graph's strongly connected components, each measured after
     /// those it reaches. A node in no cycle has its own level and pages
@@ -1321,7 +1335,22 @@ impl Graph {
                 shape.pages = shape.pages.max(pages[v]);
             }
         }
-        shape
+        if self.roots.is_empty() {
+            return shape;
+        }
+        // A node's depth and pages are those of everything it reaches: the
+        // roots' are the walk's.
+        let mut walked = Shape { depth: 0, pages: 0 };
+        for &v in self
+            .roots
+            .iter()
+            .filter_map(|n| self.objects.get(n))
+            .flatten()
+        {
+            walked.depth = walked.depth.max(depth[v]);
+            walked.pages = walked.pages.max(pages[v]);
+        }
+        walked
     }
 
     /// The strongly connected components of the graph `nodes` (of the `n`
@@ -1759,7 +1788,7 @@ mod tests {
         let header: String = (0..200).map(|i| format!("{} 0 ", 3 + i)).collect();
         let plain = format!("{header}<< /Type /Pages /Kids [3 0 R] >>{pad}");
         let packed = zlib(plain.as_bytes());
-        let mut file = pdf(&["<< /Type /Catalog /Pages 2 0 R >>".into()]);
+        let mut file = pdf(&["<< /Type /Catalog /Pages 3 0 R >>".into()]);
         file.extend(
             format!(
                 "400 0 obj\n<< /Type /ObjStm /N 200 /First {} /Filter /FlateDecode /Length {} >>\nstream\n",
@@ -1899,6 +1928,40 @@ mod tests {
             "<< /Type /Page >>".into(),
         ]);
         assert_eq!(measure(&quiet).unwrap(), Shape { depth: 1, pages: 1 });
+    }
+
+    #[test]
+    fn only_what_a_catalog_reaches_is_measured() {
+        // A structure tree's `/K` written as an array of its own, and a name
+        // tree's node, each naming 300,000 dictionaries: past the pages a
+        // tree may list, were they pages, and no page of the parser's walk.
+        let refs = vec!["5 0 R"; 300_000].join(" ");
+        let objects = |catalog: &str| -> Vec<String> {
+            vec![
+                catalog.into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /MediaBox [0 0 612 792] >>".into(),
+                format!("[{refs}]"),
+                "<< /S /P >>".into(),
+                format!("<< /Kids [{refs}] >>"),
+                "<< /Type /StructTreeRoot /K 4 0 R >>".into(),
+            ]
+        };
+        let tagged = pdf(&objects(
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R /Names << /Dests 6 0 R >> >>",
+        ));
+        assert_eq!(measure(&tagged).unwrap(), Shape { depth: 1, pages: 1 });
+        assert_eq!(open(tagged).unwrap().pages().len(), 1);
+        // Where no catalog is seen, every node is measured, as the parser
+        // may start from any.
+        let bare = pdf(&objects("<< /Type /Catalog >>"));
+        assert_eq!(pages(&bare), 300_000);
+        // Every version of a catalog, and what each names, is a root.
+        let mut updated = pdf(&objects(
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>",
+        ));
+        updated.extend(b"1 0 obj\n<< /Type /Catalog /Pages 6 0 R >>\nendobj\n");
+        assert_eq!(pages(&updated), 300_000);
     }
 
     #[test]
