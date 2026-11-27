@@ -723,21 +723,44 @@ impl Grid {
     /// The text of one row read across the whole grid, ignoring columns —
     /// for a row that spans them.
     pub fn row_text(&self, glyphs: &[crate::glyph::Glyph], row: usize) -> String {
-        let inside: Vec<crate::glyph::Glyph> = glyphs
-            .iter()
-            .filter(|g| {
-                g.bbox.is_some() && !g.text.trim().is_empty() && g.is_horizontal() && {
-                    let (x, y) = g.center();
-                    self.cell_at(x, y).is_some_and(|(r, _)| r == row)
-                }
-            })
-            .cloned()
-            .collect();
-        crate::line::assemble(&inside)
+        crate::line::assemble(&self.row_glyphs(glyphs, row))
             .iter()
             .map(|l| l.text.as_str())
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// The inked glyphs row `row`'s cells read ([`Self::glyph_cells`]), and
+    /// so take from the page ([`Self::takes`]).
+    ///
+    /// Not each glyph by its own centre. A cell reads a word whole, in the
+    /// cell holding its centre of mass. Picked glyph by glyph, a word an
+    /// edge of the grid runs through lost letters or was read twice. With
+    /// its centre of mass inside, its letters outside the edge were neither
+    /// the row's nor the prose's: a head line set out past a table's edge,
+    /// read out as the table's title, read `ECIMAL` for `DECIMAL`. With it
+    /// outside, the prose kept the word whole and the row read its letters
+    /// inside the edge again: `World` in the prose, `ld` in the title.
+    ///
+    /// Ink only, the words spaced by their gaps as before: a space the text
+    /// draws between two cells' labels (`Quota Measures ␠ 0-50%`) joins
+    /// them into one line, run across the cut between them.
+    pub(crate) fn row_glyphs(
+        &self,
+        glyphs: &[crate::glyph::Glyph],
+        row: usize,
+    ) -> Vec<crate::glyph::Glyph> {
+        let cols = self.cols().max(1);
+        glyphs
+            .iter()
+            .zip(self.glyph_cells(glyphs))
+            .filter(|(g, home)| {
+                home.is_some_and(|i| i / cols == row)
+                    && g.bbox.is_some()
+                    && !g.text.trim().is_empty()
+            })
+            .map(|(g, _)| g.clone())
+            .collect()
     }
 
     /// The text of a block of cells read as one label, rows `rows` by
@@ -14084,6 +14107,11 @@ mod tests {
         let w = letters(92.0, "warranty");
         assert!(grid.takes(&w).iter().all(|&t| t));
         assert_eq!(grid.cell_texts(&w)[0], "warranty");
+        // Read across the row, as a title or a spanning row is, the word is
+        // whole too: its first letters, taken, are read.
+        assert_eq!(grid.row_text(&w, 0), "warranty");
+        assert_eq!(grid.row_glyphs(&w, 0).len(), w.len());
+        assert_eq!(grid.row_text(&see, 0), "");
     }
 
     /// A spec sheet's fields, labels and values in one face, every other
