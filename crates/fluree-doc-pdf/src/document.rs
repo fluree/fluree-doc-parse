@@ -2992,11 +2992,16 @@ fn drop_blank_rows(e: &mut Element) {
     };
     indexes(&mut e.sub_headers);
     indexes(&mut e.restated_headers);
-    // Each blank row ends the group over it: a section the rows over it
-    // open stops at the row that follows.
-    let mut breaks: Vec<usize> = blank.iter().map(|&b| up(b + 1)).collect();
-    breaks.dedup();
-    e.section_breaks = Some(breaks);
+    // In a list whose sections a bold label opens (the table asks for its
+    // breaks), each blank row ends the group over it: the section stops at
+    // the row that follows. A band across a wider table runs on past a
+    // blank row set between its lines, as a statement sets one before a
+    // summary line of the same section.
+    if e.section_breaks.is_some() {
+        let mut breaks: Vec<usize> = blank.iter().map(|&b| up(b + 1)).collect();
+        breaks.dedup();
+        e.section_breaks = Some(breaks);
+    }
     if let Some(h) = e.header_rows.as_mut() {
         *h = up(*h);
     }
@@ -6925,6 +6930,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 spread_left: spread.iter().any(|x| *x).then_some(spread),
                 cells: Some(rows),
                 header_rows: Some(header_rows),
+                // A list's sections by weight end at its blank rows, which
+                // `drop_blank_rows` records here.
+                section_breaks: sub_headers
+                    .iter()
+                    .any(|r| by_weight.contains(r))
+                    .then(Vec::new),
                 sub_headers: (!sub_headers.is_empty()).then_some(sub_headers),
                 restated_headers: (!restated_headers.is_empty()).then_some(restated_headers),
                 merged_down: merges
@@ -6968,6 +6979,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 tables += 1;
             }
             drop_blank_rows(&mut table_elements[this_table]);
+            let t = &mut table_elements[this_table];
+            if t.section_breaks.as_ref().is_some_and(Vec::is_empty) {
+                t.section_breaks = None;
+            }
         }
         // Table-confidence anchors: a table whose reading is in doubt
         // ([`table_in_doubt`]) anchors for a model's reading of its crop. The
@@ -8740,6 +8755,7 @@ mod tests {
             ])),
             header_rows: Some(0),
             sub_headers: Some(vec![2]),
+            section_breaks: Some(Vec::new()),
             // The second blank row is the merged cell's, set over two rows.
             merged_down: Some(vec![
                 false, false, false, false, false, false, false, false, false, false, true, false,
