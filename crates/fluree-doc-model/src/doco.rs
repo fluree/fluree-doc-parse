@@ -698,7 +698,9 @@ impl<'a> Emitter<'a> {
         let idx = self.node("notes", "doc:SpeakerNotes", Some("section"));
         self.nodes[idx].insert("doc:pageIndex".into(), json!(slide));
         if let Some(iri) = self.slide_nodes.get(&slide) {
-            self.nodes[idx].insert("doc:notesFor".into(), Value::String(iri.clone()));
+            // A node reference written out, so the context every document
+            // carries stays as it was.
+            self.nodes[idx].insert("doc:notesFor".into(), json!({ "@id": iri }));
         }
         self.attach(back, idx);
         self.open_notes = Some((slide, idx));
@@ -1721,7 +1723,6 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             // A table carried on from the page before names the part it
             // carries on.
             "doc:continues": { "@type": "@id" },
-            "doc:notesFor": { "@type": "@id" },
         },
         "@graph": graph,
     });
@@ -1828,7 +1829,7 @@ mod tests {
             .contains(notes[0]["@id"].as_str().unwrap()));
         // It points at the second slide's section.
         let sections = find(&g, "doco:Section");
-        assert_eq!(notes[0]["doc:notesFor"], sections[1]["@id"]);
+        assert_eq!(notes[0]["doc:notesFor"]["@id"], sections[1]["@id"]);
         // The body's offsets are what they were without the notes, and the
         // notes' text comes after the body's.
         let offsets = |g: &[Value]| -> Vec<(Value, Value)> {
