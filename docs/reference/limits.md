@@ -37,7 +37,7 @@ Three kinds of spending share one estimate of memory, 2.5 GiB a document:
 | Unit | Cost | What it is |
 | --- | --- | --- |
 | element | 4 KiB for `-f doco`, 2 KiB for the others | an element made, or a table cell that holds text, which DoCO writes as a node of its own; for the others, a table's cell that holds text costs 512 B, whatever the format, its slot and text counted apart |
-| cell | 128 B | a cell slot allocated: read, each copy of a repeated one, each a merge covers, each a table is padded with, and each copy a layout keeps |
+| cell | 128 B | a cell slot allocated: read (a `.docx` or `.pptx` table's cells and rows as each is read, its grid within them), each copy of a repeated one, each a merge covers, each a table is padded with, and each copy a layout keeps |
 | byte of text | 12 B | each byte the text may take in the worst output: a control character counts six (`\u0001` in JSON), `"` and `&` six, `<` and `>` four, a character Markdown escapes two |
 | link | an element and a cell (4.1 KiB) for `-f doco`, four cells (512 B) for the others, with its target's text | a hyperlink kept on an element (Markdown, HTML): DoCO writes each as a node of its own |
 
@@ -317,7 +317,11 @@ counted at 512. Counted at two slots a node and two an attribute, an `.odt`
 of 40 tables of 2,500 rows by 10 columns (a million cells, 3 MB), each cell
 with the three attributes LibreOffice writes, was refused as Markdown; it
 takes 1.03 GB, now counted at 1.98 GB, and converts. A 1.2 MB `.odt` whose
-one paragraph is 1.2 GB of text is refused at 1.25 GB, the part alone. And
+one paragraph is 1.2 GB of text is refused at 1.25 GB, the part alone. A
+part that is not UTF-8 is read with each byte that is not replaced by
+U+FFFD, three bytes, in a copy beside the part, spent at its length
+before it is made: 1.2 GiB of `0xFF`, a megabyte zipped, peaked near 5
+GB. And
 a 202 KB `.ods` whose content inflates to 65 MB, two million cells, made a
 tree of about 600 MB the budget did not see, and peaked at 1.7 GB before
 its cells were refused, at 800 MB under the fuzz targets' budget of 160
