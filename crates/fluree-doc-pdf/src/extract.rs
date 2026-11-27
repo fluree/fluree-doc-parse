@@ -2550,6 +2550,16 @@ const SYNTH_WIDTH: f64 = 0.60;
 /// width leaves that space to be read.
 const MAX_SYNTH_ADVANCE: f64 = 1.25;
 
+/// Widest a boxless glyph is taken to be, in sizes, where no agreeing
+/// measures of it give its own width: `W`, `m`, a ligature or a CJK
+/// character runs to about one. Measured wider, the pen crossed a gap.
+const WIDEST_GLYPH: f64 = 1.05;
+
+/// How far the middle of a character's measured widths may stand above the
+/// narrowest for its widths to agree: the pen's rounding, not the text's
+/// own spacing.
+const AGREEING_WIDTHS: f64 = 1.1;
+
 /// How much wider than the narrowest measure of itself a boxless glyph's
 /// measured advance may be before the rest is read as a gap: a character's
 /// widths at one size vary only by the pen's rounding.
@@ -2633,19 +2643,51 @@ fn synthesize_missing_boxes(glyphs: &mut [Glyph]) {
             )
         })
         .collect();
-    let mut narrowest: std::collections::HashMap<&(String, i64), f64> = Default::default();
+    // Only where its measures agree: a font sets a character at one width,
+    // so most of them sit at the narrowest. An OCR'd page's invisible text
+    // sets its glyphs where the scan's letters were, each at its own
+    // spacing, and its narrowest says nothing of a gap (`PA GE`).
+    let mut measures: std::collections::HashMap<&(String, i64), Vec<f64>> = Default::default();
     for (k, m) in keys.iter().zip(&measured) {
         if let Some(d) = *m {
-            let w = narrowest.entry(k).or_insert(d);
-            *w = w.min(d);
+            measures.entry(k).or_default().push(d);
         }
     }
+    let narrowest: std::collections::HashMap<&(String, i64), f64> = measures
+        .into_iter()
+        .filter_map(|(k, mut v)| {
+            if v.len() < 3 {
+                return None;
+            }
+            v.sort_by(f64::total_cmp);
+            let (low, mid) = (v[0], v[v.len() / 2]);
+            (mid <= low * AGREEING_WIDTHS).then_some((k, low))
+        })
+        .collect();
+    // Each size's typical glyph width, the middle of all its measures: what
+    // a glyph whose own width no agreeing measures give is taken to be,
+    // where it measures wider than any glyph is set.
+    let mut by_size: std::collections::HashMap<i64, Vec<f64>> = Default::default();
+    for (k, m) in keys.iter().zip(&measured) {
+        if let Some(d) = *m {
+            by_size.entry(k.1).or_default().push(d);
+        }
+    }
+    let typical: std::collections::HashMap<i64, f64> = by_size
+        .into_iter()
+        .filter(|(_, v)| v.len() >= 3)
+        .map(|(s, mut v)| {
+            v.sort_by(f64::total_cmp);
+            (s, v[v.len() / 2])
+        })
+        .collect();
     for ((&i, m), k) in candidates.iter().zip(&measured).zip(&keys) {
         let (x, y) = glyphs[i].origin;
         let font = glyphs[i].font_size.max(1.0) as f64;
         let width = match *m {
-            Some(d) => match narrowest.get(k) {
-                Some(&own) if d > own * WIDER_THAN_ITSELF && d - own > font * 0.2 => own,
+            Some(d) => match (narrowest.get(k), typical.get(&k.1)) {
+                (Some(&own), _) if d > own * WIDER_THAN_ITSELF && d - own > font * 0.2 => own,
+                (None, Some(&t)) if d > font * WIDEST_GLYPH && t < d => t,
                 _ => d,
             },
             None => font * SYNTH_WIDTH,
@@ -2793,10 +2835,10 @@ mod tests {
 
     #[test]
     fn a_type3_glyph_measured_across_a_gap_takes_its_own_width() {
-        // A spreadsheet's two cells, each in one Type3 string: `95` right
-        // against its cell's edge, `WIRE` moved on by the string's offset.
-        // Measured to `W`, the `5` took the gap; its own width is what it
-        // measures before another digit.
+        // A spreadsheet's cells, each in one Type3 string: an amount right
+        // against its cell's edge, the next cell's word moved on by the
+        // string's offset. Measured to the next glyph, the amount's last
+        // digit took the gap.
         let glyph = |text: &str, x: f64, y: f64| Glyph {
             text: text.into(),
             bbox: None,
@@ -2810,24 +2852,57 @@ mod tests {
             draw_index: 0,
             ocr: None,
         };
+        let run = |text: &str, x: f64, y: f64, w: f64| -> Vec<Glyph> {
+            text.chars()
+                .enumerate()
+                .map(|(k, c)| glyph(&c.to_string(), x + k as f64 * w, y))
+                .collect()
+        };
+        let mut g = Vec::new();
+        g.extend(run("5555255", 100.0, 20.0, 5.25));
+        g.extend(run("9", 464.0, 116.25, 5.26));
+        let five = g.len();
+        g.push(glyph("5", 469.26, 116.25));
+        g.extend(run("WIRE", 479.77, 116.25, 5.5));
+        // A letter seen once, measured across its cell's edge.
+        g.extend(run("FERNAND", 200.0, 46.5, 5.25));
+        let z = g.len();
+        g.push(glyph("Z", 236.75, 46.5));
+        g.extend(run("11", 247.78, 46.5, 5.25));
+        synthesize_missing_boxes(&mut g);
+        // Its own width: what it measures before other digits.
+        assert!(
+            (g[five].advance.unwrap() - 5.25).abs() < 0.01,
+            "{:?}",
+            g[five].advance
+        );
+        assert!(g[five].bbox.unwrap().x1 < 475.0);
+        // No measures of its own: wider than any glyph is set, it takes
+        // the size's typical width.
+        assert!(
+            g[z].advance.unwrap() < 9.45 * WIDEST_GLYPH,
+            "{:?}",
+            g[z].advance
+        );
+        // `W` measures wider than a digit, within a glyph's width: kept.
+        let w = five + 1;
+        assert!((g[w].advance.unwrap() - 5.5).abs() < 0.01);
+
+        // An OCR'd page's invisible text: one letter's measures scattered,
+        // as the scan's letters stood. Its widest is no gap.
         let mut g = vec![
-            glyph("5", 100.0, 20.0),
-            glyph("2", 105.25, 20.0),
-            glyph("9", 464.0, 116.25),
-            glyph("5", 469.26, 116.25),
-            glyph("W", 479.77, 116.25),
-            glyph("I", 488.68, 116.25),
+            glyph("A", 10.0, 50.0),
+            glyph("A", 15.0, 50.0),
+            glyph("A", 22.0, 50.0),
+            glyph("A", 31.0, 50.0),
+            glyph("x", 40.5, 50.0),
         ];
         synthesize_missing_boxes(&mut g);
         assert!(
-            (g[3].advance.unwrap() - 5.25).abs() < 0.01,
+            (g[3].advance.unwrap() - 9.5).abs() < 0.01,
             "{:?}",
             g[3].advance
         );
-        assert!(g[3].bbox.unwrap().x1 < 475.0);
-        // `W` measures wider than a digit, but no narrower `W` says it took
-        // a gap: it keeps the pen's delta.
-        assert!((g[4].advance.unwrap() - 8.91).abs() < 0.01);
     }
 
     fn page(n: usize) -> Page {
