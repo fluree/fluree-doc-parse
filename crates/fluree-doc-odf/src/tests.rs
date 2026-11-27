@@ -395,3 +395,34 @@ fn a_header_repeated_on_master_pages_is_read_once_and_its_own_lines_kept() {
         ["Ref: QA-7", "Rev 2", "Body"]
     );
 }
+
+/// A text document's elements read within `budget`, or why not.
+fn text_within(body: &str, budget: Budget) -> Result<Vec<Element>, OdfError> {
+    let xml = format!(
+        "<office:document-content {NS}><office:body><office:text>{body}</office:text></office:body></office:document-content>"
+    );
+    let content = Tree::parse(&xml).unwrap();
+    let mut room = Room::within(budget);
+    let read = text_elements(&content, None, &mut room);
+    room.check(read)
+}
+
+#[test]
+fn a_texts_tables_and_paragraphs_spend_the_documents_budget() {
+    use fluree_doc_model::budget::{Output, ELEMENT_BYTES};
+    // A hundred rows of a cell repeated a hundred times: 10,000 cells that
+    // hold text from a few kilobytes. DoCO writes each as a node, at
+    // 4 KiB; Markdown writes each once in its row.
+    let row = "<table:table-row><table:table-cell table:number-columns-repeated=\"100\">\
+               <text:p>x</text:p></table:table-cell></table:table-row>";
+    let table = format!("<table:table>{}</table:table>", row.repeat(100));
+    let budget = || Budget::new(5_000 * ELEMENT_BYTES, 0);
+    let refused = text_within(&table, budget()).unwrap_err();
+    assert!(refused.to_string().contains("past"), "{refused}");
+    let els = text_within(&table, budget().for_output(Output::Flat)).unwrap();
+    assert_eq!(els[0].cells.as_ref().unwrap().len(), 100);
+    // Paragraphs, each an element, are spent as well.
+    let paras = "<text:p>x</text:p>".repeat(100);
+    assert!(text_within(&paras, Budget::new(100 * ELEMENT_BYTES + 100 * 12, 0)).is_ok());
+    assert!(text_within(&paras, Budget::new(99 * ELEMENT_BYTES, 0)).is_err());
+}

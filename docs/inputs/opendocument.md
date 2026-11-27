@@ -81,6 +81,10 @@ counted each time and a short row's padding to the table's width counted
 too, and at most 64 MiB of cell text, a repeated cell's text counted each
 time it is copied: a cell of a few kilobytes repeated a thousand times asks
 for gigabytes. Both are counted before the cells are made, and a document
-past either fails as too large. In a library,
+past either fails as too large. A text's or a presentation's elements, its
+tables' cells (a repeated one each time, a cell that holds text at what the
+output makes of it: a node of its own in DoCO, a cell of its row in the
+others) and their text are also counted against the memory one document
+may take, before they are made. In a library,
 `fluree_doc_odf::parse_with_info` returns the elements, the declared info
 and the kind; `Format::sniff` tells the kind from the bytes.

@@ -30,11 +30,15 @@
 //! table's width counted too, and at most [`MAX_TEXT_CELL_BYTES`] bytes of
 //! cell text, a repeated cell's text counted each time it is copied; both
 //! are counted before the cells are made, and a document past either is
-//! refused.
+//! refused. So is a text or a presentation past the document's [`Budget`]:
+//! its elements, its tables' cells (a repeated one each time, at what the
+//! output makes of a cell) and their text are spent from it before they
+//! are made.
 
 mod sheet;
 mod tree;
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_ooxml::Package;
 use tree::{Role, Tree};
@@ -54,21 +58,49 @@ pub const MAX_TEXT_CELLS: usize = 1 << 22;
 pub const MAX_TEXT_CELL_BYTES: usize = 64 << 20;
 
 /// What the tables of a document may still make: cells, and bytes of their
-/// text. Spent before anything is made; past it, the document is refused
-/// ([`Room::over`]), and nothing more is made.
+/// text; and the document's budget, which its elements, its tables' cells
+/// and their text are spent from. Spent before anything is made; past it,
+/// the document is refused ([`Room::over`]), and nothing more is made.
 struct Room {
     cells: usize,
     bytes: usize,
+    budget: Budget,
     over: Option<String>,
 }
 
 impl Room {
     fn new() -> Self {
+        Self::within(Budget::default())
+    }
+
+    fn within(budget: Budget) -> Self {
         Room {
             cells: MAX_TEXT_CELLS,
             bytes: MAX_TEXT_CELL_BYTES,
+            budget,
             over: None,
         }
+    }
+
+    /// Spend from the document's budget; `false`, and the document refused,
+    /// where it is spent.
+    fn spend_budget(&mut self, spend: impl FnOnce(&mut Budget) -> Result<(), TooLarge>) -> bool {
+        if self.over.is_some() {
+            return false;
+        }
+        if let Err(e) = spend(&mut self.budget) {
+            self.over = Some(e.to_string());
+            return false;
+        }
+        true
+    }
+
+    /// Spend an element about to be made, and its text.
+    fn element(&mut self, text: &str) -> bool {
+        self.spend_budget(|b| {
+            b.spend_elements(1)?;
+            b.spend_text(text)
+        })
     }
 
     /// Spend `cells` cells holding `bytes` bytes of text; `false`, and the
@@ -386,9 +418,23 @@ fn table(
             if name == "table-cell" && (cs > 1 || rs > 1) {
                 spans.push((rows.len(), row.len(), cs, rs));
             }
-            // Each copy is a cell and its text: counted before any is made.
+            // Each copy is a cell and its text: counted before any is made,
+            // a cell that holds text at what the output makes of one.
             cells += repeat;
             if !room.spend(repeat, text.len().saturating_mul(repeat)) {
+                return None;
+            }
+            let spent = room.spend_budget(|b| {
+                b.spend_cells(repeat as u64)?;
+                if !text.is_empty() {
+                    b.spend_text_cells(repeat as u64)?;
+                    for _ in 0..repeat {
+                        b.spend_text(&text)?;
+                    }
+                }
+                Ok(())
+            });
+            if !spent {
                 return None;
             }
             row.extend(std::iter::repeat_n(text, repeat));
@@ -406,7 +452,8 @@ fn table(
     // row would otherwise make a grid of their product.
     let n = rows.len();
     let grid = n.saturating_mul(width);
-    if !room.spend(grid - cells, 0) {
+    if !room.spend(grid - cells, 0) || !room.spend_budget(|b| b.spend_cells((grid - cells) as u64))
+    {
         return None;
     }
     for r in &mut rows {
@@ -445,6 +492,10 @@ fn table(
         .map(|r| r.join(" | "))
         .collect::<Vec<_>>()
         .join("\n");
+    // The table, and its text, a copy of its cells'.
+    if !room.element(&text) {
+        return None;
+    }
     let mut e = element("doco:Table", text, None, page);
     e.cells = Some(rows);
     e.header_rows = Some(header_rows);
@@ -500,14 +551,14 @@ fn flow(
                     .unwrap_or(1)
                     .clamp(1, 6);
                 let text = tidy(&para_text(t, c, asides));
-                if !text.is_empty() {
+                if !text.is_empty() && room.element(&text) {
                     out.push(element("doco:SectionTitle", text, Some(level), page));
                 }
                 frames_after(c, out, asides, room);
             }
             "p" => {
                 let text = tidy(&para_text(t, c, asides));
-                if text.is_empty() {
+                if text.is_empty() || !room.element(&text) {
                     frames_after(c, out, asides, room);
                     continue;
                 }
@@ -725,7 +776,7 @@ fn slide_shapes(
                             .collect::<Vec<_>>()
                             .join(" "),
                     );
-                    if !text.is_empty() {
+                    if !text.is_empty() && room.element(&text) {
                         out.push(element("doco:SectionTitle", text, Some(1), page));
                     }
                     continue;
