@@ -473,10 +473,13 @@ pub struct UnreadRegion {
     /// enough for the router to send a model. Or one the router declined,
     /// listed so a caller can decide: `Small`, whose pixels look like text
     /// but which covers under a tenth of the page, half an inch or more on
-    /// its longer side;
-    /// `NotTexty`, a tenth of the page or more whose pixels the probe did
-    /// not take for text (a photograph, a chart). An OCR engine reads the
-    /// first, nothing reads the second. Only `Region` is warned about.
+    /// its longer side; `NotTexty`, a tenth of the page or more whose
+    /// pixels the probe did not take for text (a photograph, a chart). An
+    /// OCR engine reads the first, nothing reads the second. Or
+    /// `Unprobed`, an image nothing examined, half an inch or more on its
+    /// longer side: the parse decoded no image (a plain run), or none under
+    /// a tenth of the page (a run without OCR), so nothing tells a capture
+    /// of text from a photograph. Only `Region` is warned about.
     pub reason: String,
 }
 
@@ -521,15 +524,25 @@ pub struct UnreadImage {
     /// Where the file keeps it, as the file names it
     /// ([`crate::MediaSource::name`]).
     pub part: String,
-    /// Why it was not read: `NotRead` (nothing was asked to read it, or no
-    /// reading of it was supplied), `Missing` (the file does not hold it: a
-    /// link to an outside file, a relationship it does not define),
-    /// `UnsupportedFormat` (not a PNG, JPEG or TIFF: a vector drawing kept as
-    /// EMF or WMF, a GIF), `PastAllowance` (past the pictures or pixels one
-    /// document may have read, [`crate::Allowance::DOCUMENT`]), `Small`
-    /// (nothing else read it, and it is under the pixels the configured
-    /// model is sent) or `Failed` (its reading failed, or the part it names
-    /// is not there).
+    /// Why it was not read, one of seven:
+    ///
+    /// - `NotRead`: nothing was asked to read it, no reading of it was
+    ///   supplied, or the configured model was not sent it, past the images
+    ///   one document may send it (`escalation.max_crops`);
+    /// - `Missing`: the file does not hold it (a link to an outside file, a
+    ///   relationship it does not define);
+    /// - `UnsupportedFormat`: not a PNG, JPEG or TIFF (a vector drawing kept
+    ///   as EMF or WMF, a GIF);
+    /// - `PastAllowance`: past the pictures or pixels one document may have
+    ///   read ([`crate::Allowance::DOCUMENT`]);
+    /// - `Small`: nothing else read it, and it is under the pixels the
+    ///   configured model is sent;
+    /// - `NotTexty`: nothing else read it, and the pixel probe does not take
+    ///   it for text, so the configured model was not sent it, or OCR read
+    ///   it and what it read was noise;
+    /// - `Failed`: its reading failed, the part it names is not there or
+    ///   cannot be read, its part ends before its format can be told, or
+    ///   its header does not parse, so the configured model was not sent it.
     pub reason: String,
 }
 
@@ -542,7 +555,8 @@ pub struct UnreadImage {
 /// routed on it. Only a reading of pixels that need not hold any text (a
 /// PDF region the pixel probe does not take for text, a picture a document
 /// places) is set aside as noise under a mean of 0.5, before it is taken:
-/// it is then listed as one that took no word.
+/// it is then listed with [`set_aside`](OcrReading::set_aside), its words
+/// and their confidence those it held, none of them in the output.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct OcrReading {
     /// 0-based physical page read, the space of [`Element::page`]; absent
@@ -561,14 +575,21 @@ pub struct OcrReading {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
     /// Words taken into the output, or lines for an engine that boxes lines
-    /// rather than words (the built-in one does).
+    /// rather than words (the built-in one does). For a reading set aside
+    /// ([`set_aside`](OcrReading::set_aside)), the words it held, none of
+    /// which is in the output.
     pub words: usize,
-    /// Mean and lowest confidence (0-1) of the words (or lines) taken, to
-    /// four decimals; absent when the engine gave none.
+    /// Mean and lowest confidence (0-1) of the words (or lines) counted in
+    /// `words`, to four decimals; absent when the engine gave none.
     #[serde(rename = "meanConfidence", skip_serializing_if = "Option::is_none")]
     pub mean_confidence: Option<f64>,
     #[serde(rename = "minConfidence", skip_serializing_if = "Option::is_none")]
     pub min_confidence: Option<f64>,
+    /// Why the reading's words were set aside, none of them taken: `noise`,
+    /// a photograph's grain or a gradient read for text. Absent for a
+    /// reading taken, even one that took no word.
+    #[serde(rename = "setAside", skip_serializing_if = "Option::is_none")]
+    pub set_aside: Option<String>,
 }
 
 /// What a document says about itself: its title, who made it, and when.
@@ -771,7 +792,11 @@ impl Notes {
         }
         // Only the regions the router sent a reader to: one it declined is a
         // logo or a photograph as often as content, listed in
-        // `doc:unreadRegions` for a caller to judge, not warned about.
+        // `doc:unreadRegions` for a caller to judge, not warned about. So is
+        // an image no pixel of which was looked at (`Unprobed`): a plain run
+        // examines none, and saying so in every document with a logo would
+        // put a comment in most of them for what a parse that reads nothing
+        // never meant to read.
         let mut regions: Vec<&UnreadRegion> = self
             .unread_regions
             .iter()
@@ -814,40 +839,12 @@ impl Notes {
                 at.join("; ")
             ));
         }
-        // Images no pixel of which was looked at: a capture of text and a
-        // logo alike. Said once, by page, not each with its box: they are
-        // as often decoration as content, and the boxes are in
-        // `doc:unreadRegions`.
-        let mut unprobed: Vec<usize> = self
-            .unread_regions
-            .iter()
-            .filter(|r| r.reason == "Unprobed")
-            .map(|r| r.page + 1)
-            .collect();
-        let images = unprobed.len();
-        unprobed.sort_unstable();
-        unprobed.dedup();
-        let unexamined = (images > 0).then(|| {
+        (!said.is_empty()).then(|| {
             format!(
-                "{images} image{} on page{} {} {} not examined: a parse that \
-                 probes images (--probe-images, or OCR) can tell whether {} text",
-                if images == 1 { "" } else { "s" },
-                if unprobed.len() == 1 { "" } else { "s" },
-                page_runs(&unprobed),
-                if images == 1 { "was" } else { "were" },
-                if images == 1 { "it holds" } else { "they hold" },
+                "fluree-doc-parse: {}. This output is missing it.",
+                said.join(". ")
             )
-        });
-        match (said.is_empty(), unexamined) {
-            (true, None) => None,
-            (true, Some(u)) => Some(format!("fluree-doc-parse: {u}.")),
-            (false, u) => Some(format!(
-                "fluree-doc-parse: {}. This output is missing it.{}",
-                said.join(". "),
-                u.map(|u| format!(" {}{}.", u[..1].to_uppercase(), &u[1..]))
-                    .unwrap_or_default()
-            )),
-        }
+        })
     }
 }
 

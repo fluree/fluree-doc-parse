@@ -97,24 +97,16 @@ writes the image as `<stem>_m<n>.png`, reason `embedded_image` (`small_image`
 under the floor a model is sent, below), for the
 figure `figure-0-<n>`, and each reader takes it under that name.
 
-First, the pixel probe a PDF's raster regions are routed by
-([the router](../design/router.md#the-pixel-probe)) looks at the picture.
-One it does not take for text (a photograph, a chart, a logo, a flat
-illustration), or too thin for a line of text (under 10 pixels on its
-shorter side, the floor a PDF's region is held to, under which an engine
-misreads what it reads), is read by nothing: neither OCR, which reads noise in such
-pixels, nor a model, whose call is billed and sends the picture off the
-machine. It is listed in
-[`doc:unreadImages`](../formats/doco.md#images-nothing-read) as
-`NotTexty`, not counted in the note on stderr, and `render-routed` writes no
-crop of it. A capture, a scanned table or a labelled chart is taken for
-text, a capture with a few lines on a wide, light screen included. A
-picture that does not decode is not judged. The others go on:
+Each reader below is asked in turn. Only the last, the configured model,
+is held to the pixel probe:
 
 1. **OCR**, when `convert` has an engine (`--ocr`) or the words one wrote
-   (`--ocr-words`, `<stem>_m<n>.json`). What it reads is held to a noise
-   rule, a net behind the probe for a photograph or a gradient it took for
-   text, as an OCR reading of a PDF's region is: words whose mean
+   (`--ocr-words`, `<stem>_m<n>.json`). The engine reads every picture it
+   decodes, whatever it shows, and words written for a picture are read
+   whatever the probe makes of it: OCR costs nothing per image and sends
+   nothing off the machine. What it reads is held to a noise
+   rule instead, for a photograph or a gradient read for text it does not
+   hold, as an OCR reading of a PDF's region is: words whose mean
    confidence is under 0.5, or under 0.8 when most of them are fragments of
    one or two letters or figures, or one fragment, or one word read under
    0.8, boxed over nearly all of the picture. A line of text cropped close,
@@ -124,26 +116,38 @@ picture that does not decode is not judged. The others go on:
    `NotTexty`, not counted in the note on stderr.
 2. **A model's reading supplied** (`--tier-results`, `<stem>_m<n>.json`),
    which replaces what OCR read, as a scanned page's reading does, unless it
-   lost most of OCR's letters (a truncated reply). With `--tier-results`,
-   no model is called for any picture, even one it holds no reading of.
-3. **The configured model** (`--escalate`, or a reader configured), for a
-   picture OCR read no text in, or with no OCR at all; at most
-   `escalation.max_crops` pictures a document (0 for no limit), the others
-   noted on stderr and left unread. Only a PNG, JPEG or TIFF is sent. A
-   document's pictures go through one reader, up to
-   `escalation.concurrency` at a time, as a PDF's crops do.
+   lost most of OCR's letters (a truncated reply). It is taken whatever the
+   picture shows. With `--tier-results`, no model is called for any
+   picture, even one it holds no reading of.
+3. **The configured model** (`--escalate`, or a reader configured, unless
+   `--no-escalate`), for a picture OCR read no text in, or with no OCR at
+   all; at most `escalation.max_crops` pictures a document (0 for no
+   limit), the others noted on stderr and left unread. A document's
+   pictures go through one reader, up to `escalation.concurrency` at a
+   time, as a PDF's crops do; each picture's bytes are read from the file
+   again as it is sent, so a document of many large pictures is not held
+   whole until the last is read (a batch of them at most, some 64 MiB).
 
-   A picture is sent when it has at least 400 pixels on its longer side and
-   48 on its shorter, as an e-mail's image needs, whatever size the
-   document shows it at: a small logo or an icon is under that floor.
-   With the probe, nothing else is judged: a sparse screenshot or a
-   labelled chart over the floor is sent, a request the provider bills,
-   even one the document shows an inch wide. One under the floor is listed in
-   [`doc:unreadImages`](../formats/doco.md#images-nothing-read) as `Small`
-   and, as a logo is, not counted in the note on stderr (`--verbose` names
-   it). OCR and a reading supplied are not held to the floor: they read
-   every picture with a line's pixels (see above), whatever size the
-   document shows it at.
+   A request is billed and sends the picture off the machine, so a picture
+   is sent only when it is worth one:
+   - **its header reads.** Only a PNG, JPEG or TIFF is sent, and one whose
+     header does not parse (a part that only opens like an image) is not: it
+     is listed as `Failed`, stderr saying why;
+   - **it is over the floor:** at least 400 pixels on its longer side and
+     48 on its shorter, as an e-mail's image needs, whatever size the
+     document shows it at. A small logo or an icon is under it, and listed
+     as `Small`, not counted in the note on stderr (`--verbose` names it);
+   - **the pixel probe takes it for text.** The probe a PDF's raster regions
+     are routed by ([the router](../design/router.md#the-pixel-probe)) looks
+     at the picture: one it does not take for text (a photograph, a chart, a
+     logo, a flat illustration), or too thin for a line of text (under 10
+     pixels on its shorter side), is listed as `NotTexty`, not counted in
+     the note on stderr, and `render-routed` writes no crop of it. A
+     capture, a scanned table or a labelled chart is taken for text, a
+     capture with a few lines on a wide, light screen included: sent, a
+     request the provider bills, even one the document shows an inch wide.
+     A picture whose header reads but that does not decode is not judged,
+     and is sent: the model may read what the decoder refuses.
 
 A group of pictures is one figure holding several images:
 the second and later are `m<n>_1`, `m<n>_2`, … and their text follows the
@@ -297,7 +301,11 @@ read. Only pictures (`xdr:pic`) are read: a chart has its data in the sheet,
 and a shape's image fill is a texture. A group of pictures is one figure
 holding several images. Pictures in a header or footer, comments' shapes,
 and Excel's pictures placed *in* a cell (`IMAGE()`, Place in Cell) are not
-read. A workbook without pictures converts as it did. In a library,
+read. A workbook without pictures converts as it did. One with pictures
+does not, with no reader configured either: each picture is a figure in
+every format, its alternative text in the text, Markdown and JSON, the
+elements after it numbered one further, and the graph lists it in
+`doc:unreadImages` (`NotRead`) when nothing read it. In a library,
 `fluree_doc_xlsx::parse_with_ocr` (feature `ocr`) does it with an engine, and
 `parse_with_media` and `read_media` list and read the pictures as DOCX's do.
 

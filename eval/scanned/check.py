@@ -26,6 +26,10 @@ Usage:
     eval/scanned/check.py --models DIR --baseline eval/scanned/baseline.json
     eval/scanned/check.py --models DIR --write-baseline eval/scanned/baseline.json
 
+It measures recall only: a fact is credited when its text is found, and text
+the engine invents costs nothing. With --baseline it fails when the set's
+digest is not the baseline's, unless --allow-digest-mismatch is given.
+
 The binary is target/release/fdoc unless --fdoc or $FDOC_BIN says otherwise;
 the assets directory is --models or $FDOC_OCR_MODELS. Both runs use an empty
 fdoc configuration, so a configured model or OCR engine does not take part:
@@ -354,6 +358,9 @@ def main():
                          "then is not, a heading other than the gold's is read that was not, a document "
                          "is not in it or is not in the set, or it lacks one of its lists")
     ap.add_argument("--write-baseline", type=Path)
+    ap.add_argument("--allow-digest-mismatch", action="store_true",
+                    help="with --baseline, warn rather than fail when the set is not the one the baseline "
+                         "was written on (another platform's bytes)")
     args = ap.parse_args()
     if args.no_ocr and (args.baseline or args.write_baseline):
         ap.error("--baseline and --write-baseline are about the OCR run; drop --no-ocr")
@@ -418,10 +425,17 @@ def main():
         print(f"baseline written to {args.write_baseline}")
     if after and args.baseline:
         baseline = json.loads(args.baseline.read_text())
+        # Another set's pixels read differently: a fact lost, or one found,
+        # may be the pixels rather than fdoc, so a mismatch fails unless the
+        # caller says the comparison is still wanted (another platform).
         if baseline.get("corpus_sha256") != digest:
-            print("WARNING: this set is not the one the baseline was written on (another seed, other "
-                  "versions of the generator's dependencies, or another platform: the bytes hold on one "
-                  "machine, its interpreter's zlib and its wheels); a lost fact may be the pixels, not fdoc")
+            print(f"{'WARNING' if args.allow_digest_mismatch else 'DIGEST MISMATCH'}: this set is not the "
+                  f"one the baseline was written on ({baseline.get('corpus_sha256')}): another seed, other "
+                  "versions of the generator's dependencies, or another platform (the bytes hold on one "
+                  "machine, its interpreter's zlib and its wheels); a lost fact may be the pixels, not fdoc"
+                  + ("" if args.allow_digest_mismatch else ". Pass --allow-digest-mismatch to compare anyway"))
+            if not args.allow_digest_mismatch:
+                rc = 1
         # Each gate reads one of these lists: a baseline without one would pass
         # that gate unchecked, so it fails before any is run.
         listing = ("missed", "gold_headings_read", "other_headings_read")
