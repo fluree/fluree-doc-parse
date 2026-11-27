@@ -280,6 +280,7 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
         doc: Document {
             pages,
             pages_past_limit: past_limit,
+            cut_short: None,
             title: None,
         },
         images,

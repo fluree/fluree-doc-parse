@@ -9256,6 +9256,7 @@ mod tests {
         );
         let mut raw = RawDoc {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page],
             title: None,
         };
@@ -9323,6 +9324,7 @@ mod tests {
         );
         let mut raw = RawDoc {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page],
             title: None,
         };

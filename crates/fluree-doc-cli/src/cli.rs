@@ -38,12 +38,14 @@ pub struct Cli {
 #[command(next_help_heading = "Limits")]
 pub struct LimitArgs {
     /// Memory one document's elements, cells, text and parts may take, in
-    /// MiB (default 2560) [env: FDOC_MAX_MEMORY]
+    /// MiB (default 2560); a PDF past it is read to its last whole page,
+    /// the rest listed unread, `PastMemoryLimit` [env: FDOC_MAX_MEMORY]
     #[arg(long, global = true, value_name = "MIB")]
     pub max_memory: Option<u64>,
 
     /// Steps of the layout passes and parsers' loops one document may take
-    /// (default 268435456) [env: FDOC_MAX_WORK]
+    /// (default 268435456); a PDF past it is read to its last whole page,
+    /// the rest listed unread, `PastWorkLimit` [env: FDOC_MAX_WORK]
     #[arg(long, global = true, value_name = "STEPS")]
     pub max_work: Option<u64>,
 

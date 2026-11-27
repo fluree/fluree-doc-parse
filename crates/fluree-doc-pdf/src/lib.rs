@@ -150,14 +150,24 @@ pub fn unread_pages(
     out
 }
 
-/// The pages after the last one read, past the page limit
-/// ([`Document::pages_past_limit`]): listed `PastPageLimit`, so a document
-/// cut short is never taken for a whole one.
+/// The pages after the last one read ([`Document::pages_past_limit`]),
+/// each listed by the limit that left it unread, so a document cut short
+/// is never taken for a whole one: `PastMemoryLimit` or `PastWorkLimit`
+/// from the page the budget ran out on to the page limit
+/// ([`Document::cut_short`]), `PastPageLimit` past that.
 pub fn past_limit(doc: &Document) -> impl Iterator<Item = fluree_doc_model::UnreadPage> {
     let first = doc.pages.last().map_or(0, |p| p.index + 1);
-    (first..first + doc.pages_past_limit).map(|index| fluree_doc_model::UnreadPage {
+    let (budget, reason) = doc.cut_short.map_or((0, ""), |c| {
+        (c.pages, fluree_doc_model::past_limit_reason(c.limit))
+    });
+    (first..first + doc.pages_past_limit).map(move |index| fluree_doc_model::UnreadPage {
         index,
-        reason: fluree_doc_model::PAST_PAGE_LIMIT.into(),
+        reason: if index < first + budget {
+            reason
+        } else {
+            fluree_doc_model::PAST_PAGE_LIMIT
+        }
+        .into(),
     })
 }
 
@@ -337,8 +347,8 @@ pub mod watermark;
 
 pub use block::Block;
 pub use extract::{
-    extract_bytes, extract_bytes_with, extract_file, extract_pdf, extract_pdf_with, Document,
-    ExtractError, ExtractOptions, ImagePlacement, Page,
+    extract_bytes, extract_bytes_with, extract_file, extract_pdf, extract_pdf_with, CutShort,
+    Document, ExtractError, ExtractOptions, ImagePlacement, Page,
 };
 pub use furniture::Furniture;
 pub use geom::BBox;
@@ -448,6 +458,7 @@ mod tests {
     fn a_routed_region_nothing_read_is_unread_with_its_box() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG, OTHER])],
             title: None,
         };
@@ -464,6 +475,7 @@ mod tests {
     fn a_region_a_model_read_is_not_unread() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG, OTHER])],
             title: None,
         };
@@ -491,6 +503,7 @@ mod tests {
     fn an_image_drawn_twice_in_one_place_is_one_unread_region() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG, OTHER, BIG])],
             title: None,
         };
@@ -501,6 +514,7 @@ mod tests {
         next.index = 1;
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG]), next],
             title: None,
         };
@@ -511,6 +525,7 @@ mod tests {
     fn a_whole_page_reading_reads_every_region() {
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG, OTHER])],
             title: None,
         };
@@ -530,6 +545,7 @@ mod tests {
         });
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p.clone()],
             title: None,
         };
@@ -540,6 +556,7 @@ mod tests {
         p.ocr.as_mut().unwrap().whole = true;
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -561,6 +578,7 @@ mod tests {
         let small = b(50.0, 100.0, 250.0, 130.0);
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[small, BIG])],
             title: None,
         };
@@ -580,6 +598,7 @@ mod tests {
         });
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -588,6 +607,7 @@ mod tests {
         // nothing, and the region is still the router's to decline.
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[small])],
             title: None,
         };
@@ -608,6 +628,7 @@ mod tests {
         let doc = Document {
             pages: vec![p],
             pages_past_limit: 0,
+            cut_short: None,
             title: None,
         };
         assert_eq!(route::decide(&doc.pages[0]).0, route::Route::Deterministic);
@@ -628,6 +649,7 @@ mod tests {
         }
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p.clone()],
             title: None,
         };
@@ -646,6 +668,7 @@ mod tests {
         });
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![read],
             title: None,
         };
@@ -668,6 +691,7 @@ mod tests {
         }));
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![covered],
             title: None,
         };
@@ -675,6 +699,7 @@ mod tests {
         // A model's reading of the whole page reads it too.
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[BIG])],
             title: None,
         };
@@ -689,6 +714,7 @@ mod tests {
         let small = b(50.0, 100.0, 250.0, 130.0);
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![page(&[small, BIG, small])],
             title: None,
         };
@@ -702,6 +728,7 @@ mod tests {
         }
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -734,6 +761,7 @@ mod tests {
         assert_eq!(route::decide(&p).0, route::Route::Deterministic);
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -755,6 +783,7 @@ mod tests {
         assert_ne!(shown, BIG);
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };
@@ -778,6 +807,7 @@ mod tests {
         b.warnings = vec!["ImageDecodeFailure"];
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![a, page(&[]), b],
             title: None,
         };
@@ -803,6 +833,7 @@ mod tests {
         p.glyphs.clear();
         let doc = Document {
             pages_past_limit: 0,
+            cut_short: None,
             pages: vec![p],
             title: None,
         };

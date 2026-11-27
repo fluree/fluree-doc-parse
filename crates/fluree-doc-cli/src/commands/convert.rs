@@ -1293,6 +1293,7 @@ fn convert_image(
             );
         }
     }
+    past_limits(stem, &notes, args.format, quiet);
     Ok(render(&elements, src, args, sizes, &notes))
 }
 
@@ -1996,8 +1997,8 @@ fn render_image_ocr(read: ImageOcr, src: &Source, args: &ConvertArgs, quiet: boo
     warn_listed_scores(read.scores, &read.notes.ocr, quiet);
     if let (Some(note), false) = (read.notes.summary(), quiet) {
         eprintln!("warning: {}: {note}", src.stem);
-        past_page_limit(src.stem, &read.notes);
     }
+    past_limits(src.stem, &read.notes, args.format, quiet);
     render(&read.elements, src, args, read.sizes, &read.notes)
 }
 
@@ -2177,12 +2178,30 @@ fn ocr_image(
     })
 }
 
-/// Where a document was read only to the page limit, the flag that raises
-/// it, on stderr.
-fn past_page_limit(stem: &str, notes: &fluree_doc_model::Notes) {
-    let past = |u: &&fluree_doc_model::UnreadPage| u.reason == fluree_doc_model::PAST_PAGE_LIMIT;
-    if let Some(first) = notes.unread.iter().filter(past).map(|u| u.index).min() {
-        eprintln!("note: {stem}: read to page {first} (raise it with --max-pages)");
+/// Where a limit left a document's pages unread, the page it was read to
+/// and the flag that raises the limit that stopped it, on stderr: the
+/// budget's where it ran out first, else the page limit's.
+///
+/// Said under `--quiet` too where the output carries no notes (`-f json`,
+/// `-f text`): nothing else would tell a document read short from a whole
+/// one. The others list each page in band.
+fn past_limits(stem: &str, notes: &fluree_doc_model::Notes, format: Format, quiet: bool) {
+    if quiet && !matches!(format, Format::Json | Format::Text) {
+        return;
+    }
+    let first = (notes.unread.iter())
+        .filter(|u| fluree_doc_model::is_past_limit(&u.reason))
+        .min_by_key(|u| u.index);
+    if let Some(first) = first {
+        let flag = match first.reason.as_str() {
+            fluree_doc_model::PAST_MEMORY_LIMIT => "--max-memory",
+            fluree_doc_model::PAST_WORK_LIMIT => "--max-work",
+            _ => "--max-pages",
+        };
+        eprintln!(
+            "note: {stem}: read to page {} (raise it with {flag})",
+            first.index
+        );
     }
 }
 
@@ -2626,8 +2645,8 @@ fn convert_bytes(
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {stem}: {note}");
-        past_page_limit(src.stem, &notes);
     }
+    past_limits(stem, &notes, args.format, quiet);
     if !quiet {
         for line in parse_warning_lines(&notes.warnings) {
             eprintln!("warning: {stem}: {line}");
@@ -2879,8 +2898,8 @@ fn convert_xps(
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {stem}: {note}");
-        past_page_limit(src.stem, &notes);
     }
+    past_limits(stem, &notes, args.format, quiet);
     let asked_pages = doc.pages.iter().filter(|p| asked(p.index)).count();
     if let Some(why) = read_nothing(doc.pages.len(), asked_pages, &a.elements, &notes) {
         if args.strict {

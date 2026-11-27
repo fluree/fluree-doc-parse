@@ -299,14 +299,33 @@ impl Page {
 #[derive(Clone)]
 pub struct Document {
     pub pages: Vec<Page>,
-    /// Pages the file holds after the last one read, past the page limit
-    /// ([`Limits::pages`](fluree_doc_model::budget::Limits::pages)): not
-    /// read, and listed unread, `PastPageLimit`, by [`crate::unread_pages`].
+    /// Pages the file holds after the last one read: past the page limit
+    /// ([`Limits::pages`](fluree_doc_model::budget::Limits::pages)), or
+    /// left by the budget ([`Document::cut_short`]). Not read, and listed
+    /// unread by [`crate::unread_pages`].
     pub pages_past_limit: usize,
+    /// Where the budget ran out before the page limit: the document is
+    /// read to the last page whole, and the pages from there to the page
+    /// limit, the first of [`Document::pages_past_limit`], listed unread
+    /// by the limit passed (`PastMemoryLimit`, `PastWorkLimit`); those
+    /// past the page limit as well are `PastPageLimit`. `None` where the
+    /// reading ran to the page limit or to the end.
+    pub cut_short: Option<CutShort>,
     /// The title the file's information dictionary states (`/Title`), as
     /// written: what the document is called by whoever made the file, and
     /// often stale or a file's name.
     pub title: Option<String>,
+}
+
+/// The budget passed on a page after the first ([`Document::cut_short`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CutShort {
+    /// Which: [`Limit::Memory`](fluree_doc_model::budget::Limit::Memory)
+    /// or [`Limit::Work`](fluree_doc_model::budget::Limit::Work).
+    pub limit: fluree_doc_model::budget::Limit,
+    /// The pages it left unread before the page limit, from the one it was
+    /// passed on.
+    pub pages: usize,
 }
 
 impl Document {
@@ -2428,6 +2447,7 @@ pub fn extract_pdf_with(
     // Past the page limit, the pages are not read, and said to be.
     let all = pdf.pages();
     let read = all.len().min(fluree_doc_model::budget::limits().pages);
+    let mut cut_short = None;
     for (index, page) in all.iter().take(read).enumerate() {
         let (w, h) = page.render_dimensions();
         faces.read(page);
@@ -2477,7 +2497,11 @@ pub fn extract_pdf_with(
             settings.clone(),
         );
         // Stopped by the collector once the budget is spent, the page is
-        // left where it stopped, and the document refused.
+        // left where it stopped, and dropped: the document is read to the
+        // page before, and the rest listed unread, as past the page limit.
+        // A text PDF of 5,000 pages, past the memory at its 3,500th or so,
+        // is read to there rather than refused. A first page past it alone
+        // leaves nothing read: refused.
         let interpreted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             interpret_page(page, &mut ctx, &mut dev)
         }));
@@ -2487,7 +2511,18 @@ pub fn extract_pdf_with(
             }
         }
         if let Some(e) = dev.over.take() {
-            return Err(ExtractError::TooLarge(e));
+            use fluree_doc_model::budget::Limit;
+            if index == 0 || !matches!(e.limit(), Limit::Memory | Limit::Work) {
+                return Err(ExtractError::TooLarge(e));
+            }
+            // What the pages before it found, read again once all are.
+            letters = std::mem::take(&mut dev.letters);
+            faces = std::mem::take(&mut dev.faces);
+            cut_short = Some(CutShort {
+                limit: e.limit(),
+                pages: read - index,
+            });
+            break;
         }
         // A span the page left open still covers what it drew.
         while let Some(open) = dev.open.pop() {
@@ -2586,8 +2621,9 @@ pub fn extract_pdf_with(
     }
 
     Ok(Document {
+        pages_past_limit: all.len() - pages.len(),
         pages,
-        pages_past_limit: all.len() - read,
+        cut_short,
         title: crate::info::read(&pdf).title,
     })
 }
@@ -3859,10 +3895,65 @@ mod budget_tests {
         }
         assert!(within(need, 1 << 20, letters()).is_ok());
         // Each line spent once, not each glyph, and the largest page's
-        // glyphs once, not each page's.
+        // glyphs once, not each page's: a byte less, and the fifth page is
+        // not read.
         let need = letters_cost(5);
-        assert!(within(need, 1 << 20, letters_on(5)).is_ok());
-        assert!(within(need - 1, 1 << 20, letters_on(5)).is_err());
+        assert_eq!(within(need, 1 << 20, letters_on(5)).unwrap().pages.len(), 5);
+        let short = within(need - 1, 1 << 20, letters_on(5)).unwrap();
+        assert_eq!(short.pages.len(), 4);
+    }
+
+    /// The reasons the pages after the last one read are listed by.
+    fn past(doc: &Document) -> Vec<(usize, String)> {
+        crate::past_limit(doc)
+            .map(|u| (u.index, u.reason))
+            .collect()
+    }
+
+    #[test]
+    fn a_long_text_pdf_past_its_budget_is_read_to_the_last_whole_page() {
+        // Forty pages of a thousand glyphs, the memory enough for ten and
+        // a half: read to the tenth, the thirty after it listed unread by
+        // the memory, rather than the document refused.
+        let doc = within(
+            letters_cost(10) + 500 * GLYPH_BYTES,
+            1 << 30,
+            letters_on(40),
+        )
+        .unwrap();
+        assert_eq!(doc.pages.len(), 10);
+        assert!(doc.pages.iter().all(|p| p.glyphs.len() == 1000));
+        assert_eq!(doc.pages_past_limit, 30);
+        assert_eq!(
+            doc.cut_short,
+            Some(CutShort {
+                limit: Limit::Memory,
+                pages: 30
+            })
+        );
+        let listed = past(&doc);
+        assert_eq!(listed.len(), 30);
+        assert_eq!(listed[0], (10, "PastMemoryLimit".to_string()));
+        assert!(listed.iter().all(|(_, r)| r == "PastMemoryLimit"));
+        // With a page limit of 20 as well: the memory's to it, the page
+        // limit's past it, whichever is raised first.
+        let mut l = Limits::default();
+        (l.memory, l.work, l.pages) = (letters_cost(10) + 500 * GLYPH_BYTES, 1 << 30, 20);
+        let doc = limited_to(l, || extract_bytes(letters_on(40))).unwrap();
+        assert_eq!((doc.pages.len(), doc.pages_past_limit), (10, 30));
+        let listed = past(&doc);
+        assert_eq!(listed[9], (19, "PastMemoryLimit".to_string()));
+        assert_eq!(listed[10], (20, "PastPageLimit".to_string()));
+        assert_eq!(listed.last().unwrap().0, 39);
+        // The work runs out the same way: a step a glyph, two pages and a
+        // half.
+        let doc = within(1 << 30, 2500, letters_on(6)).unwrap();
+        assert_eq!(doc.pages.len(), 2);
+        assert_eq!(past(&doc)[0], (2, "PastWorkLimit".to_string()));
+        // Within both, read whole and nothing listed.
+        let doc = within(1 << 30, 1 << 30, letters_on(6)).unwrap();
+        assert_eq!((doc.pages.len(), doc.cut_short), (6, None));
+        assert!(past(&doc).is_empty());
     }
 
     #[test]
