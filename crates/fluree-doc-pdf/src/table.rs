@@ -1299,6 +1299,17 @@ impl Grid {
         if row0.iter().all(|c| c.trim().is_empty()) {
             return 0;
         }
+        // A first row of numbered fields (`1. DATE OF ORDER`, `2. CONTRACT
+        // NO. …`, `6. SHIP TO:`) is a form's: each names its own box, and
+        // no column under it.
+        let filled: Vec<&str> = row0
+            .iter()
+            .map(|c| c.trim())
+            .filter(|c| !c.is_empty())
+            .collect();
+        if filled.len() >= 2 && filled.iter().all(|c| numbered_field(c)) {
+            return 0;
+        }
         let mut run = self.leading_fill_run(fills);
         // The run's last row is the body's first stripe where the rows from
         // it on are shaded every other row and it holds figures as they do:
@@ -5097,15 +5108,112 @@ pub fn detect_framed(
     page: usize,
     frames: &[BBox],
 ) -> Vec<Grid> {
-    with_column_bands(
-        with_header_band_edges(
-            detect_framed_rules(rules, fills, glyphs, page, frames),
-            fills,
-            glyphs,
-        ),
-        rules,
-        glyphs,
-    )
+    let grids = detect_framed_rules(rules, fills, glyphs, page, frames)
+        .into_iter()
+        .map(|g| cut_page_head(g, rules, glyphs))
+        .collect();
+    with_column_bands(with_header_band_edges(grids, fills, glyphs), rules, glyphs)
+}
+
+/// Whether a cell opens on a form's field number and the field's name: one
+/// or two digits and a stop, then a capital (`1. DATE OF ORDER`, `12.
+/// F.O.B. POINT`).
+fn numbered_field(text: &str) -> bool {
+    let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+    (1..=2).contains(&digits.len())
+        && text[digits.len()..].starts_with(". ")
+        && text[digits.len() + 2..]
+            .chars()
+            .next()
+            .is_some_and(char::is_uppercase)
+}
+
+/// Whether a cell's text is a page counter and nothing else: `PAGE 1 OF
+/// 30`, `Page 2 of 7`, a form's `PAGE OF PAGES` box with its two figures.
+fn page_counter(text: &str) -> bool {
+    let words: Vec<String> = text.split_whitespace().map(|w| w.to_lowercase()).collect();
+    words.len() <= 6
+        && words.first().is_some_and(|w| w == "page")
+        && words.iter().any(|w| w == "of")
+        && words.iter().any(|w| w.chars().all(|c| c.is_ascii_digit()))
+        && words.iter().all(|w| {
+            matches!(w.as_str(), "page" | "of" | "pages") || w.chars().all(|c| c.is_ascii_digit())
+        })
+}
+
+/// Most rows a form's head band runs to: its title and a notice under it.
+const PAGE_HEAD_ROWS: usize = 2;
+
+/// A ruled grid cut under the page's head: its first rows a band holding
+/// the page's counter (`PAGE OF PAGES` over `1 30`, read down its column)
+/// beside a line or two of words and no figure (the form's title, a
+/// notice), down to the first rule across the grid under the counter. A
+/// form sets its head inside its frame; the head names nothing of the
+/// fields under it, and a row of it is no header. The band's text is read
+/// as the page's.
+fn cut_page_head(g: Grid, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) -> Grid {
+    if g.layout.is_some() || g.rows() < PAGE_HEAD_ROWS + 3 {
+        return g;
+    }
+    let cols = g.cols();
+    let texts = g.cell_texts(glyphs);
+    let cell = |r: usize, c: usize| texts[r * cols + c].trim();
+    // The counter's column, and the rows it is read down.
+    let down = |c: usize, rows: usize| {
+        (0..rows)
+            .map(|r| cell(r, c))
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let Some((counter, rows)) = (0..cols).find_map(|c| {
+        (1..=PAGE_HEAD_ROWS)
+            .find(|&n| page_counter(&down(c, n)))
+            .map(|n| (c, n))
+    }) else {
+        return g;
+    };
+    let (x0, x1) = (g.xs[0], g.xs[cols]);
+    let counter_bottom = glyphs
+        .iter()
+        .filter(|gl| !gl.text.trim().is_empty())
+        .filter_map(|gl| gl.bbox.map(|b| (gl.center(), b)))
+        .filter(|((x, y), _)| {
+            *x >= g.xs[counter] && *x < g.xs[counter + 1] && *y >= g.ys[0] && *y < g.ys[rows]
+        })
+        .map(|(_, b)| b.y1)
+        .fold(f64::MIN, f64::max);
+    // The first boundary under it a rule runs across the grid along.
+    let across = |y: f64| {
+        rules.iter().any(|r| {
+            r.orientation == Orientation::Horizontal
+                && (r.axis_pos() - y).abs() <= EDGE_TOLERANCE
+                && r.bbox.x0 <= x0 + EDGE_TOLERANCE
+                && r.bbox.x1 >= x1 - EDGE_TOLERANCE
+        })
+    };
+    let Some(cut) = (1..=PAGE_HEAD_ROWS).find(|&k| g.ys[k] > counter_bottom && across(g.ys[k]))
+    else {
+        return g;
+    };
+    // Beside the counter, each row of the band a line of words: no figure.
+    let words_only = (0..cut).all(|r| {
+        (0..cols)
+            .filter(|&c| c != counter)
+            .all(|c| !cell(r, c).chars().any(|ch| ch.is_ascii_digit()))
+    });
+    if !words_only || g.rows() - cut < 3 {
+        return g;
+    }
+    let ys = g.ys[cut..].to_vec();
+    Grid {
+        bbox: BBox {
+            y0: ys[0],
+            ..g.bbox
+        },
+        ys,
+        ..g
+    }
 }
 
 /// [`detect_framed`]'s grids, as the rules alone give them.
