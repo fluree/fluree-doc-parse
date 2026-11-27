@@ -475,7 +475,10 @@ mod tests {
                    <tr><td rowspan=\"2\">North</td><td>4</td></tr>\n\
                    <tr><td>5</td></tr>\n</table>\n\nAfter.\n";
         let els = parse(src);
-        assert_eq!(kinds(&els), ["doco:Paragraph", "doco:Table", "doco:Paragraph"]);
+        assert_eq!(
+            kinds(&els),
+            ["doco:Paragraph", "doco:Table", "doco:Paragraph"]
+        );
         let t = &els[1];
         assert_eq!(
             t.cells.as_deref().unwrap(),
