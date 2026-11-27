@@ -5387,6 +5387,80 @@ pub fn continued_row(
         .count();
     (held >= 2).then_some(g)
 }
+/// A table's head stranded at its page's foot: the break fell under the
+/// header's first row, the rest of the table on the next page (the arms,
+/// `Drug A n=429 | Drug B n=425`, ruled at one page's foot; `All Grades |
+/// Grades 3-4` under them and the body at the next page's head). One ruled
+/// row stands alone as no table, and the head was read as paragraphs, the
+/// next page's part headed by its own row alone.
+///
+/// It is one ruled row that ends its page ([`ends_page`]), set as a header
+/// is (bold in each cell, or shaded), with labels in two cells or more and
+/// no figures, and the next page opens on a table drawn at its columns
+/// ([`opens_under`]). A row of a table's body is set as the rows under it
+/// are (`• Diagnostic tests | $0 Talk to your provider`, `Authorized
+/// entrants: | Refer to the daily roster`): bold nowhere, or in its label
+/// alone. A column's name is a phrase ([`HEAD_LABEL_WORDS`]); captions
+/// boxed side by side at the foot, over the next page's figures in boxes
+/// at the same places, are sentences.
+///
+/// Its table's ruling, `drawn_to` before its empty rows were trimmed, ends
+/// under the row, or runs on past the page's last line: the break cut it
+/// there. A form's labels ruled over an empty box for entries, closed
+/// above the page's folio, are a table ending on its page.
+pub fn stranded_head(
+    g: &Grid,
+    drawn_to: f64,
+    glyphs: &[crate::glyph::Glyph],
+    fills: &[crate::rule::Fill],
+) -> bool {
+    if g.rows() != 1 || g.cols() < 2 || !ends_page(g, glyphs) {
+        return false;
+    }
+    if drawn_to > g.bbox.y1 + EDGE_TOLERANCE && lines_where(glyphs, |b| b.y0 >= drawn_to) > 0 {
+        return false;
+    }
+    if !g.cells_are_bold(glyphs, 0) && !g.band_has_fill(fills, 0) {
+        return false;
+    }
+    let cells = g.cell_texts(glyphs);
+    let labels: Vec<&str> = cells
+        .iter()
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .collect();
+    labels.len() >= 2
+        && !labels
+            .iter()
+            .any(|c| is_numeric_cell(c) || c.split_whitespace().count() > HEAD_LABEL_WORDS)
+}
+
+/// Most words a column's name in a stranded head holds: an arm with its
+/// dose and count (`Drug A 200 mg every 3 weeks in combination with Drug B
+/// n=403`) runs to a dozen or so; a caption runs to sentences.
+const HEAD_LABEL_WORDS: usize = 20;
+
+/// Does the page whose ruled tables are `next` open on a table whose
+/// columns are drawn where `head`'s are, to within `tolerance`:
+/// [`BREAK_LINES`] lines or fewer over its first table, and as many column
+/// edges, each at one of `head`'s?
+pub fn opens_under(
+    head: &Grid,
+    next: &[Grid],
+    next_glyphs: &[crate::glyph::Glyph],
+    tolerance: f64,
+) -> bool {
+    let Some(opening) = next.iter().min_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0)) else {
+        return false;
+    };
+    lines_where(next_glyphs, |b| b.y1 <= opening.bbox.y0) <= BREAK_LINES
+        && opening.xs.len() == head.xs.len()
+        && opening
+            .xs
+            .iter()
+            .zip(&head.xs)
+            .all(|(a, b)| (a - b).abs() <= tolerance)
+}
 
 /// Detect table grids on a page from its ruling lines.
 ///
@@ -14131,6 +14205,98 @@ mod tests {
         let mut over = row.clone();
         over.extend([mk(80.0, 10.0), mk(80.0, 22.0), mk(80.0, 34.0)]);
         assert!(continued_row(&tail, &ruled(&[50.0, 66.0]), &over, &[], 1).is_none());
+    }
+
+    #[test]
+    fn a_tables_head_stranded_at_the_page_foot_heads_the_next_pages_table() {
+        let glyph = |text: &str, x: f64, y: f64, weight: Option<u32>| crate::glyph::Glyph {
+            text: text.into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: y,
+                x1: x + (6.0 * text.len() as f64).min(100.0),
+                y1: y + 10.0,
+            }),
+            page: 0,
+            origin: (x, y + 10.0),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight,
+            italic: false,
+            advance: None,
+            draw_index: 0,
+            ocr: None,
+        };
+        let mk = |text: &str, x: f64, y: f64| glyph(text, x, y, None);
+        let bold = |text: &str, x: f64, y: f64| glyph(text, x, y, Some(700));
+        let xs = vec![68.0, 183.0, 297.0, 411.0];
+        let grid = |xs: &[f64], ys: &[f64]| Grid {
+            page: 0,
+            xs: xs.to_vec(),
+            ys: ys.to_vec(),
+            bbox: BBox {
+                x0: xs[0],
+                y0: ys[0],
+                x1: xs[xs.len() - 1],
+                y1: ys[ys.len() - 1],
+            },
+            layout: None,
+        };
+        // The arms ruled at the page's foot, a folio under them.
+        let head = grid(&xs, &[720.0, 750.0]);
+        let page = vec![
+            bold("Reaction", 72.0, 728.0),
+            bold("ArmA", 190.0, 728.0),
+            bold("ArmB", 300.0, 728.0),
+            mk("12", 300.0, 770.0),
+        ];
+        assert!(stranded_head(&head, 750.0, &page, &[]));
+        // A row set as a body's rows are is no head.
+        let plain = vec![
+            mk("Reaction", 72.0, 728.0),
+            mk("ArmA", 190.0, 728.0),
+            mk("ArmB", 300.0, 728.0),
+        ];
+        assert!(!stranded_head(&head, 750.0, &plain, &[]));
+        // A row of figures is a table's last row, not its head.
+        let figures = vec![
+            bold("Total", 72.0, 728.0),
+            bold("56", 190.0, 728.0),
+            bold("45", 300.0, 728.0),
+        ];
+        assert!(!stranded_head(&head, 750.0, &figures, &[]));
+        // Captions boxed side by side are sentences, no column's names.
+        let caption = "Figure 3 The artery lies in front of the vein. The image was taken a little below the ligament, and the artery has divided.";
+        let captions = vec![bold(caption, 72.0, 728.0), bold(caption, 190.0, 728.0)];
+        assert!(!stranded_head(&head, 750.0, &captions, &[]));
+        // Ruled on under the row to an empty box above the folio: the
+        // table ends on its page. Ruled on past the page's last line: the
+        // break cut it.
+        assert!(!stranded_head(&head, 765.0, &page, &[]));
+        assert!(stranded_head(&head, 792.0, &page, &[]));
+        // Prose under the row: the page goes on, and the row is no head.
+        let mut prose = page.clone();
+        prose.extend([
+            mk("text", 72.0, 760.0),
+            mk("text", 72.0, 774.0),
+            mk("text", 72.0, 788.0),
+        ]);
+        assert!(!stranded_head(&head, 750.0, &prose, &[]));
+        // The next page opens on the table, its columns drawn at the head's.
+        let body = grid(&xs, &[50.0, 66.0, 82.0, 98.0]);
+        let next = vec![mk("Nausea", 72.0, 52.0), mk("28", 190.0, 52.0)];
+        assert!(opens_under(&head, &[body.clone()], &next, 3.0));
+        // A table at other columns is another table.
+        let other = grid(&[68.0, 240.0, 411.0], &[50.0, 66.0, 82.0]);
+        assert!(!opens_under(&head, &[other], &next, 3.0));
+        // Prose over the table: the next page does not open on it.
+        let mut over = next.clone();
+        over.extend([
+            mk("text", 72.0, 10.0),
+            mk("text", 72.0, 22.0),
+            mk("text", 72.0, 34.0),
+        ]);
+        assert!(!opens_under(&head, &[body], &over, 3.0));
     }
 
     #[test]

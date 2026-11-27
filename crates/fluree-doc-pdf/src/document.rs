@@ -996,13 +996,20 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             })
             && !runs_on.is_empty();
         let repeats = repeats || repeats_run_on;
+        // A part opening on a section's band under a part that is all
+        // header (`Monotherapy` across the columns under `Indication |
+        // Recommended Dosage | Duration`) carries on under that header: the
+        // band heads its section's rows and names no column.
+        let opens_band = next.sub_headers.as_ref().is_some_and(|s| s.contains(&0));
+        let under_head = prev.header_only() && opens_band;
         let finishes_header = prev.header_only()
+            && !opens_band
             && rows.len() > 1
             && b.bold
             && rows[0]
                 .iter()
                 .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()));
-        if b.styled && !repeats && !finishes_header {
+        if b.styled && !repeats && !finishes_header && !under_head {
             continue;
         }
         let heads: Vec<(usize, usize, String, String)> = runs_on
@@ -3926,6 +3933,9 @@ struct PageLayout {
     /// ([`picture_table`]): the page's text, as a picture read as text is,
     /// and no figure.
     picture_tables: Vec<crate::geom::BBox>,
+    /// The ruled rows kept as the head of the table the next page opens
+    /// on ([`table::stranded_head`]).
+    stranded_heads: Vec<crate::geom::BBox>,
 }
 
 /// A picture's lettering, read by OCR inside it and assembled on its own:
@@ -5506,7 +5516,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // The ruled table ending the page before, its last row perhaps printed
     // at the head of this one ([`table::continued_row`]).
     let mut tail: Option<Grid> = None;
-    for (p, route) in raw.pages.iter_mut().zip(routes) {
+    for (i, route) in routes.into_iter().enumerate() {
+        // The page, and the page after it: a table's head stranded at this
+        // page's foot is the head of the table opening the next.
+        let (pages, after) = raw.pages.split_at_mut(i + 1);
+        let p = &mut pages[i];
+        let next = after.first();
         // A picture's lettering is read apart from the page's text, before
         // any reader of the page's text sees it.
         let (lettering, picture_tables) = take_lettering(p);
@@ -5537,12 +5552,37 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // handful of cells after it, which is exactly what happens on a form
         // of separate labelled boxes. Whichever survives trimming with more
         // populated cells is the one that explains the page.
-        let trim = |mut gs: Vec<Grid>| -> Vec<Grid> {
-            for g in gs.iter_mut() {
-                g.trim_to_content_ruled(&p.glyphs, &p.rules);
-            }
-            gs.retain(|g| g.rows() >= 2 && g.cols() >= 1);
-            gs
+        //
+        // One ruled row is no table, unless it is the head of the table the
+        // next page opens on, stranded at this page's foot
+        // ([`table::stranded_head`]). The next page's ruled tables are read
+        // for it only then.
+        let next_grids = std::cell::OnceCell::new();
+        let opens_next = |g: &Grid| -> bool {
+            let Some(n) = next else {
+                return false;
+            };
+            let grids = next_grids.get_or_init(|| {
+                let mut gs = table::detect_framed(&n.rules, &n.fills, &n.glyphs, n.index, &[]);
+                for g in gs.iter_mut() {
+                    g.trim_to_content_ruled(&n.glyphs, &n.rules);
+                }
+                gs.retain(|g| g.rows() >= 2 && g.cols() >= 1);
+                gs
+            });
+            table::opens_under(g, grids, &n.glyphs, CONTINUED_EDGE_TOLERANCE)
+        };
+        let trim = |gs: Vec<Grid>| -> Vec<Grid> {
+            gs.into_iter()
+                .filter_map(|mut g| {
+                    let drawn_to = g.bbox.y1;
+                    g.trim_to_content_ruled(&p.glyphs, &p.rules);
+                    ((g.rows() >= 2 && g.cols() >= 1)
+                        || (table::stranded_head(&g, drawn_to, &p.glyphs, &p.fills)
+                            && opens_next(&g)))
+                    .then_some(g)
+                })
+                .collect()
         };
         let filled = |gs: &[Grid]| -> usize {
             gs.iter()
@@ -5581,6 +5621,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 grid_sources = vec![GridSource::Ruled; grids.len()];
             }
         }
+        // The ruled rows kept as the heads of the next page's table: one
+        // row is kept only as that.
+        let stranded_heads: Vec<crate::geom::BBox> = grids
+            .iter()
+            .filter(|g| g.rows() == 1)
+            .map(|g| g.bbox)
+            .collect();
 
         if grids.is_empty() {
             let mut fill_grids = timed(&mut timings.tables, || {
@@ -6460,6 +6507,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             demoted_tables: demoted,
             lettering,
             picture_tables,
+            stranded_heads,
         });
     }
 
@@ -7651,6 +7699,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // A table opening on its first section's band has no header row.
             if first_band {
                 header_rows = 0;
+            }
+            // A table's head stranded at the page's foot is all head, its
+            // body on the next page.
+            if rows.len() == 1 && layout.stranded_heads.contains(&g.bbox) {
+                header_rows = 1;
             }
             // A merged cell is read whole, into its top-left cell. Its words
             // were dealt out by the grid's cuts through it, which split a
@@ -10857,6 +10910,42 @@ mod tests {
             els[1].header_rows,
             Some(1),
             "the grades row finishes the header"
+        );
+    }
+
+    #[test]
+    fn a_band_under_a_head_stranded_by_the_break_opens_its_first_section() {
+        // The head alone at one page's foot; the next page opens on the
+        // first section's band, bold across the columns.
+        let (a, fa) = part(
+            "elem-00001",
+            0,
+            &[&["Indication", "Dosage", "Duration"]],
+            1,
+            &XS,
+            false,
+            true,
+        );
+        let (mut b, fb) = part(
+            "elem-00002",
+            1,
+            &[
+                &["Monotherapy", "", ""],
+                &["Melanoma", "200 mg", "Until progression"],
+            ],
+            1,
+            &XS,
+            true,
+            true,
+        );
+        b.sub_headers = Some(vec![0]);
+        let mut els = vec![a, b];
+        link_continued_tables(&mut els, &[fa, fb]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(
+            els[1].header_rows,
+            Some(0),
+            "the band names no column: the head is the first part's"
         );
     }
 
