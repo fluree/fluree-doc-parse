@@ -467,12 +467,52 @@ fn batch_jobs(
     )
 }
 
-/// The memory free to this process, the least of: what the system has
-/// available (`MemAvailable`), what its control groups leave it (a
-/// container's limit), and what its address space may grow to; `None` where
-/// none is known (outside Linux).
+/// The memory free to this process. On Linux, the least of: what the
+/// system has available (`MemAvailable`), what its control groups leave it
+/// (a container's limit), and what its address space may grow to. On
+/// macOS, what `vm_stat` counts free, inactive or speculative, the pages
+/// the system hands out before it compresses or swaps ([`vm_stat_available`]);
+/// a limit on the process is not looked at there. `None` where nothing is
+/// known (on any other system).
 pub(crate) fn free_memory() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    if let Some(free) = std::process::Command::new("/usr/bin/vm_stat")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| vm_stat_available(&String::from_utf8_lossy(&o.stdout)))
+    {
+        return Some(free);
+    }
     free_memory_in(|path| std::fs::read_to_string(path).ok())
+}
+
+/// The bytes `vm_stat`'s report `out` counts free, inactive or speculative,
+/// at the page size its first line states; `None` where it states none, or
+/// counts none of them.
+#[cfg(any(test, target_os = "macos"))]
+fn vm_stat_available(out: &str) -> Option<u64> {
+    let page: u64 = out
+        .split("page size of ")
+        .nth(1)?
+        .split(' ')
+        .next()?
+        .parse()
+        .ok()?;
+    let mut pages = None;
+    for line in out.lines() {
+        let Some((name, count)) = line.split_once(':') else {
+            continue;
+        };
+        if matches!(
+            name.trim(),
+            "Pages free" | "Pages inactive" | "Pages speculative"
+        ) {
+            let n: u64 = count.trim().trim_end_matches('.').parse().ok()?;
+            pages = Some(pages.unwrap_or(0u64).saturating_add(n));
+        }
+    }
+    pages.map(|p| p.saturating_mul(page))
 }
 
 /// [`free_memory`], its files read by `read`.
@@ -3283,6 +3323,25 @@ mod tests {
         // Not known: one per core at most.
         assert_eq!(batch_jobs(0, 6, None, 0, 0), (6, None));
         assert_eq!(batch_jobs(16, 6, None, 0, 0).0, 6);
+    }
+
+    #[test]
+    fn the_memory_free_on_macos_is_what_vm_stat_counts_free() {
+        let report = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n\
+            Pages free:                               10000.\n\
+            Pages active:                            400000.\n\
+            Pages inactive:                          200000.\n\
+            Pages speculative:                         5000.\n\
+            Pages throttled:                              0.\n\
+            Pages wired down:                        150000.\n\
+            Pages purgeable:                          20000.\n\
+            \"Translation faults\":                 123456789.\n";
+        assert_eq!(vm_stat_available(report), Some(215_000 * 16384));
+        assert_eq!(vm_stat_available("Pages free: 10.\n"), None);
+        assert_eq!(
+            vm_stat_available("(page size of 4096 bytes)\nPages active: 3.\n"),
+            None
+        );
     }
 
     #[test]
