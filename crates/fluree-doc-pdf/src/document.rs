@@ -930,6 +930,43 @@ fn running_over_parts(elements: &[Element]) -> Vec<bool> {
                     .zip(b.bbox)
                     .is_some_and(|(r, t)| r.y1 <= t.y0 + RUNNING_PLACE)
         };
+        // A page that sets its head as another page does, over a part
+        // opening as the part before it opened, on the label its first row
+        // opens with (`Form Factor` over each page's list of drives, a
+        // form's `1 a Form 8949 …` box by box), prints its own copy of the
+        // block, and the head is the copy's. Only a header repeated whole
+        // opens the rest of the table.
+        fn words(t: &String) -> Vec<&str> {
+            t.split_whitespace().collect()
+        }
+        let opens_alike = match (a.cells.as_deref(), b.cells.as_deref()) {
+            (Some([x, ..]), Some([y, ..])) => x.first().zip(y.first()).is_some_and(|(p, q)| {
+                !p.trim().is_empty() && !table::is_numeric_cell(p.trim()) && words(p) == words(q)
+            }),
+            _ => false,
+        };
+        let n = a.header_rows.unwrap_or(0);
+        let head_again = n > 0
+            && a.cells
+                .as_ref()
+                .zip(b.cells.as_ref())
+                .is_some_and(|(x, y)| {
+                    x.len() >= n
+                        && y.len() > n
+                        && x[..n]
+                            .iter()
+                            .zip(&y[..n])
+                            .all(|(p, q)| p.iter().map(words).eq(q.iter().map(words)))
+                });
+        // A part with a header of its own that is not that one again (a
+        // title band set into the first page's grid, read out as text over
+        // the next) is a table set on the page in its own right: the link
+        // over a page's head is for a part carried on as rows alone, or
+        // under its header repeated whole.
+        let headless = b.header_rows.unwrap_or(0) == 0;
+        if (opens_alike || !headless) && !head_again {
+            continue;
+        }
         if between.iter().all(|&n| over(n) && repeated(n)) {
             for &n in between {
                 running[n] = true;
@@ -11491,6 +11528,36 @@ mod tests {
         assert_eq!(linked(head(1, 20.0, "PRICING SCHEDULE")), None);
         // Words of the page's own over the second table are between them.
         assert_eq!(linked(head(1, 0.0, "RATES FOR OPTION YEAR 1")), None);
+
+        // Under the head, a part that repeats the header whole carries on.
+        let with_second = |second: &[&[&str]], header: usize| {
+            let (a, fa) = part("elem-00001", 0, rows, 1, &XS, true, true);
+            let (b, fb) = part("elem-00002", 1, second, header, &XS, false, false);
+            let mut els: Vec<Element> = head(0, 0.0, "PRICING SCHEDULE").into();
+            els.push(a);
+            els.extend(head(1, 0.0, "PRICING SCHEDULE"));
+            els.push(b);
+            link_continued_tables(&mut els, &[fa, fb]);
+            els[5].continues.clone()
+        };
+        let again: &[&[&str]] = &[
+            &["Category", "Hours", "Rate"],
+            &["Analyst II", "2,820", "$51.99"],
+        ];
+        assert_eq!(with_second(again, 1).as_deref(), Some("elem-00001"));
+        // One with a header of its own is a table set on its page.
+        let own: &[&[&str]] = &[
+            &["Labor", "Hours", "Rate"],
+            &["Analyst II", "2,820", "$51.99"],
+        ];
+        assert_eq!(with_second(own, 1), None);
+        // So is one opening on the label the first part opens with: the
+        // page's copy of a block printed page after page.
+        let copy: &[&[&str]] = &[
+            &["Category", "Days", "Price"],
+            &["Analyst II", "2,820", "$51.99"],
+        ];
+        assert_eq!(with_second(copy, 0), None);
     }
 
     #[test]
