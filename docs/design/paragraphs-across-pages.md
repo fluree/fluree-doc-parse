@@ -61,6 +61,12 @@ A paragraph on page n+1 continues the one on page n when all of these hold:
   foot notes, or nothing, follow it there; page furniture is already gone.
 - It ends mid-sentence: in a word, a comma or a line-end hyphen, not in
   sentence-final punctuation, a number or a leader.
+- Its last line is one the page break cut. The part is set in a column of
+  text (two lines or more, or other text on its page set from its left
+  edge), and its last line has no room left for the next part's first word,
+  the word's width read at the line's average character's, give or take
+  2 em. A folio (`v` over `vi`), a label (`ANNEX TABLES`), an address or a
+  byline at a page's foot fails this.
 - The part on page n+1 is the first body element on its page, and a
   paragraph.
 - It opens in lower case.
@@ -85,7 +91,9 @@ These conditions keep out what the measurement found that is no paragraph:
 
 A figure, a table or a caption standing at the foot of page n or the head of
 page n+1 is no foot note and no paragraph, so the parts are not linked across
-it. A running head on page n+1 is furniture and already gone; a section
+it. A caption the page break cut goes on at the head of the next page in its
+own size, and joins as a paragraph does; text after a caption is set in the
+text's size, so the type size keeps a caption and the text apart. A running head on page n+1 is furniture and already gone; a section
 title there is the first element, so nothing carries on.
 
 A page's foot notes are what follows the earlier part on its page: each

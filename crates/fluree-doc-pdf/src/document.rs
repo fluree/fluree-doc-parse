@@ -13194,6 +13194,52 @@ mod tests {
                 2
             ),
         ]));
+        // A paragraph in a page's first column, text set in a column to its
+        // right: the page's text does not end in it.
+        assert!(none(vec![
+            cut_part("e1", 0, "A sidebar read first.", 320.0, 560.0, 100.0, 40),
+            cut_part(
+                "e2",
+                0,
+                "the left column ends on a word and",
+                50.0,
+                300.0,
+                100.0,
+                40
+            ),
+            cut_part(
+                "e3",
+                1,
+                "goes on at the head of the next page.",
+                50.0,
+                300.0,
+                72.0,
+                30
+            ),
+        ]));
+        // A narrow sidebar at the page's foot, and the next page's text set
+        // to the full measure: no one column.
+        assert!(none(vec![
+            cut_part("e1", 0, "Text above it.", 72.0, 540.0, 100.0, 30),
+            cut_part(
+                "e2",
+                0,
+                "a sidebar's quote ends on a word and",
+                420.0,
+                540.0,
+                600.0,
+                8
+            ),
+            cut_part(
+                "e3",
+                1,
+                "the next page's text goes on.",
+                72.0,
+                540.0,
+                72.0,
+                30
+            ),
+        ]));
         // A caption at the page's foot, set smaller, and the text at the
         // head of the next page: the caption is no part of it.
         let mut els = page_break(
