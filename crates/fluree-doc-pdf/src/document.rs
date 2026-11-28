@@ -965,7 +965,17 @@ fn running_over_parts(elements: &[Element]) -> Vec<bool> {
         // over a page's head is for a part carried on as rows alone, or
         // under its header repeated whole.
         let headless = b.header_rows.unwrap_or(0) == 0;
-        if (opens_alike || !headless) && !head_again {
+        // Or it opens on the rest of the names the break cut in a head
+        // that is all the part before it holds.
+        let cut = a.header_only()
+            && n > 0
+            && a.cells
+                .as_ref()
+                .zip(b.cells.as_ref())
+                .is_some_and(|(x, y)| {
+                    x.len() >= n && !y.is_empty() && rest_of_names(&x[n - 1], &y[0])
+                });
+        if (opens_alike || !headless) && !head_again && !cut {
             continue;
         }
         if between.iter().all(|&n| over(n) && repeated(n)) {
@@ -1169,17 +1179,29 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         // Recommended Dosage | Duration`) carries on under that header: the
         // band heads its section's rows and names no column.
         let under_head = prev.header_only() && opens_band;
+        // A column's name the break cut: the rest of its words open the
+        // next part, set as the head is, under the names they finish
+        // (`Estimated Completion Date (for` over `information only)`), each
+        // going on in lowercase or closing a bracket the name leaves open.
+        // The row is neither a header row nor data: it is the head's.
+        let cut_head = prev.header_only()
+            && b.bold
+            && own > 0
+            && rows.len() > 1
+            && rest_of_names(&prev_cells[own - 1], &rows[0]);
+        let rest_of_head: Option<Vec<String>> = cut_head.then(|| rows[0].clone());
         let finishes_header = prev.header_only()
+            && !cut_head
             && !opens_band
             && rows.len() > 1
             && b.bold
             && rows[0]
                 .iter()
                 .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()));
-        if b.styled && !repeats && !finishes_header && !under_head && !in_bands {
+        if b.styled && !repeats && !finishes_header && !under_head && !in_bands && !cut_head {
             continue;
         }
-        if shifted && !headless && !repeats {
+        if shifted && !headless && !repeats && !cut_head {
             continue;
         }
         let heads: Vec<(usize, usize, String, String)> = runs_on
@@ -1196,6 +1218,9 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             prev.sub_headers = Some(subs);
         }
         next.continues = Some(prev.id.clone());
+        if let Some(rest) = rest_of_head {
+            finish_cut_head(prev, own - 1, next, &rest);
+        }
         if let Some(cells) = next.cells.as_mut() {
             let cols = cells.first().map_or(0, Vec::len);
             for (r, c, h, rest) in heads {
@@ -1243,6 +1268,97 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             }
             table_heads.insert(next.id.clone(), head);
         }
+    }
+}
+
+/// Row `first`, opening a part, holds the rest of the names in `names`,
+/// the last row of the head before it, that the page break cut: some of
+/// them, each finishing the name over it ([`finishes_name`]).
+fn rest_of_names(names: &[String], first: &[String]) -> bool {
+    let filled = |r: &[String]| r.iter().filter(|t| !t.trim().is_empty()).count();
+    names.len() == first.len()
+        && filled(first) > 0
+        && filled(first) < filled(names)
+        && first
+            .iter()
+            .zip(names)
+            .all(|(rest, name)| rest.trim().is_empty() || finishes_name(name, rest))
+}
+
+/// Most words a line cut by the page break and printed on both pages may
+/// repeat at the next page's head.
+const MAX_CUT_OVERLAP_WORDS: usize = 4;
+
+/// `rest` finishes the column's name `name` the page break cut: it goes on
+/// in lowercase, or closes a bracket the name leaves open, and is no
+/// figure.
+fn finishes_name(name: &str, rest: &str) -> bool {
+    let (name, rest) = (name.trim(), rest.trim());
+    !name.is_empty()
+        && !table::is_numeric_cell(rest)
+        && (rest.starts_with(char::is_lowercase)
+            || (name.matches('(').count() > name.matches(')').count() && rest.contains(')')))
+}
+
+/// The rest of a head's names, cut by the page break, joined to the names
+/// in row `row` of the head part `head`, and taken out of the part `body`
+/// that opened on it.
+fn finish_cut_head(head: &mut Element, row: usize, body: &mut Element, rest: &[String]) {
+    let table_text = |cells: &[Vec<String>]| {
+        cells
+            .iter()
+            .map(|r| r.join(" | "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    if let Some(cells) = head.cells.as_mut() {
+        for (name, more) in cells[row].iter_mut().zip(rest) {
+            if more.trim().is_empty() {
+                continue;
+            }
+            // A line the break cut through prints on both pages: the rest
+            // opening on the words the name ends with (`… with or without
+            // bevacizumab` over `bevacizumab n=275`) says them once.
+            let head: Vec<&str> = name.split_whitespace().collect();
+            let tail: Vec<&str> = more.split_whitespace().collect();
+            let overlap = (1..=head.len().min(tail.len()).min(MAX_CUT_OVERLAP_WORDS))
+                .rev()
+                .find(|&k| head[head.len() - k..] == tail[..k])
+                .unwrap_or(0);
+            *name = head
+                .iter()
+                .chain(&tail[overlap..])
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+        head.text = table_text(cells);
+    }
+    let Some(cells) = body.cells.as_mut() else {
+        return;
+    };
+    let cols = cells.first().map_or(0, Vec::len);
+    cells.remove(0);
+    body.text = table_text(cells);
+    for flags in [
+        body.merged_down.as_mut(),
+        body.merged_left.as_mut(),
+        body.spread_left.as_mut(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        flags.drain(..cols.min(flags.len()));
+    }
+    for rows in [
+        body.sub_headers.as_mut(),
+        body.section_breaks.as_mut(),
+        body.restated_headers.as_mut(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        *rows = rows.iter().filter_map(|r| r.checked_sub(1)).collect();
     }
 }
 
@@ -6071,13 +6187,25 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 gs.retain(|g| g.rows() >= 2 && g.cols() >= 1);
                 gs
             });
-            table::opens_under(g, grids, &n.glyphs, CONTINUED_EDGE_TOLERANCE)
+            table::opens_under(g, grids, &n.glyphs, &p.glyphs, CONTINUED_EDGE_TOLERANCE)
         };
         let trim = |gs: Vec<Grid>| -> Vec<Grid> {
             gs.into_iter()
                 .filter_map(|mut g| {
                     let drawn_to = g.bbox.y1;
                     g.trim_to_content_ruled(&p.glyphs, &p.rules);
+                    // A head under its title bars at the page's foot: the
+                    // bars are text over the table, the head its next
+                    // page's.
+                    if g.rows() >= 2 {
+                        if let Some(h) = table::head_under_title_bars(&g, &p.glyphs, &p.fills) {
+                            if table::stranded_head(&h, drawn_to, &p.glyphs, &p.fills)
+                                && opens_next(&h)
+                            {
+                                return Some(h);
+                            }
+                        }
+                    }
                     ((g.rows() >= 2 && g.cols() >= 1)
                         || (table::stranded_head(&g, drawn_to, &p.glyphs, &p.fills)
                             && opens_next(&g)))
@@ -11954,6 +12082,58 @@ mod tests {
             &["Report complete", "3/26/2026", "$298,000"],
         ];
         assert_eq!(link(over, 1), None);
+    }
+
+    #[test]
+    fn a_columns_name_the_break_cut_is_finished_by_the_next_parts_first_line() {
+        // The head alone at the foot, a name cut by the break; the next
+        // page opens on the rest of it, bold as the head is.
+        let head: &[&[&str]] = &[&["Milestone", "Completion Date (for", "Fee"]];
+        let next: &[&[&str]] = &[
+            &["", "information only)", ""],
+            &["Report complete", "3/26/2025", "$312,746"],
+        ];
+        let (a, fa) = part("elem-00001", 0, head, 1, &XS, true, true);
+        let (b, fb) = part("elem-00002", 1, next, 1, &XS, true, true);
+        let mut els = vec![a.clone(), b.clone()];
+        link_continued_tables(&mut els, &[fa.clone(), fb.clone()]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(
+            els[0].cells.as_ref().unwrap()[0][1],
+            "Completion Date (for information only)"
+        );
+        assert_eq!(els[1].header_rows, Some(0));
+        assert_eq!(
+            els[1].cells.as_ref().unwrap().len(),
+            1,
+            "the rest is the head's"
+        );
+        assert!(els[1].text.starts_with("Report complete"));
+        // A first line set plain is the body's.
+        let (c, fc) = part("elem-00002", 1, next, 0, &XS, false, false);
+        let mut els = vec![a.clone(), c];
+        link_continued_tables(&mut els, &[fa.clone(), fc]);
+        assert_eq!(els[0].cells.as_ref().unwrap()[0][1], "Completion Date (for");
+        // A row of the head's names again, in full, is no rest of one.
+        let whole: &[&[&str]] = &[
+            &["Milestone", "Completion Date", "Fee"],
+            &["Report complete", "3/26/2025", "$312,746"],
+        ];
+        let (d, fd) = part("elem-00002", 1, whole, 1, &XS, true, true);
+        let mut els = vec![a, d];
+        link_continued_tables(&mut els, &[fa, fd]);
+        assert_eq!(els[0].cells.as_ref().unwrap()[0][1], "Completion Date (for");
+        // A line the break printed on both pages is said once.
+        let cut: &[&[&str]] = &[&["Endpoint", "Placebo with or without bevacizumab", "Fee"]];
+        let twice: &[&[&str]] = &[&["", "bevacizumab n=275", ""], &["OS", "16.3", "$312,746"]];
+        let (h, fh) = part("elem-00001", 0, cut, 1, &XS, true, true);
+        let (t, ft) = part("elem-00002", 1, twice, 1, &XS, true, true);
+        let mut els = vec![h, t];
+        link_continued_tables(&mut els, &[fh, ft]);
+        assert_eq!(
+            els[0].cells.as_ref().unwrap()[0][1],
+            "Placebo with or without bevacizumab n=275"
+        );
     }
 
     #[test]
