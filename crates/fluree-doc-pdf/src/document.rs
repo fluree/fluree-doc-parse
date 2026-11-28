@@ -896,17 +896,36 @@ fn running_over_parts(elements: &[Element]) -> Vec<bool> {
             && (a.y0 - b.y0).abs() <= RUNNING_PLACE
             && (a.y1 - b.y1).abs() <= RUNNING_PLACE
     };
+    // Inside another page's copy: its words a run of the copy's, set in a
+    // box holding its own, at the same place. A template's line read in
+    // two pieces on one page (`Location:` and `Lawton State #001`) and
+    // whole on the other, or its box read into the table beside it.
+    let within = |a: &crate::geom::BBox, o: &crate::geom::BBox| {
+        o.x0 <= a.x0 + RUNNING_PLACE
+            && o.y0 <= a.y0 + RUNNING_PLACE
+            && o.x1 >= a.x1 - RUNNING_PLACE
+            && o.y1 >= a.y1 - RUNNING_PLACE
+    };
+    let words_of = |t: &str| {
+        t.split_whitespace()
+            .filter(|w| *w != "|")
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
     let repeated = |i: usize| {
         let e = &elements[i];
         let (Some(b), t) = (e.bbox, norm(&e.text)) else {
             return false;
         };
+        let w = words_of(&e.text);
         !t.is_empty()
             && elements.iter().any(|o| {
                 o.page != e.page
-                    && o.kind != "doco:Table"
-                    && o.bbox.is_some_and(|ob| at_place(&ob, &b))
-                    && norm(&o.text) == t
+                    && o.bbox.is_some_and(|ob| {
+                        (o.kind != "doco:Table" && at_place(&ob, &b) && norm(&o.text) == t)
+                            || (within(&b, &ob)
+                                && words_of(&o.text).windows(w.len()).any(|run| run == w))
+                    })
             })
     };
     let table = |i: usize| elements[i].kind == "doco:Table";
@@ -924,12 +943,20 @@ fn running_over_parts(elements: &[Element]) -> Vec<bool> {
         if between.is_empty() || b.page != a.page + 1 {
             continue;
         }
+        // Over the second part on its page, or under the first on its own:
+        // the page's head, or its foot (a form's box set under the items on
+        // every page).
         let over = |n: usize| {
-            elements[n].page == b.page
+            (elements[n].page == b.page
                 && elements[n]
                     .bbox
                     .zip(b.bbox)
-                    .is_some_and(|(r, t)| r.y1 <= t.y0 + RUNNING_PLACE)
+                    .is_some_and(|(r, t)| r.y1 <= t.y0 + RUNNING_PLACE))
+                || (elements[n].page == a.page
+                    && elements[n]
+                        .bbox
+                        .zip(a.bbox)
+                        .is_some_and(|(r, t)| r.y0 >= t.y1 - RUNNING_PLACE))
         };
         // A page that sets its head as another page does, over a part
         // opening as the part before it opened, on the label its first row
@@ -12003,6 +12030,70 @@ mod tests {
             Some(1),
             "the grades row finishes the header"
         );
+    }
+
+    #[test]
+    fn a_forms_foot_box_and_its_head_read_in_pieces_are_not_between_the_parts() {
+        // An invoice's items at one page's foot and on at the next page's
+        // head, under the header repeated whole. The form's box under the
+        // items on the first page is set again, at the same place, inside
+        // the totals box on the second; the form's head line is read whole
+        // on the first page and in two pieces on the second.
+        let on = |e: Element, page: usize| Element { page, ..e };
+        let rows: &[&[&str]] = &[&["Date", "Item", "Amount"], &["12/5", "K1", "2,438.15"]];
+        let again: &[&[&str]] = &[&["Date", "Item", "Amount"], &["12/28", "K1", "5,255.25"]];
+        let linked = |foot: &str, piece_dx: f64| {
+            let (a, fa) = part("elem-00001", 0, rows, 1, &XS, true, true);
+            let (b, fb) = part("elem-00002", 1, again, 1, &XS, true, true);
+            let els = vec![
+                on(
+                    element(
+                        "Location: Lawton State #001",
+                        295.0,
+                        40.0,
+                        421.0,
+                        50.0,
+                        false,
+                    ),
+                    0,
+                ),
+                a,
+                on(element(foot, 310.0, 730.0, 360.0, 740.0, false), 0),
+                on(element("Location:", 295.0, 40.0, 337.0, 50.0, false), 1),
+                on(
+                    element(
+                        "Lawton State #001",
+                        349.0 + piece_dx,
+                        40.0,
+                        421.0 + piece_dx,
+                        50.0,
+                        false,
+                    ),
+                    1,
+                ),
+                b,
+                on(
+                    element(
+                        "Tax Location Subtotal $48,842.76",
+                        293.0,
+                        725.0,
+                        571.0,
+                        760.0,
+                        true,
+                    ),
+                    1,
+                ),
+            ];
+            let mut els = els;
+            link_continued_tables(&mut els, &[fa, fb]);
+            els[5].continues.clone()
+        };
+        assert_eq!(linked("Tax Location", 0.0).as_deref(), Some("elem-00001"));
+        // A line under the first part that the other page does not set is
+        // the page's own text between them.
+        assert_eq!(linked("Payment terms", 0.0), None);
+        // A head piece set somewhere else is the page's own.
+        assert_eq!(linked("Tax Location", 30.0), None);
     }
 
     #[test]

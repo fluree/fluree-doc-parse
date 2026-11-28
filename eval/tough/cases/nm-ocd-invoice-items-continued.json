@@ -1,0 +1,50 @@
+{
+  "document": {
+    "path": "../fixtures/nm-ocd-invoice-p124-125.pdf",
+    "sha256": "5113c4fe9a180e3cd05940538f6603027d1925b9f3e3e341e1e2bbf91a8ce2ad",
+    "about": "Pages 124–125 of a New Mexico Oil Conservation Division filing (public): a well-service invoice over two pages. Page 125 repeats the form's head and the items' header, and carries on the items: the last item's daily total carried over the break, two items, and a credit note under them. The form's tax box stands at each page's foot."
+  },
+  "notes": [
+    "Source: https://ocdimage.emnrd.nm.gov/Imaging/FileStore/santafe/cf/20251009/24683_10_09_2025_04_29_13.pdf (sha256 275bbae5e89e5cad2c26becabc09dbcd800c0ae01d87c94be89dcd6a65097940), pages 124 and 125. Made with pypdf: add those two pages to a PdfWriter, `remove_images(to_delete=ImageType.XOBJECT_IMAGES | ImageType.INLINE_IMAGES)` (raster images only: the default also strips vector drawings, the grid's rules and shading), `compress_content_streams()` on each page, `compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)`, write. The images dropped are the letterhead's logo.",
+    "2026-11-28 (#640): the second page's items are read as rows (the rest of the page before's last item and a note under the items each a row of their own), the band's rows are no header, and the part carries on the first page's across the form's foot and head, set again at the same place."
+  ],
+  "checks": [
+    {
+      "id": "second-page-items",
+      "found": "2026-11-28",
+      "issue": "Page 125's items read as paragraphs.",
+      "row": {
+        "Date": "12/28/2022",
+        "Item #": "K1",
+        "Qty": "1",
+        "Amount": "5,255.25T"
+      }
+    },
+    {
+      "id": "last-item",
+      "found": "2026-11-28",
+      "issue": "Page 125's last item read as paragraphs.",
+      "row": {
+        "Date": "1/4/2023",
+        "Amount": "242.00T"
+      }
+    },
+    {
+      "id": "credit-note-row",
+      "found": "2026-11-28",
+      "issue": "The credit note under the items stays in the table, a row of its own.",
+      "row": {
+        "Item Description": "Credit of $14,000.72 to be applied from Credit memo 22636"
+      }
+    },
+    {
+      "id": "continues-page-before",
+      "found": "2026-11-28",
+      "issue": "Page 125's items carry on page 124's table.",
+      "continues": {
+        "cell": "12/28/2022",
+        "from": "12/5/2022"
+      }
+    }
+  ]
+}
