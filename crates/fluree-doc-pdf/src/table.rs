@@ -2785,7 +2785,7 @@ impl Grid {
             let k = (1..rows)
                 .rev()
                 .find(|&k| covers_v(outer, top, self.ys[k]))?;
-            if any_v(outer, self.ys[k], foot) {
+            if covers_v(outer, top, foot) || any_v(outer, self.ys[k], foot) {
                 return None;
             }
             // Where the boxes meet: the nearest inner vertical running the
