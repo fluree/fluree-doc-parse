@@ -2580,15 +2580,23 @@ fn stray_space(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool
         return false;
     }
     // Out of turn, between two marks that close up: the mark after begins
-    // where the one before stops, and the page leaves no room for a space
-    // there. A producer lays a row of blank spaces across a cell, a space's
-    // width apart, before it sets the cell's text over them; read where they
+    // where the one before stops, its ink no further from the other's than
+    // a word space, and the page leaves no room for a space there. A
+    // producer lays a row of blank spaces across a cell, a space's width
+    // apart, before it sets the cell's text over them; read where they
     // fell, they parted words between their letters (`wi t h`, `0 4/
-    // 30/20 2 4`). A space drawn out of turn in a real gap stays: the
-    // words stand a space's width apart.
+    // 30/20 2 4`). A space drawn out of turn in a real gap stays: the words
+    // stand a space's width apart. So does one after a bullet whose advance
+    // runs on past its ink to the text: the page shows the room.
     if let (Some(b), Some(a)) = (before, after) {
         let stop = adv.at(b.origin) + width(b);
-        if (adv.at(a.origin) - stop).abs() <= SPACE_INSIDE * em {
+        let ink_gap = match (b.bbox, a.bbox) {
+            (Some(bb), Some(ab)) => adv.start(&ab) - adv.end(&bb),
+            _ => f64::INFINITY,
+        };
+        if (adv.at(a.origin) - stop).abs() <= SPACE_INSIDE * em
+            && ink_gap < SPACE_GAP_RATIO * a.font_size.max(1.0) as f64
+        {
             return true;
         }
     }
@@ -4560,6 +4568,14 @@ mod tests {
             ["of", "it"],
             "{text:?}"
         );
+        // A bullet whose advance runs on past its ink to the text, and its
+        // space drawn before it: the page shows the room, and it stays.
+        let mut bullet = g("•", 90.0, 0.0, 3.0, 0.0);
+        bullet.advance = Some(10.0);
+        bullet.draw_index = 1;
+        let mut v = vec![space(100.0, 0), bullet];
+        v.extend(run("Shelves", 101.0, 2));
+        assert_eq!(assemble(&v)[0].text.trim(), "• Shelves");
     }
 
     #[test]
