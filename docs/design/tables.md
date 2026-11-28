@@ -107,7 +107,17 @@ row of the table. A blank row the table rules as its own goes on, though:
   with text either side of it;
 - the rows taken in under it hold their text as cells do, each glyph within
   its row and no line run across a column edge closer than 0.4 em, about a
-  word space.
+  word space. A glyph past its row's edge counts only where a rule is drawn
+  along that edge over it: a site's name centred down a cell merged over its
+  contracts' rows crosses the grid's row lines, which are drawn only in the
+  other columns.
+
+A band merged across the table, blank, goes on as well: the box's two sides
+run down through it, unbroken, and every column edge through the rows either
+side. A contract list sets one, shaded, between each site's contracts and the
+next site's. Two tables sharing one frame with a blank band between them
+rule their columns at different places, and were parted before (see Grouping
+and trimming).
 
 Tables set such a row between groups of rows: a parameter table puts one
 before each instrument's settings, a SKU table between two sets of
@@ -418,6 +428,15 @@ one row's:
   rows were never ruled names a row on every line. In a table ruled with
   horizontals alone, no line runs across a column's edge either, as a
   paragraph set between two tables would.
+- **Or a description wrapped down the first column.** The first column may
+  run to more lines where they are one row's description: a contract's long
+  title beside its number, dates and value, or the contractors of a multiple
+  award listed down their own column. Half the other columns holding text,
+  two of them at least, set a line or two each, the row's values; a body
+  never ruled sets a value beside each of its names in most of its columns.
+  And the description's lines stand at one leading, each gap within half
+  again the narrowest: labels scattered over a schematic's wires stand at
+  none, and the wires' bands are no table's.
 
 The band a table opens with, its rules running on through it into the rows
 below, is its header row however tall: column labels wrap over as many lines

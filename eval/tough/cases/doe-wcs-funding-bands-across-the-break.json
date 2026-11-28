@@ -1,0 +1,49 @@
+{
+  "document": {
+    "file": "doe-wcs-tru-gtcc-mod1-section-b.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2024-10/WCS_89203424FEM400022_TRU%20GTCC%20Storage_Modification%201_Section%20B%20Update_Fully%20Executed_10072024.pdf",
+    "sha256": "a484738eed54a057d14f3560dea1fb3db0d0d73a871d44098a2fea10223d688b",
+    "about": "A DOE task order modification (Section B update, 6 pages). Its Limitation of Funds tables group their CLINs under shaded period bands (`Base Period 1: …`, `Base Period 2: …`) whose labels are centred across the columns, under a shaded `CLIN | Funding Amount | Estimated Date` header. On page 5 the table starts at the page's foot with its header, the first band and two CLINs; page 6 goes on with the next band and no header."
+  },
+  "notes": [
+    "2026-11-27: the first band was read as the header's second row, so every column was named `CLIN / Base Period 1: …`. On page 4 the bands further down the table did not show it a band: their labels, centred, ran over the columns' cuts and were dealt out among the cells. On page 5 the bands further down are on the next page.",
+    "2026-11-27: the part on page 6 opens on a shaded band, which ended the link to page 5's part as a new table's styled head would. Its rows had no column names."
+  ],
+  "checks": [
+    {
+      "id": "first-band-is-no-header-row",
+      "found": "2026-11-27",
+      "issue": "Every column was named `… / Base Period 1: September 13, 2024 to September 30, 2025`.",
+      "no_column_header": "Base Period 1"
+    },
+    {
+      "id": "first-band-labels-its-rows",
+      "found": "2026-11-27",
+      "issue": "The first band was header, not the section over CLINs 0001 and 0002.",
+      "cell": {
+        "value": "0001 – Storage of Type 2 and Type 3 wastes in the Federal Waste Facility",
+        "column": "CLIN",
+        "section": "Base Period 1: September 13, 2024 to September 30, 2025"
+      }
+    },
+    {
+      "id": "page-6-part-continues-page-5",
+      "found": "2026-11-27",
+      "issue": "Page 6's part, opening on the `Base Period 2` band, was a table of its own with no column names.",
+      "row": {
+        "CLIN": "0003 – Storage of Type 2 and Type 3 wastes in the Federal Waste Facility",
+        "Funding Amount": "TBD"
+      }
+    },
+    {
+      "id": "page-6-band-over-its-rows",
+      "found": "2026-11-27",
+      "issue": "As above: the CLIN under page 6's first band.",
+      "cell": {
+        "value": "0004 – Mobile Loading Support of Type 2 and 3 Waste",
+        "column": "CLIN",
+        "section": "Base Period 2: October 1, 2025 to September 30, 2026"
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "document": {
+    "path": "../fixtures/chrome-table-blank-band.pdf",
+    "sha256": "d3f17722343d857c169afb6b62feaf25467c35604e93b0431dec008b213c449b",
+    "about": "An invented table of depots printed to PDF by headless Chrome on macOS (fixtures/chrome-table-blank-band.html): ruled cell by cell, its regions' rows set apart by a blank grey band merged across the four columns, ten points tall."
+  },
+  "notes": [
+    "Reprint with: Chrome --headless --no-pdf-header-footer --print-to-pdf=chrome-table-blank-band.pdf chrome-table-blank-band.html, then update the sha256.",
+    "A blank band thinner than a cell is no row of the grid at all, and never ended the table; the fixture's band is as tall as the DOE contract summaries' (pdf-table-across-blank-separator-band)."
+  ],
+  "checks": [
+    {
+      "id": "rows-under-the-band",
+      "found": "2026-11-27",
+      "issue": "The table ended at the first band: the rows under it were a table of their own, headed by its first row (`South | Calder Wharf`).",
+      "cell": {
+        "value": "Calder Wharf",
+        "column": "Depot"
+      }
+    },
+    {
+      "id": "rows-under-the-band-2",
+      "found": "2026-11-27",
+      "issue": "As above, the row under it.",
+      "cell": {
+        "value": "Orchard Lane",
+        "column": "Depot"
+      }
+    }
+  ]
+}
