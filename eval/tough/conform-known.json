@@ -97,6 +97,12 @@
   "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 2
  },
+ "doe-wcs-funding-bands-across-the-break": {
+  "md table.header_rows": 2,
+  "md table.sub_headers": 2,
+  "xhtml table.header_rows": 2,
+  "xhtml table.sub_headers": 2
+ },
  "ecb-diagram-picture-no-table": {
   "md table.header_rows": 1,
   "md table.sub_headers": 1,
@@ -824,6 +830,12 @@
  },
  "wd-gold-title": {
   "md table.sub_headers": 3,
+  "xhtml table.sub_headers": 3
+ },
+ "who-a77-16-fr-stacked-bands": {
+  "md table.header_rows": 1,
+  "md table.sub_headers": 3,
+  "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 3
  },
  "worldbank-pad-template-markers": {
