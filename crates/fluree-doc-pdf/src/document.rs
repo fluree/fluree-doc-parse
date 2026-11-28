@@ -8724,22 +8724,26 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
 
     // A paragraph the page break cut is linked across it, in each page's
     // reading frame, where a column's left edge is the same on both pages.
-    let type_size = |e: &Element| -> Option<f32> {
-        let b = e.bbox?;
-        let mut sizes: Vec<f32> = flat_lines
-            .get(e.page)?
-            .0
+    let part_lines = |e: &Element| -> Vec<PartLine> {
+        let (Some(b), Some((lines, _))) = (e.bbox, flat_lines.get(e.page)) else {
+            return Vec::new();
+        };
+        let mut v: Vec<PartLine> = lines
             .iter()
             .filter(|l| {
                 let (x, y) = ((l.bbox.x0 + l.bbox.x1) / 2.0, (l.bbox.y0 + l.bbox.y1) / 2.0);
                 x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1
             })
-            .map(|l| l.font_size)
+            .map(|l| PartLine {
+                bbox: l.bbox,
+                size: l.font_size,
+                chars: l.text.trim().chars().count(),
+            })
             .collect();
-        sizes.sort_by(f32::total_cmp);
-        sizes.get(sizes.len() / 2).copied()
+        v.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        v
     };
-    link_continued_paragraphs(&mut elements, type_size, &compounds);
+    link_continued_paragraphs(&mut elements, part_lines, &compounds);
 
     // Everything above worked in each page's reading frame. The output's
     // boxes are in the display frame — the one a page render has — so a
@@ -8808,6 +8812,14 @@ const SAME_SIZE_SHARE: f32 = 0.05;
 /// line's indent, where a part is that one line, and a ragged right edge.
 const CONTINUED_INDENT_EMS: f64 = 2.0;
 
+/// A line of a paragraph's part, as [`link_continued_paragraphs`] reads it:
+/// its box, its type size and how many characters it holds.
+struct PartLine {
+    bbox: crate::geom::BBox,
+    size: f32,
+    chars: usize,
+}
+
 /// Links each paragraph a page break cut: the part at the head of the next
 /// page carries on the part at the foot of this one (`continues`), and the
 /// writers read the two as one paragraph.
@@ -8817,6 +8829,10 @@ const CONTINUED_INDENT_EMS: f64 = 2.0;
 ///   paragraph;
 /// - it ends mid-sentence: in a word, a comma, or a hyphen after a letter,
 ///   not in sentence-final punctuation, a figure or a leader;
+/// - it is set in a column of text (two lines or more, or other text on its
+///   page set from its left edge), and its last line is full: the next
+///   part's first word would not have fitted on it. A folio or a label is
+///   neither;
 /// - the later part is the next page's first element, and a paragraph
 ///   opening in lower case;
 /// - both are set in one type size, and the text flows on from one to the
@@ -8839,9 +8855,15 @@ const CONTINUED_INDENT_EMS: f64 = 2.0;
 /// [`PART_BREAK`]: fluree_doc_model::join::PART_BREAK
 fn link_continued_paragraphs(
     elements: &mut Vec<Element>,
-    size: impl Fn(&Element) -> Option<f32>,
+    lines: impl Fn(&Element) -> Vec<PartLine>,
     compounds: &crate::line::Compounds,
 ) {
+    // An element's type size: its lines' median.
+    let size = |e: &Element| -> Option<f32> {
+        let mut sizes: Vec<f32> = lines(e).iter().map(|l| l.size).collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.get(sizes.len() / 2).copied()
+    };
     let Some(last_page) = elements.iter().map(|e| e.page).max() else {
         return;
     };
@@ -8849,14 +8871,14 @@ fn link_continued_paragraphs(
     for (i, e) in elements.iter().enumerate() {
         on[e.page].push(i);
     }
-    // A body paragraph: no caption, which belongs to its figure or table.
+    // A caption the page break cut goes on in its own size, and text after
+    // it is set in the text's: the size tells the two apart.
     let plain = |e: &Element| {
         e.kind == "doco:Paragraph"
             && e.turn.is_none()
             && e.message.is_none()
             && e.notes_for.is_none()
             && !e.text.trim().is_empty()
-            && !heading::is_caption(&e.text)
     };
     let note_mark = |t: &str| {
         t.trim_start().chars().next().is_some_and(|c| {
@@ -8917,10 +8939,43 @@ fn link_continued_paragraphs(
         let flows_on = !boxes_a.iter().any(|b| b.x0 > ba.x1)
             && !boxes_b.iter().any(|b| b.x1 < bb.x0)
             && (measure(&boxes_a, ba.x0) - measure(&boxes_b, bb.x0)).abs() <= slack;
+        // The page break cut a line of running text: the earlier part is set
+        // in a column, and its last line had no room for the next word.
+        let la = lines(a);
+        let column = la.len() >= 2
+            || boxes_a
+                .iter()
+                .filter(|x| (x.x0 - ba.x0).abs() <= slack)
+                .count()
+                >= 2;
+        let full = la.last().is_some_and(|last| {
+            // The column's right edge: the part's own, where it has lines
+            // enough to show it, else the text's set from its left edge.
+            let right = if la.len() >= 2 {
+                ba.x1
+            } else {
+                boxes_a
+                    .iter()
+                    .filter(|x| (x.x0 - ba.x0).abs() <= slack)
+                    .map(|x| x.x1)
+                    .fold(ba.x1, f64::max)
+            };
+            let per_char = (last.bbox.x1 - last.bbox.x0) / last.chars.max(1) as f64;
+            let word = b
+                .text
+                .split_whitespace()
+                .next()
+                .map_or(0, |w| w.chars().count());
+            // The word's width is read at the line's average character's,
+            // give or take the slack.
+            last.bbox.x1 + (word + 1) as f64 * per_char > right - slack
+        });
         let cut = plain(a)
             && plain(b)
             && b.continues.is_none()
             && mid_sentence(&a.text)
+            && column
+            && full
             && b.text
                 .trim_start()
                 .chars()
@@ -12937,18 +12992,35 @@ mod tests {
         }
     }
 
-    /// Type sizes by id: a note (`n…`) 10 points, a heading's size (`h…`)
-    /// 14, the text 11.
-    fn cut_sized(e: &Element) -> Option<f32> {
-        Some(match e.id.chars().next() {
+    /// An element's lines: one every 14 points down its box, each across it,
+    /// in a type size by its id: a note (`n…`) 10 points, a caption (`c…`)
+    /// 9, a heading's size (`h…`) 14, the text 11.
+    fn cut_lines(e: &Element) -> Vec<PartLine> {
+        let size = match e.id.chars().next() {
             Some('n') => 10.0,
+            Some('c') => 9.0,
             Some('h') => 14.0,
             _ => 11.0,
-        })
+        };
+        let b = e.bbox.unwrap();
+        let n = (((b.y1 - b.y0) / 14.0).round() as usize).max(1);
+        let chars = (e.text.chars().count() / n).max(1);
+        (0..n)
+            .map(|k| PartLine {
+                bbox: BBox {
+                    x0: b.x0,
+                    y0: b.y0 + 14.0 * k as f64,
+                    x1: b.x1,
+                    y1: b.y0 + 14.0 * (k + 1) as f64,
+                },
+                size,
+                chars,
+            })
+            .collect()
     }
 
     fn cut_linked(mut els: Vec<Element>) -> Vec<Element> {
-        link_continued_paragraphs(&mut els, cut_sized, &crate::line::Compounds::default());
+        link_continued_paragraphs(&mut els, cut_lines, &crate::line::Compounds::default());
         els
     }
 
@@ -13026,7 +13098,7 @@ mod tests {
         // A compound the document sets whole elsewhere keeps its hyphen.
         let mut els = page_break("over the long-", "term the view held.");
         let compounds = crate::line::Compounds::of(["a long-term view"].into_iter());
-        link_continued_paragraphs(&mut els, cut_sized, &compounds);
+        link_continued_paragraphs(&mut els, cut_lines, &compounds);
         assert_eq!(els[1].text, "over the long-");
         assert_eq!(els[2].continues.as_deref(), Some("e2"));
         // Without that evidence, the same letters read as a word broken.
@@ -13100,12 +13172,35 @@ mod tests {
             ),
             cut_part("e3", 1, "the left column goes on.", 50.0, 300.0, 72.0, 30),
         ]));
-        // A caption at the page's foot belongs to its figure.
+        // A folio the furniture pass left, ending on a letter, over the next
+        // page's: no column of text.
+        assert!(none(vec![
+            cut_part("e1", 0, "Text above it.", 72.0, 540.0, 100.0, 3),
+            cut_part("e2", 0, "v", 300.0, 305.0, 760.0, 1),
+            cut_part("e3", 1, "vi", 300.0, 307.0, 760.0, 1),
+        ]));
+        // A label set from the column's edge, its line far short of the
+        // measure: no line the page break cut.
+        assert!(none(vec![
+            cut_part("e1", 0, "Text above it.", 72.0, 540.0, 100.0, 3),
+            cut_part("e2", 0, "ANNEX TABLES", 72.0, 142.0, 760.0, 1),
+            cut_part(
+                "e3",
+                1,
+                "table A.3 sets out the figures.",
+                72.0,
+                540.0,
+                72.0,
+                2
+            ),
+        ]));
+        // A caption at the page's foot, set smaller, and the text at the
+        // head of the next page: the caption is no part of it.
         let mut els = page_break(
             "Figure 2: Rates by region and",
             "and demands for storage grow.",
         );
-        els[1].text = "Figure 2: Rates by region and".into();
+        els[1].id = "c2".into();
         assert!(none(els));
         // Text after the paragraph in its own size is no foot note, even
         // opening on a figure.
@@ -13118,6 +13213,33 @@ mod tests {
             cut_part("e9", 0, "2024 was a year of change.", 72.0, 540.0, 700.0, 1),
         );
         assert!(none(els));
+    }
+
+    #[test]
+    fn a_caption_the_page_break_cut_goes_on_in_its_own_size() {
+        let els = cut_linked(vec![
+            cut_part("e1", 0, "Text above it.", 72.0, 540.0, 100.0, 3),
+            cut_part(
+                "c2",
+                0,
+                "Figure 2. (D) Amastigotes per 100 macrophages. Amastigotes",
+                72.0,
+                540.0,
+                700.0,
+                3,
+            ),
+            cut_part(
+                "c3",
+                1,
+                "enumerated by direct microscopy.",
+                72.0,
+                540.0,
+                72.0,
+                1,
+            ),
+            cut_part("e4", 1, "Body text goes on.", 72.0, 540.0, 100.0, 3),
+        ]);
+        assert_eq!(els[2].continues.as_deref(), Some("c2"));
     }
 
     #[test]
