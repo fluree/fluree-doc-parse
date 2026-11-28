@@ -121,9 +121,9 @@ Markdown only:
   a document converted with options (`--ocr-words`) is checked as converted.
 - `eval/tough`: every case document is held to the contract, as it is to the
   offset contract: a class may fail no more often than the case's known list
-  records (`eval/tough/conform-known.json`; a private case's beside it, under
-  `conform/`). A fix lowers the counts and `--conform-update` writes them; the
-  list only shrinks, to nothing.
+  records (`eval/tough/conform-known/<case>.json`, a file per case; a private
+  case's beside it, under `conform/`). A fix lowers the counts and
+  `--conform-update` writes them; the list only shrinks, to nothing.
 
 ## First findings
 
