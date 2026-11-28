@@ -1627,6 +1627,34 @@ impl Grid {
         {
             return 0;
         }
+        // A header two rows deep set apart by weight alone, no shading:
+        // group names over some columns (`MRM | Ret. | Quant MRM | Qual
+        // MRM`), over a row naming every column (`Start | Time | Compound
+        // | Q1 | Q3 | CE`), both bold in every cell, labels and no figures,
+        // over a plain row of figures mostly. Group names stand apart, each
+        // over its columns: a title dealt out over the cuts runs on across
+        // them as one line, and heads no column.
+        let filled = |r: usize| rows[r].iter().filter(|t| !t.trim().is_empty()).count();
+        let labels = |r: usize| {
+            rows[r]
+                .iter()
+                .all(|t| t.trim().is_empty() || !is_numeric_cell(t.trim()))
+        };
+        if run == 0
+            && rows.len() > 3
+            && self.cols() >= 3
+            && filled(1) == self.cols()
+            && (2..self.cols()).contains(&filled(0))
+            && labels(0)
+            && labels(1)
+            && self.words_bold(glyphs, 0)
+            && self.words_bold(glyphs, 1)
+            && !self.runs_over_a_cut(glyphs, 0)
+            && !self.row_is_bold(glyphs, 2)
+            && rows[2].iter().filter(|t| is_numeric_cell(t.trim())).count() * 2 > filled(2)
+        {
+            return 2;
+        }
         // run == 1 is itself the exclusive-stripe evidence: band 0 filled,
         // band 1 not (where the run stopped).
         let styled = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, 1) || run == 1;
@@ -2227,6 +2255,33 @@ impl Grid {
     /// beside a short plain amount (`Subtotal | 38.60`) is a bold majority,
     /// so the amount was named a column header. A header row is bold in
     /// each of its cells.
+    /// Every cell of `row` holding words sets them bold: most of its
+    /// glyphs heavy, spaces aside, which some producers set at the plain
+    /// weight between bold words.
+    fn words_bold(&self, glyphs: &[crate::glyph::Glyph], row: usize) -> bool {
+        let (Some(&y0), Some(&y1)) = (self.ys.get(row), self.ys.get(row + 1)) else {
+            return false;
+        };
+        let mut counts = vec![(0usize, 0usize); self.cols()];
+        for g in glyphs {
+            let (x, y) = g.center();
+            if y < y0 || y >= y1 || g.weight.is_none() || g.text.trim().is_empty() {
+                continue;
+            }
+            let Some(c) = self.xs.windows(2).position(|w| x >= w[0] && x < w[1]) else {
+                continue;
+            };
+            counts[c].0 += 1;
+            if g.weight.unwrap_or(400) >= 600 {
+                counts[c].1 += 1;
+            }
+        }
+        counts.iter().any(|(w, _)| *w > 0)
+            && counts
+                .iter()
+                .all(|(weighted, heavy)| *weighted == 0 || heavy * 2 > *weighted)
+    }
+
     fn cells_are_bold(&self, glyphs: &[crate::glyph::Glyph], row: usize) -> bool {
         let counts = self.cell_weights(glyphs, row);
         counts.iter().any(|(w, _)| *w > 0)
@@ -11046,6 +11101,53 @@ mod header_tests {
             .map(|r| (0..4).map(|c| format!("r{r}c{c}")).collect())
             .collect();
         assert_eq!(g.header_rows(&rows, &[], &[], &fills), 3);
+    }
+
+    #[test]
+    fn a_header_two_rows_deep_set_bold_over_plain_rows_is_both() {
+        // A transitions table: its group names over its column names, both
+        // bold, no shading, over plain rows of figures. A space between
+        // bold words is set at the plain weight.
+        let g = grid_with_bands();
+        let word = |x: f64, base: f64, text: &str, heavy: bool| crate::glyph::Glyph {
+            weight: Some(if heavy { 700 } else { 400 }),
+            ..gly(x, base, 6.0, text)
+        };
+        let row = |r: usize, labels: &[&str], heavy: bool| -> Vec<crate::glyph::Glyph> {
+            let base = 114.0 + 20.0 * r as f64;
+            labels
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| !t.is_empty())
+                .flat_map(|(c, t)| {
+                    let x = 10.0 + 100.0 * c as f64;
+                    [word(x, base, t, heavy), word(x + 7.0, base, " ", false)]
+                })
+                .collect()
+        };
+        let texts: [[&str; 4]; 5] = [
+            ["Ret.", "", "Quant", ""],
+            ["Time", "Compound", "Q1", "Q3"],
+            ["3.7", "Alpha", "89", "45"],
+            ["4.3", "Beta", "152", "110"],
+            ["4.4", "Gamma", "137", "102"],
+        ];
+        let rows: Vec<Vec<String>> = texts
+            .iter()
+            .map(|r| r.iter().map(|t| t.to_string()).collect())
+            .collect();
+        let mut glyphs = row(0, &texts[0], true);
+        glyphs.extend(row(1, &texts[1], true));
+        for r in 2..5 {
+            glyphs.extend(row(r, &texts[r], false));
+        }
+        assert_eq!(g.header_rows(&rows, &glyphs, &[], &[]), 2);
+        // The second row plain: the header is the first alone.
+        let mut one = row(0, &texts[0], true);
+        for r in 1..5 {
+            one.extend(row(r, &texts[r], false));
+        }
+        assert_eq!(g.header_rows(&rows, &one, &[], &[]), 1);
     }
 
     #[test]

@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "fda-lib-4650.pdf",
+    "url": "https://www.fda.gov/media/169747/download",
+    "sha256": "589de53e74acc0643c9b5d5f1ab4158aa4f7a1108670436dbad668013a59675e",
+    "about": "FDA Laboratory Information Bulletin 4650 (Adobe Paper Capture). Its Attachment C lists GC-MS/MS transitions over six pages under a two-row header, both rows bold and unshaded: `MRM | Ret. | Quant MRM | Qual MRM` over `Start | Time | Compound | Q1 | Q3 | CE | Q1 | Q3 | CE`."
+  },
+  "checks": [
+    {
+      "id": "second-header-row-names-the-columns",
+      "found": "2026-11-27",
+      "issue": "The header's second row was read as data, so Compound, Q1, Q3 and CE named no column in any part.",
+      "cell": {
+        "value": "Metaldehyde",
+        "column": "Compound"
+      }
+    },
+    {
+      "id": "group-over-its-column",
+      "found": "2026-11-27",
+      "issue": "As above: the quantifier's Q3.",
+      "cell": {
+        "value": "45",
+        "column": "Quant MRM / Q3",
+        "row": "3.4"
+      }
+    }
+  ]
+}
