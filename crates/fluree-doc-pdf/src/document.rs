@@ -606,6 +606,7 @@ fn group_label(rows: &[Vec<String>], r: usize) -> bool {
 
 /// A table's frame on its page: where its columns are drawn, and whether
 /// its first row is set apart the way a header is.
+#[derive(Clone)]
 struct TableFrame {
     page: usize,
     bbox: crate::geom::BBox,
@@ -929,7 +930,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             }
             continue;
         }
-        let (prev, next) = (&before[p], &mut after[0]);
+        let (prev, next) = (&mut before[p], &mut after[0]);
         if prev.kind != "doco:Table" || next.kind != "doco:Table" || next.page != prev.page + 1 {
             continue;
         }
@@ -953,7 +954,32 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         if prev_cells.len() == rows.len() && prev_cells.iter().zip(rows).all(|(a, b)| same(a, b)) {
             continue;
         }
-        let own = prev.header_rows.unwrap_or(0).min(prev_cells.len());
+        // A part with no header of its own that opens on a section's band
+        // (`Base Period 2: …` across the columns) carries on a table set in
+        // bands: one whose body holds them, or whose header ends on one. The
+        // band heads its section's rows and names no column.
+        //
+        // A header ending on a band set as this one is, its label alone in
+        // the first cell, ended on the table's first band (`Base Period 1:
+        // …` under `CLIN | Funding Amount | Date`). The header's reading
+        // tells a first band from a second header row by a band further
+        // down ([`table::Grid::header_rows`]), and the break put that one
+        // on this page.
+        let lone = |row: &[String]| {
+            row.first().is_some_and(|t| !t.trim().is_empty())
+                && row.iter().skip(1).all(|t| t.trim().is_empty())
+        };
+        let opens_band = next.sub_headers.as_ref().is_some_and(|s| s.contains(&0));
+        let mut own = prev.header_rows.unwrap_or(0).min(prev_cells.len());
+        let band_head = own >= 2 && lone(&prev_cells[own - 1]) && lone(&rows[0]);
+        let in_bands = opens_band
+            && next.header_rows == Some(0)
+            && rows.len() > 1
+            && (band_head || prev.sub_headers.as_ref().is_some_and(|s| !s.is_empty()));
+        let first_band = in_bands && band_head;
+        if first_band {
+            own -= 1;
+        }
         let head: Vec<Vec<String>> = if own > 0 {
             prev_cells[..own].to_vec()
         } else {
@@ -1000,7 +1026,6 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         // header (`Monotherapy` across the columns under `Indication |
         // Recommended Dosage | Duration`) carries on under that header: the
         // band heads its section's rows and names no column.
-        let opens_band = next.sub_headers.as_ref().is_some_and(|s| s.contains(&0));
         let under_head = prev.header_only() && opens_band;
         let finishes_header = prev.header_only()
             && !opens_band
@@ -1009,7 +1034,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             && rows[0]
                 .iter()
                 .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()));
-        if b.styled && !repeats && !finishes_header && !under_head {
+        if b.styled && !repeats && !finishes_header && !under_head && !in_bands {
             continue;
         }
         let heads: Vec<(usize, usize, String, String)> = runs_on
@@ -1017,6 +1042,14 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             .filter(|_| repeats_run_on)
             .map(|(r, c, rest)| (r, c, head[r][c].clone(), rest))
             .collect();
+        if first_band {
+            prev.header_rows = Some(own);
+            let mut subs = prev.sub_headers.take().unwrap_or_default();
+            subs.push(own);
+            subs.sort_unstable();
+            subs.dedup();
+            prev.sub_headers = Some(subs);
+        }
         next.continues = Some(prev.id.clone());
         if let Some(cells) = next.cells.as_mut() {
             let cols = cells.first().map_or(0, Vec::len);
@@ -11396,6 +11429,68 @@ mod tests {
             els[1].header_rows,
             Some(0),
             "the band names no column: the head is the first part's"
+        );
+    }
+
+    #[test]
+    fn a_part_opening_on_a_band_carries_on_a_table_set_in_bands() {
+        // A funding table: its header, its first period's band and that
+        // period's rows at one page's foot. The next page opens on the next
+        // period's band, shaded as the first is, and names no column.
+        let foot: &[&[&str]] = &[
+            &["CLIN", "Funding Amount", "Estimated Date"],
+            &["Period 1: May 1 to April 30", "", ""],
+            &["0001 – Storage", "$1,000.00", "05/01/2024"],
+            &["0002 – Support", "TBD", "TBD"],
+        ];
+        let next: &[&[&str]] = &[
+            &["Period 2: May 1 to April 30", "", ""],
+            &["0003 – Storage", "TBD", "TBD"],
+        ];
+        let (a, fa) = part("elem-00001", 0, foot, 2, &XS, true, true);
+        let (mut b, fb) = part("elem-00002", 1, next, 0, &XS, true, true);
+        b.sub_headers = Some(vec![0]);
+        let mut els = vec![a.clone(), b.clone()];
+        link_continued_tables(&mut els, &[fa.clone(), fb.clone()]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[1].header_rows, Some(0));
+        assert_eq!(
+            (els[0].header_rows, els[0].sub_headers.clone()),
+            (Some(1), Some(vec![1])),
+            "the first period's band is a band, as the next is, not the header's second row"
+        );
+
+        // The first part's body holds the bands, its header one row deep.
+        let (mut a2, fa2) = part("elem-00001", 0, foot, 1, &XS, true, true);
+        a2.sub_headers = Some(vec![1]);
+        let mut els = vec![a2, b.clone()];
+        link_continued_tables(&mut els, &[fa2, fb.clone()]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[0].sub_headers, Some(vec![1]));
+
+        // A table set in no bands is not carried on by a part opening on
+        // one, styled as a new table's head is: that part is a table of its
+        // own, under a band of its own.
+        let plain: &[&[&str]] = &[
+            &["CLIN", "Funding Amount", "Estimated Date"],
+            &["0001 – Storage", "$1,000.00", "05/01/2024"],
+            &["0002 – Support", "TBD", "TBD"],
+        ];
+        let (c, fc) = part("elem-00001", 0, plain, 1, &XS, true, true);
+        let mut els = vec![c, b.clone()];
+        link_continued_tables(&mut els, &[fc, fb.clone()]);
+        assert_eq!(els[1].continues, None);
+
+        // Nor is a part with a header of its own under its band.
+        let mut headed = b.clone();
+        headed.header_rows = Some(1);
+        let mut els = vec![a.clone(), headed];
+        link_continued_tables(&mut els, &[fa.clone(), fb]);
+        assert_eq!(els[1].continues, None);
+        assert_eq!(
+            els[0].header_rows,
+            Some(2),
+            "unlinked, the first part's header is as read"
         );
     }
 
