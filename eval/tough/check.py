@@ -37,14 +37,32 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 DOCS = HERE / "docs"
 # Conformance violations known per case, by format and class, until each
-# class is fixed: the tracked cases' here, other directories' in a `conform/`
-# of their own, out of the way of their case files.
-KNOWN = HERE / "conform-known.json"
+# class is fixed: a file per case, so that two changes to two cases' lists
+# never meet in one file. The tracked cases' are in `conform-known/`, other
+# directories' in a `conform/` of their own, out of the way of their case
+# files.
+KNOWN = HERE / "conform-known"
+# Before the split, each directory kept its cases' lists in one file. A case
+# with no file of its own reads its entry there; the file is no longer
+# written, and goes once its last entries have files of their own.
+SHARED_KNOWN = HERE / "conform-known.json"
 
 
 def known_path(case):
     d = case["_dir"]
-    return KNOWN if d == HERE / "cases" else d / "conform" / "known.json"
+    f = (KNOWN if d == HERE / "cases" else d / "conform") / f"{case['_id']}.json"
+    if f == shared_known_path(case):
+        raise SystemExit(f"case {case['_id']}: its known list would be the shared file {f}; rename the case")
+    return f
+
+
+def shared_known_path(case):
+    d = case["_dir"]
+    return SHARED_KNOWN if d == HERE / "cases" else d / "conform" / "known.json"
+
+
+def known_text(counts):
+    return json.dumps(dict(sorted(counts.items())), indent=1, ensure_ascii=False) + "\n"
 
 
 def norm(s):
@@ -458,13 +476,40 @@ def main():
     if not cases:
         raise SystemExit("no cases found")
 
-    known_files = {}
+    shared_files = {}
+
+    def shared_for(case):
+        f = shared_known_path(case)
+        if f not in shared_files:
+            shared_files[f] = json.loads(f.read_text()) if f.is_file() else {}
+        return shared_files[f]
 
     def known_for(case):
         f = known_path(case)
-        if f not in known_files:
-            known_files[f] = json.loads(f.read_text()) if f.is_file() else {}
-        return known_files[f]
+        if f.is_file():
+            return json.loads(f.read_text())
+        return shared_for(case).get(case["_id"], {})
+
+    # Known lists written or removed by --conform-update.
+    wrote, removed = [], []
+
+    def update_known(case, counts, now):
+        """Write a case's counts to its own file where they differ from what
+        it reads now, or where it has a file already. A case with none needs
+        no file, unless the shared file lists some for it: an empty file of
+        its own then says it has none."""
+        f = known_path(case)
+        if not f.is_file() and counts == now:
+            return
+        if counts or case["_id"] in shared_for(case):
+            text = known_text(counts)
+            if not f.is_file() or f.read_text() != text:
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(text)
+                wrote.append(f)
+        elif f.is_file():
+            f.unlink()
+            removed.append(f)
 
     failed = missing = opened = fixed = passed = 0
     for case in cases:
@@ -504,11 +549,9 @@ def main():
         if got is not None:
             known = known_for(case)
             if args.conform_update:
-                if got[0]:
-                    known[case["_id"]] = dict(sorted(got[0].items()))
-                else:
-                    known.pop(case["_id"], None)
-            ok, detail, fewer = conform_check(got, known.get(case["_id"], {}))
+                update_known(case, got[0], known)
+                known = got[0]
+            ok, detail, fewer = conform_check(got, known)
             conform = {"id": "conform", "issue": "a projection, read back, says other than the element model"}
             results.append((conform, ok, detail))
             if fewer and not args.conform_update:
@@ -537,11 +580,11 @@ def main():
         for l in lines:
             print(l)
 
-    if args.conform_update:
-        for f, known in known_files.items():
-            f.parent.mkdir(exist_ok=True)
-            f.write_text(json.dumps(dict(sorted(known.items())), indent=1, ensure_ascii=False) + "\n")
-            print(f"wrote {f}")
+    shown = lambda f: f.relative_to(HERE) if f.is_relative_to(HERE) else f
+    for f in wrote:
+        print(f"wrote   {shown(f)}")
+    for f in removed:
+        print(f"removed {shown(f)}")
     print(
         f"\n{passed} passed, {failed} failed, {opened} open, {fixed} open now passing, "
         f"{missing} documents missing"
