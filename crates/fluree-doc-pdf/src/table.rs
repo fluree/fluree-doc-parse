@@ -1551,8 +1551,20 @@ impl Grid {
         // The run's last row is the body's first stripe where the rows from
         // it on are shaded every other row and it holds figures as they do:
         // an exposure table's `ethanol | 1000 | - | 1000` shaded under its
-        // header's own cells, the next row bare, the one after shaded.
-        if run >= 2 && self.stripes_from(fills, run - 1) && figures_row(&rows[run - 1]) {
+        // header's own cells, the next row bare, the one after shaded. Or
+        // where it is shaded as the stripes under it are, and the header
+        // over it in another paint: a schedule's dark header over its
+        // lines striped pale, a title and a code in each.
+        if run >= 2
+            && self.stripes_from(fills, run - 1)
+            && (figures_row(&rows[run - 1]) || {
+                let stripe = self.row_paints(fills, run - 1);
+                let head = self.row_paints(fills, run - 2);
+                !stripe.is_empty()
+                    && stripe == self.row_paints(fills, run + 1)
+                    && !stripe.iter().any(|p| head.contains(p))
+            })
+        {
             run -= 1;
         }
         // The run's last row is the table's first band where it holds a
@@ -2631,6 +2643,31 @@ impl Grid {
             }
         }
         covered >= 0.5 * (self.bbox.x1 - self.bbox.x0)
+    }
+
+    /// The paints of the shading across row `row`'s middle within the
+    /// table, each once, in the order they are drawn.
+    fn row_paints(&self, fills: &[crate::rule::Fill], row: usize) -> Vec<crate::rule::Paint> {
+        let (Some(&y0), Some(&y1)) = (self.ys.get(row), self.ys.get(row + 1)) else {
+            return Vec::new();
+        };
+        let mid = (y0 + y1) / 2.0;
+        let mut paints = Vec::new();
+        for p in fills
+            .iter()
+            .filter(|f| {
+                f.bbox.y0 <= mid
+                    && f.bbox.y1 >= mid
+                    && f.bbox.x1 > self.bbox.x0
+                    && f.bbox.x0 < self.bbox.x1
+            })
+            .filter_map(|f| f.paint)
+        {
+            if !paints.contains(&p) {
+                paints.push(p);
+            }
+        }
+        paints
     }
 
     /// Length of the leading run of filled row bands, stopping at the first
@@ -12274,6 +12311,54 @@ mod header_tests {
         assert_eq!(g.leading_fill_run(&shaded), 2);
         assert!(g.stripes_from(&shaded, 1));
         assert_eq!(g.header_rows(&rows, &[], &[], &shaded), 1);
+    }
+
+    #[test]
+    fn a_first_stripe_painted_as_the_body_is_data() {
+        let rows: Vec<Vec<String>> = [
+            ["CLIN", "Title", "Type", "Estimated Cost"],
+            ["00033-a", "Phase In", "CPAF", "$612,211,866"],
+            ["00033-b", "Site Usage Fees", "CR", "$2,473,358"],
+            [
+                "00033-c",
+                "Pension and Reservation Management",
+                "CR",
+                "$36,048,417",
+            ],
+            ["000341a", "Core Functions", "CPFF", "$251,387,408"],
+            ["000341b", "Site Usage Fees", "CR", "$49,940,727"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert!(!figures_row(&rows[1]));
+        let g = plain_grid(
+            vec![0.0, 100.0, 200.0, 300.0, 400.0],
+            (0..7).map(|k| k as f64 * 20.0).collect(),
+        );
+        let paint = |rgb: [u8; 3], y0: f64| crate::rule::Fill {
+            paint: Some(crate::rule::Paint::Solid([rgb[0], rgb[1], rgb[2], 255])),
+            ..fill(0.0, y0, 400.0, y0 + 20.0)
+        };
+        let (dark, pale) = ([20, 96, 130], [193, 228, 245]);
+        // A dark header, then the body striped pale from its first row.
+        let shaded = [
+            paint(dark, 0.0),
+            paint(pale, 20.0),
+            paint(pale, 60.0),
+            paint(pale, 100.0),
+        ];
+        assert_eq!(g.leading_fill_run(&shaded), 2);
+        assert_eq!(g.header_rows(&rows, &[], &[], &shaded), 1);
+        // The header painted as the stripes are: the run is two header rows,
+        // as it was.
+        let alike = [
+            paint(pale, 0.0),
+            paint(pale, 20.0),
+            paint(pale, 60.0),
+            paint(pale, 100.0),
+        ];
+        assert_eq!(g.header_rows(&rows, &[], &[], &alike), 2);
     }
 
     #[test]

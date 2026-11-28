@@ -1282,7 +1282,10 @@ Such a table often shades its header's cells and then every other row from
 the first. The shaded run at the top then takes in the first row of data
 as well. Where the rows from the run's last row on are shaded every other
 row, and that row holds figures as the rows under it do (`ethanol | 1000 |
-- | 1000`), it is the body's first stripe, and the header ends above it.
+- | 1000`), it is the body's first stripe, and the header ends above it. So
+it is where it is shaded in the stripes' paint and the header over it in
+another: a schedule's dark header over its lines striped pale, a code and a
+title in each.
 
 A row that holds only a label in its first column, drawn as cells of the
 table rather than a band across it, labels the rows beneath it when the row
@@ -1646,7 +1649,12 @@ plain as a rule; stripes are not, nor a row of cells a group's cell beside it
 leaves short. And a band whose values each wrap under themselves under a
 labelled line (`1.47 lb (.67 kg)` over `±10%`), the first column left empty,
 holds one row, not two; lines with no label under none (a statement's
-header, years over units) are lines of their own.
+header, years over units) are lines of their own. Nor is a header shaded
+apart two rows: the table's first band, shaded across in a paint that shades
+none of the bands under it, its lines words alone, is the columns' names
+wrapped over two lines or three (`CLIN/` over `SubCLIN`, `Estimated` over
+`Cost`). A table striped row by row, or a section's band, shades its body
+too, and a band holding a line of figures holds a row's values.
 
 Read from its text, a table runs on through lines that carry figures in its
 columns. A line ruled off above and below, after a line ruled the same way,

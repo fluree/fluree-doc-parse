@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "doe-orrcc-end-states-mod-p57.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2024-12/Master%20TO%20Mod%20P57_Award%20Subtask%207_Modification%205_FINAL%2011-13-2024.pdf",
+    "sha256": "5440fa0b920285bf217f88b47c6100db494a3cdad7c07cbf8c42aaf15fa7515e",
+    "about": "US Department of Energy, Oak Ridge Reservation Cleanup Contract task order modification (Acrobat PDFMaker for Word), landscape. Table B-2 is a 12-column schedule over pages 3 to 5, its columns drawn only by where its row rules break; a dark header band whose names wrap over three lines (`CLIN/` over `SubCLIN`), and the body striped pale every other row."
+  },
+  "checks": [
+    {
+      "id": "rows-in-the-schedule",
+      "found": "2026-11-27",
+      "issue": "The schedule was read from its text, not its ruling: its header's wrapped names were taken for several rows set in one band. Most of its rows on each page came out as loose paragraphs beside partial tables.",
+      "cell": {
+        "value": "$9,877,348",
+        "column": "Estimated Cost",
+        "row": "000391"
+      }
+    },
+    {
+      "id": "rows-in-the-schedule-2",
+      "found": "2026-11-27",
+      "issue": "As above, a row on the schedule's first page whose title wraps to four lines.",
+      "cell": {
+        "value": "Mobile Robotic Hot Cell/Glovebox System for Hazardous and Radioactive Waste Disposition – Phase 2",
+        "column": "CLIN/SubCLIN Title",
+        "row": "0003431"
+      }
+    },
+    {
+      "id": "first-stripe-is-a-row",
+      "found": "2026-11-27",
+      "issue": "Read from its ruling, the schedule's header took in the first row under it: the run of shaded rows at the top was the dark header and the first pale stripe.",
+      "cell": {
+        "value": "$612,211,866",
+        "column": "Estimated Cost",
+        "row": "00033-a"
+      }
+    }
+  ]
+}
