@@ -2717,6 +2717,132 @@ impl Grid {
             })
     }
 
+    /// Two boxes set flush side by side, the one at an edge shorter: their
+    /// row rules run on from one to the other, and the ruling reads as one
+    /// grid, the shorter box's column open under it.
+    ///
+    /// An invoice's tax box (`Tax Location` over `CCN`) drawn against the
+    /// left of its totals (`Subtotal`, `Sales Tax`, `Payment`, `Balance
+    /// Due`): read as one grid, the tax box's lines were the totals' first
+    /// column, and the rows' heads. The shorter box is framed: its outer
+    /// vertical ends on a row's rule that runs under its own columns alone,
+    /// and under it nothing is ruled or written down to the grid's foot. The
+    /// other box's first vertical, where they meet, runs the grid's full
+    /// height. Each box is a grid of its own. Returns the grids, the edge
+    /// box first where it stands left; the grid whole where none is so.
+    pub fn split_flush_boxes(self, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) -> Vec<Grid> {
+        let (rows, cols) = (self.rows(), self.cols());
+        if self.layout.is_some() || rows < 2 || cols < 2 {
+            return vec![self];
+        }
+        let t = EDGE_TOLERANCE * 2.0;
+        let covers_v = |x: f64, y0: f64, y1: f64| {
+            let spans = rules
+                .iter()
+                .filter(|r| r.orientation == Orientation::Vertical && (r.axis_pos() - x).abs() <= t)
+                .map(|r| (r.bbox.y0, r.bbox.y1));
+            span_coverage(spans, y0, y1) >= (y1 - y0) - 2.0 * t
+        };
+        let covers_h = |y: f64, x0: f64, x1: f64| {
+            let spans = rules
+                .iter()
+                .filter(|r| {
+                    r.orientation == Orientation::Horizontal && (r.axis_pos() - y).abs() <= t
+                })
+                .map(|r| (r.bbox.x0, r.bbox.x1));
+            span_coverage(spans, x0, x1) >= (x1 - x0) - 2.0 * t
+        };
+        let any_v = |x: f64, y0: f64, y1: f64| {
+            let spans = rules
+                .iter()
+                .filter(|r| r.orientation == Orientation::Vertical && (r.axis_pos() - x).abs() <= t)
+                .map(|r| (r.bbox.y0, r.bbox.y1));
+            span_coverage(spans, y0 + t, y1 - t) > t
+        };
+        let any_h = |y: f64, x0: f64, x1: f64| {
+            let spans = rules
+                .iter()
+                .filter(|r| {
+                    r.orientation == Orientation::Horizontal && (r.axis_pos() - y).abs() <= t
+                })
+                .map(|r| (r.bbox.x0, r.bbox.x1));
+            span_coverage(spans, x0 + t, x1 - t) > t
+        };
+        let written = |x0: f64, x1: f64, y0: f64, y1: f64| {
+            glyphs.iter().any(|g| {
+                let (x, y) = g.center();
+                !g.text.trim().is_empty() && x > x0 && x < x1 && y > y0 && y < y1
+            })
+        };
+        let (top, foot) = (self.ys[0], self.ys[rows]);
+        // The edge box's columns `cs`, its outer edge `outer`, and where it
+        // meets the other at `inner`.
+        let split = |left: bool| -> Option<(usize, usize)> {
+            let outer = if left { self.xs[0] } else { self.xs[cols] };
+            // The outer vertical runs down from the top to a row's rule.
+            let k = (1..rows)
+                .rev()
+                .find(|&k| covers_v(outer, top, self.ys[k]))?;
+            if covers_v(outer, top, foot) || any_v(outer, self.ys[k], foot) {
+                return None;
+            }
+            // Where the boxes meet: the nearest inner vertical running the
+            // full height.
+            let inner: Vec<usize> = if left {
+                (1..cols).collect()
+            } else {
+                (1..cols).rev().collect()
+            };
+            let c = inner
+                .into_iter()
+                .find(|&c| covers_v(self.xs[c], top, foot))?;
+            let (x0, x1) = if left {
+                (self.xs[0], self.xs[c])
+            } else {
+                (self.xs[c], self.xs[cols])
+            };
+            // The edge box's foot runs under its own columns; under it,
+            // nothing is ruled or written.
+            if !covers_h(self.ys[k], x0, x1)
+                || (k + 1..=rows).any(|j| any_h(self.ys[j], x0, x1))
+                || self
+                    .xs
+                    .iter()
+                    .filter(|&&x| x > x0 + t && x < x1 - t)
+                    .any(|&x| any_v(x, self.ys[k], foot))
+                || written(x0, x1, self.ys[k], foot)
+            {
+                return None;
+            }
+            Some((k, c))
+        };
+        let part = |xs: &[f64], ys: &[f64]| Grid {
+            page: self.page,
+            xs: xs.to_vec(),
+            ys: ys.to_vec(),
+            bbox: BBox {
+                x0: xs[0],
+                y0: ys[0],
+                x1: xs[xs.len() - 1],
+                y1: ys[ys.len() - 1],
+            },
+            layout: None,
+        };
+        if let Some((k, c)) = split(true) {
+            return vec![
+                part(&self.xs[..=c], &self.ys[..=k]),
+                part(&self.xs[c..], &self.ys),
+            ];
+        }
+        if let Some((k, c)) = split(false) {
+            return vec![
+                part(&self.xs[..=c], &self.ys),
+                part(&self.xs[c..], &self.ys[..=k]),
+            ];
+        }
+        vec![self]
+    }
+
     /// Part a grid of one ruled row into its entries
     /// ([`Grid::entry_cuts`]); returns whether it parted.
     pub fn split_entry_row(&mut self, glyphs: &[crate::glyph::Glyph]) -> bool {
