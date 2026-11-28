@@ -1,0 +1,31 @@
+{
+  "document": {
+    "path": "../fixtures/chrome-table-thin-section-band.pdf",
+    "sha256": "08722521dc515c9d5fd714b766302d9c73e2512f21a781437435a1c964e6f783",
+    "about": "An invented list of service contracts printed to PDF by headless Chrome on macOS (fixtures/chrome-table-thin-section-band.html): 6 point type, each region's contracts under a dark band holding its name in 5.5 point type between rules 7.5 points apart."
+  },
+  "notes": [
+    "Reprint with: Chrome --headless --no-pdf-header-footer --print-to-pdf=chrome-table-thin-section-band.pdf chrome-table-thin-section-band.html, then update the sha256.",
+    "The band's height in the HTML (6.5pt) prints 7.5 points between its rules with the borders; taller than a cell's height, eight points, it was always a row."
+  ],
+  "checks": [
+    {
+      "id": "band-over-its-contracts",
+      "found": "2026-11-28",
+      "issue": "The band `Northern Region (NR)` was no row of its own: its rules stand closer than a cell's height, and it ran into the row under it (`Northern Region (NR) Grounds maintenance`).",
+      "cell": {
+        "value": "Harrow Groundworks Ltd",
+        "section": "Northern Region (NR)"
+      }
+    },
+    {
+      "id": "band-over-its-contracts-2",
+      "found": "2026-11-28",
+      "issue": "As above, the next band.",
+      "cell": {
+        "value": "Orchard Guarding Co",
+        "section": "Southern Region (SR)"
+      }
+    }
+  ]
+}
