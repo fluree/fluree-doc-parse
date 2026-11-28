@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "hess-28-781-2024.pdf",
+    "url": "https://hess.copernicus.org/articles/28/781/2024/hess-28-781-2024.pdf",
+    "sha256": "53bac97eeb151feed5a49057ef8d37018181e0e07a1089df331642190ddc2a1c",
+    "about": "Hydrology and Earth System Sciences 28, 781 (2024), set in two columns. A word hyphenated at a page's last line goes on at the head of the next page's first column."
+  },
+  "notes": [
+    "2026-11-28: a second producer for a word broken at a page break (`through-` / `out`)."
+  ],
+  "checks": [
+    {
+      "id": "persists-throughout",
+      "found": "2026-11-28",
+      "issue": "`…persists through-` / `out the winter` read as two paragraphs, the word broken.",
+      "text": "ablation season that persists throughout the winter"
+    }
+  ]
+}
