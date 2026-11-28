@@ -330,7 +330,6 @@ fn cid_source<'a>(font: &Dict<'a>) -> Option<CidSource<'a>> {
     let registry = info.get::<hayro_syntax::object::String<'_>>(REGISTRY)?;
     let ordering = info.get::<hayro_syntax::object::String<'_>>(ORDERING)?;
     let family = CidFamily::from_registry_ordering(registry.as_bytes(), ordering.as_bytes());
-    family.ucs2_cmap()?;
     let descriptor = descendant.get::<Dict<'a>>(FONT_DESC)?;
     let program = match descendant.get::<Name<'_>>(SUBTYPE).as_deref() {
         Some(CID_FONT_TYPE0) => CidProgram::Cff(descriptor.get::<Stream<'a>>(FONT_FILE3)?),
@@ -1298,6 +1297,12 @@ mod tests {
         assert_eq!(
             read_cid_with(program.clone(), &[695], Some(&[(695, 'x')]), "Japan1"),
             "x"
+        );
+        // A font with a ToUnicode map is read by its map: a CID it leaves
+        // out reads as nothing here.
+        assert_eq!(
+            read_cid_with(program.clone(), &[695], Some(&[(1, 'a')]), "Japan1"),
+            ""
         );
         // CIDs no collection numbers (`Adobe-Identity`) read as nothing.
         assert_eq!(read_cid_with(program, &[695], None, "Identity"), "");
