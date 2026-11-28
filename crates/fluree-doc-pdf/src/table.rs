@@ -1548,6 +1548,12 @@ impl Grid {
             return 0;
         }
         let mut run = self.leading_fill_run(fills);
+        // Rows parted from one ruled band by its entries are the body's
+        // ([`Grid::entry_row`]): the stripes shaded under every other line
+        // of them are no header's shading.
+        if let Some(r) = (0..run).find(|&r| self.entry_row(glyphs, rules, r)) {
+            run = r;
+        }
         // The run's last row is the body's first stripe where the rows from
         // it on are shaded every other row and it holds figures as they do:
         // an exposure table's `ethanol | 1000 | - | 1000` shaded under its
@@ -2411,6 +2417,12 @@ impl Grid {
     /// column, a line's pitch under it. At
     /// least one line wraps so: entries of one line each are values stacked
     /// one per line ([`Grid::stacked_cuts`]).
+    ///
+    /// Lines over the first entry are a row of their own: the rest of the
+    /// last item of the page before, its `Daily Total` carried over the
+    /// break. So are lines under the last entry set off from it by more
+    /// than a line's pitch: a note under the items (`Credit of … to be
+    /// applied`).
     fn entry_cuts(&self, glyphs: &[crate::glyph::Glyph], y0: f64, y1: f64) -> Option<Vec<f64>> {
         let cols = self.cols();
         let lines: Vec<Vec<(f64, String, f64)>> = (0..cols)
@@ -2447,44 +2459,87 @@ impl Grid {
         if beside_each < 2 {
             return None;
         }
+        // Lines over the first entry are a row of their own (the rest of the
+        // last row of the page before, carried over the break), and so are
+        // lines under the last, set off from it by more than a line's pitch
+        // (a note under the items). Between two entries, every line is
+        // beside one or wraps on from the line over it.
+        let (first, last) = (bases[0], bases[bases.len() - 1]);
+        let mut head = false;
+        let mut tail: Option<f64> = None;
+        let mut tails: Vec<(f64, f64)> = Vec::new();
         let mut wrapped = false;
         for col in &lines {
+            let mut prev_tail = false;
             for (i, l) in col.iter().enumerate() {
                 if base_of(l).is_some() {
+                    prev_tail = false;
                     continue;
                 }
-                // A wrapped line: under its column's line before it, a
-                // line's pitch on (too close for an entry to open between).
-                let Some(prev) = i.checked_sub(1).map(|j| &col[j]) else {
-                    return None;
-                };
-                let pitch = l.0 - prev.0;
-                if pitch <= 0.0 || pitch > 1.6 * l.2 {
+                let prev = i.checked_sub(1).map(|j| &col[j]);
+                let pitch = prev.map(|p| l.0 - p.0);
+                let wraps = pitch.is_some_and(|d| d > 0.0 && d <= 1.6 * l.2);
+                if l.0 < first - 0.25 * l.2 {
+                    // Over the first entry: the head, its lines wrapping on
+                    // from one another.
+                    if prev.is_some() && !wraps {
+                        return None;
+                    }
+                    head = true;
+                } else if wraps && !prev_tail {
+                    // A wrapped line: under its column's line before it, a
+                    // line's pitch on (too close for an entry to open
+                    // between).
+                    wrapped = true;
+                } else if wraps || l.0 > last + 0.25 * l.2 {
+                    // Under the last entry and set off from it: the tail.
+                    if !wraps {
+                        tail = Some(tail.map_or(l.0, |t: f64| t.min(l.0)));
+                    }
+                    tails.push((l.0, l.2));
+                    prev_tail = true;
+                } else {
                     return None;
                 }
-                wrapped = true;
             }
         }
         if !wrapped {
             return None;
+        }
+        // The tail opens under every line of the last entry, in every column.
+        if let Some(t) = tail {
+            let tail_line = |l: &(f64, String, f64)| tails.iter().any(|&(y, _)| y == l.0);
+            if lines
+                .iter()
+                .flatten()
+                .any(|l| !tail_line(l) && l.0 > t - 0.5 * l.2)
+            {
+                return None;
+            }
         }
         // Each cut lies between the centres of the last line over the entry,
         // in any column, and the entry's own line: a glyph belongs to the
         // row its centre falls in.
         let all: Vec<&(f64, String, f64)> = lines.iter().flatten().collect();
         let centre = |l: &(f64, String, f64)| l.0 - 0.35 * l.2;
-        let cuts = lines[key]
-            .iter()
-            .skip(1)
-            .map(|opening| {
-                let over = all
-                    .iter()
-                    .filter(|l| l.0 < opening.0 - 0.5 * opening.2)
-                    .map(|l| centre(l))
-                    .fold(f64::MIN, f64::max);
-                (over + centre(opening)) / 2.0
-            })
-            .collect();
+        let cut_over = |opening: &(f64, String, f64)| {
+            let over = all
+                .iter()
+                .filter(|l| l.0 < opening.0 - 0.5 * opening.2)
+                .map(|l| centre(l))
+                .fold(f64::MIN, f64::max);
+            (over + centre(opening)) / 2.0
+        };
+        let skip = usize::from(!head);
+        let mut cuts: Vec<f64> = lines[key].iter().skip(skip).map(cut_over).collect();
+        if let Some(t) = tail {
+            let opening = all
+                .iter()
+                .find(|l| l.0 == t)
+                .copied()
+                .expect("the tail's own line");
+            cuts.push(cut_over(opening));
+        }
         Some(cuts)
     }
 
@@ -2603,6 +2658,39 @@ impl Grid {
         }
         added.reverse();
         added
+    }
+
+    /// Whether row `r` is one of the rows a ruled band was parted into by
+    /// its entries ([`Grid::entry_cuts`]): the band between the ruled
+    /// boundaries around it holds two rows or more, and its boundaries
+    /// inside, unruled, are where its entries part.
+    fn entry_row(&self, glyphs: &[crate::glyph::Glyph], rules: &[Rule], r: usize) -> bool {
+        let rows = self.rows();
+        if r >= rows || self.cols() < 2 {
+            return false;
+        }
+        let (left, right) = (self.xs[0], self.xs[self.cols()]);
+        let ruled = |k: usize| {
+            let y = self.ys[k];
+            rules.iter().any(|rule| {
+                rule.orientation == Orientation::Horizontal
+                    && (rule.axis_pos() - y).abs() <= EDGE_TOLERANCE * 2.0
+                    && rule.bbox.x1.min(right) - rule.bbox.x0.max(left) > 0.0
+            })
+        };
+        let a = (0..=r).rev().find(|&k| ruled(k)).unwrap_or(0);
+        let b = (r + 1..=rows).find(|&k| ruled(k)).unwrap_or(rows);
+        if b - a < 2 {
+            return false;
+        }
+        self.entry_cuts(glyphs, self.ys[a], self.ys[b])
+            .is_some_and(|cuts| {
+                cuts.len() == b - a - 1
+                    && cuts
+                        .iter()
+                        .zip(&self.ys[a + 1..b])
+                        .all(|(y, k)| (y - k).abs() <= 0.5)
+            })
     }
 
     /// Part a grid of one ruled row into its entries
@@ -13104,6 +13192,31 @@ mod header_tests {
     }
 
     #[test]
+    fn lines_over_the_first_entry_and_under_the_last_are_rows_of_their_own() {
+        // The rest of the page before's last item over the first entry, and
+        // a note set off under the last.
+        let mut lines: Vec<(f64, f64, &str)> = ITEMS.to_vec();
+        lines.push((105.0, 104.0, "Daily Total: $ 9.00"));
+        lines.push((105.0, 185.0, "Credit to be applied"));
+        let (mut g, glyphs) = entry_box(ITEM_COLUMNS, &lines);
+        assert_eq!(g.split_stacked_rows(&glyphs), vec![(0, 3)]);
+        let texts = g.cell_texts(&glyphs);
+        let description = |r: usize| texts[r * 5 + 2].clone();
+        assert_eq!(description(0), "Daily Total: $ 9.00");
+        assert_eq!(
+            description(1),
+            "Items by a third party - Lindsay Trucking Daily Total $ 2,599.67"
+        );
+        assert_eq!(description(2), "Pump truck travel Daily Total $ 200.00");
+        assert_eq!(description(3), "Credit to be applied");
+        // A note whose column's lines run on under it in another column is
+        // no tail: the last entry is not over.
+        lines.push((305.0, 190.0, "7"));
+        let (g, glyphs) = entry_box(ITEM_COLUMNS, &lines);
+        assert!(g.entry_cuts(&glyphs, 100.0, 200.0).is_none());
+    }
+
+    #[test]
     fn entries_are_not_parted_without_their_evidence() {
         let without = |drop: &dyn Fn(&(f64, f64, &str)) -> bool,
                        add: &[(f64, f64, &'static str)]| {
@@ -13119,9 +13232,6 @@ mod header_tests {
         assert!(without(&|_| false, &[(55.0, 142.0, "see note")]).is_none());
         // One column beside the figures alone (the item codes and dates gone).
         assert!(without(&|l| l.0 < 100.0, &[]).is_none());
-        // A line over the first entry (a label at the cell's head) goes on
-        // from nothing.
-        assert!(without(&|_| false, &[(55.0, 104.0, "Note")]).is_none());
         // A wrap two lines' pitch under the line over it is no wrap.
         assert!(without(
             &|l| l.2.starts_with("Daily Total $ 2"),

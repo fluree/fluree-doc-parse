@@ -896,17 +896,36 @@ fn running_over_parts(elements: &[Element]) -> Vec<bool> {
             && (a.y0 - b.y0).abs() <= RUNNING_PLACE
             && (a.y1 - b.y1).abs() <= RUNNING_PLACE
     };
+    // Inside another page's copy: its words a run of the copy's, set in a
+    // box holding its own, at the same place. A template's line read in
+    // two pieces on one page (`Location:` and `Lawton State #001`) and
+    // whole on the other, or its box read into the table beside it.
+    let within = |a: &crate::geom::BBox, o: &crate::geom::BBox| {
+        o.x0 <= a.x0 + RUNNING_PLACE
+            && o.y0 <= a.y0 + RUNNING_PLACE
+            && o.x1 >= a.x1 - RUNNING_PLACE
+            && o.y1 >= a.y1 - RUNNING_PLACE
+    };
+    let words_of = |t: &str| {
+        t.split_whitespace()
+            .filter(|w| *w != "|")
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
     let repeated = |i: usize| {
         let e = &elements[i];
         let (Some(b), t) = (e.bbox, norm(&e.text)) else {
             return false;
         };
+        let w = words_of(&e.text);
         !t.is_empty()
             && elements.iter().any(|o| {
                 o.page != e.page
-                    && o.kind != "doco:Table"
-                    && o.bbox.is_some_and(|ob| at_place(&ob, &b))
-                    && norm(&o.text) == t
+                    && o.bbox.is_some_and(|ob| {
+                        (o.kind != "doco:Table" && at_place(&ob, &b) && norm(&o.text) == t)
+                            || (within(&b, &ob)
+                                && words_of(&o.text).windows(w.len()).any(|run| run == w))
+                    })
             })
     };
     let table = |i: usize| elements[i].kind == "doco:Table";
@@ -924,12 +943,20 @@ fn running_over_parts(elements: &[Element]) -> Vec<bool> {
         if between.is_empty() || b.page != a.page + 1 {
             continue;
         }
+        // Over the second part on its page, or under the first on its own:
+        // the page's head, or its foot (a form's box set under the items on
+        // every page).
         let over = |n: usize| {
-            elements[n].page == b.page
+            (elements[n].page == b.page
                 && elements[n]
                     .bbox
                     .zip(b.bbox)
-                    .is_some_and(|(r, t)| r.y1 <= t.y0 + RUNNING_PLACE)
+                    .is_some_and(|(r, t)| r.y1 <= t.y0 + RUNNING_PLACE))
+                || (elements[n].page == a.page
+                    && elements[n]
+                        .bbox
+                        .zip(a.bbox)
+                        .is_some_and(|(r, t)| r.y0 >= t.y1 - RUNNING_PLACE))
         };
         // A page that sets its head as another page does, over a part
         // opening as the part before it opened, on the label its first row
