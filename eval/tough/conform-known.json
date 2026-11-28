@@ -91,6 +91,12 @@
   "md table.restated_headers": 1,
   "xhtml table.restated_headers": 1
  },
+ "doe-em-cell-space-layer": {
+  "md table.header_rows": 1,
+  "md table.sub_headers": 2,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 2
+ },
  "ecb-diagram-picture-no-table": {
   "md table.header_rows": 1,
   "md table.sub_headers": 1,
@@ -222,6 +228,14 @@
   "md table.sub_headers": 5,
   "xhtml table.header_rows": 5,
   "xhtml table.sub_headers": 5
+ },
+ "fed-mpr-chart-labels-space-layer": {
+  "md table.header_rows": 2,
+  "md table.shape": 1,
+  "md table.sub_headers": 2,
+  "xhtml table.header_rows": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 2
  },
  "fed-mpr-chart-titles-side-by-side": {
   "md table.header_rows": 1,

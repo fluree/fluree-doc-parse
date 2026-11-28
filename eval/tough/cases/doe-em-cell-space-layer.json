@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "doe-em-major-procurements-2026-01.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2026-05/January%202026%20Major%20Procurements%201-12-26-Final.pdf",
+    "sha256": "0bda158ea8b8029ae216f8a381ea75675249660a87db44e158a38011d2ed0ad2",
+    "about": "DOE Office of Environmental Management, awarded major procurements (January 2026), 5 pages. Each cell lays a row of blank spaces across itself, a space's width apart, before its text is set over them."
+  },
+  "notes": [
+    "2026-11-28: the blank spaces, drawn before the words, fell between letters that close up, and parted words between their letters (`T& M wi t h I DIQ C L I N`). A space drawn out of turn between two marks that close up is a stray."
+  ],
+  "checks": [
+    {
+      "id": "tm-with-idiq",
+      "found": "2026-11-28",
+      "issue": "`T&M with IDIQ CLIN for FFP Task Orders` read `T& M wi t h I DIQ C L I N for FFP Task Orders`.",
+      "text": "T&M with IDIQ CLIN for FFP Task Orders"
+    },
+    {
+      "id": "full-and-open-competition",
+      "found": "2026-11-28",
+      "issue": "`Full and Open Competition` read `Full and Open C o m p e t i t ion`.",
+      "no_text": "C o m p e t i t ion"
+    },
+    {
+      "id": "no-split-word",
+      "found": "2026-11-28",
+      "issue": "No word parted between its letters.",
+      "no_text": "wi t h"
+    }
+  ]
+}
