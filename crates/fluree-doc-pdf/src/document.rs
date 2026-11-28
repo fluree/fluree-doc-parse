@@ -1285,6 +1285,10 @@ fn rest_of_names(names: &[String], first: &[String]) -> bool {
             .all(|(rest, name)| rest.trim().is_empty() || finishes_name(name, rest))
 }
 
+/// Most words a line cut by the page break and printed on both pages may
+/// repeat at the next page's head.
+const MAX_CUT_OVERLAP_WORDS: usize = 4;
+
 /// `rest` finishes the column's name `name` the page break cut: it goes on
 /// in lowercase, or closes a bracket the name leaves open, and is no
 /// figure.
@@ -1309,9 +1313,24 @@ fn finish_cut_head(head: &mut Element, row: usize, body: &mut Element, rest: &[S
     };
     if let Some(cells) = head.cells.as_mut() {
         for (name, more) in cells[row].iter_mut().zip(rest) {
-            if !more.trim().is_empty() {
-                *name = format!("{} {}", name.trim(), more.trim());
+            if more.trim().is_empty() {
+                continue;
             }
+            // A line the break cut through prints on both pages: the rest
+            // opening on the words the name ends with (`… with or without
+            // bevacizumab` over `bevacizumab n=275`) says them once.
+            let head: Vec<&str> = name.split_whitespace().collect();
+            let tail: Vec<&str> = more.split_whitespace().collect();
+            let overlap = (1..=head.len().min(tail.len()).min(MAX_CUT_OVERLAP_WORDS))
+                .rev()
+                .find(|&k| head[head.len() - k..] == tail[..k])
+                .unwrap_or(0);
+            *name = head
+                .iter()
+                .chain(&tail[overlap..])
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ");
         }
         head.text = table_text(cells);
     }
@@ -12082,6 +12101,17 @@ mod tests {
         assert_eq!(
             els[0].cells.as_ref().unwrap()[0][1],
             "Completion Date (for information only)"
+        );
+        // A line the break printed on both pages is said once.
+        let cut: &[&[&str]] = &[&["Endpoint", "Placebo with or without bevacizumab", "Fee"]];
+        let twice: &[&[&str]] = &[&["", "bevacizumab n=275", ""], &["OS", "16.3", "$312,746"]];
+        let (h, fh) = part("elem-00001", 0, cut, 1, &XS, true, true);
+        let (t, ft) = part("elem-00002", 1, twice, 1, &XS, true, true);
+        let mut els = vec![h, t];
+        link_continued_tables(&mut els, &[fh, ft]);
+        assert_eq!(
+            els[0].cells.as_ref().unwrap()[0][1],
+            "Placebo with or without bevacizumab n=275"
         );
         assert_eq!(els[1].header_rows, Some(0));
         assert_eq!(
