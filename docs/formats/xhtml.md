@@ -97,20 +97,24 @@ lossy in a specific way worth knowing:
 | a [transcript](../inputs/transcripts.md) turn | `<p data-speaker="…" data-start-ms="…" data-end-ms="…">`, the label in `<b>` | nothing |
 | an [email](../inputs/email.md) message's header | `<p data-from="…" data-sent-at="…">`, with `<hr/>` above each quoted message | the other header fields, which are in the text |
 | `doc:ListItem` | `<li>`, with a nested list's `<ul>` inside its parent's `<li>` | nothing |
-| figure fragment | `<span>` | that it is prose at all |
+| figure fragment | `<div class="doco-figure-text">` | nothing: fdoc's HTML reader reads each back as one fragment of its drawing |
 | `doco:Table` | `<table>` | sub-header bands; merges survive as `rowspan`/`colspan` |
 | `doco:Figure` | `<figure data-figure="…">` | **that it is an escalation anchor** |
 | `doco:Section` | — | containment is implicit in heading order |
+| a deck's `doc:SpeakerNotes` | after the slides in `<section class="speaker-notes">`, each slide's in `<section data-slide="4">` under `<h2>Slide 4: <its title></h2>` | that the slide contains them |
 | — | — | page, bbox, evidence: nowhere to put them |
 
 Consecutive figure fragments sharing a `figure` id are wrapped in one
 `<figure>` element, which is the one piece of grouping this format keeps that
-Markdown does not:
+Markdown does not. Each fragment is a block of its own, classed as a
+drawing's text: a block so that each reads back as one fragment, not run
+together with the next as inline text would be, and classed so that a reader
+can tell it from a paragraph of prose:
 
 ```xml
 <figure data-figure="figure-0-0">
-<span>• 2mV input offset voltage maximum at 25°C (BA</span>
-<span>version)</span>
+<div class="doco-figure-text">• 2mV input offset voltage maximum at 25°C (BA</div>
+<div class="doco-figure-text">version)</div>
 </figure>
 ```
 

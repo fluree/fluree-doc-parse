@@ -606,6 +606,7 @@ fn group_label(rows: &[Vec<String>], r: usize) -> bool {
 
 /// A table's frame on its page: where its columns are drawn, and whether
 /// its first row is set apart the way a header is.
+#[derive(Clone)]
 struct TableFrame {
     page: usize,
     bbox: crate::geom::BBox,
@@ -867,6 +868,115 @@ fn is_splice_anchor(e: &Element) -> bool {
     matches!(e.evidence, "route" | "table-confidence" | "table-missing")
 }
 
+/// How far apart, in points, two copies of a page's running line may stand
+/// and still be its template's: a template sets them to the point.
+const RUNNING_PLACE: f64 = 1.5;
+
+/// Which elements are the page's running head over a table's part carried
+/// on from the page before: blocks between the two parts, on the second
+/// part's page and over it, each set word for word at the same place on
+/// another page.
+///
+/// The reading of furniture finds a running head by its repeating on most
+/// pages, or, in a short document, on every page or every page but one. A
+/// document whose head is left off some pages (a schedule's page of rows
+/// carried on with no head, between two pages with one) falls short of
+/// both, and its head was read as text between the parts, which ended the
+/// link. Text that repeats elsewhere does not land at the same place to the
+/// point, as a template's does.
+fn running_over_parts(elements: &[Element]) -> Vec<bool> {
+    let mut running = vec![false; elements.len()];
+    let content: Vec<usize> = (0..elements.len())
+        .filter(|&i| !is_splice_anchor(&elements[i]))
+        .collect();
+    let norm = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+    let at_place = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
+        (a.x0 - b.x0).abs() <= RUNNING_PLACE
+            && (a.x1 - b.x1).abs() <= RUNNING_PLACE
+            && (a.y0 - b.y0).abs() <= RUNNING_PLACE
+            && (a.y1 - b.y1).abs() <= RUNNING_PLACE
+    };
+    let repeated = |i: usize| {
+        let e = &elements[i];
+        let (Some(b), t) = (e.bbox, norm(&e.text)) else {
+            return false;
+        };
+        !t.is_empty()
+            && elements.iter().any(|o| {
+                o.page != e.page
+                    && o.kind != "doco:Table"
+                    && o.bbox.is_some_and(|ob| at_place(&ob, &b))
+                    && norm(&o.text) == t
+            })
+    };
+    let table = |i: usize| elements[i].kind == "doco:Table";
+    for (k, &j) in content.iter().enumerate() {
+        if !table(j) {
+            continue;
+        }
+        // The next table after this one, and the blocks between them.
+        let Some(m) = content[k + 1..].iter().position(|&n| table(n)) else {
+            continue;
+        };
+        let between = &content[k + 1..k + 1 + m];
+        let next = content[k + 1 + m];
+        let (a, b) = (&elements[j], &elements[next]);
+        if between.is_empty() || b.page != a.page + 1 {
+            continue;
+        }
+        let over = |n: usize| {
+            elements[n].page == b.page
+                && elements[n]
+                    .bbox
+                    .zip(b.bbox)
+                    .is_some_and(|(r, t)| r.y1 <= t.y0 + RUNNING_PLACE)
+        };
+        // A page that sets its head as another page does, over a part
+        // opening as the part before it opened, on the label its first row
+        // opens with (`Form Factor` over each page's list of drives, a
+        // form's `1 a Form 8949 …` box by box), prints its own copy of the
+        // block, and the head is the copy's. Only a header repeated whole
+        // opens the rest of the table.
+        fn words(t: &String) -> Vec<&str> {
+            t.split_whitespace().collect()
+        }
+        let opens_alike = match (a.cells.as_deref(), b.cells.as_deref()) {
+            (Some([x, ..]), Some([y, ..])) => x.first().zip(y.first()).is_some_and(|(p, q)| {
+                !p.trim().is_empty() && !table::is_numeric_cell(p.trim()) && words(p) == words(q)
+            }),
+            _ => false,
+        };
+        let n = a.header_rows.unwrap_or(0);
+        let head_again = n > 0
+            && a.cells
+                .as_ref()
+                .zip(b.cells.as_ref())
+                .is_some_and(|(x, y)| {
+                    x.len() >= n
+                        && y.len() > n
+                        && x[..n]
+                            .iter()
+                            .zip(&y[..n])
+                            .all(|(p, q)| p.iter().map(words).eq(q.iter().map(words)))
+                });
+        // A part with a header of its own that is not that one again (a
+        // title band set into the first page's grid, read out as text over
+        // the next) is a table set on the page in its own right: the link
+        // over a page's head is for a part carried on as rows alone, or
+        // under its header repeated whole.
+        let headless = b.header_rows.unwrap_or(0) == 0;
+        if (opens_alike || !headless) && !head_again {
+            continue;
+        }
+        if between.iter().all(|&n| over(n) && repeated(n)) {
+            for &n in between {
+                running[n] = true;
+            }
+        }
+    }
+    running
+}
+
 /// Link a table the page break split to its part on the page before.
 ///
 /// A table that fills the foot of one page and goes on at the head of the
@@ -892,7 +1002,11 @@ fn is_splice_anchor(e: &Element) -> bool {
 /// table's anchor goes in just before the table, so with anchors on the
 /// second part follows its own anchor, not the first part, and comparing
 /// neighbours alone lost the link on every run that minted anchors.
+///
+/// Nor is the page's running head over the second part
+/// ([`running_over_parts`]).
 fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
+    let running = running_over_parts(elements);
     let frame = |e: &Element| {
         frames
             .iter()
@@ -912,7 +1026,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     let mut table_heads: std::collections::HashMap<String, Vec<Vec<String>>> =
         std::collections::HashMap::new();
     for i in 0..elements.len() {
-        if is_splice_anchor(&elements[i]) {
+        if is_splice_anchor(&elements[i]) || running[i] {
             continue;
         }
         let Some(p) = last.replace(i) else {
@@ -929,7 +1043,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             }
             continue;
         }
-        let (prev, next) = (&before[p], &mut after[0]);
+        let (prev, next) = (&mut before[p], &mut after[0]);
         if prev.kind != "doco:Table" || next.kind != "doco:Table" || next.page != prev.page + 1 {
             continue;
         }
@@ -953,7 +1067,32 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         if prev_cells.len() == rows.len() && prev_cells.iter().zip(rows).all(|(a, b)| same(a, b)) {
             continue;
         }
-        let own = prev.header_rows.unwrap_or(0).min(prev_cells.len());
+        // A part with no header of its own that opens on a section's band
+        // (`Base Period 2: …` across the columns) carries on a table set in
+        // bands: one whose body holds them, or whose header ends on one. The
+        // band heads its section's rows and names no column.
+        //
+        // A header ending on a band set as this one is, its label alone in
+        // the first cell, ended on the table's first band (`Base Period 1:
+        // …` under `CLIN | Funding Amount | Date`). The header's reading
+        // tells a first band from a second header row by a band further
+        // down ([`table::Grid::header_rows`]), and the break put that one
+        // on this page.
+        let lone = |row: &[String]| {
+            row.first().is_some_and(|t| !t.trim().is_empty())
+                && row.iter().skip(1).all(|t| t.trim().is_empty())
+        };
+        let opens_band = next.sub_headers.as_ref().is_some_and(|s| s.contains(&0));
+        let mut own = prev.header_rows.unwrap_or(0).min(prev_cells.len());
+        let band_head = own >= 2 && lone(&prev_cells[own - 1]) && lone(&rows[0]);
+        let in_bands = opens_band
+            && next.header_rows == Some(0)
+            && rows.len() > 1
+            && (band_head || prev.sub_headers.as_ref().is_some_and(|s| !s.is_empty()));
+        let first_band = in_bands && band_head;
+        if first_band {
+            own -= 1;
+        }
         let head: Vec<Vec<String>> = if own > 0 {
             prev_cells[..own].to_vec()
         } else {
@@ -996,13 +1135,19 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             })
             && !runs_on.is_empty();
         let repeats = repeats || repeats_run_on;
+        // A part opening on a section's band under a part that is all
+        // header (`Monotherapy` across the columns under `Indication |
+        // Recommended Dosage | Duration`) carries on under that header: the
+        // band heads its section's rows and names no column.
+        let under_head = prev.header_only() && opens_band;
         let finishes_header = prev.header_only()
+            && !opens_band
             && rows.len() > 1
             && b.bold
             && rows[0]
                 .iter()
                 .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()));
-        if b.styled && !repeats && !finishes_header {
+        if b.styled && !repeats && !finishes_header && !under_head && !in_bands {
             continue;
         }
         let heads: Vec<(usize, usize, String, String)> = runs_on
@@ -1010,6 +1155,14 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             .filter(|_| repeats_run_on)
             .map(|(r, c, rest)| (r, c, head[r][c].clone(), rest))
             .collect();
+        if first_band {
+            prev.header_rows = Some(own);
+            let mut subs = prev.sub_headers.take().unwrap_or_default();
+            subs.push(own);
+            subs.sort_unstable();
+            subs.dedup();
+            prev.sub_headers = Some(subs);
+        }
         next.continues = Some(prev.id.clone());
         if let Some(cells) = next.cells.as_mut() {
             let cols = cells.first().map_or(0, Vec::len);
@@ -3926,6 +4079,9 @@ struct PageLayout {
     /// ([`picture_table`]): the page's text, as a picture read as text is,
     /// and no figure.
     picture_tables: Vec<crate::geom::BBox>,
+    /// The ruled rows kept as the head of the table the next page opens
+    /// on ([`table::stranded_head`]).
+    stranded_heads: Vec<crate::geom::BBox>,
 }
 
 /// A picture's lettering, read by OCR inside it and assembled on its own:
@@ -5247,6 +5403,322 @@ fn side_of(
     (cut.rows() >= 2 && held >= 2 && ruled).then_some(cut)
 }
 
+/// Fewest icons in a row of them ([`icon_rows`]): two shapes side by side
+/// are as often a pair of logos or a chart's legend.
+const ICON_ROW: usize = 3;
+
+/// How far two icons of one row may differ in size, as a share of the size:
+/// one shape drawn again, its outline's width aside.
+const ICON_SIZE_SPREAD: f64 = 0.15;
+
+/// Farthest, in a label's line height, an icon's foot stands over its
+/// label's first line; a label's lines stand a line's leading apart.
+const ICON_LABEL_REACH: f64 = 1.5;
+
+/// Most words in a line of an icon's label: a name, not a sentence.
+const ICON_LABEL_WORDS: usize = 5;
+
+/// A row of icons, each with its label set under it.
+struct IconRow {
+    /// Where the labels stand: from the icons' feet to the lowest label's.
+    band: crate::geom::BBox,
+    /// Each icon's label's box: its slot's width, from the icon's foot to
+    /// the label's.
+    boxes: Vec<crate::geom::BBox>,
+    /// The most lines any label runs to.
+    lines: usize,
+}
+
+impl IconRow {
+    /// Where its labels' lines are cut: at each edge between two icons'
+    /// slots, from the icons' feet to the labels'.
+    fn cuts(&self) -> Vec<(f64, f64, f64)> {
+        self.boxes
+            .windows(2)
+            .map(|w| (w[0].x1, self.band.y0, self.band.y1))
+            .collect()
+    }
+
+    /// Is `g`, a grid read from alignment, the row's labels: within the
+    /// band they stand in, rows no more than the labels' lines?
+    fn labels_grid(&self, g: &Grid) -> bool {
+        let slack = 2.0;
+        g.bbox.y0 >= self.band.y0 - slack
+            && g.bbox.y1 <= self.band.y1 + slack
+            && g.bbox.x0 >= self.band.x0 - slack
+            && g.bbox.x1 <= self.band.x1 + slack
+            && g.rows() <= self.lines
+    }
+}
+
+/// Do words of one line close up across `cut`: a glyph left of it and one
+/// right of it, level, less than an em apart, as a word's space sets them?
+/// Labels side by side stand farther apart than that.
+fn closes_across(glyphs: &[crate::geom::BBox], cut: f64) -> bool {
+    glyphs.iter().any(|a| {
+        (a.x0 + a.x1) / 2.0 < cut
+            && glyphs.iter().any(|b| {
+                let em = a.height().max(b.height());
+                let level = ((a.y0 + a.y1) - (b.y0 + b.y1)).abs() / 2.0 <= em / 2.0;
+                (b.x0 + b.x1) / 2.0 >= cut && level && b.x0 - a.x1 < em
+            })
+    })
+}
+
+/// The page's rows of icons with their labels: [`ICON_ROW`] drawn shapes
+/// or more of one size ([`ICON_SIZE_SPREAD`]), level with each other, side
+/// by side and apart, each larger than the text and with a label of a
+/// word or a few set under it: a fact sheet's `HOW THE DATA IS USED`, five
+/// round icons over `FISHERY AND / PROTECTED / SPECIES STOCK /
+/// ASSESSMENTS`, `ECOSYSTEM / MODELING`, ….
+///
+/// Read across, alignment lined the labels' lines up into a table, and the
+/// page read them row by row: `FISHERY AND ECOSYSTEM PROTECTED MODELING`.
+/// A label is the lines under its icon, within its slot (to halfway to
+/// each neighbour), the first within [`ICON_LABEL_REACH`] of its lines of
+/// the icon's foot and each next within a line's leading, none of more
+/// than [`ICON_LABEL_WORDS`] words, one word of two letters or more. Every
+/// icon of the row has one, and each ends under its icon.
+///
+/// Not a row: shapes holding words (a flowchart's steps), shapes with text
+/// level between them (an outlined title's letters), labels whose words
+/// close up across a slot's edge (a paragraph run on under shapes), or a
+/// column of text run on under each icon (a list per icon).
+///
+/// The labels are read from `glyphs`, the page's prose; what stands on and
+/// between the shapes is weighed over all the page's glyphs, `page_glyphs`,
+/// a chart's axis numbers read into a grid among them.
+fn icon_rows(
+    fills: &[crate::rule::Fill],
+    glyphs: &[Glyph],
+    page_glyphs: &[Glyph],
+    page_width: f64,
+) -> Vec<IconRow> {
+    let inked: Vec<&Glyph> = glyphs
+        .iter()
+        .filter(|g| g.bbox.is_some() && g.is_horizontal() && !g.text.trim().is_empty())
+        .collect();
+    let all = || glyphs.iter().chain(page_glyphs);
+    let page_ink: Vec<crate::geom::BBox> = all()
+        .filter(|g| g.bbox.is_some() && !g.text.trim().is_empty())
+        .map(|g| g.bbox.unwrap())
+        .collect();
+    if inked.is_empty() || fills.len() < ICON_ROW {
+        return Vec::new();
+    }
+    let mut sizes: Vec<f64> = inked.iter().map(|g| g.font_size as f64).collect();
+    sizes.sort_by(f64::total_cmp);
+    let text = sizes[sizes.len() / 2].max(1.0);
+    // Shapes larger than the text, narrower than a quarter of the page,
+    // about as tall as wide, and not inside another such shape.
+    let shapes: Vec<crate::geom::BBox> = fills
+        .iter()
+        .map(|f| f.bbox)
+        .filter(|b| {
+            let (w, h) = (b.width(), b.height());
+            w >= 2.0 * text
+                && h >= 2.0 * text
+                && w <= page_width / 4.0
+                && w <= 2.0 * h
+                && h <= 2.0 * w
+        })
+        .collect();
+    let inside = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
+        a != b
+            && a.x0 >= b.x0 - 0.5
+            && a.x1 <= b.x1 + 0.5
+            && a.y0 >= b.y0 - 0.5
+            && a.y1 <= b.y1 + 0.5
+    };
+    // An icon is a picture, holding no words: a box with words in it is a
+    // flowchart's step or a card, and the text under it is the next one's.
+    // A mark set on the icon, a `$` or a `?`, is its own lettering.
+    let holds_text = |b: &crate::geom::BBox| {
+        all()
+            .filter(|g| {
+                let Some(gb) = g.bbox else {
+                    return false;
+                };
+                let (cx, cy) = ((gb.x0 + gb.x1) / 2.0, (gb.y0 + gb.y1) / 2.0);
+                cx > b.x0 && cx < b.x1 && cy > b.y0 && cy < b.y1
+            })
+            .flat_map(|g| g.text.chars())
+            .filter(|c| c.is_alphabetic())
+            .count()
+            >= 2
+    };
+    let mut shapes: Vec<crate::geom::BBox> = shapes
+        .iter()
+        .filter(|a| !shapes.iter().any(|b| inside(a, b)) && !holds_text(a))
+        .copied()
+        .collect();
+    shapes.sort_by(|a, b| a.y0.total_cmp(&b.y0).then(a.x0.total_cmp(&b.x0)));
+    shapes.dedup_by(|a, b| a == b);
+    let alike = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
+        (a.width() - b.width()).abs() <= ICON_SIZE_SPREAD * a.width()
+            && (a.height() - b.height()).abs() <= ICON_SIZE_SPREAD * a.height()
+            && (a.y0 - b.y0).abs() <= ICON_SIZE_SPREAD * a.height()
+    };
+    let mut used = vec![false; shapes.len()];
+    let mut out = Vec::new();
+    for i in 0..shapes.len() {
+        if used[i] {
+            continue;
+        }
+        let mut row: Vec<usize> = (i..shapes.len())
+            .filter(|&j| !used[j] && alike(&shapes[i], &shapes[j]))
+            .collect();
+        row.sort_by(|&a, &b| shapes[a].x0.total_cmp(&shapes[b].x0));
+        // Side by side and apart: none overlaps the next.
+        let apart = row.windows(2).all(|w| shapes[w[0]].x1 < shapes[w[1]].x0);
+        if row.len() < ICON_ROW || !apart {
+            continue;
+        }
+        let icons: Vec<crate::geom::BBox> = row.iter().map(|&k| shapes[k]).collect();
+        // A row of icons stands alone in its band: text level with the
+        // icons, between them, makes them a line's letters (an outlined
+        // title's O's) or pictures set in running text.
+        let top = icons.iter().map(|b| b.y0).fold(f64::MAX, f64::min);
+        let foot = icons.iter().map(|b| b.y1).fold(f64::MIN, f64::max);
+        let (left, right) = (icons[0].x0, icons[icons.len() - 1].x1);
+        let level = page_ink.iter().any(|b| {
+            let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+            cy > top
+                && cy < foot
+                && cx > left
+                && cx < right
+                && !icons.iter().any(|i| cx >= i.x0 && cx <= i.x1)
+        });
+        if level {
+            continue;
+        }
+        // Each icon's slot: to halfway to each neighbour, and as far out at
+        // the row's ends.
+        let slot = |k: usize| {
+            let a = &icons[k];
+            let half = |b: &crate::geom::BBox, c: &crate::geom::BBox| (c.x0 - b.x1) / 2.0;
+            let lo = if k == 0 {
+                a.x0 - half(a, &icons[1])
+            } else {
+                (icons[k - 1].x1 + a.x0) / 2.0
+            };
+            let hi = if k + 1 == icons.len() {
+                a.x1 + half(&icons[k - 1], a)
+            } else {
+                (a.x1 + icons[k + 1].x0) / 2.0
+            };
+            (lo, hi)
+        };
+        let mut boxes = Vec::new();
+        let mut most = 0;
+        for (k, icon) in icons.iter().enumerate() {
+            let (lo, hi) = slot(k);
+            // The glyphs under the icon in its slot, as lines of their own.
+            let under: Vec<Glyph> = inked
+                .iter()
+                .filter(|g| {
+                    let b = g.bbox.unwrap();
+                    let cx = (b.x0 + b.x1) / 2.0;
+                    cx >= lo && cx < hi && b.y0 >= icon.y1 - 1.0 && b.y0 <= icon.y1 + 8.0 * text
+                })
+                .map(|g| (*g).clone())
+                .collect();
+            let mut lines = crate::line::assemble(&under);
+            lines.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+            let mut label: Vec<&Line> = Vec::new();
+            for l in &lines {
+                let fs = (l.font_size as f64).max(1.0);
+                let reach = match label.last() {
+                    None => icon.y1 + ICON_LABEL_REACH * fs,
+                    Some(prev) => prev.bbox.y1 + fs,
+                };
+                if l.bbox.y0 > reach {
+                    break;
+                }
+                label.push(l);
+            }
+            // A label names its picture in words: a few to a line, one of
+            // two letters or more. Lone letters under shapes are a
+            // diagram's symbols.
+            let named = !label.is_empty()
+                && label
+                    .iter()
+                    .all(|l| l.text.split_whitespace().count() <= ICON_LABEL_WORDS)
+                && label.iter().any(|l| {
+                    l.text
+                        .split_whitespace()
+                        .any(|w| w.chars().filter(|c| c.is_alphabetic()).count() >= 2)
+                });
+            if !named {
+                boxes.clear();
+                break;
+            }
+            most = most.max(label.len());
+            let foot = label.iter().map(|l| l.bbox.y1).fold(f64::MIN, f64::max);
+            // A label ends under its icon: a line following it in the slot
+            // as close as a label stands under its icon makes it the head of
+            // a column of text, a list set under each icon. A paragraph
+            // running on across the slot's edges, under the whole row, is
+            // the page's text after it.
+            let leading = label.last().map_or(text, |l| (l.font_size as f64).max(1.0));
+            let next: Vec<crate::geom::BBox> = inked
+                .iter()
+                .map(|g| g.bbox.unwrap())
+                .filter(|b| b.y0 > foot && b.y0 <= foot + ICON_LABEL_REACH * leading)
+                .collect();
+            let in_slot = |b: &crate::geom::BBox| {
+                let cx = (b.x0 + b.x1) / 2.0;
+                cx >= lo && cx < hi
+            };
+            let across = [lo, hi].iter().any(|&cut| closes_across(&next, cut));
+            if next.iter().any(in_slot) && !across {
+                boxes.clear();
+                break;
+            }
+            boxes.push(crate::geom::BBox {
+                x0: lo,
+                y0: icon.y1 - 1.0,
+                x1: hi,
+                y1: foot + 0.5,
+            });
+        }
+        if boxes.len() != icons.len() {
+            continue;
+        }
+        // Each label reads whole in its slot: across a slot's edge, the
+        // words either side stand an em or more apart, wider than a word's
+        // space. Words closing up across it are a line of text running on
+        // under the row, its columns not the icons'.
+        let (lo_y, hi_y) = (foot, boxes.iter().map(|b| b.y1).fold(f64::MIN, f64::max));
+        let under_row: Vec<crate::geom::BBox> = inked
+            .iter()
+            .map(|g| g.bbox.unwrap())
+            .filter(|b| b.y0 >= lo_y - 1.0 && b.y1 <= hi_y + 0.5)
+            .collect();
+        let closes_up = boxes[1..]
+            .iter()
+            .any(|slot| closes_across(&under_row, slot.x0));
+        if closes_up {
+            continue;
+        }
+        for &k in &row {
+            used[k] = true;
+        }
+        let band = crate::geom::BBox {
+            x0: boxes[0].x0,
+            y0: icons.iter().map(|b| b.y1).fold(f64::MAX, f64::min),
+            x1: boxes[boxes.len() - 1].x1,
+            y1: boxes.iter().map(|b| b.y1).fold(f64::MIN, f64::max),
+        };
+        out.push(IconRow {
+            band,
+            boxes,
+            lines: most,
+        });
+    }
+    out
+}
+
 /// Fewest items a column of aligned rows holds to be a list ([`list_boxes`]):
 /// one bullet is an item, not a list.
 const LIST_COLUMN_ITEMS: usize = 2;
@@ -5506,7 +5978,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // The ruled table ending the page before, its last row perhaps printed
     // at the head of this one ([`table::continued_row`]).
     let mut tail: Option<Grid> = None;
-    for (p, route) in raw.pages.iter_mut().zip(routes) {
+    for (i, route) in routes.into_iter().enumerate() {
+        // The page, and the page after it: a table's head stranded at this
+        // page's foot is the head of the table opening the next.
+        let (pages, after) = raw.pages.split_at_mut(i + 1);
+        let p = &mut pages[i];
+        let next = after.first();
         // A picture's lettering is read apart from the page's text, before
         // any reader of the page's text sees it.
         let (lettering, picture_tables) = take_lettering(p);
@@ -5537,12 +6014,37 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // handful of cells after it, which is exactly what happens on a form
         // of separate labelled boxes. Whichever survives trimming with more
         // populated cells is the one that explains the page.
-        let trim = |mut gs: Vec<Grid>| -> Vec<Grid> {
-            for g in gs.iter_mut() {
-                g.trim_to_content_ruled(&p.glyphs, &p.rules);
-            }
-            gs.retain(|g| g.rows() >= 2 && g.cols() >= 1);
-            gs
+        //
+        // One ruled row is no table, unless it is the head of the table the
+        // next page opens on, stranded at this page's foot
+        // ([`table::stranded_head`]). The next page's ruled tables are read
+        // for it only then.
+        let next_grids = std::cell::OnceCell::new();
+        let opens_next = |g: &Grid| -> bool {
+            let Some(n) = next else {
+                return false;
+            };
+            let grids = next_grids.get_or_init(|| {
+                let mut gs = table::detect_framed(&n.rules, &n.fills, &n.glyphs, n.index, &[]);
+                for g in gs.iter_mut() {
+                    g.trim_to_content_ruled(&n.glyphs, &n.rules);
+                }
+                gs.retain(|g| g.rows() >= 2 && g.cols() >= 1);
+                gs
+            });
+            table::opens_under(g, grids, &n.glyphs, CONTINUED_EDGE_TOLERANCE)
+        };
+        let trim = |gs: Vec<Grid>| -> Vec<Grid> {
+            gs.into_iter()
+                .filter_map(|mut g| {
+                    let drawn_to = g.bbox.y1;
+                    g.trim_to_content_ruled(&p.glyphs, &p.rules);
+                    ((g.rows() >= 2 && g.cols() >= 1)
+                        || (table::stranded_head(&g, drawn_to, &p.glyphs, &p.fills)
+                            && opens_next(&g)))
+                    .then_some(g)
+                })
+                .collect()
         };
         let filled = |gs: &[Grid]| -> usize {
             gs.iter()
@@ -5581,6 +6083,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 grid_sources = vec![GridSource::Ruled; grids.len()];
             }
         }
+        // The ruled rows kept as the heads of the next page's table: one
+        // row is kept only as that.
+        let stranded_heads: Vec<crate::geom::BBox> = grids
+            .iter()
+            .filter(|g| g.rows() == 1)
+            .map(|g| g.bbox)
+            .collect();
 
         if grids.is_empty() {
             let mut fill_grids = timed(&mut timings.tables, || {
@@ -6121,8 +6630,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 crate::column::detect(&glyphs_outside_grids(&p.glyphs, &elsewhere))
             }
         });
+        // Rows of icons with their labels under them: no table, each label
+        // read whole, its lines cut at the edges of the icons' slots
+        // ([`icon_rows`]).
+        let icons = icon_rows(&p.fills, &prose, &p.glyphs, p.width);
+        let slot_cuts: Vec<(f64, f64, f64)> = icons.iter().flat_map(IconRow::cuts).collect();
         let mut cols = timed(&mut timings.columns, || {
             line::assemble_columns_in(&prose, &p.rules, p.index, &prose_cols)
+                .into_iter()
+                .map(|col| line::part_at(col, &prose, &slot_cuts))
+                .collect::<Vec<_>>()
         });
 
         // Second table strategy: alignment, for the 14 corpus documents whose
@@ -6146,6 +6663,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 && !table::walled_in(&g.bbox, &walls)
                 && !lists_its_rows(g, &prose)
                 && !lists_side_by_side(g, &prose, &p.rules)
+                && !icons.iter().any(|row| row.labels_grid(g))
         });
         // Field lists set without rules, found between the page's gutters
         // where a row across the page holds more than a label and its
@@ -6208,6 +6726,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 } else {
                     line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
                 }
+                .into_iter()
+                .map(|col| line::part_at(col, &remaining, &slot_cuts))
+                .collect()
             });
             grid_sources.extend(std::iter::repeat_n(GridSource::Aligned, aligned.len()));
             grids.extend(aligned);
@@ -6245,6 +6766,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let remaining = glyphs_outside_grids(&p.glyphs, &grids);
                 cols = timed(&mut timings.columns, || {
                     line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
+                        .into_iter()
+                        .map(|col| line::part_at(col, &remaining, &slot_cuts))
+                        .collect()
                 });
             }
         }
@@ -6272,6 +6796,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let remaining = glyphs_outside_grids(&p.glyphs, &grids);
                 cols = timed(&mut timings.columns, || {
                     line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
+                        .into_iter()
+                        .map(|col| line::part_at(col, &remaining, &slot_cuts))
+                        .collect()
                 });
             }
         }
@@ -6362,13 +6889,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             })
             .map(|f| f.bbox)
             .collect();
-        let groups = crate::region::read_order_with_panels(
+        let label_boxes: Vec<crate::geom::BBox> = icons
+            .iter()
+            .flat_map(|row| row.boxes.iter().copied())
+            .collect();
+        let groups = crate::region::read_order_with_labels(
             cols,
             &p.rules,
             &table_boxes,
             &pictures,
             &frames,
             &panels,
+            &label_boxes,
         );
         let prose_sources: Vec<(usize, bool)> =
             groups.iter().map(|g| (g.column, g.own_measure)).collect();
@@ -6460,6 +6992,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             demoted_tables: demoted,
             lettering,
             picture_tables,
+            stranded_heads,
         });
     }
 
@@ -7651,6 +8184,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // A table opening on its first section's band has no header row.
             if first_band {
                 header_rows = 0;
+            }
+            // A table's head stranded at the page's foot is all head, its
+            // body on the next page.
+            if rows.len() == 1 && layout.stranded_heads.contains(&g.bbox) {
+                header_rows = 1;
             }
             // A merged cell is read whole, into its top-left cell. Its words
             // were dealt out by the grid's cuts through it, which split a
@@ -9295,6 +9833,117 @@ mod tests {
     }
 
     #[test]
+    fn labels_under_a_row_of_icons_are_no_table() {
+        let glyph = |x0: f64, y: f64, t: &str| Glyph {
+            text: t.into(),
+            bbox: Some(BBox {
+                x0,
+                y0: y - 6.0,
+                x1: x0 + 4.5 * t.chars().count() as f64,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x0, y),
+            rotation_deg: 0.0,
+            font_size: 7.0,
+            weight: None,
+            italic: false,
+            advance: Some(4.5 * t.chars().count() as f64),
+            draw_index: 0,
+            ocr: None,
+        };
+        let fill = |x0: f64, y0: f64| {
+            crate::rule::Fill::new(
+                BBox {
+                    x0,
+                    y0,
+                    x1: x0 + 70.0,
+                    y1: y0 + 70.0,
+                },
+                0,
+            )
+        };
+        // Five round icons in a row, a label of a line or two under each.
+        let xs = [220.0, 298.0, 376.0, 454.0, 532.0];
+        let fills: Vec<crate::rule::Fill> = xs.iter().map(|&x| fill(x, 376.0)).collect();
+        let labels = [
+            ["FISHERY AND", "PROTECTED"],
+            ["ECOSYSTEM", "MODELING"],
+            ["INTEGRATED", "ECOSYSTEM"],
+            ["SCIENTIFIC", "RESEARCH"],
+            ["CLIMATE", "SCIENCE"],
+        ];
+        let mut glyphs = Vec::new();
+        for (x, label) in xs.iter().zip(labels) {
+            for (k, t) in label.iter().enumerate() {
+                glyphs.push(glyph(x + 8.0, 460.0 + 9.0 * k as f64, t));
+            }
+        }
+        let rows = icon_rows(&fills, &glyphs, &glyphs, 612.0);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].boxes.len(), 5);
+        assert_eq!(rows[0].cuts().len(), 4);
+        // A grid alignment reads over the labels is theirs; one running on
+        // past them, rows of values under icons heading its columns, is a
+        // table.
+        let grid = |y1: f64, rows: usize| Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 226.0,
+                y0: 454.0,
+                x1: 590.0,
+                y1,
+            },
+            xs: vec![226.0, 400.0, 590.0],
+            ys: (0..=rows)
+                .map(|r| 454.0 + (y1 - 454.0) * r as f64 / rows as f64)
+                .collect(),
+        };
+        assert!(rows[0].labels_grid(&grid(469.0, 2)));
+        assert!(!rows[0].labels_grid(&grid(560.0, 8)));
+        // Icons stacked down a column, a table's status marks: no row.
+        let stacked: Vec<crate::rule::Fill> = (0..5)
+            .map(|k| fill(60.0, 100.0 + 80.0 * k as f64))
+            .collect();
+        assert!(icon_rows(&stacked, &glyphs, &glyphs, 612.0).is_empty());
+        // An outlined title's round letters, the line's other words set
+        // level between them: letters, no icons.
+        let mut titled = glyphs.clone();
+        for x in [292.0, 370.0, 448.0, 526.0] {
+            let mut g = glyph(x, 420.0, "A");
+            g.font_size = 40.0;
+            titled.push(g);
+        }
+        assert!(icon_rows(&fills, &titled, &titled, 612.0).is_empty());
+        // So are a chart's plots, its axis numbers between them read into a
+        // grid and out of the prose.
+        assert!(icon_rows(&fills, &glyphs, &titled, 612.0).is_empty());
+        // A paragraph run on under the row, its words closing up across the
+        // slots' edges: text with columns of its own, no labels.
+        let running: Vec<Glyph> = (0..17)
+            .map(|k| glyph(216.0 + 22.0 * k as f64, 460.0, "abcd"))
+            .collect();
+        assert!(icon_rows(&fills, &running, &running, 612.0).is_empty());
+        // A `$` set on an icon is its lettering: the row stands.
+        let mut marked = glyphs.clone();
+        marked.push(glyph(250.0, 420.0, "$"));
+        assert_eq!(icon_rows(&fills, &marked, &marked, 612.0).len(), 1);
+        // A list run on under each icon, its next item a little over a
+        // leading under the first: no labels, a column of text per icon.
+        let mut listed = glyphs.clone();
+        for x in xs {
+            listed.push(glyph(x + 8.0, 484.0, "item"));
+        }
+        assert!(icon_rows(&fills, &listed, &listed, 612.0).is_empty());
+        // The page's paragraph under the row, running across the slots'
+        // edges: the row stands.
+        let mut over_text = glyphs.clone();
+        over_text.extend((0..17).map(|k| glyph(216.0 + 22.0 * k as f64, 484.0, "abcd")));
+        assert_eq!(icon_rows(&fills, &over_text, &over_text, 612.0).len(), 1);
+    }
+
+    #[test]
     fn a_title_set_out_past_the_grids_edge_reads_whole() {
         // A head line read across the grid's first row, its first word set
         // out 5 pt past the grid's left edge: `D` centred outside it, the
@@ -10857,6 +11506,188 @@ mod tests {
             els[1].header_rows,
             Some(1),
             "the grades row finishes the header"
+        );
+    }
+
+    #[test]
+    fn a_parts_page_head_set_as_on_another_page_is_not_between_the_parts() {
+        // A schedule's header and rows at one page's foot, its rows going on
+        // at the next page's head, under the page's running head: the
+        // document's two lines set as on the first page, which the reading
+        // of furniture missed.
+        let on = |e: Element, page: usize| Element { page, ..e };
+        let head = |page: usize, dx: f64, text: &str| {
+            [
+                on(
+                    element(
+                        "Task Order 0001 Attachment J-8",
+                        381.0 + dx,
+                        20.0,
+                        540.0 + dx,
+                        40.0,
+                        false,
+                    ),
+                    page,
+                ),
+                on(
+                    element(text, 205.0 + dx, 45.0, 407.0 + dx, 55.0, false),
+                    page,
+                ),
+            ]
+        };
+        let rows: &[&[&str]] = &[
+            &["Category", "Hours", "Rate"],
+            &["Analyst I", "940", "$48.03"],
+        ];
+        let parts = || {
+            let (a, fa) = part("elem-00001", 0, rows, 1, &XS, true, true);
+            let (b, fb) = part("elem-00002", 1, &rows[1..], 0, &XS, false, false);
+            (a, b, [fa, fb])
+        };
+        let linked = |second_head: [Element; 2]| {
+            let (a, b, frames) = parts();
+            let mut els: Vec<Element> = head(0, 0.0, "PRICING SCHEDULE").into();
+            els.push(a);
+            els.extend(second_head);
+            els.push(b);
+            link_continued_tables(&mut els, &frames);
+            els[5].continues.clone()
+        };
+        assert_eq!(
+            linked(head(1, 0.0, "PRICING SCHEDULE")).as_deref(),
+            Some("elem-00001")
+        );
+        // Set somewhere else, the same words are the page's own text.
+        assert_eq!(linked(head(1, 20.0, "PRICING SCHEDULE")), None);
+        // Words of the page's own over the second table are between them.
+        assert_eq!(linked(head(1, 0.0, "RATES FOR OPTION YEAR 1")), None);
+
+        // Under the head, a part that repeats the header whole carries on.
+        let with_second = |second: &[&[&str]], header: usize| {
+            let (a, fa) = part("elem-00001", 0, rows, 1, &XS, true, true);
+            let (b, fb) = part("elem-00002", 1, second, header, &XS, false, false);
+            let mut els: Vec<Element> = head(0, 0.0, "PRICING SCHEDULE").into();
+            els.push(a);
+            els.extend(head(1, 0.0, "PRICING SCHEDULE"));
+            els.push(b);
+            link_continued_tables(&mut els, &[fa, fb]);
+            els[5].continues.clone()
+        };
+        let again: &[&[&str]] = &[
+            &["Category", "Hours", "Rate"],
+            &["Analyst II", "2,820", "$51.99"],
+        ];
+        assert_eq!(with_second(again, 1).as_deref(), Some("elem-00001"));
+        // One with a header of its own is a table set on its page.
+        let own: &[&[&str]] = &[
+            &["Labor", "Hours", "Rate"],
+            &["Analyst II", "2,820", "$51.99"],
+        ];
+        assert_eq!(with_second(own, 1), None);
+        // So is one opening on the label the first part opens with: the
+        // page's copy of a block printed page after page.
+        let copy: &[&[&str]] = &[
+            &["Category", "Days", "Price"],
+            &["Analyst II", "2,820", "$51.99"],
+        ];
+        assert_eq!(with_second(copy, 0), None);
+    }
+
+    #[test]
+    fn a_band_under_a_head_stranded_by_the_break_opens_its_first_section() {
+        // The head alone at one page's foot; the next page opens on the
+        // first section's band, bold across the columns.
+        let (a, fa) = part(
+            "elem-00001",
+            0,
+            &[&["Indication", "Dosage", "Duration"]],
+            1,
+            &XS,
+            false,
+            true,
+        );
+        let (mut b, fb) = part(
+            "elem-00002",
+            1,
+            &[
+                &["Monotherapy", "", ""],
+                &["Melanoma", "200 mg", "Until progression"],
+            ],
+            1,
+            &XS,
+            true,
+            true,
+        );
+        b.sub_headers = Some(vec![0]);
+        let mut els = vec![a, b];
+        link_continued_tables(&mut els, &[fa, fb]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(
+            els[1].header_rows,
+            Some(0),
+            "the band names no column: the head is the first part's"
+        );
+    }
+
+    #[test]
+    fn a_part_opening_on_a_band_carries_on_a_table_set_in_bands() {
+        // A funding table: its header, its first period's band and that
+        // period's rows at one page's foot. The next page opens on the next
+        // period's band, shaded as the first is, and names no column.
+        let foot: &[&[&str]] = &[
+            &["CLIN", "Funding Amount", "Estimated Date"],
+            &["Period 1: May 1 to April 30", "", ""],
+            &["0001 – Storage", "$1,000.00", "05/01/2024"],
+            &["0002 – Support", "TBD", "TBD"],
+        ];
+        let next: &[&[&str]] = &[
+            &["Period 2: May 1 to April 30", "", ""],
+            &["0003 – Storage", "TBD", "TBD"],
+        ];
+        let (a, fa) = part("elem-00001", 0, foot, 2, &XS, true, true);
+        let (mut b, fb) = part("elem-00002", 1, next, 0, &XS, true, true);
+        b.sub_headers = Some(vec![0]);
+        let mut els = vec![a.clone(), b.clone()];
+        link_continued_tables(&mut els, &[fa.clone(), fb.clone()]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[1].header_rows, Some(0));
+        assert_eq!(
+            (els[0].header_rows, els[0].sub_headers.clone()),
+            (Some(1), Some(vec![1])),
+            "the first period's band is a band, as the next is, not the header's second row"
+        );
+
+        // The first part's body holds the bands, its header one row deep.
+        let (mut a2, fa2) = part("elem-00001", 0, foot, 1, &XS, true, true);
+        a2.sub_headers = Some(vec![1]);
+        let mut els = vec![a2, b.clone()];
+        link_continued_tables(&mut els, &[fa2, fb.clone()]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[0].sub_headers, Some(vec![1]));
+
+        // A table set in no bands is not carried on by a part opening on
+        // one, styled as a new table's head is: that part is a table of its
+        // own, under a band of its own.
+        let plain: &[&[&str]] = &[
+            &["CLIN", "Funding Amount", "Estimated Date"],
+            &["0001 – Storage", "$1,000.00", "05/01/2024"],
+            &["0002 – Support", "TBD", "TBD"],
+        ];
+        let (c, fc) = part("elem-00001", 0, plain, 1, &XS, true, true);
+        let mut els = vec![c, b.clone()];
+        link_continued_tables(&mut els, &[fc, fb.clone()]);
+        assert_eq!(els[1].continues, None);
+
+        // Nor is a part with a header of its own under its band.
+        let mut headed = b.clone();
+        headed.header_rows = Some(1);
+        let mut els = vec![a.clone(), headed];
+        link_continued_tables(&mut els, &[fa.clone(), fb]);
+        assert_eq!(els[1].continues, None);
+        assert_eq!(
+            els[0].header_rows,
+            Some(2),
+            "unlinked, the first part's header is as read"
         );
     }
 

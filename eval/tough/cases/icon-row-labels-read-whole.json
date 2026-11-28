@@ -1,0 +1,46 @@
+{
+  "document": {
+    "file": "noaa-research-surveys-overview.pdf",
+    "url": "https://www.fisheries.noaa.gov/s3/2023-04/Research-Surveys-National-Overview.pdf",
+    "sha256": "94725c303624eaf5491f408b0d3d925cc8942a5e85bab7be88dff973670b4872",
+    "about": "NOAA Fisheries fact sheet, 4 pages. Pages 2 and 3 each set a row of five round icons, a label of one to four short lines centred under each."
+  },
+  "checks": [
+    {
+      "id": "no-table",
+      "found": "2026-11-27",
+      "issue": "Read across, alignment lined the labels' lines up into a table: `FISHERY AND ECOSYSTEM PROTECTED MODELING`, row by row.",
+      "no_table": {
+        "page": 2
+      }
+    },
+    {
+      "id": "label-whole",
+      "found": "2026-11-27",
+      "issue": "As above: each label's lines were read in turn with its neighbours'.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "FISHERY AND PROTECTED SPECIES STOCK ASSESSMENTS"
+      }
+    },
+    {
+      "id": "partners-label-whole",
+      "found": "2026-11-27",
+      "issue": "Page 3's row: its labels were read row by row as one figure text, `STATE AND UNIVERSITIES FISHING FOREIGN INSTRUMENT`.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "INSTRUMENT AND SURVEY PLATFORM DEVELOPERS"
+      }
+    },
+    {
+      "id": "centred-label-whole",
+      "found": "2026-11-27",
+      "issue": "A label set centred over two lines, its first line the shorter, reads as two paragraphs, `CLIMATE` and `SCIENCE AND ASSESSMENTS`: block assembly reads centred lines at body size as ended by hand, as an address's are.",
+      "status": "open",
+      "element": {
+        "type": "doco:Figure",
+        "text": "CLIMATE SCIENCE AND ASSESSMENTS"
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "document": {
+    "file": "SA100-2026.pdf",
+    "url": "https://assets.publishing.service.gov.uk/media/69c14d07cfa346b9d4704a8d/SA100-2026.pdf",
+    "sha256": "53841ec2138b5d1ccd8e69ae402b35e6e3a04f17556bb3b0829f55b47f51b506",
+    "about": "HMRC SA100 2026 tax return. Its notes are set in boxes and cut to them, and the lines past a box are drawn on under its clip: every viewer shows each note once."
+  },
+  "notes": [
+    "2026-11-27: a glyph wholly outside its clip was read wherever the clip showed some of its other text, so each clipped note line read two or three times more, run through the next box's notes. Glyphs are judged one by one now, under clips of any shape by their box."
+  ],
+  "checks": [
+    {
+      "id": "capacity-note-once",
+      "found": "2026-11-27",
+      "issue": "The note on signing in a capacity read three times; the page shows it once.",
+      "text": "the capacity",
+      "count": 1
+    },
+    {
+      "id": "name-note-once",
+      "found": "2026-11-27",
+      "issue": "Box 24's note read three times; the page shows it once.",
+      "text": "Enter the name of the person",
+      "count": 1
+    },
+    {
+      "id": "file-online-once",
+      "found": "2026-11-27",
+      "issue": "The cover's line on filing online read five times; the page shows it once.",
+      "text": "quick and easy to file online",
+      "count": 1
+    }
+  ]
+}

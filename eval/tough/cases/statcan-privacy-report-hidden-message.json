@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "statcan-privacy-act-annual-report-2024-2025.pdf",
+    "url": "https://www.statcan.gc.ca/en/about/transparency/access-information-privacy/privacy-act-2024-2025.pdf",
+    "sha256": "b81aeac63d0ccc838fde7910f4acaa12762172f5cc819ed0d29e6d4599e2b69b",
+    "about": "Statistics Canada Privacy Act annual report 2024-2025, 54 pages. Its statistical report pages keep a fillable form's prompts, set in the colour of their fields."
+  },
+  "notes": [
+    "2026-11-27: a form prompt set in its field's own colour read as text among the report's figures."
+  ],
+  "checks": [
+    {
+      "id": "no-hidden-form-prompt",
+      "found": "2026-11-27",
+      "issue": "A form's prompt, set in its field's colour, read among the figures: `You must enter an institution's name`.",
+      "no_text": "You must enter an institution"
+    }
+  ]
+}

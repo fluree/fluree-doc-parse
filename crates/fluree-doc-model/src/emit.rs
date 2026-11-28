@@ -6,6 +6,11 @@ use crate::message::Message;
 mod md_escape;
 use md_escape::{Context, Mark};
 
+/// The class of the XHTML block holding one fragment of a drawing's text,
+/// inside the drawing's `<figure>`: a block, so each fragment reads back as
+/// one, and marked, so it reads back as a drawing's text and not prose.
+pub const FIGURE_TEXT_CLASS: &str = "doco-figure-text";
+
 /// Split an element's text at its located link anchors.
 ///
 /// Yields `(text, link)` pairs in order, covering the string exactly once —
@@ -62,6 +67,20 @@ pub enum MdLinks {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MarkdownOptions {
     pub links: MdLinks,
+}
+
+/// A slide's name over its speaker notes: `Slide 4: <its title>`, by its
+/// place in the deck.
+pub fn notes_heading(elements: &[Element], slide: usize) -> String {
+    let title = elements.iter().find(|e| {
+        e.notes_for.is_none()
+            && e.page == slide
+            && matches!(e.kind.as_str(), "doco:Title" | "doco:SectionTitle")
+    });
+    match title {
+        Some(t) => format!("Slide {}: {}", slide + 1, t.text),
+        None => format!("Slide {}", slide + 1),
+    }
 }
 
 /// An element's text with its links marked up as Markdown, escaped where
@@ -609,10 +628,29 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
     // innermost sits in an item left open to hold the list after it.
     let mut lists: Vec<usize> = Vec::new();
     let mut open_figure: Option<String> = None;
+    // A deck's speaker notes, after the slides: a section of their own,
+    // one inside it per slide.
+    let mut notes_open = false;
     for (i, e) in elements.iter().enumerate() {
         if open_figure.is_some() && e.kind != "doco:Figure" {
             out.push_str("</figure>\n");
             open_figure = None;
+        }
+        if let Some(slide) = e.notes_for {
+            if i == 0 || elements[i - 1].notes_for != Some(slide) {
+                close_lists(&mut out, &mut lists, 0);
+                if notes_open {
+                    out.push_str("</section>\n");
+                } else {
+                    notes_open = true;
+                    out.push_str("<section class=\"speaker-notes\">\n<h1>Speaker notes</h1>\n");
+                }
+                out.push_str(&format!(
+                    "<section data-slide=\"{}\">\n<h2>{}</h2>\n",
+                    slide + 1,
+                    esc(&notes_heading(elements, slide))
+                ));
+            }
         }
         if e.kind != "doc:ListItem" {
             close_lists(&mut out, &mut lists, 0);
@@ -686,7 +724,9 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
             // the page sets them, which `<figure>` marks as a grouping
             // rather than a sentence. Nothing here says which label goes
             // with which value: that pairing lives in the drawing, and only
-            // a reader that can see it may assert it.
+            // a reader that can see it may assert it. Each fragment is a
+            // block of its own, marked as a drawing's text rather than
+            // prose: inline `<span>`s read back as one run of text.
             "doco:Figure" => {
                 if open_figure.as_deref() != e.figure.as_deref() {
                     if open_figure.is_some() {
@@ -708,7 +748,10 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                     }
                     open_figure = e.figure.clone();
                 }
-                out.push_str(&format!("<span>{}</span>\n", html_linked(e)));
+                out.push_str(&format!(
+                    "<div class=\"{FIGURE_TEXT_CLASS}\">{}</div>\n",
+                    html_linked(e)
+                ));
             }
             _ => match (&e.turn, &e.message) {
                 (Some(t), _) => out.push_str(&html_turn(e, t)),
@@ -725,6 +768,9 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
     close_lists(&mut out, &mut lists, 0);
     if open_figure.is_some() {
         out.push_str("</figure>\n");
+    }
+    if notes_open {
+        out.push_str("</section>\n</section>\n");
     }
     if let Some(note) = notes.summary() {
         out.push_str(&format!("<!-- {} -->\n", note.replace("--", "—")));
@@ -813,7 +859,24 @@ pub fn to_markdown_with_options(
     // its items, and the column its last item's text starts at, where a
     // list inside that item is indented to.
     let mut lists: Vec<(usize, usize, usize)> = Vec::new();
+    // A deck's speaker notes: after the slides under a heading of their
+    // own, a slide's name over each slide's.
+    let mut notes_open = false;
     for (i, e) in elements.iter().enumerate() {
+        if let Some(slide) = e.notes_for {
+            if i == 0 || elements[i - 1].notes_for != Some(slide) {
+                lists.clear();
+                if !notes_open {
+                    notes_open = true;
+                    out.push_str("\n# Speaker notes\n\n");
+                }
+                let heading = notes_heading(elements, slide).replace('\n', " ");
+                let chars: Vec<char> = heading.chars().collect();
+                let m = md_escape::marks(&chars, Context::Heading, 0);
+                let heading = md_escape::apply(&chars, &m, 0..chars.len());
+                out.push_str(&format!("\n## {heading}\n\n"));
+            }
+        }
         if e.kind != "doc:ListItem" {
             lists.clear();
         }
@@ -946,6 +1009,53 @@ mod tests {
     use super::*;
     use crate::element::{Link, Target};
 
+    /// Two slides, each titled and with a line, and the speaker notes of
+    /// both after them.
+    fn deck(notes: bool) -> Vec<Element> {
+        let at = |kind: &str, text: &str, page: usize, level: Option<usize>| Element {
+            page,
+            level,
+            ..Element::new(kind, text, "pptx", "pptx")
+        };
+        let mut els = vec![
+            at("doco:SectionTitle", "One", 0, Some(1)),
+            at("doco:Paragraph", "Body one", 0, None),
+            at("doco:SectionTitle", "Two", 1, Some(1)),
+            at("doco:Paragraph", "Body two", 1, None),
+        ];
+        if notes {
+            els.push(Element {
+                notes_for: Some(0),
+                ..at("doco:Paragraph", "Said over one", 0, None)
+            });
+            els.push(Element {
+                notes_for: Some(1),
+                ..at("doc:ListItem", "A point on two", 1, None)
+            });
+        }
+        els
+    }
+
+    #[test]
+    fn speaker_notes_follow_the_slides_under_their_own_heading() {
+        let bare = to_markdown(&deck(false));
+        let md = to_markdown(&deck(true));
+        // The slides read as they did; the notes come after them.
+        assert!(md.starts_with(&bare), "{md}");
+        let rest = &md[bare.len()..];
+        let at = |s: &str| rest.find(s).unwrap_or_else(|| panic!("{s} in {rest}"));
+        assert!(at("# Speaker notes") < at("## Slide 1: One"));
+        assert!(at("## Slide 1: One") < at("Said over one"));
+        assert!(at("Said over one") < at("## Slide 2: Two"));
+        assert!(at("## Slide 2: Two") < at("- A point on two"));
+        let x = to_xhtml(&deck(true));
+        assert!(x.contains("<section class=\"speaker-notes\">"), "{x}");
+        assert!(
+            x.contains("<section data-slide=\"2\">\n<h2>Slide 2: Two</h2>"),
+            "{x}"
+        );
+    }
+
     fn para(text: &str, links: Vec<Link>) -> Element {
         Element {
             links: (!links.is_empty()).then_some(links),
@@ -1001,6 +1111,31 @@ mod tests {
             };
             assert_eq!(md(&plain), format!("{plain}\n\n"), "{plain}");
         }
+    }
+
+    #[test]
+    fn a_drawings_fragments_are_blocks_of_its_figure() {
+        // Each fragment a block of its own, marked as a drawing's text: as
+        // inline spans they read back as one run of text.
+        let frag = |t: &str, fig: &str| Element {
+            figure: Some(fig.into()),
+            ..Element::new("doco:Figure", t, "rust", "layout")
+        };
+        let html = to_xhtml(&[
+            frag("FISHERY AND PROTECTED", "figure-0-0"),
+            frag("ECOSYSTEM MODELING", "figure-0-0"),
+            frag("Source: NOAA", "figure-0-1"),
+        ]);
+        assert!(html.contains(
+            "<figure data-figure=\"figure-0-0\">\n\
+             <div class=\"doco-figure-text\">FISHERY AND PROTECTED</div>\n\
+             <div class=\"doco-figure-text\">ECOSYSTEM MODELING</div>\n\
+             </figure>\n\
+             <figure data-figure=\"figure-0-1\">\n\
+             <div class=\"doco-figure-text\">Source: NOAA</div>\n\
+             </figure>\n"
+        ));
+        assert!(!html.contains("<span>"));
     }
 
     #[test]
@@ -1281,6 +1416,7 @@ mod tests {
         );
         let opts = MarkdownOptions {
             links: MdLinks::Text,
+            ..Default::default()
         };
         assert_eq!(
             to_markdown_with_options(&[e], &Notes::default(), &opts).trim(),
@@ -1298,6 +1434,7 @@ mod tests {
         let e = para("Γ[w](t)", vec![Link::uri("https://e.org").spanning(4, 7)]);
         let opts = MarkdownOptions {
             links: MdLinks::Text,
+            ..Default::default()
         };
         assert_eq!(
             to_markdown_with_options(&[e], &Notes::default(), &opts).trim(),

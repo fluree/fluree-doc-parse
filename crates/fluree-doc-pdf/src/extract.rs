@@ -346,6 +346,51 @@ type PageInk = Vec<Option<(u128, Option<f64>)>>;
 /// half-width and a little rounding, short of any text's height.
 const TIGHT_CLIP: f64 = 3.0;
 
+/// How far apart, per 8-bit sRGB channel, a glyph's colour and its
+/// ground's may be for the glyph to vanish on it: the rounding of two
+/// conversions to sRGB from colour spaces that state the same colour
+/// (DeviceGray 1 and DeviceRGB white, an ICC space and its device twin).
+/// Text a reader can make out on a tint differs from it by far more: a
+/// light grey caption on a pale panel, by 20 or more.
+const GROUND_TOLERANCE: u8 = 2;
+
+/// How near, as a share of the type size, two draws of a glyph stand to be
+/// one glyph drawn twice. Copies drawn in one place, a word once per cell it
+/// crosses or lettering once per slice of a gradient, share a pen position
+/// to float noise; the next letter of a word stands a narrow letter's width
+/// on, a quarter of the type size or more.
+const SAME_PLACE: f64 = 0.05;
+
+/// Float noise in a box computed from a transformed outline.
+const BOX_EPS: f64 = 0.1;
+
+/// Whether `outer` holds all of `b`, to float noise.
+fn holds(outer: &BBox, b: &BBox) -> bool {
+    b.x0 >= outer.x0 - BOX_EPS
+        && b.x1 <= outer.x1 + BOX_EPS
+        && b.y0 >= outer.y0 - BOX_EPS
+        && b.y1 <= outer.y1 + BOX_EPS
+}
+
+/// Whether a box painted over or under glyph `g` is a bar across its line
+/// rather than a box round it: narrower across the line than half the
+/// type's size. Such a bar hides no letter, under the glyph or over it. A
+/// link's underline drawn through the underscores of its URL, a rule over a
+/// dash, a cell's rule: each paints the very mark it lies on, and the text
+/// still reads. A bar is a fraction of the type's size (a link's underline
+/// 0.72pt under 11pt type); a box laid over or under a word to hide it is
+/// about the type's size (a 9.6pt box over 10pt type).
+fn bar_across(c: &BBox, g: &Glyph) -> bool {
+    let turned = (g.rotation_deg.rem_euclid(180.0) - 90.0).abs() < 45.0;
+    let across = if turned { c.x1 - c.x0 } else { c.y1 - c.y0 };
+    across < 0.5 * g.font_size as f64
+}
+
+/// Whether two boxes share more than an edge, to float noise.
+fn meets(a: &BBox, b: &BBox) -> bool {
+    a.x0 < b.x1 - BOX_EPS && a.x1 > b.x0 + BOX_EPS && a.y0 < b.y1 - BOX_EPS && a.y1 > b.y0 + BOX_EPS
+}
+
 struct Collector<'a> {
     page: usize,
     glyphs: Vec<Glyph>,
@@ -385,6 +430,8 @@ struct Collector<'a> {
     /// Opaque rectangles filled on the page, each with the number of glyphs
     /// drawn before it: what it hides was drawn first and lies under it.
     covers: Vec<(BBox, usize)>,
+    /// What the page paints, in order, for the text it hides; see [`Hiding`].
+    hide: Hiding,
     /// Whether the next shape is drawn through a soft mask, or blended other
     /// than normally: either lets what is under it show.
     masked: bool,
@@ -427,6 +474,45 @@ struct Collector<'a> {
     italics: std::collections::HashMap<u128, bool>,
     /// The document's image probes so far; see [`Probes`].
     probes: Probes,
+}
+
+/// What a page paints, kept to tell the text it hides: the paths and images
+/// in the order they are painted, and for each glyph its colour and the clip
+/// it is drawn under. See [`Collector::grounded`] and [`Collector::covered`].
+#[derive(Default)]
+struct Hiding {
+    /// Paths and images painted so far, glyphs too: the next one's number.
+    seq: usize,
+    /// Every path, image and glyph painted, in order.
+    paints: Vec<Painted>,
+    /// Parallel to `glyphs`: the glyph's number and its colour, where it is
+    /// filled in one colour and nothing else (render mode 0, painted
+    /// normally, at full opacity, not masked).
+    inks: Vec<Option<(usize, [u8; 4])>>,
+    /// Parallel to `glyphs`: the box the clips in force let the glyph show
+    /// in, all it can show lying inside it.
+    clip_boxes: Vec<Option<BBox>>,
+}
+
+/// One path, image or glyph painted on a page.
+#[derive(Clone, Copy)]
+struct Painted {
+    /// Its number, in the order the page paints.
+    seq: usize,
+    /// The part of its box that shows.
+    bbox: BBox,
+    kind: PaintKind,
+    /// A fill's colour where it is a ground text can be set on
+    /// ([`Collector::ground_colour`]); a glyph's where it is filled in one.
+    colour: Option<[u8; 4]>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PaintKind {
+    Stroke,
+    Fill,
+    Image,
+    Glyph,
 }
 
 /// What [`looks_like_text`] found for each image XObject the document has
@@ -666,7 +752,22 @@ impl<'a> Collector<'a> {
     /// over some of its letters — and there the drawn capitals are the text
     /// a reader sees, and stay.
     /// The glyphs a clip takes away: every glyph judged against a clip none
-    /// of whose inked glyphs shows inside it ([`Collector::draw_glyph`]).
+    /// of whose inked glyphs shows inside it ([`Collector::draw_glyph`]),
+    /// and every inked glyph wholly outside its clip that is drawn nowhere
+    /// else or shows where it is drawn again. A space is left: its pen can
+    /// stand past a cell's edge at the end of a line of words that show,
+    /// and it parts them from the next line's.
+    ///
+    /// A clip that shows some of its text can still hide a copy of it: a
+    /// datasheet draws one block diagram twice, each copy cut by its form to
+    /// one of the two figures, and the hidden copy's labels ran through the
+    /// visible ones (`SSPPII FFllaasshh`); a tax form cuts its notes to their
+    /// boxes, and the lines past a box read on into the next. Such a glyph
+    /// goes. Where a glyph is drawn again in the same place, as a word is
+    /// once per cell it crosses or lettering once per slice of a gradient,
+    /// the copy outside its clip goes only when another copy shows: the
+    /// copies stand for one glyph, and if none of them is judged to show,
+    /// the page is not read well enough here to take it away.
     fn clipped_out(&self) -> Vec<bool> {
         let mut tally: std::collections::HashMap<usize, (usize, usize)> = Default::default();
         for &(id, shown, inked) in self.clip_votes.iter().flatten() {
@@ -676,7 +777,8 @@ impl<'a> Collector<'a> {
                 t.1 += usize::from(shown);
             }
         }
-        self.clip_votes
+        let mut out: Vec<bool> = self
+            .clip_votes
             .iter()
             .map(|v| {
                 v.is_some_and(|(id, _, _)| {
@@ -685,7 +787,210 @@ impl<'a> Collector<'a> {
                         .is_some_and(|&(n, shown)| n > 0 && shown == 0)
                 })
             })
-            .collect()
+            .collect();
+        let hidden: Vec<usize> = (0..self.glyphs.len())
+            .filter(|&i| !out[i] && matches!(self.clip_votes[i], Some((_, false, true))))
+            .collect();
+        if hidden.is_empty() {
+            return out;
+        }
+        // Shown: judged inside its clip, or painted with no clip to judge
+        // it by but the page.
+        let shown = |j: usize| match self.clip_votes[j] {
+            Some((_, shown, _)) => shown,
+            None => self.painted[j] && self.hide.clip_boxes[j].is_some(),
+        };
+        let mut by_text: std::collections::HashMap<&str, Vec<usize>> = Default::default();
+        for (j, g) in self.glyphs.iter().enumerate() {
+            if self.painted[j] {
+                by_text.entry(g.text.as_str()).or_default().push(j);
+            }
+        }
+        for i in hidden {
+            let g = &self.glyphs[i];
+            let near = SAME_PLACE * g.font_size.max(1.0) as f64;
+            let mut again = by_text[g.text.as_str()].iter().copied().filter(|&j| {
+                j != i
+                    && (self.glyphs[j].origin.0 - g.origin.0).abs() <= near
+                    && (self.glyphs[j].origin.1 - g.origin.1).abs() <= near
+            });
+            let first = again.next();
+            let others: Vec<usize> = first.into_iter().chain(again).collect();
+            if others.is_empty() && self.lettered(i, None) {
+                continue;
+            }
+            if others.is_empty() || others.iter().any(|&j| shown(j)) {
+                out[i] = true;
+            }
+        }
+        out
+    }
+
+    /// Whether something drawn where glyph `i` stands could show its
+    /// letters, painted after paint number `after`: an image, any size, or
+    /// a shape filled that is as tall across the line as type is, a quarter
+    /// of the type's size to a little over it. A scanned page sets its words
+    /// as text and paints the scan over them; a flyer draws its badge's
+    /// lettering as outlines (0.7 to 0.8 of their type's size across) and
+    /// keeps the words as text under a clip that shows none of them. Either
+    /// way the text is what the page shows, and stays. A box drawn round a
+    /// label (twice its type), a panel, a figure's frame or the page's
+    /// ground is taller; a rule is thinner than its letters.
+    fn lettered(&self, i: usize, after: Option<usize>) -> bool {
+        let g = &self.glyphs[i];
+        let b = g.bbox.unwrap_or(BBox {
+            x0: g.origin.0,
+            y0: g.origin.1,
+            x1: g.origin.0,
+            y1: g.origin.1,
+        });
+        let size = g.font_size.max(1.0) as f64;
+        let turned = (g.rotation_deg.rem_euclid(180.0) - 90.0).abs() < 45.0;
+        self.hide.paints.iter().any(|p| {
+            let across = if turned {
+                p.bbox.x1 - p.bbox.x0
+            } else {
+                p.bbox.y1 - p.bbox.y0
+            };
+            after.is_none_or(|a| p.seq > a)
+                && match p.kind {
+                    PaintKind::Image => true,
+                    PaintKind::Fill => (0.25 * size..=1.2 * size).contains(&across),
+                    _ => false,
+                }
+                && meets(&p.bbox, &b)
+        })
+    }
+
+    /// Note a path or image painted on the page, by the part of its box that
+    /// shows, with its colour where it is a ground ([`Collector::ground_colour`]).
+    fn note_paint(&mut self, b: BBox, kind: PaintKind, colour: Option<[u8; 4]>) {
+        let seq = self.hide.seq;
+        self.hide.seq += 1;
+        if let Some(bbox) = self.visible(b) {
+            self.hide.paints.push(Painted {
+                seq,
+                bbox,
+                kind,
+                colour,
+            });
+        }
+    }
+
+    /// The colour of a fill text can be set on and vanish: one rectangle
+    /// filled in a solid colour at full opacity, painted normally, nothing
+    /// under it showing through, under rectangle clips only. The same
+    /// conditions as a cover's ([`Collector::note_cover`]): the fill shows
+    /// as one flat colour over its whole box.
+    fn ground_colour(
+        &self,
+        path: &kurbo::BezPath,
+        paint: &hayro_interpret::Paint<'_>,
+        mode: &hayro_interpret::PathDrawMode,
+    ) -> Option<[u8; 4]> {
+        if !matches!(mode, hayro_interpret::PathDrawMode::Fill(_))
+            || self.masked
+            || self.blended
+            || !self.groups.iter().all(|&g| g)
+            || !self.clip_rects.iter().all(|&r| r)
+        {
+            return None;
+        }
+        let hayro_interpret::Paint::Color(c) = paint else {
+            return None;
+        };
+        if !is_rect(path) {
+            return None;
+        }
+        let rgba = c.to_rgba().to_rgba8();
+        (rgba[3] == u8::MAX).then_some(rgba)
+    }
+
+    /// The glyphs set on a ground of their own colour: the topmost thing
+    /// painted under the glyph is an opaque fill of one colour holding all
+    /// of the glyph that shows, and the glyph is filled in that colour. A
+    /// template's markers set white on its white page, a form's
+    /// instructions printed in the colour of their box: no reader sees
+    /// them, and read, they ran into the text that shows.
+    ///
+    /// Only a glyph filled and nothing else (render mode 0): a stroked
+    /// outline shows on any ground. Where an image, or lettering drawn as
+    /// shapes, is painted at its place after the ground, the text is what
+    /// that shows, and stays ([`Collector::lettered`]). Anything painted over the fill before
+    /// the glyph, an image, a shading, a path of another colour, under any
+    /// part of it, leaves the glyph on that, and it stays. Colours are
+    /// compared as the page shows them, in sRGB after conversion from each
+    /// one's own space, to within [`GROUND_TOLERANCE`].
+    fn grounded(&self) -> Vec<bool> {
+        let mut out = vec![false; self.glyphs.len()];
+        let grounds: Vec<&Painted> = self
+            .hide
+            .paints
+            .iter()
+            .filter(|p| p.kind == PaintKind::Fill && p.colour.is_some())
+            .collect();
+        if grounds.is_empty() {
+            return out;
+        }
+        let close = |a: [u8; 4], b: [u8; 4]| {
+            a[..3]
+                .iter()
+                .zip(&b[..3])
+                .all(|(x, y)| x.abs_diff(*y) <= GROUND_TOLERANCE)
+        };
+        for (i, g) in self.glyphs.iter().enumerate() {
+            let Some((seq, colour)) = self.hide.inks[i] else {
+                continue;
+            };
+            // A space, with no ink, is where its pen is.
+            let b = g.bbox.unwrap_or(BBox {
+                x0: g.origin.0,
+                y0: g.origin.1,
+                x1: g.origin.0,
+                y1: g.origin.1,
+            });
+            // What of the glyph shows: its ink cut to its clip.
+            let b = match self.hide.clip_boxes[i] {
+                Some(c) => BBox {
+                    x0: b.x0.max(c.x0),
+                    y0: b.y0.max(c.y0),
+                    x1: b.x1.min(c.x1),
+                    y1: b.y1.min(c.y1),
+                },
+                None => b,
+            };
+            if b.x1 < b.x0 || b.y1 < b.y0 {
+                continue;
+            }
+            // The latest ground of its colour under all of it, drawn before it.
+            let Some(ground) = grounds.iter().rev().filter(|p| p.seq < seq).find(|p| {
+                p.colour.is_some_and(|c| close(c, colour))
+                    && holds(&p.bbox, &b)
+                    && !bar_across(&p.bbox, g)
+            }) else {
+                continue;
+            };
+            // Nothing painted between the ground and the glyph reaches it:
+            // a shape, an image, or a glyph, a warning sign's white
+            // triangle set on a black box for its black mark to stand on.
+            // What is painted in the ground's own colour changes nothing.
+            let after = self.hide.paints.partition_point(|p| p.seq <= ground.seq);
+            let before = self.hide.paints.partition_point(|p| p.seq < seq);
+            // Latest first: what lies on a ground is mostly drawn just
+            // before the text set on it.
+            // And nothing painted after the ground shows its letters: a
+            // scanned page sets its words on a ground of their own colour
+            // and paints the scan over them.
+            if !self.hide.paints[after..before]
+                .iter()
+                .rev()
+                .any(|p| meets(&p.bbox, &b) && !p.colour.is_some_and(|c| close(c, colour)))
+                && !self.lettered(i, Some(ground.seq))
+            {
+                out[i] = true;
+            }
+        }
+        out
     }
 
     /// Note a fill that hides what was drawn under it before: one rectangle,
@@ -729,15 +1034,16 @@ impl<'a> Collector<'a> {
     /// The glyphs an opaque fill painted after them hides: a slide's band
     /// laid over the template's footer and page number, its own title then
     /// set on the band; read, the hidden footer ran through the title a
-    /// letter at a time. A glyph is hidden when its whole ink box lies under
-    /// a cover drawn later; a space, with no ink, where its pen does. A
-    /// cover whose edge cuts through a glyph drawn before it hides nothing:
-    /// the glyph shows in part, and its word with it. A fill inside an
+    /// letter at a time. A glyph is hidden when all of its ink that shows
+    /// lies under a cover drawn later, its ink box cut to the clip it is
+    /// drawn under; a space, with no ink, where its pen does. A form's box
+    /// laid over the part of its instructions their clip leaves showing
+    /// hides them as wholly as one laid over all of each letter. A cover
+    /// whose edge cuts through what shows of a glyph drawn before it hides
+    /// nothing: the glyph shows in part, and its word with it. A fill inside an
     /// annotation's rectangle is the annotation's appearance, drawn after
     /// the page's content and no part of it, so never a cover.
     fn covered(&self, annotated: &[BBox]) -> Vec<bool> {
-        // Float noise in a box computed from a transformed outline.
-        const EPS: f64 = 0.1;
         // Horizontal bands of the page, each listing the painted glyphs
         // whose ink reaches into it, in draw order.
         const BANDS: usize = 64;
@@ -770,12 +1076,6 @@ impl<'a> Collector<'a> {
                 }
             }
         }
-        let under = |b: &BBox, c: &BBox| {
-            b.x0 >= c.x0 - EPS && b.x1 <= c.x1 + EPS && b.y0 >= c.y0 - EPS && b.y1 <= c.y1 + EPS
-        };
-        let meets = |b: &BBox, c: &BBox| {
-            b.x0 < c.x1 - EPS && b.x1 > c.x0 + EPS && b.y0 < c.y1 - EPS && b.y1 > c.y0 + EPS
-        };
         for (c, before) in covers {
             let (k0, k1) = (band(c.y0), band(c.y1));
             let mut hid = Vec::new();
@@ -785,22 +1085,28 @@ impl<'a> Collector<'a> {
                     if i >= before {
                         break;
                     }
-                    let Some(b) = self.glyphs[i].bbox else {
+                    let Some(ink) = self.glyphs[i].bbox else {
                         continue;
                     };
                     // Each glyph once: in the first band it shares with the
                     // cover.
-                    if band(b.y0).max(k0) != k || !meets(&b, &c) {
+                    if band(ink.y0).max(k0) != k {
                         continue;
                     }
-                    // A bar narrower across the line than the type is set
-                    // hides no letter: a link's underline drawn over the
-                    // underscores of its URL, a rule over a dash, paints
-                    // the very mark it lies on, and the text still reads.
-                    let g = &self.glyphs[i];
-                    let turned = (g.rotation_deg.rem_euclid(180.0) - 90.0).abs() < 45.0;
-                    let across = if turned { c.x1 - c.x0 } else { c.y1 - c.y0 };
-                    if !under(&b, &c) || across < g.font_size as f64 {
+                    let b = match self.hide.clip_boxes[i] {
+                        Some(clip) => BBox {
+                            x0: ink.x0.max(clip.x0),
+                            y0: ink.y0.max(clip.y0),
+                            x1: ink.x1.min(clip.x1),
+                            y1: ink.y1.min(clip.y1),
+                        },
+                        None => ink,
+                    };
+                    if b.x1 <= b.x0 || b.y1 <= b.y0 || !meets(&b, &c) {
+                        continue;
+                    }
+                    // A bar across the line hides nothing ([`bar_across`]).
+                    if !holds(&c, &b) || bar_across(&c, &self.glyphs[i]) {
                         torn = true;
                         break 'bands;
                     }
@@ -1000,6 +1306,9 @@ impl<'a> Device<'a> for Collector<'a> {
         // [`pen_bars`]. Each bar is read as any shape is, a rule or a fill.
         if let hayro_interpret::PathDrawMode::Stroke(props) = mode {
             if let Some(bars) = pen_bars(path, transform, props) {
+                for &b in &bars {
+                    self.note_paint(b, PaintKind::Stroke, None);
+                }
                 for b in bars {
                     if !self.page_box.intersects(&b) {
                         continue;
@@ -1029,6 +1338,28 @@ impl<'a> Device<'a> for Collector<'a> {
         if !self.page_box.intersects(&drawn) {
             return;
         }
+        // A stroke's paint reaches half its pen's width past the path.
+        let reach = match mode {
+            hayro_interpret::PathDrawMode::Stroke(props) => {
+                props.line_width as f64 * 0.5 * transform.determinant().abs().sqrt()
+            }
+            _ => 0.0,
+        };
+        let ground = self.ground_colour(&path, paint, mode);
+        self.note_paint(
+            BBox {
+                x0: drawn.x0 - reach,
+                y0: drawn.y0 - reach,
+                x1: drawn.x1 + reach,
+                y1: drawn.y1 + reach,
+            },
+            if matches!(mode, hayro_interpret::PathDrawMode::Fill(_)) {
+                PaintKind::Fill
+            } else {
+                PaintKind::Stroke
+            },
+            ground,
+        );
         if matches!(mode, hayro_interpret::PathDrawMode::Fill(_)) {
             self.note_cover(&path, paint);
         }
@@ -1139,6 +1470,7 @@ impl<'a> Device<'a> for Collector<'a> {
         if !self.page_box.intersects(&b) {
             return;
         }
+        self.note_paint(b, PaintKind::Image, None);
         // Pixels per inch along each axis: its pixels over the length that
         // axis is drawn at, in inches. An image squeezed one way is only as
         // fine as its coarser axis.
@@ -1230,7 +1562,7 @@ impl<'a> Device<'a> for Collector<'a> {
         glyph: &HGlyph<'a>,
         transform: Affine,
         glyph_transform: Affine,
-        _paint: &hayro_interpret::Paint<'a>,
+        paint: &hayro_interpret::Paint<'a>,
         mode: &hayro_interpret::GlyphDrawMode,
     ) {
         let mut text = match glyph.as_unicode() {
@@ -1432,15 +1764,18 @@ impl<'a> Device<'a> for Collector<'a> {
         // away at the page's end ([`Collector::clipped_out`]): a word drawn
         // once per cell it crosses, or lettering drawn a copy per slice of a
         // gradient, shows in part under each clip, and is kept whole.
-        // Judged only under rectangles, the frames text is placed in, whose
-        // boxes are the clips exactly. Text set invisible, an OCR'd scan's
-        // words over or under its image, is the document's text wherever
-        // it lies, and a Type3 glyph, with no box, is not judged; a space,
-        // with no ink, stands where its pen does.
+        // A clip of any shape lies inside its box, and the boxes of the
+        // clips in force cut to one another (`clips`) hold all a glyph can
+        // show in: a glyph outside them shows nowhere, whatever the clips'
+        // shapes. One that meets them is judged to show, though a clip cut
+        // to curves may yet hide it: the judgment errs toward keeping text.
+        // Text set invisible, an OCR'd scan's words over or under its
+        // image, is the document's text wherever it lies, and a Type3
+        // glyph, with no box, is not judged; a space, with no ink, stands
+        // where its pen does.
         let vote = match (self.clips.last(), self.clip_ids.last()) {
             (Some(clip), Some(&id))
-                if self.clip_rects.iter().all(|&r| r)
-                    && !matches!(mode, hayro_interpret::GlyphDrawMode::Invisible)
+                if !matches!(mode, hayro_interpret::GlyphDrawMode::Invisible)
                     && matches!(glyph, HGlyph::Outline(_)) =>
             {
                 let shown = match bbox {
@@ -1480,6 +1815,46 @@ impl<'a> Device<'a> for Collector<'a> {
         }
         self.ink.push(ink);
         self.clip_votes.push(vote);
+        // Filled and stroked (render mode 2), a glyph is drawn twice, filled
+        // then stroked: the outline shows whatever the fill does, so the
+        // fill's colour says nothing about what shows.
+        let seq = self.hide.seq;
+        self.hide.seq += 1;
+        if matches!(mode, hayro_interpret::GlyphDrawMode::Stroke(_)) {
+            if let (Some(last), Some(ink)) = (self.glyphs.last(), self.hide.inks.last_mut()) {
+                if last.origin == origin && last.text == text {
+                    *ink = None;
+                }
+            }
+        }
+        let filled = matches!(mode, hayro_interpret::GlyphDrawMode::Fill)
+            && matches!(glyph, HGlyph::Outline(_))
+            && !self.masked
+            && !self.blended
+            && self.groups.iter().all(|&g| g);
+        let ink_colour = match paint {
+            hayro_interpret::Paint::Color(c) if filled => Some(c.to_rgba().to_rgba8()),
+            _ => None,
+        };
+        self.hide.inks.push(ink_colour.map(|c| (seq, c)));
+        // A glyph that shows is painted like a shape: what is set on it
+        // stands on it.
+        if let (Some(b), false) = (
+            bbox,
+            matches!(mode, hayro_interpret::GlyphDrawMode::Invisible),
+        ) {
+            if let Some(bbox) = self.visible(b) {
+                self.hide.paints.push(Painted {
+                    seq,
+                    bbox,
+                    kind: PaintKind::Glyph,
+                    colour: ink_colour,
+                });
+            }
+        }
+        self.hide
+            .clip_boxes
+            .push(Some(self.clips.last().copied().unwrap_or(self.page_box)));
         self.painted.push(
             !matches!(mode, hayro_interpret::GlyphDrawMode::Invisible)
                 && matches!(glyph, HGlyph::Outline(_)),
@@ -2268,6 +2643,7 @@ pub fn extract_bytes_with(
             clip_ids: Vec::new(),
             clip_seq: 0,
             clip_votes: Vec::new(),
+            hide: Hiding::default(),
             painted: Vec::new(),
             covers: Vec::new(),
             masked: false,
@@ -2302,6 +2678,9 @@ pub fn extract_bytes_with(
         dev.read_cased();
         dev.read_symbols();
         let mut out = dev.clipped_out();
+        for (o, g) in out.iter_mut().zip(dev.grounded()) {
+            *o |= g;
+        }
         if !dev.covers.is_empty() {
             let annotated = appearance_boxes(page);
             for (o, c) in out.iter_mut().zip(dev.covered(&annotated)) {
@@ -2639,8 +3018,8 @@ fn synthesize_missing_boxes(glyphs: &mut [Glyph], rules: &[crate::rule::Rule]) {
     // for it on the page. Measured once more widely, the pen crossed a gap
     // no space glyph was drawn for: a spreadsheet sets each cell's text in
     // one string, an amount right against its cell's edge and the next
-    // cell's word moved on by the string's own offset (`9,672.95` and
-    // `WIRE`), and the `5`'s width took in the gap, its box the border.
+    // cell's word moved on by the string's own offset (`1,234.95` and
+    // `CASH`), and the `5`'s width took in the gap, its box the border.
     let keys: Vec<(String, i64)> = candidates
         .iter()
         .map(|&i| {
@@ -2872,9 +3251,9 @@ mod tests {
         g.extend(run("9", 464.0, 116.25, 5.26));
         let five = g.len();
         g.push(glyph("5", 469.26, 116.25));
-        g.extend(run("WIRE", 479.77, 116.25, 5.5));
+        g.extend(run("CASH", 479.77, 116.25, 5.5));
         // A letter seen once, measured across its cell's edge.
-        g.extend(run("FERNAND", 200.0, 46.5, 5.25));
+        g.extend(run("ABCDEFG", 200.0, 46.5, 5.25));
         let z = g.len();
         g.push(glyph("Z", 236.75, 46.5));
         g.extend(run("11", 247.78, 46.5, 5.25));
@@ -3169,6 +3548,7 @@ mod actual_text_tests {
             clip_ids: Vec::new(),
             clip_seq: 0,
             clip_votes: Vec::new(),
+            hide: Hiding::default(),
             painted: Vec::new(),
             covers: Vec::new(),
             masked: false,
@@ -3228,6 +3608,7 @@ mod actual_text_tests {
             clip_ids: Vec::new(),
             clip_seq: 0,
             clip_votes: Vec::new(),
+            hide: Hiding::default(),
             painted: Vec::new(),
             covers: Vec::new(),
             masked: false,
@@ -3315,6 +3696,7 @@ mod actual_text_tests {
             clip_ids: Vec::new(),
             clip_seq: 0,
             clip_votes: Vec::new(),
+            hide: Hiding::default(),
             painted: Vec::new(),
             covers: Vec::new(),
             masked: false,
@@ -3805,17 +4187,98 @@ mod clip_tests {
         );
         assert!(text.contains("Shown"), "{text:?}");
         assert!(!text.contains("Hidden"), "{text:?}");
-        // Under a clip some of whose text shows, all of it stays: a word
-        // drawn once per cell it crosses, each copy cut to its cell.
+        // Under a clip some of whose text shows, the text outside it goes
+        // too: a form's notes run past their box, a hidden copy of a
+        // figure's labels under the clip of the copy that shows.
         let text = read(
             "q 0 0 150 200 re W n \
              BT /F1 12 Tf 1 0 0 1 20 100 Tm (Left) Tj ET \
              BT /F1 12 Tf 1 0 0 1 200 100 Tm (Right) Tj ET Q",
         );
-        assert!(text.contains("Left") && text.contains("Right"), "{text:?}");
-        // A word the clip's edge cuts through shows its inside part.
+        assert!(text.contains("Left") && !text.contains("Right"), "{text:?}");
+        // Letters the clip's edge cuts through show their inside part; the
+        // ones past it show nowhere.
         let text = read("q 0 0 150 200 re W n BT /F1 12 Tf 1 0 0 1 140 100 Tm (Edge) Tj ET Q");
-        assert!(text.contains("Edge"), "{text:?}");
+        assert_eq!(text, "Ed");
+    }
+
+    #[test]
+    fn a_word_drawn_once_per_cell_reads_once_and_whole() {
+        // Each copy cut to its cell: each letter shows in one copy, and the
+        // copy outside its cell goes.
+        let text = read(
+            "q 0 0 150 200 re W n BT /F1 12 Tf 1 0 0 1 120 100 Tm (provisions) Tj ET Q \
+             q 150 0 150 200 re W n BT /F1 12 Tf 1 0 0 1 120 100 Tm (provisions) Tj ET Q",
+        );
+        assert!(
+            text.starts_with("provi") && text.ends_with("ons"),
+            "{text:?}"
+        );
+        assert_eq!(text.matches('p').count(), 1, "{text:?}");
+        assert_eq!(text.matches('n').count(), 1, "{text:?}");
+        // Drawn twice in one place, with neither copy judged to show, it
+        // stays: the copies stand for one glyph.
+        let text = read(
+            "q 0 0 150 200 re W n BT /F1 12 Tf 1 0 0 1 20 100 Tm (One) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 200 100 Tm (Twice) Tj ET Q \
+             q 0 0 150 200 re W n BT /F1 12 Tf 1 0 0 1 20 60 Tm (Two) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 200 100 Tm (Twice) Tj ET Q",
+        );
+        assert!(text.contains("Twice"), "{text:?}");
+    }
+
+    #[test]
+    fn clipped_text_where_its_lettering_is_drawn_as_shapes_stays() {
+        // A badge's word drawn as a filled outline, a line of type tall, and
+        // kept as text under a clip that shows none of it: the text is what
+        // the page shows.
+        const CLIPPED: &str =
+            "q 0 0 100 60 re W n 0 g BT /F1 12 Tf 1 0 0 1 20 20 Tm (Shown) Tj ET \
+                               BT /F1 12 Tf 1 0 0 1 20 98 Tm (Badge) Tj ET Q";
+        let text = read(&format!("0.5 g 18 96 60 12 re f {CLIPPED}"));
+        assert!(text.contains("Badge"), "{text:?}");
+        // Under an image, of any size, that may show it: so does a scan.
+        let text = read(&format!(
+            "{CLIPPED} q 280 0 0 180 10 10 cm BI /W 1 /H 1 /BPC 8 /CS /G /F /AHx ID 80> EI Q"
+        ));
+        assert!(text.contains("Badge"), "{text:?}");
+        // Behind it, a box drawn round a label, twice its type, a panel
+        // far taller, or a rule thinner than its letters: nothing there
+        // shows it, and it goes.
+        for under in [
+            "0.5 g 18 90 60 24 re f",
+            "0.5 g 10 70 200 120 re f",
+            "0 G 0.5 w 18 100 m 80 100 l S",
+        ] {
+            let text = read(&format!("{under} {CLIPPED}"));
+            assert!(
+                text.contains("Shown") && !text.contains("Badge"),
+                "{under}: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_clip_of_any_shape_hides_what_lies_outside_its_box() {
+        // A triangle in the page's left half: text in the right half lies
+        // outside its box, and shows nowhere.
+        let text = read(
+            "q 0 0 m 150 0 l 0 200 l h W n \
+             BT /F1 12 Tf 1 0 0 1 20 20 Tm (Inside) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 200 100 Tm (Outside) Tj ET Q",
+        );
+        assert!(
+            text.contains("Inside") && !text.contains("Outside"),
+            "{text:?}"
+        );
+        // Inside its box but past its slope, a word may or may not show
+        // there: it stays.
+        let text = read(
+            "q 0 0 m 150 0 l 0 200 l h W n \
+             BT /F1 12 Tf 1 0 0 1 20 20 Tm (Inside) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 100 150 Tm (Corner) Tj ET Q",
+        );
+        assert!(text.contains("Corner"), "{text:?}");
     }
 
     #[test]
@@ -3916,8 +4379,9 @@ mod cover_tests {
     fn text_painted_over_by_an_opaque_fill_is_not_read() {
         // The words and the space between them go; the line below stays.
         assert_eq!(read(&format!("{UNDER} {BAND} {SHOWN}")), "Shown");
-        // Set on the band, after it, they show.
-        let text = read(&format!("{BAND} {UNDER} {SHOWN}"));
+        // Set on the band, after it, they show: in black, not in the
+        // band's own blue, the colour the band left set.
+        let text = read(&format!("{BAND} 0 g {UNDER} {SHOWN}"));
         assert!(text.contains("Hidden words"), "{text:?}");
         // A fill is as opaque as its own alpha, `ca`: the stroke's, `CA`,
         // is no part of it.
@@ -4055,5 +4519,123 @@ mod cover_tests {
             &[annot, look],
         );
         assert!(text.contains("Hidden words"), "{text:?}");
+    }
+
+    #[test]
+    fn a_cover_hides_what_the_clip_lets_show_of_a_glyph() {
+        // The words cut by a clip at x 40, the part that shows covered: the
+        // letter the clip's edge crosses shows nothing past the cover, and
+        // goes with the rest.
+        let text = read(
+            "q 0 0 40 200 re W n BT /F1 12 Tf 1 0 0 1 20 100 Tm (Hidden words) Tj ET Q \
+             1 1 1 rg 10 90 32 30 re f 0 g {SHOWN}"
+                .replace("{SHOWN}", SHOWN)
+                .as_str(),
+        );
+        assert_eq!(text.trim(), "Shown");
+        // Not clipped, the cover's edge cuts through what shows: it all
+        // stays.
+        let text = read(&format!(
+            "BT /F1 12 Tf 1 0 0 1 20 100 Tm (Hidden words) Tj ET 1 1 1 rg 10 90 32 30 re f 0 g {SHOWN}"
+        ));
+        assert!(text.contains("Hidden words"), "{text:?}");
+    }
+
+    #[test]
+    fn a_box_about_the_type_size_hides_a_dash_under_it() {
+        // A box 9pt tall over 10pt type: the dash and the letters, all
+        // their ink under it, go.
+        let text = read(&format!(
+            "BT /F1 10 Tf 1 0 0 1 20 100 Tm (-Con.) Tj ET 1 1 1 rg 15 99.5 40 9 re f 0 g {SHOWN}"
+        ));
+        assert_eq!(text, "Shown");
+        // A bar a point thick over a run of underscores is the line they
+        // draw: they stay.
+        let text = read(&format!(
+            "BT /F1 10 Tf 1 0 0 1 20 100 Tm (____) Tj ET 0 0 1 rg 15 97.5 40 1.5 re f {SHOWN}"
+        ));
+        assert!(text.contains("____"), "{text:?}");
+    }
+
+    #[test]
+    fn text_in_the_colour_of_the_fill_it_is_set_on_is_not_read() {
+        // White on a white box: gone. Black on it, and white off it, stay.
+        let text = read(
+            "1 1 1 rg 10 90 200 30 re f \
+             BT /F1 12 Tf 1 0 0 1 20 100 Tm (Unseen) Tj ET \
+             0 g BT /F1 12 Tf 1 0 0 1 20 40 Tm (Seen) Tj ET",
+        );
+        assert_eq!(text, "Seen");
+        // The same colour stated in another space: gray 0.5 on an RGB fill
+        // of 0.5, 0.5, 0.5.
+        let text = read(
+            "0.5 0.5 0.5 rg 10 90 200 30 re f \
+             0.5 g BT /F1 12 Tf 1 0 0 1 20 100 Tm (Unseen) Tj ET",
+        );
+        assert_eq!(text, "");
+        // A slightly different tint shows: a reader can make it out.
+        let text = read(
+            "0.5 0.5 0.5 rg 10 90 200 30 re f \
+             0.56 0.56 0.56 rg BT /F1 12 Tf 1 0 0 1 20 100 Tm (Tinted) Tj ET",
+        );
+        assert!(text.contains("Tinted"), "{text:?}");
+    }
+
+    #[test]
+    fn a_links_underline_under_its_underscores_is_no_ground() {
+        // A link's underline, a bar a point tall in the link's blue, drawn
+        // before the URL set over it: the URL's underscores lie wholly on
+        // the bar, in its colour, and stay. The bar is a rule, no ground.
+        let url =
+            "0 0 1 rg 15 98.4 80 1 re f BT /F1 11 Tf 1 0 0 1 20 100 Tm (cms_ia/alert_64) Tj ET";
+        assert_eq!(read(url), "cms_ia/alert_64");
+        // A box of the same blue, a line of type tall, hides them all.
+        let boxed =
+            "0 0 1 rg 10 94 120 16 re f BT /F1 11 Tf 1 0 0 1 20 100 Tm (cms_ia/alert_64) Tj ET";
+        assert_eq!(read(boxed), "");
+    }
+
+    #[test]
+    fn text_on_its_colour_with_something_between_shows() {
+        // White text on a dark band laid over a white page: the band is
+        // the topmost thing under it.
+        let text = read(
+            "1 1 1 rg 0 0 300 200 re f 0 0 0.5 rg 10 90 200 30 re f \
+             1 1 1 rg BT /F1 12 Tf 1 0 0 1 20 100 Tm (Banner) Tj ET",
+        );
+        assert!(text.contains("Banner"), "{text:?}");
+        // A scanned page's words, set black on a black ground with the
+        // scan painted over them: the scan shows them, and they stay.
+        // Without the scan they show nowhere.
+        const SCAN: &str = "q 280 0 0 180 10 10 cm BI /W 1 /H 1 /BPC 8 /CS /G /F /AHx ID 80> EI Q";
+        const WORDS: &str = "0 g 0 0 300 200 re f BT /F1 12 Tf 1 0 0 1 20 100 Tm (Scanned) Tj ET";
+        assert_eq!(read(&format!("{WORDS} {SCAN}")), "Scanned");
+        assert_eq!(read(WORDS), "");
+        // So does a glyph: a warning sign's white mark set on a black box,
+        // and the black `!` set on the mark.
+        let text = read(
+            "0 g 10 90 200 30 re f 1 g BT /F1 24 Tf 1 0 0 1 20 95 Tm (M) Tj ET \
+             0 g BT /F1 12 Tf 1 0 0 1 24 100 Tm (!) Tj ET",
+        );
+        assert_eq!(text, "M!");
+        // A dark shape of any outline does the same.
+        let text = read(
+            "1 1 1 rg 0 0 300 200 re f 0 0 0.5 rg 10 90 m 210 90 l 110 130 l h f \
+             1 1 1 rg BT /F1 12 Tf 1 0 0 1 60 100 Tm (Peak) Tj ET",
+        );
+        assert!(text.contains("Peak"), "{text:?}");
+        // Stroked (1 Tr), or filled and stroked (2 Tr, each glyph drawn
+        // twice), its outline shows.
+        for (mode, read_as) in [("1", "Outlined"), ("2", "OOuuttlliinneedd")] {
+            let text = read(&format!(
+                "1 1 1 rg 1 1 1 RG 10 90 200 30 re f 0 0 0 RG \
+                 BT {mode} Tr /F1 12 Tf 1 0 0 1 20 100 Tm (Outlined) Tj ET"
+            ));
+            assert_eq!(text, read_as, "{mode}");
+        }
+        // Set invisible (3 Tr), an OCR layer, it is the document's text.
+        let text =
+            read("1 1 1 rg 10 90 200 30 re f BT 3 Tr /F1 12 Tf 1 0 0 1 20 100 Tm (Layer) Tj ET");
+        assert!(text.contains("Layer"), "{text:?}");
     }
 }

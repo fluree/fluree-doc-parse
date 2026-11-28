@@ -11,6 +11,12 @@
       "found": "2026-11-27",
       "issue": "Table II.1 (page 66) is two columns, minerals and a count. Its header row was read as a field, and the counts had no column name.",
       "row": {"Critical minerals": "Cobalt, lithium", "Number of G20 economies identifying minerals as critical": "16"}
+    },
+    {
+      "id": "table-a3-carried-on-under-its-repeated-title",
+      "found": "2026-11-27",
+      "issue": "Table A.3 runs on over its pages under its title restated at the same place on each (`table A .3`, `Developing economies: growth of real GDP (continued)`, `Annual percentage change`), each part under its header again. The title lines were read as text between the parts, and page 173's part was a table of its own.",
+      "continues": {"cell": "Myanmar e", "from": "Malaysia"}
     }
   ]
 }

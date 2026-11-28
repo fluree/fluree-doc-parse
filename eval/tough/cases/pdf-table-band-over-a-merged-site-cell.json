@@ -1,0 +1,30 @@
+{
+  "document": {
+    "file": "doe-em-major-contracts-2021-10.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2021-10/MAJOR-CONTRACTS-SUMMARY-As-of-10-4-21.pdf",
+    "sha256": "9c943f6c520365ee0f007174757810f3e215e09b33f82a7bc6c1d6e5ec3b4e2e",
+    "about": "US Department of Energy, Office of Environmental Management, major contracts summary (Microsoft Word for Microsoft 365). A ruled grid; each site's name is centred down a first-column cell merged over its contracts' rows, and a blank grey band, ruled through every column, sets the sites apart."
+  },
+  "checks": [
+    {
+      "id": "rows-under-the-band",
+      "found": "2026-11-27",
+      "issue": "The table ended at the blank band on page 2: the next site's name, centred down its merged cell, crosses the row lines the grid draws in the other columns, and was read as text running out of its row. Its contracts came out as 53 paragraphs.",
+      "cell": {
+        "value": "Portsmouth Infrastructure Services",
+        "column": "Contract Description",
+        "row": "Portsmouth Paducah Project Office"
+      }
+    },
+    {
+      "id": "rows-under-the-band-2",
+      "found": "2026-11-27",
+      "issue": "As above, a later row of the same site.",
+      "cell": {
+        "value": "Paducah GDP Deactivation & Remediation",
+        "column": "Contract Description",
+        "row": "Portsmouth Paducah Project Office"
+      }
+    }
+  ]
+}

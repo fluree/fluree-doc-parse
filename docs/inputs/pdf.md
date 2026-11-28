@@ -45,6 +45,27 @@ dropped however far apart the two draws are: a document printed with its
 highlighting draws each line once under the highlight and once over it, and
 read twice, every line came out with each letter doubled: `RReeccoorrdd`.
 
+**Text the page doesn't show.** A PDF can hold text that no viewer shows:
+the lines of a note that run past the box its clip cuts it to, a copy of a
+figure's labels drawn under the clip of the copy that shows, a word under an
+opaque box painted over it, or a template's markers set white on a white
+page. Read, such text ran into the words that do show. Each glyph is judged
+by what the page paints over and under it, and text that shows nowhere is
+left out:
+
+- a glyph drawn wholly outside its clip;
+- a glyph whose visible part lies wholly under an opaque box painted after
+  it;
+- a glyph filled in the colour of the box it stands on, with nothing painted
+  between the two.
+
+A glyph that shows even in part keeps its word, and a bar under half the
+type's size, an underline or a rule over a dash, hides nothing. Outlined or
+stroked text shows on any ground. Text set invisible on purpose, the text
+layer of a scanned page, is the document's text and stays. So does clipped
+text where its own lettering is drawn as shapes in the same place, a badge's
+words for instance: the text is what the page shows.
+
 **Underlines struck over text.** A line printer underlines by printing the
 line, then printing `_` under the letters it stresses. Read by position, the
 two interleave: `_D_O_ _N_O_T`. A run of underscores struck over another

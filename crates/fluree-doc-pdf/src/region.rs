@@ -92,6 +92,7 @@ pub fn read_order(
 /// or outlined, a sidebar set in one beside the column's text reading
 /// apart from it ([`sidebar`], [`panel_after_its_sentence`]). A page's or
 /// a half-spread's white background is no panel.
+#[cfg(test)]
 pub fn read_order_with_panels(
     cols: Vec<Vec<Line>>,
     rules: &[Rule],
@@ -99,6 +100,21 @@ pub fn read_order_with_panels(
     pictures: &[BBox],
     frames: &[BBox],
     panels: &[BBox],
+) -> Vec<Group> {
+    read_order_with_labels(cols, rules, tables, pictures, frames, panels, &[])
+}
+
+/// [`read_order_with_panels`], with the boxes of a row of icons and their
+/// labels: each icon's slot, from its top to its label's foot. A row of
+/// them is read box by box, left to right ([`labelled_row`]).
+pub fn read_order_with_labels(
+    cols: Vec<Vec<Line>>,
+    rules: &[Rule],
+    tables: &[BBox],
+    pictures: &[BBox],
+    frames: &[BBox],
+    panels: &[BBox],
+    labels: &[BBox],
 ) -> Vec<Group> {
     let total: usize = cols.iter().map(Vec::len).sum();
     if total < 2 {
@@ -121,6 +137,7 @@ pub fn read_order_with_panels(
         pictures,
         frames,
         panels,
+        labels,
         h,
     };
     let mut out = Vec::new();
@@ -230,6 +247,7 @@ struct Page<'a> {
     pictures: &'a [BBox],
     frames: &'a [BBox],
     panels: &'a [BBox],
+    labels: &'a [BBox],
     h: f64,
 }
 
@@ -385,16 +403,29 @@ impl Page<'_> {
                     // A stretch all in drawn boxes reads box by box; any
                     // other at a gutter only it has, then block by block
                     // where two stand side by side.
-                    let read_stretch = |group: Vec<Line>| -> Vec<(Vec<Line>, bool)> {
+                    let read_plain = |group: Vec<Line>| -> Vec<(Vec<Line>, bool)> {
                         match boxed(&group, self.frames) {
-                            Some(boxes) => boxes.into_iter().map(|b| (b, true)).collect(),
+                            Some(boxes) => boxes
+                                .into_iter()
+                                .flat_map(|b| {
+                                    with_labels(b, true, self.labels, |l, o| vec![(l, o)])
+                                })
+                                .collect(),
                             None => split_local(group, self.h, 3)
                                 .into_iter()
                                 .flat_map(|(lines, own)| {
-                                    side_blocks(lines, own, self.h, self.frames, 2)
+                                    // A row of icons in one of the
+                                    // stretch's columns reads there.
+                                    with_labels(lines, own, self.labels, |l, o| {
+                                        side_blocks(l, o, self.h, self.frames, 2)
+                                    })
                                 })
                                 .collect(),
                         }
+                    };
+                    // A row of icons' labels reads label by label first.
+                    let read_stretch = |group: Vec<Line>| -> Vec<(Vec<Line>, bool)> {
+                        with_labels(group, false, self.labels, |l, _| read_plain(l))
                     };
                     // A panel set beside the column's text reads apart from
                     // it, after the text beside it.
@@ -1767,6 +1798,127 @@ const CAPTION_RUN_ON_LINES: usize = 1;
 /// caption is set larger by at the least: a size step, as a heading's.
 const CAPTION_SIZE_STEP: f64 = 0.1;
 
+/// `lines` read by `read`, but for a row of icons with their labels among
+/// them ([`labelled_row`]): the lines over the row read first, each label
+/// whole, then the rest.
+fn with_labels(
+    lines: Vec<Line>,
+    own: bool,
+    labels: &[BBox],
+    read: impl Fn(Vec<Line>, bool) -> Vec<(Vec<Line>, bool)>,
+) -> Vec<(Vec<Line>, bool)> {
+    let Some((over, row, rest)) = labelled_row(&lines, labels) else {
+        return read(lines, own);
+    };
+    let mut parts = Vec::new();
+    if !over.is_empty() {
+        parts.extend(read(over, own));
+    }
+    parts.extend(row.into_iter().map(|b| (b, true)));
+    if !rest.is_empty() {
+        parts.extend(read(rest, own));
+    }
+    parts
+}
+
+/// A row of icons with their labels in `group`: the boxes of `labels`
+/// ([`crate::document`]'s icon rows) holding some of its lines, two or more.
+/// Read row by row, the labels' lines took turns (`FISHERY AND ECOSYSTEM
+/// PROTECTED MODELING`); each label is read whole instead, left to right,
+/// a row at a time. The lines over the rows read before them, the rest
+/// after. A stretch with text beside the rows has none here: the rows read
+/// in their own column once the stretch is parted. Returns the lines
+/// over the row, each label's lines, and the rest.
+fn labelled_row(group: &[Line], labels: &[BBox]) -> Option<(Vec<Line>, Vec<Vec<Line>>, Vec<Line>)> {
+    if labels.len() < 2 {
+        return None;
+    }
+    // Each line to the first box that holds it, once.
+    let mut claimed = vec![false; group.len()];
+    let mut boxes: Vec<(BBox, Vec<usize>)> = labels
+        .iter()
+        .map(|b| {
+            let v: Vec<usize> = (0..group.len())
+                .filter(|&i| !claimed[i] && group[i].rotation_bucket == 0 && holds(b, &group[i]))
+                .collect();
+            for &i in &v {
+                claimed[i] = true;
+            }
+            (*b, v)
+        })
+        .filter(|(_, v)| !v.is_empty())
+        .collect();
+    if boxes.len() < 2 {
+        return None;
+    }
+    // The row spans the stretch: a line level with it and beside it is
+    // another column's, and the row reads once the stretch is parted into
+    // its columns.
+    let top = boxes.iter().map(|(b, _)| b.y0).fold(f64::MAX, f64::min);
+    let foot = boxes.iter().map(|(b, _)| b.y1).fold(f64::MIN, f64::max);
+    let x0 = boxes.iter().map(|(b, _)| b.x0).fold(f64::MAX, f64::min);
+    let x1 = boxes.iter().map(|(b, _)| b.x1).fold(f64::MIN, f64::max);
+    let beside = group.iter().enumerate().any(|(i, l)| {
+        let cx = (l.bbox.x0 + l.bbox.x1) / 2.0;
+        !claimed[i] && l.bbox.y0 < foot && l.bbox.y1 > top && (cx < x0 || cx > x1)
+    });
+    if beside {
+        return None;
+    }
+    // Row by row, each left to right: a row's boxes stand level, the next
+    // row's under them all.
+    boxes.sort_by(|a, b| a.0.y0.total_cmp(&b.0.y0));
+    let mut rows: Vec<Vec<(BBox, Vec<usize>)>> = Vec::new();
+    for b in boxes {
+        match rows.last_mut() {
+            Some(row) if b.0.y0 < row.iter().map(|(r, _)| r.y1).fold(f64::MAX, f64::min) => {
+                row.push(b)
+            }
+            _ => rows.push(vec![b]),
+        }
+    }
+    for row in &mut rows {
+        row.sort_by(|a, b| a.0.x0.total_cmp(&b.0.x0));
+    }
+    let boxes: Vec<(BBox, Vec<usize>)> = rows.into_iter().flatten().collect();
+    let mut taken = vec![false; group.len()];
+    let mut out = Vec::new();
+    for (b, v) in &boxes {
+        // Marks set aslant among the label's lines are the icon's
+        // lettering run down into its slot: they read apart, before it.
+        let held: Vec<usize> = (0..group.len())
+            .filter(|&i| {
+                !claimed[i] && !taken[i] && group[i].rotation_bucket != 0 && holds(b, &group[i])
+            })
+            .collect();
+        let marks: Vec<Line> = held.iter().map(|&i| group[i].clone()).collect();
+        for &i in &held {
+            taken[i] = true;
+        }
+        if !marks.is_empty() {
+            out.push(marks);
+        }
+        let mut lines: Vec<Line> = v.iter().map(|&i| group[i].clone()).collect();
+        lines.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        for &i in v {
+            taken[i] = true;
+        }
+        out.push(lines);
+    }
+    let (mut over, mut rest) = (Vec::new(), Vec::new());
+    for (i, l) in group.iter().enumerate() {
+        if taken[i] {
+            continue;
+        }
+        if l.bbox.y1 <= top + BOX_SLACK {
+            over.push(l.clone());
+        } else {
+            rest.push(l.clone());
+        }
+    }
+    Some((over, out, rest))
+}
+
 /// A stretch of a column whose every upright line stands in a drawn box,
 /// the outermost boxes two or more and apart, one holding two rows of text:
 /// a box diagram, a flowchart, a page of cards. The region pass reads its
@@ -1978,6 +2130,77 @@ mod tests {
             compounds: Vec::new(),
             opens_bold: false,
         }
+    }
+
+    #[test]
+    fn icons_labels_read_whole_a_row_at_a_time() {
+        // Two rows of three icons in a column, a two-line label under each:
+        // a heading over them, a line of text under them.
+        let slots = [(300.0, 380.0), (380.0, 460.0), (460.0, 540.0)];
+        let mut labels = Vec::new();
+        let mut group = vec![line("Signs and symptoms", 300.0, 80.0, 540.0)];
+        for (r, top) in [100.0, 150.0].into_iter().enumerate() {
+            for (k, &(x0, x1)) in slots.iter().enumerate() {
+                labels.push(BBox {
+                    x0,
+                    y0: top,
+                    x1,
+                    y1: top + 30.0,
+                });
+                group.push(line(
+                    &format!("LABEL {r}{k}"),
+                    x0 + 10.0,
+                    top + 8.0,
+                    x1 - 10.0,
+                ));
+                group.push(line(
+                    &format!("SECOND {r}{k}"),
+                    x0 + 10.0,
+                    top + 18.0,
+                    x1 - 10.0,
+                ));
+            }
+        }
+        group.push(line("Practice good hygiene.", 300.0, 200.0, 540.0));
+        // Read across, the rows' lines sort by height: row by row instead,
+        // each label whole.
+        group.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        let (over, row, rest) = labelled_row(&group, &labels).expect("a labelled row");
+        assert_eq!(over.len(), 1);
+        assert_eq!(rest.len(), 1);
+        let read: Vec<String> = row
+            .iter()
+            .map(|l| {
+                l.iter()
+                    .map(|l| l.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                "LABEL 00 SECOND 00",
+                "LABEL 01 SECOND 01",
+                "LABEL 02 SECOND 02",
+                "LABEL 10 SECOND 10",
+                "LABEL 11 SECOND 11",
+                "LABEL 12 SECOND 12"
+            ]
+        );
+        // A mark set aslant in a label's box reads apart, before it.
+        let mut marked = group.clone();
+        let mut mark = line("?", 330.0, 104.0, 334.0);
+        mark.rotation_bucket = 1;
+        marked.push(mark);
+        let (_, row, _) = labelled_row(&marked, &labels).expect("a labelled row");
+        assert_eq!(row[0][0].text, "?");
+        assert_eq!(row[1][0].text, "LABEL 00");
+        // Another column's text level with the rows: the stretch is parted
+        // first, and the rows read in their own column.
+        let mut beside = group.clone();
+        beside.push(line("Adults 65 or older", 60.0, 118.0, 250.0));
+        assert!(labelled_row(&beside, &labels).is_none());
     }
 
     /// A column of prose beside a shaded panel, the column's last paragraph

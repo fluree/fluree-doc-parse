@@ -107,7 +107,17 @@ row of the table. A blank row the table rules as its own goes on, though:
   with text either side of it;
 - the rows taken in under it hold their text as cells do, each glyph within
   its row and no line run across a column edge closer than 0.4 em, about a
-  word space.
+  word space. A glyph past its row's edge counts only where a rule is drawn
+  along that edge over it: a site's name centred down a cell merged over its
+  contracts' rows crosses the grid's row lines, which are drawn only in the
+  other columns.
+
+A band merged across the table, blank, goes on as well: the box's two sides
+run down through it, unbroken, and every column edge through the rows either
+side. A contract list sets one, shaded, between each site's contracts and the
+next site's. Two tables sharing one frame with a blank band between them
+rule their columns at different places, and were parted before (see Grouping
+and trimming).
 
 Tables set such a row between groups of rows: a parameter table puts one
 before each instrument's settings, a SKU table between two sets of
@@ -418,6 +428,15 @@ one row's:
   rows were never ruled names a row on every line. In a table ruled with
   horizontals alone, no line runs across a column's edge either, as a
   paragraph set between two tables would.
+- **Or a description wrapped down the first column.** The first column may
+  run to more lines where they are one row's description: a contract's long
+  title beside its number, dates and value, or the contractors of a multiple
+  award listed down their own column. Half the other columns holding text,
+  two of them at least, set a line or two each, the row's values; a body
+  never ruled sets a value beside each of its names in most of its columns.
+  And the description's lines stand at one leading, each gap within half
+  again the narrowest: labels scattered over a schematic's wires stand at
+  none, and the wires' bands are no table's.
 
 The band a table opens with, its rules running on through it into the rows
 below, is its header row however tall: column labels wrap over as many lines
@@ -1768,6 +1787,38 @@ reading order, a table set inside another's box follows it.
 The parts stay separate elements, because an element and its box sit on one
 page. Each later part names the one before it, and the DoCO and Markdown
 emitters read the chain as one table.
+
+### In HTML: a table cut at a CSS page break
+
+A filing set as pages closes a long table at each page's foot and opens it
+again on the next: `</table>`, the page's folio, `<hr
+style="page-break-after:always">`, and a `<table>` sized as the first. An
+Exhibit 21's list of subsidiaries is one table per page. The HTML reader has
+no page geometry, so it links the parts on what the markup states. The part
+after a break carries on the table before it when:
+
+- a CSS page break (`page-break-before` or `-after`, `break-before` or
+  `-after: page`) stands between them, and only the page's furniture does
+  besides. Furniture is a folio (`2`, `Page 3`, `- ii -`), a note at the
+  page's foot (`* denotes Guarantor`), a line saying the table goes on
+  (`Exhibit 21 (continued)`), or a running head the document set before;
+- its cells declare the same widths, cell for cell, as the part before's;
+- it opens on a row laid out as one of the part before's, its text in
+  columns one of them fills, or some of them where the break cut a cell;
+- it sets no header row of its own over its values, unless it opens on the
+  table's opening row over again. A budget's second table, `Section |
+  Scorpius Service Fee | Invoice Amount` under one whose columns were
+  `… | Estimated Consumables`, is another table;
+- where it opens as the table opened, its title rows are the table's: a
+  statement after a statement, each under the company's name and its own
+  title, is a new table set the same way.
+
+A part repeating the table's header keeps it as its header; any other has
+none. A part that is the one before over again, every row, is the next copy
+of a form. Each later part's rows are then the table's: under the column
+names the first part sets, and under the band open at the part before's
+end. In a list of names, one to a row, a page ending on a name ends on a row
+like any other, not on a band the break cut, so the band carries on.
 
 ### Parts of one table on one page
 

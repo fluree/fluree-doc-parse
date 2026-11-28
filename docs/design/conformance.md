@@ -32,7 +32,10 @@ every writer reads it:
 
 DoCO is `E` serialised, and its offset contract (each element's string is
 exactly what its offsets cut from the text projection) is already enforced by
-`eval/tough`. The text projection is checked through it.
+`eval/tough`. The text projection is checked through it. The contract is on
+strings, not order. A slide's speaker notes are contained by the slide but
+follow every slide in the text, the one class where containment order and
+text order differ.
 
 ## What is compared
 
@@ -86,7 +89,9 @@ Both formats:
   metadata beyond the speaker label, `signature`: written as text or not at
   all; DoCO carries them as properties.
 - `notes_for`: a slide's speaker notes are written as a section of their own
-  after the slides; the slide they belong to is DoCO's.
+  after the slides, under `Speaker notes` and each slide's name (`Slide 4:
+  Results`); the reference sets the same two headings over them. The slide
+  they belong to is DoCO's, which puts them inside it.
 
 Kinds:
 
@@ -146,10 +151,12 @@ Markdown:
 
 XHTML:
 
-- **Figure fragments run together.** A drawing's fragments are written as
+- **Figure fragments run together.** A drawing's fragments were written as
   `<span>`s in a `<figure>`, which HTML reads as one run of text:
   `block.merged`, and the `text.lost`, `text.extra` and `order` that follow
-  from it.
+  from it. The writer sets each fragment as a block of its own, `<div
+  class="doco-figure-text">`, and the HTML reader reads each back as one
+  fragment of the drawing its `<figure data-figure>` names.
 - **Bands read as header rows.** A band row under the header, or a table
   without one, is written as a `<th>` row, and with no `<thead>` to end it
   the header runs on into it: `table.header_rows`, `table.sub_headers`.

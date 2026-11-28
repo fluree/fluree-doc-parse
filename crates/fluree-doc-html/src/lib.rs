@@ -130,8 +130,14 @@ pub fn parse(src: &str) -> Vec<Element> {
 }
 
 fn number(elements: &mut [Element]) {
+    let renamed: std::collections::HashMap<String, String> = elements
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.id.clone(), format!("elem-{:05}", i + 1)))
+        .collect();
     for (i, e) in elements.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
+        e.continues = e.continues.take().and_then(|c| renamed.get(&c).cloned());
     }
 }
 
@@ -219,6 +225,10 @@ pub fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
         }
     }
     number(&mut out.elements);
+    for &(before, after) in &out.links {
+        let id = out.elements[before].id.clone();
+        out.elements[after].continues = Some(id);
+    }
     (out.elements, out.depths)
 }
 
@@ -248,6 +258,25 @@ struct Out {
     items: usize,
     /// Whether the walk is directly in a list, not in one of its items.
     in_list: bool,
+    /// The drawing the walk is in: the `data-figure` of the `<figure>`
+    /// round a drawing's text, as the XHTML writer sets it.
+    figure: Option<String>,
+    /// The last table read: its index among the elements and the column
+    /// widths it declares.
+    last_table: Option<(usize, Vec<(usize, String)>)>,
+    /// Whether a CSS page break has come since the last table.
+    broke: bool,
+    /// Tables a page break cut, by index: the part before, the part after.
+    links: Vec<(usize, usize)>,
+    /// Each linked part's table's header rows, as its first part sets them,
+    /// by the part's index: a part carried on from a part with none of its
+    /// own is headed by these.
+    heads: std::collections::HashMap<usize, Vec<Vec<String>>>,
+    /// Each linked part's table's opening ([`opening_of`]), as its first
+    /// part set it, by the part's index.
+    openings: std::collections::HashMap<usize, Vec<Vec<String>>>,
+    /// Each table's own opening rows, by its index.
+    leads: std::collections::HashMap<usize, Vec<Vec<String>>>,
 }
 
 impl Out {
@@ -258,6 +287,11 @@ impl Out {
         self.elements.push(e);
         self.depths.push(self.depth);
     }
+}
+
+/// Does this element's `class` list name `class`?
+fn has_class(h: &Handle, class: &str) -> bool {
+    attr_of(h, "class").is_some_and(|c| c.split_whitespace().any(|c| c == class))
 }
 
 /// Does this element mark its content as quoted from another text?
@@ -522,6 +556,11 @@ fn walk_container(h: &Handle, out: &mut Out) {
             walk(&c, out);
             continue;
         }
+        // A break set on a line break or a span between pages.
+        if breaks_page(&c, "before") || breaks_page(&c, "after") {
+            flush_run(&mut run, out);
+            out.broke = true;
+        }
         let blank =
             matches!(&c.data, NodeData::Text { contents } if contents.borrow().trim().is_empty());
         if tag_of(&c).as_deref() == Some("br") {
@@ -775,6 +814,7 @@ fn walk(h: &Handle, out: &mut Out) {
     let nested = list && out.in_list;
     out.items += usize::from(nested);
     let in_list = std::mem::replace(&mut out.in_list, list);
+    out.broke |= breaks_page(h, "before");
     if is_citation(h) {
         out.depth += 1;
         walk_node(h, out);
@@ -782,6 +822,7 @@ fn walk(h: &Handle, out: &mut Out) {
     } else {
         walk_node(h, out);
     }
+    out.broke |= breaks_page(h, "after");
     out.in_list = in_list;
     out.items -= usize::from(nested);
 }
@@ -853,6 +894,26 @@ fn walk_node(h: &Handle, out: &mut Out) {
                 let (text, links) = pre_text(h);
                 if !text.is_empty() {
                     out.push(linked("doco:Paragraph", text, None, links));
+                }
+                return;
+            }
+            // A drawing's text, as the XHTML writer sets it: a block for
+            // each fragment in the drawing's `<figure>`, read back as one
+            // fragment of that drawing.
+            "figure" if attr_of(h, "data-figure").is_some() => {
+                let outer = out
+                    .figure
+                    .replace(attr_of(h, "data-figure").unwrap_or_default());
+                walk_container(h, out);
+                out.figure = outer;
+                return;
+            }
+            "div" if has_class(h, fluree_doc_model::emit::FIGURE_TEXT_CLASS) => {
+                let (text, links) = text_of(h);
+                if !text.is_empty() {
+                    let mut e = linked("doco:Figure", text, None, links);
+                    e.figure = out.figure.clone();
+                    out.push(e);
                 }
                 return;
             }
@@ -1641,7 +1702,270 @@ fn emit_table(table: &Handle, out: &mut Out) {
     e.cells = Some(cells);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
+    let widths = column_widths(&trs);
+    // A header row of its own over the table's first values: `<th>` cells
+    // or cells set as a header, under any title rows.
+    let opens_header = kinds
+        .iter()
+        .take_while(|k| !matches!(k, RowKind::Data))
+        .any(|k| matches!(k, RowKind::Th { .. } | RowKind::Styled { .. }));
+    let lead = opening_of(e.cells.as_deref().unwrap_or_default());
+    link_across_break(&mut e, widths.as_deref(), opens_header, &lead, out);
+    out.leads.insert(out.elements.len(), lead);
+    out.last_table = widths.map(|w| (out.elements.len(), w));
+    out.broke = false;
     out.push(e);
+}
+
+/// A table's opening: its first row with text, and where its first row of
+/// several cells comes later, the rows down to that one (a title, the
+/// company's name, the column names). A row saying the table goes on
+/// (`Exhibit 21 (continued)`) is not of it.
+fn opening_of(cells: &[Vec<String>]) -> Vec<Vec<String>> {
+    let filled = |r: &Vec<String>| r.iter().filter(|t| !t.trim().is_empty()).count();
+    let continued = |r: &Vec<String>| {
+        let t = r.join(" ").to_lowercase();
+        t.contains("continued") && t.split_whitespace().count() <= 8
+    };
+    let rows: Vec<&Vec<String>> = cells
+        .iter()
+        .filter(|r| filled(r) > 0)
+        .skip_while(|r| continued(r))
+        .collect();
+    match rows.iter().position(|r| filled(r) > 1) {
+        Some(k) => rows[..=k].iter().map(|r| (*r).clone()).collect(),
+        None => rows.first().map(|r| vec![(*r).clone()]).unwrap_or_default(),
+    }
+}
+
+/// A CSS page break on `side` (`before` or `after`) of this element:
+/// `page-break-after: always`, `break-before: page` and the like. A filing
+/// set as pages puts one between them, often on an empty `<hr>` or `<div>`.
+fn breaks_page(h: &Handle, side: &str) -> bool {
+    let (old, new) = (format!("page-break-{side}"), format!("break-{side}"));
+    declarations(h).iter().any(|(k, v)| {
+        let v = v.trim_end_matches("!important").trim();
+        (*k == old && matches!(v, "always" | "left" | "right" | "page"))
+            || (*k == new && matches!(v, "page" | "left" | "right" | "recto" | "verso" | "always"))
+    })
+}
+
+/// The column widths a table declares on the first row that declares any,
+/// each cell's span with its width (`98.9%`, `40pt`, empty where a cell
+/// declares none).
+fn column_widths(trs: &[Handle]) -> Option<Vec<(usize, String)>> {
+    trs.iter().find_map(|tr| {
+        let cells: Vec<Handle> = children_of(tr)
+            .into_iter()
+            .filter(|c| matches!(tag_of(c).as_deref(), Some("td" | "th")))
+            .collect();
+        let widths: Vec<String> = cells
+            .iter()
+            .map(|c| {
+                declarations(c)
+                    .into_iter()
+                    .find(|(k, _)| k == "width")
+                    .map(|(_, v)| v)
+                    .or_else(|| attr_of(c, "width"))
+                    .unwrap_or_default()
+                    .replace(' ', "")
+                    .to_ascii_lowercase()
+            })
+            .collect();
+        widths.iter().any(|w| !w.is_empty()).then(|| {
+            cells
+                .iter()
+                .map(|c| num_attr(c, "colspan"))
+                .zip(widths)
+                .collect()
+        })
+    })
+}
+
+/// Two tables' declared widths are one layout: cell for cell the same span
+/// and the same width, to a hundredth of it (a share rounded another way).
+fn same_widths(a: &[(usize, String)], b: &[(usize, String)]) -> bool {
+    let split = |w: &str| {
+        let end = w
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(w.len());
+        (w[..end].parse::<f64>().ok(), w[end..].to_string())
+    };
+    a.len() == b.len()
+        && a.len() >= 2
+        && a.iter().zip(b).all(|((sa, wa), (sb, wb))| {
+            sa == sb
+                && match (split(wa), split(wb)) {
+                    ((Some(x), ua), (Some(y), ub)) => ua == ub && (x - y).abs() <= 0.01 * x.max(y),
+                    _ => wa == wb,
+                }
+        })
+}
+
+/// Is `e`, read between two parts of a table, the page's furniture: a folio
+/// (`2`, `Page 3`, `- ii -`), a note at the page's foot (`* denotes
+/// Guarantor`), a line saying the table goes on (`Exhibit 21
+/// (continued)`), or a running head the document set before (`EXHIBIT
+/// 21.1` at each page's head)?
+fn page_furniture(e: &Element, earlier: &[Element]) -> bool {
+    if !matches!(e.kind.as_str(), "doco:Paragraph" | "doco:SectionTitle") {
+        return false;
+    }
+    let t = e.text.trim();
+    let lower = t.to_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let folio = words.len() <= 4
+        && words.iter().all(|w| {
+            let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+            w.is_empty()
+                || w == "page"
+                || w == "of"
+                || w.chars().all(|c| c.is_ascii_digit())
+                || (w.len() <= 6 && w.chars().all(|c| "ivxlcdm".contains(c)))
+        });
+    let continued = words.len() <= 8 && lower.contains("continued");
+    let note = e.kind == "doco:Paragraph" && opens_on_note_mark(t);
+    let running = earlier.iter().any(|x| x.text.trim() == t);
+    folio || continued || note || running
+}
+
+/// Link a table a page break cut to its part on the page before.
+///
+/// A filing set as pages (`<hr style="page-break-after:always">` between
+/// them) closes a long table at each page's foot and opens it again at the
+/// next page's head: a list of subsidiaries is one table per page. The part
+/// after a break carries on the table before it where only the page's
+/// furniture stands between them ([`page_furniture`]), its cells declare the
+/// same widths, and it opens with no header of its own or with the table's
+/// header over again. A table opening on another header is another table,
+/// whatever its widths; a part that is the one before over again, every
+/// row, is the next copy of a form.
+fn link_across_break(
+    e: &mut Element,
+    widths: Option<&[(usize, String)]>,
+    opens_header: bool,
+    lead: &[Vec<String>],
+    out: &mut Out,
+) {
+    let (Some(widths), true, Some((p, before))) = (widths, out.broke, out.last_table.as_ref())
+    else {
+        return;
+    };
+    let p = *p;
+    if !same_widths(before, widths)
+        || !out.elements[p + 1..]
+            .iter()
+            .all(|x| page_furniture(x, &out.elements[..p]))
+    {
+        return;
+    }
+    let (Some(prev), Some(rows)) = (out.elements[p].cells.as_ref(), e.cells.as_ref()) else {
+        return;
+    };
+    let same = |a: &[String], b: &[String]| {
+        a.len() == b.len()
+            && a.iter()
+                .zip(b)
+                .all(|(x, y)| x.split_whitespace().eq(y.split_whitespace()))
+    };
+    if prev.len() == rows.len() && prev.iter().zip(rows).all(|(a, b)| same(a, b)) {
+        return;
+    }
+    // The part after opens on a row laid out as one of the part before's:
+    // its text in columns one of them fills (some of them, where the break
+    // cut a cell and its rest opens the part). A table the break cut goes
+    // on with rows like its own; a new table opens on rows of its own
+    // (`Lease Month | Annual Basic Rent Rate | Monthly Basic Rent` under a
+    // lease's two-column terms).
+    // A row saying the table goes on (`Exhibit 21 (continued)`) opens the
+    // part as its page's furniture does: the part's rows start under it.
+    let continued = |r: &[String]| {
+        let t = r.join(" ").to_lowercase();
+        t.contains("continued") && t.split_whitespace().count() <= 8
+    };
+    let lines = |v: &[Vec<String>]| -> Vec<usize> {
+        (0..v.len())
+            .filter(|&r| v[r].iter().any(|t| !t.trim().is_empty()))
+            .collect()
+    };
+    let bl: Vec<usize> = {
+        let all = lines(rows);
+        let skip = all.iter().take_while(|&&r| continued(&rows[r])).count();
+        all[skip..].to_vec()
+    };
+    let Some(first) = bl.first().map(|&r| &rows[r]) else {
+        return;
+    };
+    let fills = |r: &[String]| {
+        r.len() == first.len()
+            && first
+                .iter()
+                .zip(r)
+                .all(|(f, t)| f.trim().is_empty() || !t.trim().is_empty())
+    };
+    if !prev.iter().any(|r| fills(r)) {
+        return;
+    }
+    // The table's opening, as its first part set it ([`opening_of`]).
+    let opening: Vec<Vec<String>> = out
+        .openings
+        .get(&p)
+        .cloned()
+        .unwrap_or_else(|| out.leads.get(&p).cloned().unwrap_or_default());
+    let restates = opening.first().is_some_and(|o| same(o, first));
+    // A part setting a header row of its own over its values, `<th>` cells
+    // or cells set as a header, is another table unless it opens on the
+    // table's opening row over again: a budget's `Section | Scorpius Service
+    // Fee | Invoice Amount` under one whose columns were `… | Estimated
+    // Consumables`, or the next statement of a filing's financial
+    // statements, under the company's name and its own title.
+    if opens_header && e.header_rows.unwrap_or(0) == 0 && !restates {
+        return;
+    }
+    let own = out.elements[p].header_rows.unwrap_or(0).min(prev.len());
+    let head: Vec<Vec<String>> = if own > 0 {
+        prev[..own].to_vec()
+    } else {
+        out.heads.get(&p).cloned().unwrap_or_default()
+    };
+    // The header over again, its rows with text in turn, whatever blank
+    // sizing rows either side sets.
+    let hl = lines(&head);
+    let repeats = !hl.is_empty()
+        && bl.len() > hl.len()
+        && hl.iter().zip(&bl).all(|(&h, &b)| same(&head[h], &rows[b]));
+    if e.header_rows.unwrap_or(0) > 0 && !repeats {
+        return;
+    }
+    // A part opening as the table opened but under title rows of its own
+    // is a new table set the same way: a statement after a statement, each
+    // under the company's name and its own title.
+    let titles = |v: &[Vec<String>]| -> Vec<Vec<String>> {
+        v.iter()
+            .filter(|r| r.iter().filter(|t| !t.trim().is_empty()).count() == 1)
+            .cloned()
+            .collect()
+    };
+    let (theirs, mine) = (titles(&opening), titles(lead));
+    if restates
+        && (theirs.len() != mine.len() || !theirs.iter().zip(&mine).all(|(a, b)| same(a, b)))
+    {
+        return;
+    }
+    let header = if repeats { bl[hl.len() - 1] + 1 } else { 0 };
+    e.header_rows = Some(header);
+    if let Some(subs) = e.sub_headers.take() {
+        let subs: Vec<usize> = subs.into_iter().filter(|&r| r >= header).collect();
+        e.sub_headers = (!subs.is_empty()).then_some(subs);
+    }
+    let at = out.elements.len();
+    if !head.is_empty() {
+        out.heads.insert(at, head);
+    }
+    if !opening.is_empty() {
+        out.openings.insert(at, opening);
+    }
+    out.links.push((p, at));
 }
 
 #[cfg(test)]
@@ -1845,6 +2169,147 @@ mod tests {
         );
         assert_eq!(kinds(&els), ["doco:Table"]);
         assert_eq!(els[0].cells.as_ref().unwrap()[0][0], "cell");
+    }
+
+    /// A filing's table of subsidiaries, set as pages: each page's part a
+    /// table of its own, sized by an empty first row, its folio under it
+    /// and a page break after.
+    fn paged(parts: &[&str], between: &str) -> String {
+        let sizing = r#"<tr><td style="width:60%"></td><td style="width:40%"></td></tr>"#;
+        parts
+            .iter()
+            .enumerate()
+            .map(|(i, rows)| {
+                let brk = if i + 1 < parts.len() {
+                    format!(
+                        r#"<p>{}</p><hr style="page-break-after:always">{between}"#,
+                        i + 1
+                    )
+                } else {
+                    String::new()
+                };
+                format!("<table>{sizing}{rows}</table>{brk}")
+            })
+            .collect()
+    }
+
+    fn tables(els: &[Element]) -> Vec<&Element> {
+        els.iter().filter(|e| e.kind == "doco:Table").collect()
+    }
+
+    #[test]
+    fn a_table_a_page_break_cut_carries_on() {
+        let head = "<tr><th>Name</th><th>Jurisdiction</th></tr>";
+        let rows = |a: &str, b: &str| {
+            format!("<tr><td>{a} LLC</td><td>Delaware</td></tr><tr><td>{b} Ltd</td><td>Ireland</td></tr>")
+        };
+        // The second part, no header of its own, after the folio and break.
+        let html = paged(
+            &[
+                &format!("{head}{}", rows("Acme", "Acme")),
+                &rows("Beta", "Beta"),
+            ],
+            "",
+        );
+        let els = parse(&html);
+        let t = tables(&els);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[1].continues.as_deref(), Some(t[0].id.as_str()));
+        assert_eq!(t[1].header_rows, Some(0));
+        // A part setting the header over again keeps it as its header, a
+        // running head at the next page's top between them.
+        let html = paged(
+            &[
+                &format!("{head}{}", rows("Acme", "Acme")),
+                &format!("{head}{}", rows("Beta", "Beta")),
+            ],
+            "<p>Exhibit 21.1</p>",
+        );
+        let els = parse(&format!("<p>Exhibit 21.1</p>{html}"));
+        let t = tables(&els);
+        assert_eq!(t[1].continues.as_deref(), Some(t[0].id.as_str()));
+        assert_eq!(t[1].header_rows, Some(2));
+    }
+
+    #[test]
+    fn tables_of_one_layout_stay_apart_without_a_break_or_under_another_header() {
+        let rows = "<tr><td>Revenue</td><td>$732</td></tr><tr><td>Net income</td><td>$41</td></tr>";
+        let head = |h: &str| format!("<tr><th>Item</th><th>{h}</th></tr>");
+        // No page break between them: two tables.
+        let one = format!(
+            r#"<table><tr><td style="width:60%"></td><td style="width:40%"></td></tr>{}{rows}</table>"#,
+            head("2026")
+        );
+        let els = parse(&format!("{one}{one}"));
+        assert!(tables(&els).iter().all(|t| t.continues.is_none()));
+        // Across a break, the same widths under another header: another
+        // table, the year before's.
+        let html = paged(
+            &[
+                &format!("{}{rows}", head("2026")),
+                &format!("{}{rows}", head("2025")),
+            ],
+            "",
+        );
+        assert!(tables(&parse(&html)).iter().all(|t| t.continues.is_none()));
+        // Text of the page's own between the parts: no carry-on either.
+        let html = paged(
+            &[
+                &format!("{}{rows}", head("2026")),
+                "<tr><td>Assets</td><td>$90</td></tr>",
+            ],
+            "<p>The table below sets out the company's assets at the year's end.</p>",
+        );
+        assert!(tables(&parse(&html)).iter().all(|t| t.continues.is_none()));
+        // Another column layout: no carry-on.
+        let html = paged(&[&format!("{}{rows}", head("2026")), rows], "")
+            .replacen("width:60%", "width:70%", 3)
+            .replacen("width:70%", "width:60%", 1);
+        assert!(tables(&parse(&html)).iter().all(|t| t.continues.is_none()));
+        // A statement after a statement, each under the company's name and
+        // a title of its own, set bold: the second opens as the first did,
+        // then sets its own title.
+        let statement = |title: &str| {
+            format!("<tr><td><b>Acme Inc.</b></td><td></td></tr><tr><td><b>{title}</b></td><td></td></tr><tr><th>Item</th><th>2026</th></tr>{rows}")
+        };
+        let html = paged(
+            &[
+                &statement("Balance Sheets"),
+                &statement("Statements of Cash Flows"),
+            ],
+            "",
+        );
+        assert!(tables(&parse(&html)).iter().all(|t| t.continues.is_none()));
+    }
+
+    #[test]
+    fn a_drawings_text_reads_back_a_fragment_a_block() {
+        // The XHTML writer's figure: a block for each fragment, read back as
+        // one fragment of the drawing it names.
+        let els = parse(
+            "<p>Our partners:</p>\
+             <figure data-figure=\"figure-2-0\">\
+             <div class=\"doco-figure-text\">STATE AND FEDERAL AGENCIES</div>\
+             <div class=\"doco-figure-text\">UNIVERSITIES</div>\
+             <div class=\"doco-figure-text\"></div>\
+             </figure>",
+        );
+        assert_eq!(
+            kinds(&els),
+            ["doco:Paragraph", "doco:Figure", "doco:Figure"]
+        );
+        assert_eq!(
+            texts(&els)[1..],
+            ["STATE AND FEDERAL AGENCIES", "UNIVERSITIES"]
+        );
+        assert!(els[1..]
+            .iter()
+            .all(|e| e.figure.as_deref() == Some("figure-2-0")));
+        // A page's own figure, its picture captioned, reads as before.
+        let els = parse(
+            "<figure><img src=\"a.png\"><figcaption>Figure 1. Survey vessels</figcaption></figure>",
+        );
+        assert_eq!(kinds(&els), ["doco:Paragraph"]);
     }
 
     #[test]
