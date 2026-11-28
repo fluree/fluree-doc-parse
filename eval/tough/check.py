@@ -274,6 +274,27 @@ def run_check(check, reading):
                 found.append(sorted({c["doc:columnIndex"] for c in cells}))
         ok = any(idx == list(range(want["count"])) for idx in found)
         return ok, None if ok else f"column indexes {found}"
+    if "continues" in check:
+        # The table holding a cell of value `cell` carries on, through
+        # `doc:continues`, the table holding a cell of value `from`: a table
+        # a page break split, read as one.
+        want = check["continues"]
+
+        def holds(t, value):
+            return any(
+                norm(reading.nodes.get(c, {}).get("doc:cellValue", "")) == norm(value)
+                for c in t.get("po:contains", [])
+            )
+
+        tables = [n for n in reading.nodes.values() if n.get("@type") == "doco:Table"]
+        for t in (t for t in tables if holds(t, want["cell"])):
+            seen, part = set(), t
+            while part.get("doc:continues") and part.get("@id") not in seen:
+                seen.add(part.get("@id"))
+                part = reading.nodes.get(part["doc:continues"], {})
+                if holds(part, want["from"]):
+                    return True, None
+        return False, "not carried on from that table"
     if "no_table" in check:
         # No table on this page (its place in the file, from 1): a picture
         # whose drawing is no table's ruling, a diagram's boxes or a

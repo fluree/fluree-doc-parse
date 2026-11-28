@@ -606,6 +606,7 @@ fn group_label(rows: &[Vec<String>], r: usize) -> bool {
 
 /// A table's frame on its page: where its columns are drawn, and whether
 /// its first row is set apart the way a header is.
+#[derive(Clone)]
 struct TableFrame {
     page: usize,
     bbox: crate::geom::BBox,
@@ -867,6 +868,115 @@ fn is_splice_anchor(e: &Element) -> bool {
     matches!(e.evidence, "route" | "table-confidence" | "table-missing")
 }
 
+/// How far apart, in points, two copies of a page's running line may stand
+/// and still be its template's: a template sets them to the point.
+const RUNNING_PLACE: f64 = 1.5;
+
+/// Which elements are the page's running head over a table's part carried
+/// on from the page before: blocks between the two parts, on the second
+/// part's page and over it, each set word for word at the same place on
+/// another page.
+///
+/// The reading of furniture finds a running head by its repeating on most
+/// pages, or, in a short document, on every page or every page but one. A
+/// document whose head is left off some pages (a schedule's page of rows
+/// carried on with no head, between two pages with one) falls short of
+/// both, and its head was read as text between the parts, which ended the
+/// link. Text that repeats elsewhere does not land at the same place to the
+/// point, as a template's does.
+fn running_over_parts(elements: &[Element]) -> Vec<bool> {
+    let mut running = vec![false; elements.len()];
+    let content: Vec<usize> = (0..elements.len())
+        .filter(|&i| !is_splice_anchor(&elements[i]))
+        .collect();
+    let norm = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+    let at_place = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
+        (a.x0 - b.x0).abs() <= RUNNING_PLACE
+            && (a.x1 - b.x1).abs() <= RUNNING_PLACE
+            && (a.y0 - b.y0).abs() <= RUNNING_PLACE
+            && (a.y1 - b.y1).abs() <= RUNNING_PLACE
+    };
+    let repeated = |i: usize| {
+        let e = &elements[i];
+        let (Some(b), t) = (e.bbox, norm(&e.text)) else {
+            return false;
+        };
+        !t.is_empty()
+            && elements.iter().any(|o| {
+                o.page != e.page
+                    && o.kind != "doco:Table"
+                    && o.bbox.is_some_and(|ob| at_place(&ob, &b))
+                    && norm(&o.text) == t
+            })
+    };
+    let table = |i: usize| elements[i].kind == "doco:Table";
+    for (k, &j) in content.iter().enumerate() {
+        if !table(j) {
+            continue;
+        }
+        // The next table after this one, and the blocks between them.
+        let Some(m) = content[k + 1..].iter().position(|&n| table(n)) else {
+            continue;
+        };
+        let between = &content[k + 1..k + 1 + m];
+        let next = content[k + 1 + m];
+        let (a, b) = (&elements[j], &elements[next]);
+        if between.is_empty() || b.page != a.page + 1 {
+            continue;
+        }
+        let over = |n: usize| {
+            elements[n].page == b.page
+                && elements[n]
+                    .bbox
+                    .zip(b.bbox)
+                    .is_some_and(|(r, t)| r.y1 <= t.y0 + RUNNING_PLACE)
+        };
+        // A page that sets its head as another page does, over a part
+        // opening as the part before it opened, on the label its first row
+        // opens with (`Form Factor` over each page's list of drives, a
+        // form's `1 a Form 8949 …` box by box), prints its own copy of the
+        // block, and the head is the copy's. Only a header repeated whole
+        // opens the rest of the table.
+        fn words(t: &String) -> Vec<&str> {
+            t.split_whitespace().collect()
+        }
+        let opens_alike = match (a.cells.as_deref(), b.cells.as_deref()) {
+            (Some([x, ..]), Some([y, ..])) => x.first().zip(y.first()).is_some_and(|(p, q)| {
+                !p.trim().is_empty() && !table::is_numeric_cell(p.trim()) && words(p) == words(q)
+            }),
+            _ => false,
+        };
+        let n = a.header_rows.unwrap_or(0);
+        let head_again = n > 0
+            && a.cells
+                .as_ref()
+                .zip(b.cells.as_ref())
+                .is_some_and(|(x, y)| {
+                    x.len() >= n
+                        && y.len() > n
+                        && x[..n]
+                            .iter()
+                            .zip(&y[..n])
+                            .all(|(p, q)| p.iter().map(words).eq(q.iter().map(words)))
+                });
+        // A part with a header of its own that is not that one again (a
+        // title band set into the first page's grid, read out as text over
+        // the next) is a table set on the page in its own right: the link
+        // over a page's head is for a part carried on as rows alone, or
+        // under its header repeated whole.
+        let headless = b.header_rows.unwrap_or(0) == 0;
+        if (opens_alike || !headless) && !head_again {
+            continue;
+        }
+        if between.iter().all(|&n| over(n) && repeated(n)) {
+            for &n in between {
+                running[n] = true;
+            }
+        }
+    }
+    running
+}
+
 /// Link a table the page break split to its part on the page before.
 ///
 /// A table that fills the foot of one page and goes on at the head of the
@@ -892,7 +1002,11 @@ fn is_splice_anchor(e: &Element) -> bool {
 /// table's anchor goes in just before the table, so with anchors on the
 /// second part follows its own anchor, not the first part, and comparing
 /// neighbours alone lost the link on every run that minted anchors.
+///
+/// Nor is the page's running head over the second part
+/// ([`running_over_parts`]).
 fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
+    let running = running_over_parts(elements);
     let frame = |e: &Element| {
         frames
             .iter()
@@ -912,7 +1026,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     let mut table_heads: std::collections::HashMap<String, Vec<Vec<String>>> =
         std::collections::HashMap::new();
     for i in 0..elements.len() {
-        if is_splice_anchor(&elements[i]) {
+        if is_splice_anchor(&elements[i]) || running[i] {
             continue;
         }
         let Some(p) = last.replace(i) else {
@@ -929,7 +1043,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             }
             continue;
         }
-        let (prev, next) = (&before[p], &mut after[0]);
+        let (prev, next) = (&mut before[p], &mut after[0]);
         if prev.kind != "doco:Table" || next.kind != "doco:Table" || next.page != prev.page + 1 {
             continue;
         }
@@ -953,7 +1067,32 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         if prev_cells.len() == rows.len() && prev_cells.iter().zip(rows).all(|(a, b)| same(a, b)) {
             continue;
         }
-        let own = prev.header_rows.unwrap_or(0).min(prev_cells.len());
+        // A part with no header of its own that opens on a section's band
+        // (`Base Period 2: …` across the columns) carries on a table set in
+        // bands: one whose body holds them, or whose header ends on one. The
+        // band heads its section's rows and names no column.
+        //
+        // A header ending on a band set as this one is, its label alone in
+        // the first cell, ended on the table's first band (`Base Period 1:
+        // …` under `CLIN | Funding Amount | Date`). The header's reading
+        // tells a first band from a second header row by a band further
+        // down ([`table::Grid::header_rows`]), and the break put that one
+        // on this page.
+        let lone = |row: &[String]| {
+            row.first().is_some_and(|t| !t.trim().is_empty())
+                && row.iter().skip(1).all(|t| t.trim().is_empty())
+        };
+        let opens_band = next.sub_headers.as_ref().is_some_and(|s| s.contains(&0));
+        let mut own = prev.header_rows.unwrap_or(0).min(prev_cells.len());
+        let band_head = own >= 2 && lone(&prev_cells[own - 1]) && lone(&rows[0]);
+        let in_bands = opens_band
+            && next.header_rows == Some(0)
+            && rows.len() > 1
+            && (band_head || prev.sub_headers.as_ref().is_some_and(|s| !s.is_empty()));
+        let first_band = in_bands && band_head;
+        if first_band {
+            own -= 1;
+        }
         let head: Vec<Vec<String>> = if own > 0 {
             prev_cells[..own].to_vec()
         } else {
@@ -1000,7 +1139,6 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         // header (`Monotherapy` across the columns under `Indication |
         // Recommended Dosage | Duration`) carries on under that header: the
         // band heads its section's rows and names no column.
-        let opens_band = next.sub_headers.as_ref().is_some_and(|s| s.contains(&0));
         let under_head = prev.header_only() && opens_band;
         let finishes_header = prev.header_only()
             && !opens_band
@@ -1009,7 +1147,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             && rows[0]
                 .iter()
                 .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()));
-        if b.styled && !repeats && !finishes_header && !under_head {
+        if b.styled && !repeats && !finishes_header && !under_head && !in_bands {
             continue;
         }
         let heads: Vec<(usize, usize, String, String)> = runs_on
@@ -1017,6 +1155,14 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             .filter(|_| repeats_run_on)
             .map(|(r, c, rest)| (r, c, head[r][c].clone(), rest))
             .collect();
+        if first_band {
+            prev.header_rows = Some(own);
+            let mut subs = prev.sub_headers.take().unwrap_or_default();
+            subs.push(own);
+            subs.sort_unstable();
+            subs.dedup();
+            prev.sub_headers = Some(subs);
+        }
         next.continues = Some(prev.id.clone());
         if let Some(cells) = next.cells.as_mut() {
             let cols = cells.first().map_or(0, Vec::len);
@@ -11364,6 +11510,90 @@ mod tests {
     }
 
     #[test]
+    fn a_parts_page_head_set_as_on_another_page_is_not_between_the_parts() {
+        // A schedule's header and rows at one page's foot, its rows going on
+        // at the next page's head, under the page's running head: the
+        // document's two lines set as on the first page, which the reading
+        // of furniture missed.
+        let on = |e: Element, page: usize| Element { page, ..e };
+        let head = |page: usize, dx: f64, text: &str| {
+            [
+                on(
+                    element(
+                        "Task Order 0001 Attachment J-8",
+                        381.0 + dx,
+                        20.0,
+                        540.0 + dx,
+                        40.0,
+                        false,
+                    ),
+                    page,
+                ),
+                on(
+                    element(text, 205.0 + dx, 45.0, 407.0 + dx, 55.0, false),
+                    page,
+                ),
+            ]
+        };
+        let rows: &[&[&str]] = &[
+            &["Category", "Hours", "Rate"],
+            &["Analyst I", "940", "$48.03"],
+        ];
+        let parts = || {
+            let (a, fa) = part("elem-00001", 0, rows, 1, &XS, true, true);
+            let (b, fb) = part("elem-00002", 1, &rows[1..], 0, &XS, false, false);
+            (a, b, [fa, fb])
+        };
+        let linked = |second_head: [Element; 2]| {
+            let (a, b, frames) = parts();
+            let mut els: Vec<Element> = head(0, 0.0, "PRICING SCHEDULE").into();
+            els.push(a);
+            els.extend(second_head);
+            els.push(b);
+            link_continued_tables(&mut els, &frames);
+            els[5].continues.clone()
+        };
+        assert_eq!(
+            linked(head(1, 0.0, "PRICING SCHEDULE")).as_deref(),
+            Some("elem-00001")
+        );
+        // Set somewhere else, the same words are the page's own text.
+        assert_eq!(linked(head(1, 20.0, "PRICING SCHEDULE")), None);
+        // Words of the page's own over the second table are between them.
+        assert_eq!(linked(head(1, 0.0, "RATES FOR OPTION YEAR 1")), None);
+
+        // Under the head, a part that repeats the header whole carries on.
+        let with_second = |second: &[&[&str]], header: usize| {
+            let (a, fa) = part("elem-00001", 0, rows, 1, &XS, true, true);
+            let (b, fb) = part("elem-00002", 1, second, header, &XS, false, false);
+            let mut els: Vec<Element> = head(0, 0.0, "PRICING SCHEDULE").into();
+            els.push(a);
+            els.extend(head(1, 0.0, "PRICING SCHEDULE"));
+            els.push(b);
+            link_continued_tables(&mut els, &[fa, fb]);
+            els[5].continues.clone()
+        };
+        let again: &[&[&str]] = &[
+            &["Category", "Hours", "Rate"],
+            &["Analyst II", "2,820", "$51.99"],
+        ];
+        assert_eq!(with_second(again, 1).as_deref(), Some("elem-00001"));
+        // One with a header of its own is a table set on its page.
+        let own: &[&[&str]] = &[
+            &["Labor", "Hours", "Rate"],
+            &["Analyst II", "2,820", "$51.99"],
+        ];
+        assert_eq!(with_second(own, 1), None);
+        // So is one opening on the label the first part opens with: the
+        // page's copy of a block printed page after page.
+        let copy: &[&[&str]] = &[
+            &["Category", "Days", "Price"],
+            &["Analyst II", "2,820", "$51.99"],
+        ];
+        assert_eq!(with_second(copy, 0), None);
+    }
+
+    #[test]
     fn a_band_under_a_head_stranded_by_the_break_opens_its_first_section() {
         // The head alone at one page's foot; the next page opens on the
         // first section's band, bold across the columns.
@@ -11396,6 +11626,68 @@ mod tests {
             els[1].header_rows,
             Some(0),
             "the band names no column: the head is the first part's"
+        );
+    }
+
+    #[test]
+    fn a_part_opening_on_a_band_carries_on_a_table_set_in_bands() {
+        // A funding table: its header, its first period's band and that
+        // period's rows at one page's foot. The next page opens on the next
+        // period's band, shaded as the first is, and names no column.
+        let foot: &[&[&str]] = &[
+            &["CLIN", "Funding Amount", "Estimated Date"],
+            &["Period 1: May 1 to April 30", "", ""],
+            &["0001 – Storage", "$1,000.00", "05/01/2024"],
+            &["0002 – Support", "TBD", "TBD"],
+        ];
+        let next: &[&[&str]] = &[
+            &["Period 2: May 1 to April 30", "", ""],
+            &["0003 – Storage", "TBD", "TBD"],
+        ];
+        let (a, fa) = part("elem-00001", 0, foot, 2, &XS, true, true);
+        let (mut b, fb) = part("elem-00002", 1, next, 0, &XS, true, true);
+        b.sub_headers = Some(vec![0]);
+        let mut els = vec![a.clone(), b.clone()];
+        link_continued_tables(&mut els, &[fa.clone(), fb.clone()]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[1].header_rows, Some(0));
+        assert_eq!(
+            (els[0].header_rows, els[0].sub_headers.clone()),
+            (Some(1), Some(vec![1])),
+            "the first period's band is a band, as the next is, not the header's second row"
+        );
+
+        // The first part's body holds the bands, its header one row deep.
+        let (mut a2, fa2) = part("elem-00001", 0, foot, 1, &XS, true, true);
+        a2.sub_headers = Some(vec![1]);
+        let mut els = vec![a2, b.clone()];
+        link_continued_tables(&mut els, &[fa2, fb.clone()]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[0].sub_headers, Some(vec![1]));
+
+        // A table set in no bands is not carried on by a part opening on
+        // one, styled as a new table's head is: that part is a table of its
+        // own, under a band of its own.
+        let plain: &[&[&str]] = &[
+            &["CLIN", "Funding Amount", "Estimated Date"],
+            &["0001 – Storage", "$1,000.00", "05/01/2024"],
+            &["0002 – Support", "TBD", "TBD"],
+        ];
+        let (c, fc) = part("elem-00001", 0, plain, 1, &XS, true, true);
+        let mut els = vec![c, b.clone()];
+        link_continued_tables(&mut els, &[fc, fb.clone()]);
+        assert_eq!(els[1].continues, None);
+
+        // Nor is a part with a header of its own under its band.
+        let mut headed = b.clone();
+        headed.header_rows = Some(1);
+        let mut els = vec![a.clone(), headed];
+        link_continued_tables(&mut els, &[fa.clone(), fb]);
+        assert_eq!(els[1].continues, None);
+        assert_eq!(
+            els[0].header_rows,
+            Some(2),
+            "unlinked, the first part's header is as read"
         );
     }
 

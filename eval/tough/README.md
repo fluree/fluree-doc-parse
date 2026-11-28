@@ -107,6 +107,7 @@ The checks a case adds:
 | `no_section` | no section is headed by a title beginning with this text |
 | `under` | an element with exactly this string (`text`), or a table cell with this value, falls in the section headed by `section` |
 | `columns` | the table holding a cell of value `with` has exactly `count` columns, its cells' `doc:columnIndex` running 0 to `count` − 1 |
+| `continues` | the table holding a cell of value `cell` carries on, through `doc:continues`, the table holding a cell of value `from` |
 | `no_table` | no table stands on the `page` (its place in the file, from 1) |
 | `list` | one list holds all these items (`holds`), by their strings |
 | `nested` | a list nested in an item whose string begins with `under` holds all these items (`holds`), by their strings |
