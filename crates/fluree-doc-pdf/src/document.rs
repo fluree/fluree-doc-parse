@@ -965,7 +965,17 @@ fn running_over_parts(elements: &[Element]) -> Vec<bool> {
         // over a page's head is for a part carried on as rows alone, or
         // under its header repeated whole.
         let headless = b.header_rows.unwrap_or(0) == 0;
-        if (opens_alike || !headless) && !head_again {
+        // Or it opens on the rest of the names the break cut in a head
+        // that is all the part before it holds.
+        let cut = a.header_only()
+            && n > 0
+            && a.cells
+                .as_ref()
+                .zip(b.cells.as_ref())
+                .is_some_and(|(x, y)| {
+                    x.len() >= n && !y.is_empty() && rest_of_names(&x[n - 1], &y[0])
+                });
+        if (opens_alike || !headless) && !head_again && !cut {
             continue;
         }
         if between.iter().all(|&n| over(n) && repeated(n)) {
@@ -1174,18 +1184,11 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         // (`Estimated Completion Date (for` over `information only)`), each
         // going on in lowercase or closing a bracket the name leaves open.
         // The row is neither a header row nor data: it is the head's.
-        let filled = |r: &[String]| r.iter().filter(|t| !t.trim().is_empty()).count();
         let cut_head = prev.header_only()
             && b.bold
             && own > 0
             && rows.len() > 1
-            && prev_cells[own - 1].len() == rows[0].len()
-            && filled(&rows[0]) > 0
-            && filled(&rows[0]) < filled(&prev_cells[own - 1])
-            && rows[0]
-                .iter()
-                .zip(&prev_cells[own - 1])
-                .all(|(rest, name)| rest.trim().is_empty() || finishes_name(name, rest));
+            && rest_of_names(&prev_cells[own - 1], &rows[0]);
         let rest_of_head: Option<Vec<String>> = cut_head.then(|| rows[0].clone());
         let finishes_header = prev.header_only()
             && !cut_head
@@ -1266,6 +1269,20 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             table_heads.insert(next.id.clone(), head);
         }
     }
+}
+
+/// Row `first`, opening a part, holds the rest of the names in `names`,
+/// the last row of the head before it, that the page break cut: some of
+/// them, each finishing the name over it ([`finishes_name`]).
+fn rest_of_names(names: &[String], first: &[String]) -> bool {
+    let filled = |r: &[String]| r.iter().filter(|t| !t.trim().is_empty()).count();
+    names.len() == first.len()
+        && filled(first) > 0
+        && filled(first) < filled(names)
+        && first
+            .iter()
+            .zip(names)
+            .all(|(rest, name)| rest.trim().is_empty() || finishes_name(name, rest))
 }
 
 /// `rest` finishes the column's name `name` the page break cut: it goes on

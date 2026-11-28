@@ -3,7 +3,7 @@
     "file": "doe-orrcc-subtask-5-1.pdf",
     "url": "https://www.energy.gov/documents/subtask-no-5-1-ornl-operations-and-cleanup",
     "sha256": "8768dec7ae490b27188ab66089f9ad52de552328ebcd70c09eb1a9f85105798d",
-    "about": "A DOE task order subtask (76 pages, Word). On pages 41–44 a milestone table of three columns runs over four landscape pages under the pages' running head; the date column's edge stands 12 pt further right on pages 42–43's rows than on pages 41 and 44's."
+    "about": "A DOE task order subtask (76 pages, Word). On pages 41–44 a milestone table of three columns runs over four landscape pages under the pages' running head. Page 41's foot holds its two shaded title bars and its header row, the date column's name cut by the break (`Estimated Completion Date (for` there, `information only)` at the top of page 42). The date column's edge stands 12 pt further right on pages 42–43's rows than on pages 41 and 44's."
   },
   "checks": [
     {
@@ -13,6 +13,22 @@
       "continues": {
         "cell": "Complete the Documented Safety Analysis Revision/Technical Safety Requirements Revision 1 Implementation",
         "from": "ORNL 3517 Complex Project Complete (in accordance with Section C requirements)"
+      }
+    },
+    {
+      "id": "title-bars-are-no-header",
+      "found": "2026-11-27",
+      "issue": "The title bars over the head at page 41's foot were read as the table's two header rows, their words dealt out among the columns.",
+      "no_column_header": "Performance Incentive"
+    },
+    {
+      "id": "cut-name-joined",
+      "found": "2026-11-27",
+      "issue": "Page 42's part opened on `information only)` as its header and was a table of its own: its dates were named by that fragment alone. The full name reaches page 42's rows only through the link to the head at page 41's foot.",
+      "cell": {
+        "value": "3/26/2025",
+        "column": "Estimated Completion Date (for information only)",
+        "row": "ORNL 3026 Phased Construction Completion Report FFA Milestone Complete"
       }
     }
   ]
