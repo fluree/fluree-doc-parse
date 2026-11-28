@@ -6233,6 +6233,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .filter_map(|mut g| {
                     let drawn_to = g.bbox.y1;
                     g.trim_to_content_ruled(&p.glyphs, &p.rules);
+                    // One ruled row holding entries one under another, under
+                    // ruled columns: a row each (`Grid::entry_cuts`).
+                    g.split_entry_row(&p.glyphs);
                     // A head under its title bars at the page's foot: the
                     // bars are text over the table, the head its next
                     // page's.

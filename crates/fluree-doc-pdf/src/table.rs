@@ -2395,6 +2395,89 @@ impl Grid {
             .collect()
     }
 
+    /// Where the band `y0..y1` of the table holds entries set one under
+    /// another, each opening on a line of a column of figures, its text
+    /// wrapped onto the lines below in the columns beside: the cuts above
+    /// each entry after the first.
+    ///
+    /// An invoice's items under ruled columns and no rule between them: a
+    /// date, an item code, a description run onto a second line and a
+    /// `Daily Total` line under it, a quantity, a unit, a rate and an
+    /// amount, one entry under the next. Read as one row, every cell ran
+    /// its entries together. The column of figures is the evidence: two
+    /// lines or more, each a figure whole, none wrapped. Two other columns
+    /// set a line beside each of its lines, and every line of every column
+    /// stands beside one of them or goes on from the line over it in its
+    /// column, a line's pitch under it, with no entry opening between. At
+    /// least one line wraps so: entries of one line each are values stacked
+    /// one per line ([`Grid::stacked_cuts`]).
+    fn entry_cuts(&self, glyphs: &[crate::glyph::Glyph], y0: f64, y1: f64) -> Option<Vec<f64>> {
+        let cols = self.cols();
+        let lines: Vec<Vec<(f64, String, f64)>> = (0..cols)
+            .map(|c| Self::lines_in(glyphs, (self.xs[c], self.xs[c + 1], y0, y1)))
+            .collect();
+        let figure = |t: &str| is_numeric_cell(t.trim());
+        let key =
+            (0..cols).find(|&c| lines[c].len() >= 2 && lines[c].iter().all(|l| figure(&l.1)))?;
+        let bases: Vec<f64> = lines[key].iter().map(|l| l.0).collect();
+        let base_of =
+            |l: &(f64, String, f64)| bases.iter().position(|b| (l.0 - b).abs() <= 0.5 * l.2);
+        let beside_each = (0..cols)
+            .filter(|&c| c != key)
+            .filter(|&c| {
+                lines[c].len() == bases.len() && lines[c].iter().all(|l| base_of(l).is_some())
+            })
+            .count();
+        if beside_each < 2 {
+            return None;
+        }
+        let mut wrapped = false;
+        for col in &lines {
+            for (i, l) in col.iter().enumerate() {
+                if base_of(l).is_some() {
+                    continue;
+                }
+                // A wrapped line: under its column's line before it, a
+                // line's pitch on, and no entry opening between the two.
+                let Some(prev) = i.checked_sub(1).map(|j| &col[j]) else {
+                    return None;
+                };
+                let pitch = l.0 - prev.0;
+                if pitch <= 0.0 || pitch > 1.6 * l.2 {
+                    return None;
+                }
+                if bases
+                    .iter()
+                    .any(|&b| b > prev.0 + 0.5 * l.2 && b < l.0 - 0.5 * l.2)
+                {
+                    return None;
+                }
+                wrapped = true;
+            }
+        }
+        if !wrapped {
+            return None;
+        }
+        // Each cut lies between the centres of the last line over the entry,
+        // in any column, and the entry's own line: a glyph belongs to the
+        // row its centre falls in.
+        let all: Vec<&(f64, String, f64)> = lines.iter().flatten().collect();
+        let centre = |l: &(f64, String, f64)| l.0 - 0.35 * l.2;
+        let cuts = lines[key]
+            .iter()
+            .skip(1)
+            .map(|opening| {
+                let over = all
+                    .iter()
+                    .filter(|l| l.0 < opening.0 - 0.5 * opening.2)
+                    .map(|l| centre(l))
+                    .fold(f64::MIN, f64::max);
+                (over + centre(opening)) / 2.0
+            })
+            .collect();
+        Some(cuts)
+    }
+
     /// Where the band `y0..y1` of the table holds values stacked one per
     /// line, a line of each beside a line of the others: the cuts between
     /// those lines, and the columns stacked so, every line of theirs on one
@@ -2414,6 +2497,11 @@ impl Grid {
         y0: f64,
         y1: f64,
     ) -> Option<(Vec<f64>, Vec<usize>)> {
+        // Entries with wrapped lines are parted where each opens, and none
+        // of their columns is read whole across them.
+        if self.entry_cuts(glyphs, y0, y1).is_some() {
+            return None;
+        }
         let cols = self.cols();
         let lines: Vec<Vec<(f64, String, f64)>> = (0..cols)
             .map(|c| Self::lines_in(glyphs, (self.xs[c], self.xs[c + 1], y0, y1)))
@@ -2479,8 +2567,9 @@ impl Grid {
         Some((cuts, stacked))
     }
 
-    /// Part each ruled row holding values stacked one per line
-    /// ([`Grid::stacked_cuts`]) into one row per line. The cells beside them
+    /// Part each ruled row holding entries with wrapped lines
+    /// ([`Grid::entry_cuts`]) into one row per entry, and each holding values
+    /// stacked one per line ([`Grid::stacked_cuts`]) into one row per line. The cells beside them
     /// that do not stack so are read whole across the new rows
     /// ([`Grid::stacked_merges`]).
     ///
@@ -2491,7 +2580,11 @@ impl Grid {
             return added;
         }
         for r in (0..self.rows()).rev() {
-            if let Some((cuts, _)) = self.stacked_cuts(glyphs, self.ys[r], self.ys[r + 1]) {
+            let (y0, y1) = (self.ys[r], self.ys[r + 1]);
+            let cuts = self
+                .entry_cuts(glyphs, y0, y1)
+                .or_else(|| self.stacked_cuts(glyphs, y0, y1).map(|(cuts, _)| cuts));
+            if let Some(cuts) = cuts {
                 added.push((r, cuts.len()));
                 for (i, y) in cuts.into_iter().enumerate() {
                     self.ys.insert(r + 1 + i, y);
@@ -2500,6 +2593,21 @@ impl Grid {
         }
         added.reverse();
         added
+    }
+
+    /// Part a grid of one ruled row into its entries
+    /// ([`Grid::entry_cuts`]); returns whether it parted.
+    pub fn split_entry_row(&mut self, glyphs: &[crate::glyph::Glyph]) -> bool {
+        if self.layout.is_some() || self.rows() != 1 || self.cols() < 2 {
+            return false;
+        }
+        let Some(cuts) = self.entry_cuts(glyphs, self.ys[0], self.ys[1]) else {
+            return false;
+        };
+        for (i, y) in cuts.into_iter().enumerate() {
+            self.ys.insert(1 + i, y);
+        }
+        true
     }
 
     /// The cells of rows [`Grid::split_stacked_rows`] parted that do not
