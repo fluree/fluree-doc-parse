@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "plos-one-pmc6203400.pdf",
+    "url": "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0206576&type=printable",
+    "sha256": "c4eb6cb0ed545b85e05bc6599bb17b7b9457499c4d1633f92443df52033f1290",
+    "about": "PLoS ONE 13(10): e0206576, a research article. Its sections open on their first subsection, the two headings set bold at 12pt one over the other: `Materials and methods` over `Animals`."
+  },
+  "notes": [
+    "2026-11-28 (#634): TeX's Computer Modern fonts embedded under a generic vector, the ASCII names at their codes, are read by TeX's layout for each family (OT1, OML, OMS, OMX)."
+  ],
+  "checks": [
+    {
+      "id": "t2-star",
+      "found": "2026-11-28",
+      "issue": "`T2∗ Map` read `T2� Map`: the symbols font's ∗, code 3, read as nothing.",
+      "text": "T2∗ Map"
+    },
+    {
+      "id": "less-equal",
+      "found": "2026-11-28",
+      "issue": "`scores ≤4` read `scores �4`.",
+      "text": "scores ≤4"
+    }
+  ]
+}
