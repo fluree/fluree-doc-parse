@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "beiersdorf-ag-afs-2024.pdf",
+    "url": "https://beiersdorf.com/~/media/Beiersdorf/investors/financial-publication/2025/annual-report/Beiersdorf-AG-Annual-Financial-Statement-2024.pdf",
+    "sha256": "1dfb04890be45d71d625a7ac058135d89c081bf34e7990cecc8168bcb6cdd030",
+    "about": "Beiersdorf AG annual financial statements 2024 (HGB). The list of shareholdings runs by region over many pages, each page under the header repeated, its region's heading set again with `(continued)` where a region carries on."
+  },
+  "checks": [
+    {
+      "id": "region-carried-on-under-its-continued-heading",
+      "found": "2026-11-27",
+      "issue": "Page 31's part, under `Europe (continued)`, was a table of its own: the heading stood between the parts.",
+      "continues": {
+        "cell": "Alpa-BDF Ltd.",
+        "from": "Beiersdorf CEE Holding GmbH"
+      }
+    }
+  ]
+}
