@@ -1,0 +1,21 @@
+{
+  "document": {
+    "file": "brother-dcp4110dw-basic-users-guide.pdf",
+    "url": "https://download.brother.com/welcome/doc003057/dcp4110dw_uke_busr_lek978004_a.pdf",
+    "sha256": "b978a7578fb7d8e78e460431fd1b7ecebd5978fd6838bfe9f25855748b88306a",
+    "about": "Brother DCP-4110DW Basic User's Guide. Its front matter's pages end on their roman-numeral folios."
+  },
+  "notes": [
+    "2026-11-28: guard. A folio ending on a letter (`v`) over the next page's (`vi`) is no paragraph cut: it is set in no column of text."
+  ],
+  "checks": [
+    {
+      "id": "folio-v",
+      "found": "2026-11-28",
+      "issue": "Page v's folio must not run on into page vi's.",
+      "no_continues": {
+        "from": "v"
+      }
+    }
+  ]
+}

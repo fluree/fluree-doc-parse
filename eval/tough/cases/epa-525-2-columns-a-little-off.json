@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "epa-method-525-2.pdf",
+    "url": "https://www.epa.gov/sites/default/files/2015-06/documents/epa-525.2.pdf",
+    "sha256": "651ff24aef3858d12810383237cba23bedd8b1bc94f0ceb34f5c4d1148b34f9c",
+    "about": "EPA Method 525.2, Rev. 2.0 (60 pages, Acrobat PDFWriter): its analyte tables run on over page breaks, each page setting the header again, the columns' edges a little off from one page's rows to the next's."
+  },
+  "checks": [
+    {
+      "id": "table-1-part-carries-on",
+      "found": "2026-11-27",
+      "issue": "Table 1's part on page 3 was a table of its own: its rows draw the columns' edges a few points off page 2's.",
+      "continues": {
+        "cell": "2921-88-2",
+        "from": "208-96-8"
+      }
+    }
+  ]
+}

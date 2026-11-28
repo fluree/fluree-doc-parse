@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "luna-sbir-doe.pdf",
+    "url": "https://science.osti.gov/sbir/-/media/sbir/pdf/Success-Stories/2024/DOE-SBIR-Success-Story-LUNA-Innovations_Final.pdf",
+    "sha256": "46527260bceb4569565d5c728341af1f6e195960ea9298e014daae00ee26cc0b",
+    "about": "DOE SBIR success story, 3 pages. Page 2's last paragraph runs on to page 3, with the page's foot note set under it."
+  },
+  "notes": [
+    "2026-11-28: the page's foot note was read between the two parts of a broken sentence. The note moves after the paragraph, which reads whole."
+  ],
+  "checks": [
+    {
+      "id": "licensing-revenue",
+      "found": "2026-11-28",
+      "issue": "`Licensing revenue and product` / note 1 / `sales related to these patents` read with the note inside the sentence.",
+      "text": "Licensing revenue and product sales related to these patents has helped Luna"
+    },
+    {
+      "id": "licensing-revenue-linked",
+      "found": "2026-11-28",
+      "issue": "The page 3 part carries on the page 2 part.",
+      "continues": {
+        "paragraph": "sales related to these patents has helped Luna",
+        "from": "Licensing revenue and product"
+      }
+    }
+  ]
+}

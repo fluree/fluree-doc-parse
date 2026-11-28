@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "fomcminutes20260617.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/fomcminutes20260617.pdf",
+    "sha256": "e824cd0233a8dc220ffb38345a7fd4d5e8ae0639505a8e5b5591e4b5d8b513f6",
+    "about": "Minutes of the Federal Open Market Committee, June 2026. A page's text ends on a compound broken at its own hyphen (`near-` / `term`), which the minutes set whole elsewhere."
+  },
+  "notes": [
+    "2026-11-28: a compound's own hyphen at a page break keeps its hyphen, the parts joined with nothing between, as at a line's end."
+  ],
+  "checks": [
+    {
+      "id": "near-term",
+      "found": "2026-11-28",
+      "issue": "`…a forward-looking measure of near-` / `term equity market volatility` read as two paragraphs.",
+      "text": "a forward-looking measure of near-term equity market volatility"
+    }
+  ]
+}

@@ -1551,8 +1551,20 @@ impl Grid {
         // The run's last row is the body's first stripe where the rows from
         // it on are shaded every other row and it holds figures as they do:
         // an exposure table's `ethanol | 1000 | - | 1000` shaded under its
-        // header's own cells, the next row bare, the one after shaded.
-        if run >= 2 && self.stripes_from(fills, run - 1) && figures_row(&rows[run - 1]) {
+        // header's own cells, the next row bare, the one after shaded. Or
+        // where it is shaded as the stripes under it are, and the header
+        // over it in another paint: a schedule's dark header over its
+        // lines striped pale, a title and a code in each.
+        if run >= 2
+            && self.stripes_from(fills, run - 1)
+            && (figures_row(&rows[run - 1]) || {
+                let stripe = self.row_paints(fills, run - 1);
+                let head = self.row_paints(fills, run - 2);
+                !stripe.is_empty()
+                    && stripe == self.row_paints(fills, run + 1)
+                    && !stripe.iter().any(|p| head.contains(p))
+            })
+        {
             run -= 1;
         }
         // The run's last row is the table's first band where it holds a
@@ -2631,6 +2643,31 @@ impl Grid {
             }
         }
         covered >= 0.5 * (self.bbox.x1 - self.bbox.x0)
+    }
+
+    /// The paints of the shading across row `row`'s middle within the
+    /// table, each once, in the order they are drawn.
+    fn row_paints(&self, fills: &[crate::rule::Fill], row: usize) -> Vec<crate::rule::Paint> {
+        let (Some(&y0), Some(&y1)) = (self.ys.get(row), self.ys.get(row + 1)) else {
+            return Vec::new();
+        };
+        let mid = (y0 + y1) / 2.0;
+        let mut paints = Vec::new();
+        for p in fills
+            .iter()
+            .filter(|f| {
+                f.bbox.y0 <= mid
+                    && f.bbox.y1 >= mid
+                    && f.bbox.x1 > self.bbox.x0
+                    && f.bbox.x0 < self.bbox.x1
+            })
+            .filter_map(|f| f.paint)
+        {
+            if !paints.contains(&p) {
+                paints.push(p);
+            }
+        }
+        paints
     }
 
     /// Length of the leading run of filled row bands, stopping at the first
@@ -5608,6 +5645,40 @@ const HEAD_LABEL_WORDS: usize = 20;
 /// Widest gap, in ems of the text, between two glyphs of one label: a word
 /// space and some. Values set each in its own column stand further apart.
 const WORD_SPACE_EMS: f64 = 0.5;
+
+/// Most an edge between two columns may stand off its place on the page
+/// before, as a share of the narrower column beside it, and the columns
+/// still be one table's.
+pub const CONTINUED_EDGE_SHIFT: f64 = 0.25;
+
+/// Whether column edges `b`, a part's over the page break, carry on the
+/// columns `a` of the part before it: as many, the table's outer edges
+/// where they were to within `tolerance`, and each edge between columns
+/// there too, or moved by less than [`CONTINUED_EDGE_SHIFT`] of the
+/// narrower column beside it, on either page.
+///
+/// A word processor sets a table's cells row by row, and the rows one page
+/// holds can draw an edge a little off where the rows on the page before
+/// draw it: a milestone table's date column 12 pt wider on its middle pages
+/// than on its first and last. A table of other columns parts them
+/// elsewhere.
+pub fn columns_carry_on(a: &[f64], b: &[f64], tolerance: f64) -> bool {
+    let n = a.len();
+    if n != b.len() || n < 2 {
+        return false;
+    }
+    if (a[0] - b[0]).abs() > tolerance || (a[n - 1] - b[n - 1]).abs() > tolerance {
+        return false;
+    }
+    (1..n - 1).all(|i| {
+        let off = (a[i] - b[i]).abs();
+        let narrower = (a[i] - a[i - 1])
+            .min(a[i + 1] - a[i])
+            .min(b[i] - b[i - 1])
+            .min(b[i + 1] - b[i]);
+        off <= tolerance || off < CONTINUED_EDGE_SHIFT * narrower
+    })
+}
 
 /// Does the page whose ruled tables are `next` open on a table whose
 /// columns are drawn where `head`'s are, to within `tolerance`:
@@ -12182,6 +12253,54 @@ mod header_tests {
     }
 
     #[test]
+    fn a_first_stripe_painted_as_the_body_is_data() {
+        let rows: Vec<Vec<String>> = [
+            ["CLIN", "Title", "Type", "Estimated Cost"],
+            ["00033-a", "Phase In", "CPAF", "$612,211,866"],
+            ["00033-b", "Site Usage Fees", "CR", "$2,473,358"],
+            [
+                "00033-c",
+                "Pension and Reservation Management",
+                "CR",
+                "$36,048,417",
+            ],
+            ["000341a", "Core Functions", "CPFF", "$251,387,408"],
+            ["000341b", "Site Usage Fees", "CR", "$49,940,727"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert!(!figures_row(&rows[1]));
+        let g = plain_grid(
+            vec![0.0, 100.0, 200.0, 300.0, 400.0],
+            (0..7).map(|k| k as f64 * 20.0).collect(),
+        );
+        let paint = |rgb: [u8; 3], y0: f64| crate::rule::Fill {
+            paint: Some(crate::rule::Paint::Solid([rgb[0], rgb[1], rgb[2], 255])),
+            ..fill(0.0, y0, 400.0, y0 + 20.0)
+        };
+        let (dark, pale) = ([20, 96, 130], [193, 228, 245]);
+        // A dark header, then the body striped pale from its first row.
+        let shaded = [
+            paint(dark, 0.0),
+            paint(pale, 20.0),
+            paint(pale, 60.0),
+            paint(pale, 100.0),
+        ];
+        assert_eq!(g.leading_fill_run(&shaded), 2);
+        assert_eq!(g.header_rows(&rows, &[], &[], &shaded), 1);
+        // The header painted as the stripes are: the run is two header rows,
+        // as it was.
+        let alike = [
+            paint(pale, 0.0),
+            paint(pale, 20.0),
+            paint(pale, 60.0),
+            paint(pale, 100.0),
+        ];
+        assert_eq!(g.header_rows(&rows, &[], &[], &alike), 2);
+    }
+
+    #[test]
     fn a_band_over_a_group_of_columns_is_the_tables_top_row() {
         // A label column and three columns under a band; the rule under
         // the band runs over the three alone, and the label column's rule
@@ -14654,6 +14773,21 @@ mod tests {
         let mut over = row.clone();
         over.extend([mk(80.0, 10.0), mk(80.0, 22.0), mk(80.0, 34.0)]);
         assert!(continued_row(&tail, &ruled(&[50.0, 66.0]), &over, &[], 1).is_none());
+    }
+
+    #[test]
+    fn a_word_tables_edge_a_little_off_on_the_next_page_carries_its_columns_on() {
+        // A milestone table: its date column's right edge 12 pt further
+        // right on the next page's rows, in a column some 85 pt wide.
+        let first = [72.9, 256.9, 339.7, 434.4];
+        let next = [72.5, 256.0, 352.0, 434.6];
+        assert!(columns_carry_on(&first, &next, 3.0));
+        assert!(columns_carry_on(&next, &first, 3.0));
+        // Moved a third of the column, the edge parts other columns.
+        assert!(!columns_carry_on(&first, &[72.5, 256.0, 368.0, 434.6], 3.0));
+        // The table's outer edges stay where they were.
+        assert!(!columns_carry_on(&first, &[72.5, 256.0, 339.7, 446.0], 3.0));
+        assert!(!columns_carry_on(&first, &[72.5, 256.0, 434.6], 3.0));
     }
 
     #[test]
