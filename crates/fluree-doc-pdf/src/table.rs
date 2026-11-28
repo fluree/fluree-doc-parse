@@ -5637,6 +5637,80 @@ pub fn stranded_head(
             .any(|c| is_numeric_cell(c) || c.split_whitespace().count() > HEAD_LABEL_WORDS)
 }
 
+/// Widest gap, in ems of the text, between two glyphs of one run of words:
+/// a word space and some. Labels set each in its own column stand further
+/// apart.
+const RUN_GAP_EMS: f64 = 0.6;
+
+/// How far, in points, a title bar's shading may stand off the table's
+/// edges and its row's.
+const BAR_EDGE: f64 = 3.0;
+
+/// A grid at the page's foot cut to its last row, where every row above
+/// that is a title bar: shaded across the table, edge to edge, under one
+/// run of words set over a cut between the columns (`iii. Performance
+/// Incentive (earned upon completion/no clawback)` over `TO-05 Subtask 1
+/// Milestones` over the header). Its columns' names in the last row, the
+/// table's body on the next page, the bars title it and the row is its
+/// head ([`stranded_head`]). A table whose columns no rule draws shows no
+/// span in its ruling; the shading and the words show the bar.
+pub fn head_under_title_bars(
+    g: &Grid,
+    glyphs: &[crate::glyph::Glyph],
+    fills: &[crate::rule::Fill],
+) -> Option<Grid> {
+    let (rows, cols) = (g.rows(), g.cols());
+    if rows < 2 || cols < 2 || g.layout.is_some() {
+        return None;
+    }
+    let bar = |r: usize| {
+        let (top, foot) = (g.ys[r], g.ys[r + 1]);
+        let shaded = fills.iter().any(|f| {
+            f.bbox.x0 <= g.xs[0] + BAR_EDGE
+                && f.bbox.x1 >= g.xs[cols] - BAR_EDGE
+                && (f.bbox.y0 - top).abs() <= BAR_EDGE
+                && (f.bbox.y1 - foot).abs() <= BAR_EDGE
+        });
+        if !shaded {
+            return false;
+        }
+        let mut boxes: Vec<(BBox, f64)> = glyphs
+            .iter()
+            .filter(|gl| gl.is_horizontal() && !gl.text.trim().is_empty())
+            .filter_map(|gl| gl.bbox.map(|b| (b, gl.font_size as f64)))
+            .filter(|(b, _)| {
+                let y = (b.y0 + b.y1) / 2.0;
+                y > top && y < foot && b.x0 >= g.xs[0] - BAR_EDGE && b.x1 <= g.xs[cols] + BAR_EDGE
+            })
+            .collect();
+        if boxes.len() < 2 {
+            return false;
+        }
+        boxes.sort_by(|a, b| a.0.x0.total_cmp(&b.0.x0));
+        let em = boxes.iter().map(|b| b.1).fold(0.0, f64::max);
+        let (high, low) = boxes.iter().fold((f64::MAX, f64::MIN), |(h, l), (b, _)| {
+            let y = (b.y0 + b.y1) / 2.0;
+            (h.min(y), l.max(y))
+        });
+        let tight = boxes
+            .windows(2)
+            .all(|w| w[1].0.x0 - w[0].0.x1 <= RUN_GAP_EMS * em);
+        let (x0, x1) = (
+            boxes[0].0.x0,
+            boxes.iter().map(|b| b.0.x1).fold(f64::MIN, f64::max),
+        );
+        let over = g.xs[1..cols].iter().any(|&x| x0 < x - 1.0 && x1 > x + 1.0);
+        low - high <= 0.5 * em && tight && over
+    };
+    if !(0..rows - 1).all(bar) {
+        return None;
+    }
+    let mut head = g.clone();
+    head.ys = vec![g.ys[rows - 1], g.ys[rows]];
+    head.bbox.y0 = g.ys[rows - 1];
+    Some(head)
+}
+
 /// Most words a column's name in a stranded head holds: an arm with its
 /// dose and count (`Drug A 200 mg every 3 weeks in combination with Drug B
 /// n=403`) runs to a dozen or so; a caption runs to sentences.
@@ -5681,25 +5755,113 @@ pub fn columns_carry_on(a: &[f64], b: &[f64], tolerance: f64) -> bool {
 }
 
 /// Does the page whose ruled tables are `next` open on a table whose
-/// columns are drawn where `head`'s are, to within `tolerance`:
-/// [`BREAK_LINES`] lines or fewer over its first table, and as many column
-/// edges, each at one of `head`'s?
+/// columns carry on `head`'s ([`columns_carry_on`], to within
+/// `tolerance`), with [`BREAK_LINES`] lines or fewer over its first table?
+///
+/// Lines the head's own page (`glyphs`) sets word for word at the same
+/// place are the pages' running head, and are not counted: a task order's
+/// five lines over every page, its page number apart.
 pub fn opens_under(
     head: &Grid,
     next: &[Grid],
     next_glyphs: &[crate::glyph::Glyph],
+    glyphs: &[crate::glyph::Glyph],
     tolerance: f64,
 ) -> bool {
     let Some(opening) = next.iter().min_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0)) else {
         return false;
     };
-    lines_where(next_glyphs, |b| b.y1 <= opening.bbox.y0) <= BREAK_LINES
-        && opening.xs.len() == head.xs.len()
-        && opening
-            .xs
+    // A table whose columns no rule draws is read here as its frame alone:
+    // its text set in the head's columns, no run of words over an edge
+    // between them, carries them on.
+    let last = head.xs.len() - 1;
+    let framed_alike = opening.xs.len() == 2
+        && head.xs.len() > 2
+        && (opening.xs[0] - head.xs[0]).abs() <= tolerance
+        && (opening.xs[1] - head.xs[last]).abs() <= tolerance
+        && set_in_columns(&head.xs, &opening.bbox, next_glyphs);
+    if !columns_carry_on(&head.xs, &opening.xs, tolerance) && !framed_alike {
+        return false;
+    }
+    let over: Vec<crate::glyph::Glyph> = next_glyphs
+        .iter()
+        .filter(|n| {
+            n.bbox.is_some_and(|nb| nb.y1 <= opening.bbox.y0)
+                && !glyphs.iter().any(|g| {
+                    g.text == n.text
+                        && g.bbox.zip(n.bbox).is_some_and(|(a, b)| {
+                            (a.x0 - b.x0).abs() <= RUNNING_PLACE
+                                && (a.y0 - b.y0).abs() <= RUNNING_PLACE
+                        })
+                })
+        })
+        .cloned()
+        .collect();
+    lines_where(&over, |_| true) <= BREAK_LINES
+}
+
+/// How far apart, in points, two copies of a page's running line may stand
+/// and still be its template's: a template sets them to the point.
+const RUNNING_PLACE: f64 = 1.5;
+
+/// The text inside `area` is set in the columns `xs` parts: each column
+/// holds some, and no run of words crosses an edge between two of them (a
+/// glyph across it, or glyphs either side of it no further apart than a
+/// word space, [`RUN_GAP_EMS`]).
+fn set_in_columns(xs: &[f64], area: &BBox, glyphs: &[crate::glyph::Glyph]) -> bool {
+    let mut boxes: Vec<(BBox, f64)> = glyphs
+        .iter()
+        .filter(|g| g.is_horizontal() && !g.text.trim().is_empty())
+        .filter_map(|g| g.bbox.map(|b| (b, g.font_size.max(1.0) as f64)))
+        .filter(|(b, _)| {
+            let (x, y) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+            x > area.x0 && x < area.x1 && y > area.y0 && y < area.y1
+        })
+        .collect();
+    if boxes.is_empty() {
+        return false;
+    }
+    let inner = &xs[1..xs.len() - 1];
+    let held = (0..xs.len() - 1).all(|c| {
+        boxes
             .iter()
-            .zip(&head.xs)
-            .all(|(a, b)| (a - b).abs() <= tolerance)
+            .any(|(b, _)| (b.x0 + b.x1) / 2.0 > xs[c] && (b.x0 + b.x1) / 2.0 < xs[c + 1])
+    });
+    if !held {
+        return false;
+    }
+    if boxes
+        .iter()
+        .any(|(b, _)| inner.iter().any(|&x| b.x0 < x - 1.0 && b.x1 > x + 1.0))
+    {
+        return false;
+    }
+    // Glyphs of one line, left to right.
+    boxes.sort_by(|a, b| {
+        let (ya, yb) = ((a.0.y0 + a.0.y1) / 2.0, (b.0.y0 + b.0.y1) / 2.0);
+        ya.total_cmp(&yb).then(a.0.x0.total_cmp(&b.0.x0))
+    });
+    let mut lines: Vec<Vec<(BBox, f64)>> = Vec::new();
+    for b in boxes {
+        let y = (b.0.y0 + b.0.y1) / 2.0;
+        match lines.iter_mut().find(|l| {
+            let (lb, size) = l[0];
+            (y - (lb.y0 + lb.y1) / 2.0).abs() <= 0.3 * size
+        }) {
+            Some(l) => l.push(b),
+            None => lines.push(vec![b]),
+        }
+    }
+    !lines.iter_mut().any(|l| {
+        l.sort_by(|a, b| a.0.x0.total_cmp(&b.0.x0));
+        l.windows(2).any(|w| {
+            let (a, b) = (&w[0], &w[1]);
+            b.0.x0 - a.0.x1 <= RUN_GAP_EMS * a.1.max(b.1)
+                && inner
+                    .iter()
+                    .any(|&x| (a.0.x0 + a.0.x1) / 2.0 < x && (b.0.x0 + b.0.x1) / 2.0 > x)
+        })
+    })
 }
 
 /// Detect table grids on a page from its ruling lines.
@@ -14791,6 +14953,104 @@ mod tests {
     }
 
     #[test]
+    fn title_bars_over_a_head_at_the_page_foot_are_read_out() {
+        let letter = |x: f64, y: f64| crate::glyph::Glyph {
+            text: "a".into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: y,
+                x1: x + 5.0,
+                y1: y + 8.0,
+            }),
+            page: 0,
+            origin: (x, y + 8.0),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: Some(700),
+            italic: false,
+            advance: Some(5.0),
+            draw_index: 0,
+            ocr: None,
+        };
+        // A run of letters a point apart, from `x0` to `x1`.
+        let run = |x0: f64, x1: f64, y: f64| -> Vec<crate::glyph::Glyph> {
+            (0..)
+                .map(|i| x0 + 6.0 * i as f64)
+                .take_while(|&x| x < x1)
+                .map(|x| letter(x, y))
+                .collect()
+        };
+        let grid = |xs: &[f64], ys: &[f64]| Grid {
+            page: 0,
+            xs: xs.to_vec(),
+            ys: ys.to_vec(),
+            bbox: BBox {
+                x0: xs[0],
+                y0: ys[0],
+                x1: xs[xs.len() - 1],
+                y1: ys[ys.len() - 1],
+            },
+            layout: None,
+        };
+        let bar = |y0: f64, y1: f64| crate::rule::Fill {
+            bbox: BBox {
+                x0: 73.0,
+                y0,
+                x1: 434.0,
+                y1,
+            },
+            page: 0,
+            paint: None,
+            stroked: false,
+        };
+        // Two title bars, each one line across the columns' cuts, over the
+        // header's names each in its column.
+        let xs = [73.0, 257.0, 340.0, 434.0];
+        let g = grid(&xs, &[458.0, 473.0, 488.0, 533.0]);
+        let names = |y: f64| {
+            let mut v = run(80.0, 140.0, y);
+            v.extend(run(265.0, 330.0, y));
+            v.extend(run(350.0, 420.0, y));
+            v
+        };
+        let mut glyphs = run(150.0, 360.0, 462.0);
+        glyphs.extend(run(200.0, 300.0, 477.0));
+        glyphs.extend(names(500.0));
+        let fills = [bar(458.0, 473.0), bar(473.0, 488.0)];
+        let head = head_under_title_bars(&g, &glyphs, &fills).expect("the bars over the head");
+        assert_eq!(head.ys, vec![488.0, 533.0]);
+        // Unshaded, the second row is the table's own.
+        assert!(head_under_title_bars(&g, &glyphs, &fills[..1]).is_none());
+        // Names each in its column are the header's, no bar.
+        let mut labels = names(462.0);
+        labels.extend(run(200.0, 300.0, 477.0));
+        labels.extend(names(500.0));
+        assert!(head_under_title_bars(&g, &labels, &fills).is_none());
+
+        // The next page's table, its columns set but drawn by no rule,
+        // read as its frame alone: its text in the head's columns carries
+        // them on.
+        let body = grid(&[72.5, 434.6], &[125.0, 530.0]);
+        let set = names(130.0);
+        assert!(opens_under(&head, &[body.clone()], &set, &[], 3.0));
+        // A run of words over an edge between the head's columns is
+        // another table's.
+        let mut over = names(130.0);
+        over.extend(run(200.0, 300.0, 160.0));
+        assert!(!opens_under(&head, &[body.clone()], &over, &[], 3.0));
+        // Lines over it the head's page sets at the same place are the
+        // pages' running head; others are text between the parts.
+        let mut headed = set.clone();
+        let running: Vec<_> = [40.0, 55.0, 70.0]
+            .iter()
+            .flat_map(|&y| run(300.0, 400.0, y))
+            .collect();
+        headed.extend(running.clone());
+        assert!(opens_under(&head, &[body.clone()], &headed, &running, 3.0));
+        assert!(!opens_under(&head, &[body], &headed, &[], 3.0));
+    }
+
+    #[test]
     fn a_tables_head_stranded_at_the_page_foot_heads_the_next_pages_table() {
         let glyph = |text: &str, x: f64, y: f64, weight: Option<u32>| crate::glyph::Glyph {
             text: text.into(),
@@ -14868,10 +15128,10 @@ mod tests {
         // The next page opens on the table, its columns drawn at the head's.
         let body = grid(&xs, &[50.0, 66.0, 82.0, 98.0]);
         let next = vec![mk("Nausea", 72.0, 52.0), mk("28", 190.0, 52.0)];
-        assert!(opens_under(&head, &[body.clone()], &next, 3.0));
+        assert!(opens_under(&head, &[body.clone()], &next, &[], 3.0));
         // A table at other columns is another table.
         let other = grid(&[68.0, 240.0, 411.0], &[50.0, 66.0, 82.0]);
-        assert!(!opens_under(&head, &[other], &next, 3.0));
+        assert!(!opens_under(&head, &[other], &next, &[], 3.0));
         // Prose over the table: the next page does not open on it.
         let mut over = next.clone();
         over.extend([
@@ -14879,7 +15139,7 @@ mod tests {
             mk("text", 72.0, 22.0),
             mk("text", 72.0, 34.0),
         ]);
-        assert!(!opens_under(&head, &[body], &over, 3.0));
+        assert!(!opens_under(&head, &[body], &over, &[], 3.0));
     }
 
     #[test]
