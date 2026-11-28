@@ -3821,6 +3821,46 @@ impl Grid {
                 })
                 .count()
         };
+        // A form's table left blank to be filled in: its header, one row of
+        // text naming each column apart, over two blank rows or more to the
+        // grid's foot, every column edge drawn down through each of them as
+        // through the header. A footer's separator below a table is joined
+        // to it by no rule; a chart's gridlines run on down past their
+        // legend, which holds no header's cells; labels set over a drawing's
+        // one ruled band, or a swatch's name repeated over each swatch, name
+        // no columns of rows. Under rows of data, a blank row at the foot
+        // still ends the table.
+        let names: Vec<String> = self
+            .xs
+            .windows(2)
+            .map(|w| {
+                let (top, bottom) = (self.ys[first], self.ys[first + 1]);
+                let mut gs: Vec<&crate::glyph::Glyph> = glyphs
+                    .iter()
+                    .filter(|g| {
+                        let (x, y) = g.center();
+                        !g.text.trim().is_empty() && x > w[0] && x < w[1] && y > top && y < bottom
+                    })
+                    .collect();
+                gs.sort_by(|a, b| a.origin.0.total_cmp(&b.origin.0));
+                gs.iter().map(|g| g.text.as_str()).collect::<String>()
+            })
+            .filter(|t| !t.is_empty())
+            .collect();
+        let apart = names
+            .iter()
+            .enumerate()
+            .all(|(i, n)| !names[..i].contains(n));
+        let blank_to_foot = first == r0
+            && first + 2 < rows
+            && (first + 1..rows).all(|r| !used[r] && drawn(r))
+            && drawn(first)
+            && filled(first) >= 2
+            && apart
+            && self.row_holds_text(glyphs, rules, first);
+        if last == first && blank_to_foot {
+            return rows - 1;
+        }
         let taken: Vec<usize> = (first + 1..=last).filter(|&r| used[r]).collect();
         if last > first
             && first > r0
@@ -14792,6 +14832,31 @@ mod tests {
             })
             .collect();
         (g, r, glyphs)
+    }
+
+    #[test]
+    fn a_forms_header_over_blank_ruled_rows_keeps_them() {
+        // Only the header holds text, and every column edge runs down
+        // through the four blank rows under it: a form's table to fill in.
+        let (g, rules, glyphs) = spacer_table(&[]);
+        let mut header: Vec<_> = glyphs.iter().take(2).cloned().collect();
+        header[0].text = "T".into();
+        header[1].text = "D".into();
+        let mut g2 = g.clone();
+        g2.trim_to_content_ruled(&header, &rules);
+        assert_eq!(g2.rows(), 5, "the header and its four blank rows");
+        // One name over each column, a swatch's over each swatch, names no
+        // columns: it ends at the line.
+        header[1].text = "T".into();
+        let mut same = g.clone();
+        same.trim_to_content_ruled(&header, &rules);
+        assert_eq!(same.rows(), 1);
+        // A line of one cell over ruled blank bands is no header, as a
+        // chart's title over its gridlines is not: it ends at the line.
+        let one: Vec<_> = glyphs.iter().take(1).cloned().collect();
+        let mut g3 = g.clone();
+        g3.trim_to_content_ruled(&one, &rules);
+        assert_eq!(g3.rows(), 1);
     }
 
     #[test]

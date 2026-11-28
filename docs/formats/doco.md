@@ -384,6 +384,13 @@ This is what lets a query ask for "the Supply voltage row of the LM358B
 column" without the consumer reconstructing the grid. Merged cells are
 denormalized first, so every cell stands on its own.
 
+Every cell of the table's body is a node, an empty one too: its
+`doc:cellValue` is `""`, and its row and column name it as any cell's do. It
+cuts nothing from the text, so it has no offsets. A form's table left blank
+to be filled in, its header over empty rows, is expressed cell by cell. The
+header rows are no cells of their own: their text is each body cell's
+`doc:columnHeader`.
+
 A table with no header row has no `doc:columnHeader` on its cells, and
 `doc:rowIndex` counts from its first row. A list of fields set `Label |
 value` is one: each value's `doc:rowHeader` is its label. See [a list of

@@ -157,7 +157,11 @@ class Reading:
                     continue
                 key = (first["@id"], c["doc:rowIndex"])
                 name = c.get("doc:columnHeader", f"#{c['doc:columnIndex']}")
-                self.rows[key][norm(name)] = norm(c["doc:cellValue"])
+                # Columns can share a name; an empty cell, a cell too, keeps
+                # the value one of them holds.
+                value = norm(c["doc:cellValue"])
+                if value or norm(name) not in self.rows[key]:
+                    self.rows[key][norm(name)] = value
         # Each section as (its title, its level, the title of the section
         # directly holding it), titles exactly as their `nif:isString`.
         title = lambda s: self.nodes.get(s.get("po:containsAsHeader"), {}).get("nif:isString")

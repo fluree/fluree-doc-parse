@@ -1676,10 +1676,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                     left_of(c)
                                 }
                             });
+                            // An empty cell is a cell too, its value
+                            // empty: a form's blank rows, a row with a
+                            // value missing. Its row and column still name
+                            // it, and it cuts nothing from the text, so it
+                            // carries no offsets.
                             let value = cell.trim();
-                            if value.is_empty() {
-                                continue;
-                            }
                             let cell_idx = em.unstamped("cell", "doc:TableCell", None);
                             em.nodes[cell_idx]
                                 .insert("doc:rowIndex".into(), json!(rows_before + r - n_header));
@@ -2264,8 +2266,14 @@ mod tests {
         ]);
         let g = graph(&[t]);
         let cells = find(&g, "doc:TableCell");
-        // "Revenue" (no column header), "10" (both headers); empty cell dropped.
-        assert_eq!(cells.len(), 2);
+        // "Revenue" (no column header), "10" (both headers), and the empty
+        // cell under 2024, a cell with no value, named all the same.
+        assert_eq!(cells.len(), 3);
+        let empty = cells.iter().find(|c| c["doc:cellValue"] == "").unwrap();
+        assert_eq!(empty["doc:columnIndex"], json!(2));
+        assert_eq!(empty["doc:columnHeader"], "2024");
+        assert_eq!(empty["doc:rowHeader"], "Revenue");
+        assert!(empty.get("nif:beginIndex").is_none(), "it cuts nothing");
         let ten = cells.iter().find(|c| c["doc:cellValue"] == "10").unwrap();
         assert_eq!(ten["doc:rowIndex"], json!(0));
         assert_eq!(ten["doc:columnIndex"], json!(1));
@@ -2501,8 +2509,8 @@ mod tests {
         let projection = to_text(&els);
         let g = graph(&els);
         let cells = find(&g, "doc:TableCell");
-        assert_eq!(cells.len(), 5, "five non-empty data cells");
-        for cell in &cells {
+        assert_eq!(cells.len(), 6, "five data cells and an empty one");
+        for cell in cells.iter().filter(|c| c["doc:cellValue"] != "") {
             let s = cell["nif:beginIndex"].as_u64().unwrap() as usize;
             let e = cell["nif:endIndex"].as_u64().unwrap() as usize;
             let slice: String = projection.chars().skip(s).take(e - s).collect();
@@ -3453,8 +3461,9 @@ mod tests {
         t.header_rows = Some(0);
         let g = graph(&[t]);
         let cells = find(&g, "doc:TableCell");
-        // Both non-empty cells of row 0 and row 1 materialise as data.
-        assert_eq!(cells.len(), 3);
+        // Every cell of row 0 and row 1 materialises as data, the empty one
+        // too.
+        assert_eq!(cells.len(), 4);
         let first = cells
             .iter()
             .find(|c| c["doc:cellValue"] == "6,785")
