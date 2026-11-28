@@ -1,6 +1,6 @@
 # Paragraphs across page breaks
 
-Status: design, not built. It is planned for the release after the next one.
+Status: built on branch pdf-paragraphs-across-pages. It is planned for the release after the next one.
 The DoCO shape is confirmed (2026-11-28): two nodes, one per page, linked by
 `doc:continues`.
 
@@ -64,18 +64,60 @@ A paragraph on page n+1 continues the one on page n when all of these hold:
 - The part on page n+1 is the first body element on its page, and a
   paragraph.
 - It opens in lower case.
-- Both parts are set in the same type size and in the same column (the same
-  left edge, give or take the measure's indent).
+- Both parts are set in the same type size, within 5%.
+- The text flows on from one part to the other:
+  - no text on page n stands in a column right of the earlier part;
+  - no text on page n+1 stands in a column left of the later part;
+  - the two columns have one measure, within 2 em.
 
-The last two conditions keep out what the measurement found that is no
-paragraph:
+  On pages of one column, that is the same column, and a quote set in from
+  it carries on too. In a two-column paper, a page's text ends in its last
+  column and goes on at the head of the next page's first. The design first
+  asked for the same left edge on both pages, which turned away every cut in
+  two-column minutes and journals; column flow replaced it (2026-11-28).
+
+These conditions keep out what the measurement found that is no paragraph:
 - a table of contents' leader line ending in a page number, before a page
   numbered `ii`;
 - a two-column paper's foot line (`…Association for Computational
-  Linguistics`), whose next page goes on with a different column's text.
+  Linguistics`), set under its first column while the text goes on in the
+  second.
 
-The page's foot notes move after the continued part in reading order. A note
-belongs to the page, and the sentence its mark sits in reads whole before it.
+A figure, a table or a caption standing at the foot of page n or the head of
+page n+1 is no foot note and no paragraph, so the parts are not linked across
+it. A running head on page n+1 is furniture and already gone; a section
+title there is the first element, so nothing carries on.
+
+A page's foot notes are what follows the earlier part on its page: each
+opens on a note's mark (a figure, a raised figure, `*`, `†`, `‡`, `§`,
+`¶`), stands under the part, and is set more than 5% smaller. Anything else
+after the part means it is not the page's last text, and nothing is linked.
+The notes move after the continued paragraph in reading order, after its
+last part where it runs over several pages. A note belongs to the page, and
+the sentence its mark sits in reads whole before it.
+
+List items are not joined. An item a page break cut stays an item, and the
+rest of it on the next page stays a paragraph, as before.
+
+### A hyphen at the break
+
+A part ending on a hyphen joins the next as a line's end does, by the same
+word evidence (`HyphenJoin` and the document's own compounds, the ones the
+line join reads):
+- **A typesetter's hyphen inside a word** (`re-` / `strictive`): the earlier
+  part's text ends on a soft hyphen (U+00AD), the mark a table cell's break
+  uses until it is settled. The writers and the projection drop it and join
+  the parts with nothing between, so the word reads whole (`restrictive`),
+  and each part's offsets still cut its own text.
+- **A hyphen the text keeps** (`long-` / `term` where the document sets
+  `long-term` whole; `1-800-` / `222-1222`): it stays, and the parts join
+  with nothing between.
+- **A dash set apart, or a compound's first half left hanging** (`a pause -`,
+  `wage-` / `and price-setting`): it stays, and the parts join with a space.
+
+A part ending on a hyphen after a figure (`1-800-`) ends on no word, so it is
+not linked at all; the rule above is what the writers apply to any linked
+part.
 
 ## The writers
 
@@ -107,7 +149,11 @@ belongs to the page, and the sentence its mark sits in reads whole before it.
 
 ## Decided
 
-The DoCO shape is two nodes, one per page, the later linked to the earlier by
-`doc:continues`, as a continued table's parts are. It was confirmed on
-2026-11-28. The alternative was one node spanning two pages, which would break
-"an element sits on one page".
+- **DoCO:** two nodes, one per page, the later linked to the earlier by
+  `doc:continues`, as a continued table's parts are. It was confirmed on
+  2026-11-28. The alternative was one node spanning two pages, which would
+  break "an element sits on one page".
+- **The column guard:** column flow, in place of the same left edge
+  (2026-11-28).
+- **A hyphen at the break:** the soft hyphen, as a table cell's break is
+  marked, and no field of its own (2026-11-28).

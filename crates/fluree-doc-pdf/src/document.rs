@@ -8849,12 +8849,14 @@ fn link_continued_paragraphs(
     for (i, e) in elements.iter().enumerate() {
         on[e.page].push(i);
     }
+    // A body paragraph: no caption, which belongs to its figure or table.
     let plain = |e: &Element| {
         e.kind == "doco:Paragraph"
             && e.turn.is_none()
             && e.message.is_none()
             && e.notes_for.is_none()
             && !e.text.trim().is_empty()
+            && !heading::is_caption(&e.text)
     };
     let note_mark = |t: &str| {
         t.trim_start().chars().next().is_some_and(|c| {
@@ -13098,6 +13100,13 @@ mod tests {
             ),
             cut_part("e3", 1, "the left column goes on.", 50.0, 300.0, 72.0, 30),
         ]));
+        // A caption at the page's foot belongs to its figure.
+        let mut els = page_break(
+            "Figure 2: Rates by region and",
+            "and demands for storage grow.",
+        );
+        els[1].text = "Figure 2: Rates by region and".into();
+        assert!(none(els));
         // Text after the paragraph in its own size is no foot note, even
         // opening on a figure.
         let mut els = page_break(
