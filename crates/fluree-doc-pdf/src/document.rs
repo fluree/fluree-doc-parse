@@ -12102,17 +12102,6 @@ mod tests {
             els[0].cells.as_ref().unwrap()[0][1],
             "Completion Date (for information only)"
         );
-        // A line the break printed on both pages is said once.
-        let cut: &[&[&str]] = &[&["Endpoint", "Placebo with or without bevacizumab", "Fee"]];
-        let twice: &[&[&str]] = &[&["", "bevacizumab n=275", ""], &["OS", "16.3", "$312,746"]];
-        let (h, fh) = part("elem-00001", 0, cut, 1, &XS, true, true);
-        let (t, ft) = part("elem-00002", 1, twice, 1, &XS, true, true);
-        let mut els = vec![h, t];
-        link_continued_tables(&mut els, &[fh, ft]);
-        assert_eq!(
-            els[0].cells.as_ref().unwrap()[0][1],
-            "Placebo with or without bevacizumab n=275"
-        );
         assert_eq!(els[1].header_rows, Some(0));
         assert_eq!(
             els[1].cells.as_ref().unwrap().len(),
@@ -12134,6 +12123,17 @@ mod tests {
         let mut els = vec![a, d];
         link_continued_tables(&mut els, &[fa, fd]);
         assert_eq!(els[0].cells.as_ref().unwrap()[0][1], "Completion Date (for");
+        // A line the break printed on both pages is said once.
+        let cut: &[&[&str]] = &[&["Endpoint", "Placebo with or without bevacizumab", "Fee"]];
+        let twice: &[&[&str]] = &[&["", "bevacizumab n=275", ""], &["OS", "16.3", "$312,746"]];
+        let (h, fh) = part("elem-00001", 0, cut, 1, &XS, true, true);
+        let (t, ft) = part("elem-00002", 1, twice, 1, &XS, true, true);
+        let mut els = vec![h, t];
+        link_continued_tables(&mut els, &[fh, ft]);
+        assert_eq!(
+            els[0].cells.as_ref().unwrap()[0][1],
+            "Placebo with or without bevacizumab n=275"
+        );
     }
 
     #[test]
