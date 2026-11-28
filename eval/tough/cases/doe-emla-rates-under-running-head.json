@@ -1,0 +1,42 @@
+{
+  "document": {
+    "file": "doe-emla-tba-task-order-p00003.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2023-01/SKMS_89303322FEM400309_EM-LA%20Technical%20and%20Business%20Assistance%20Task%20Order_Conformed%20thru%20Modification%20P00003.pdf",
+    "sha256": "2cecce602deb942453d29c88baa444919b137d41bffddd9ab2ffde8759c462ab",
+    "about": "A DOE task order conformed through a modification (48 pages). Its pricing schedule (Section J, Attachment J-8, pages 43–45) gives each year's labor rates as a ruled table that runs on over a page break with no header repeated. Page 44 carries on Year 1 with no running head and starts Year 2 at its foot; page 45 carries on Year 2 under the running head the schedule's first page sets (`Section J, Attachment J-8`, `SECTION J-8 - PRICING SCHEDULE`)."
+  },
+  "notes": [
+    "2026-11-27: Year 2's part on page 45 was a table of its own, its rows under no column names, while Year 1's part on page 44 continued page 43's. The running head over page 45's part was read as text between the parts: the reading of furniture took it for no running head, since the document sets it on some pages only.",
+    "Page 45's grand-total line (`62,190 | 33,840 | 28,350 | $6,094,768.20`) stands outside the ruled grid and is read as text, as the page prints it."
+  ],
+  "checks": [
+    {
+      "id": "year-2-part-continues",
+      "found": "2026-11-27",
+      "issue": "Page 45's part, under the running head, had no column names.",
+      "row": {
+        "Labor Categories": "Nuclear Safety Specialist Support IV",
+        "Extended Price": "$149,958.20"
+      }
+    },
+    {
+      "id": "year-2-total-under-its-columns",
+      "found": "2026-11-27",
+      "issue": "As above, for Year 2's total.",
+      "row": {
+        "Labor Categories": "Total",
+        "Prime Estimated DPLH": "11,280",
+        "Extended Price": "$2,071,791.60"
+      }
+    },
+    {
+      "id": "year-1-part-continues",
+      "found": "2026-11-27",
+      "issue": "Guard: page 44's part, under no running head, continues page 43's.",
+      "row": {
+        "Labor Categories": "Public Affairs Specialist III",
+        "Extended Price": "$207,345.20"
+      }
+    }
+  ]
+}
