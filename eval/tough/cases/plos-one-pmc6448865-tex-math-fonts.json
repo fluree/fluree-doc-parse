@@ -1,0 +1,49 @@
+{
+  "document": {
+    "file": "plos-one-pmc6448865.pdf",
+    "url": "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0214598&type=printable",
+    "sha256": "79366f14990a348866db5000efbb523234da30ebf186b784fe6e0d3534122529",
+    "about": "PLoS ONE 14(4): e0214598, an LC-MS/MS assay. Its equations and some symbols in the text are set in TeX's Computer Modern fonts, embedded as `TeX_CM_Maths_Italic`, `TeX_CM_Maths_Symbols`, `TeX_CM_Maths_Extension` and `TeX_CM_Roman` under a generic encoding vector."
+  },
+  "notes": [
+    "2026-11-28 (#634): TeX's Computer Modern fonts embedded under a generic vector, the ASCII names at their codes, are read by TeX's layout for each family (OT1, OML, OMS, OMX)."
+  ],
+  "checks": [
+    {
+      "id": "half-life",
+      "found": "2026-11-28",
+      "issue": "`In vitro t1/2 = 157.5 min.` read `In vitro t 1=2 = 157:5 min:`: the math italic's slash and period read as their codes, `=` and `:`.",
+      "text": "In vitro t 1/2 = 157.5 min."
+    },
+    {
+      "id": "clearance",
+      "found": "2026-11-28",
+      "issue": "`CLint,app = 0.97 mL/min/kg` read `CLint;app = 0:97 mL=min=kg`.",
+      "text": "CLint,app = 0.97 mL/min/kg"
+    },
+    {
+      "id": "greater-equal",
+      "found": "2026-11-28",
+      "issue": "`r2 ≥ 0.9999` read `r2 � 0.9999`: the symbols font's ≥, code 21, read as nothing.",
+      "text": "r2 ≥ 0.9999"
+    },
+    {
+      "id": "times",
+      "found": "2026-11-28",
+      "issue": "`Set 1/Set 2 × 100` read `Set 1=Set 2 � 100`.",
+      "text": "Set 1/Set 2 × 100"
+    },
+    {
+      "id": "arrow",
+      "found": "2026-11-28",
+      "issue": "`470.1→319` read `470.1!319`: the symbols font's →, code 33.",
+      "text": "470.1→319"
+    },
+    {
+      "id": "no-code-reading",
+      "found": "2026-11-28",
+      "issue": "No equation reads the math italic's codes.",
+      "no_text": "t 1=2"
+    }
+  ]
+}

@@ -1581,6 +1581,18 @@ impl<'a> Device<'a> for Collector<'a> {
             },
         };
 
+        // A glyph of one of TeX's fonts whose vector labels glyphs by their
+        // codes (`/equal` at 61, where the math italic draws a slash): read
+        // by TeX's layout for the font's family; see `crate::tex`.
+        if let HGlyph::Outline(o) = glyph {
+            if let Some(tex) = self
+                .faces
+                .tex(o.font_cache_key(), o.glyph_id().to_u32(), &text)
+            {
+                text = tex.to_string();
+            }
+        }
+
         // A letter the font's ToUnicode map gives in the other case than
         // the glyph its encoding draws (`F` read `f`): see `faces::recased`.
         if let HGlyph::Outline(o) = glyph {

@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "pmc5847320.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5847320/",
+    "sha256": "0d54aec52f7030b44129311848838bce59fb546717554985a6e5bcf54b5c9e9d",
+    "about": "PMC5847320, PLOS ONE 2018, word embeddings learnt with a knowledge base. Its line plots stand each over its caption (`Fig 1. Effect of the corpus size. …`), the caption wider than the plot and set under the axis's values and name. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-28 (#634): TeX's Computer Modern fonts embedded under a generic vector, the ASCII names at their codes, are read by TeX's layout for each family (OT1, OML, OMS, OMX)."
+  ],
+  "checks": [
+    {
+      "id": "relation",
+      "found": "2026-11-28",
+      "issue": "`R(wi, wj)(wi − w̃j)2` read `R(wi; wj)(wi w̃j)2`: the math italic's comma read `;` and the symbols font's minus as nothing. This document has no ToUnicode maps, so the glyph names are read, and they are the codes' ASCII names too.",
+      "text": "R(wi, wj)(wi − w̃j)2"
+    },
+    {
+      "id": "element-of",
+      "found": "2026-11-28",
+      "issue": "`λ ∈ R+` read `λ 2 R+`: the symbols font's ∈, code 50, read as its code's name, `two`.",
+      "text": "λ ∈ R+"
+    },
+    {
+      "id": "bars",
+      "found": "2026-11-28",
+      "issue": "`O(|V|dTn)` read `O(jVjdTn)`.",
+      "text": "O(|V|dTn)"
+    }
+  ]
+}
