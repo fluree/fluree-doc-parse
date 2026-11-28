@@ -1572,11 +1572,17 @@ impl<'a> Device<'a> for Collector<'a> {
             // Adobe Glyph List lists whole: the program's own name for the
             // glyph, read by the list's rules (`h.sc`, `f_i`), if it has one;
             // see `faces::Faces::named`.
+            //
+            // In a CID font set in TrueType, the program's own Unicode cmap
+            // instead: see `faces::Faces::mapped`.
             None => match glyph {
-                HGlyph::Outline(o) => self
-                    .faces
-                    .named(o.font_cache_key(), o.glyph_id().to_u32())
-                    .unwrap_or_default(),
+                HGlyph::Outline(o) => {
+                    let (key, id) = (o.font_cache_key(), o.glyph_id().to_u32());
+                    self.faces
+                        .named(key, id)
+                        .or_else(|| self.faces.mapped(key, id).map(String::from))
+                        .unwrap_or_default()
+                }
                 _ => String::new(),
             },
         };
