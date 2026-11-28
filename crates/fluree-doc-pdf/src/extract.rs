@@ -1568,24 +1568,26 @@ impl<'a> Device<'a> for Collector<'a> {
         let mut text = match glyph.as_unicode() {
             Some(hayro_interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
             Some(hayro_interpret::hayro_cmap::BfString::String(s)) => s,
-            // No text from the font's ToUnicode map or from a name the
-            // Adobe Glyph List lists whole: the program's own name for the
-            // glyph, read by the list's rules (`h.sc`, `f_i`), if it has one;
-            // see `faces::Faces::named`.
-            //
-            // In a CID font set in TrueType, the program's own Unicode cmap
-            // instead: see `faces::Faces::mapped`.
-            None => match glyph {
-                HGlyph::Outline(o) => {
-                    let (key, id) = (o.font_cache_key(), o.glyph_id().to_u32());
-                    self.faces
-                        .named(key, id)
-                        .or_else(|| self.faces.mapped(key, id).map(String::from))
-                        .unwrap_or_default()
-                }
-                _ => String::new(),
-            },
+            None => String::new(),
         };
+        // No text from the font's ToUnicode map or from a name the Adobe
+        // Glyph List lists whole (an empty reading says no more than none):
+        // the program's own name for the glyph, read by the list's rules
+        // (`h.sc`, `f_i`), if it has one (see `faces::Faces::named`); in a CID
+        // font set in TrueType, the program's own Unicode cmap
+        // (`faces::Faces::mapped`); in a CID font numbered in an Adobe
+        // collection, the collection's map (`faces::Faces::collection`).
+        if text.is_empty() {
+            if let HGlyph::Outline(o) = glyph {
+                let (key, id) = (o.font_cache_key(), o.glyph_id().to_u32());
+                text = self
+                    .faces
+                    .named(key, id)
+                    .or_else(|| self.faces.mapped(key, id).map(String::from))
+                    .or_else(|| self.faces.collection(key, id))
+                    .unwrap_or_default();
+            }
+        }
 
         // A glyph of one of TeX's fonts whose vector labels glyphs by their
         // codes (`/equal` at 61, where the math italic draws a slash): read

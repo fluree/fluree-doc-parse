@@ -17,10 +17,11 @@ use std::collections::{HashMap, HashSet};
 
 use hayro_interpret::CacheKey;
 use hayro_syntax::object::dict::keys::{
-    BASE_ENCODING, BASE_FONT, CID_FONT_TYPE2, DESCENDANT_FONTS, DIFFERENCES, ENCODING, FIRST_CHAR,
-    FLAGS, FONT, FONT_DESC, FONT_FILE, FONT_FILE2, FONT_FILE3, FONT_WEIGHT, FORM, ITALIC_ANGLE,
-    MAC_ROMAN_ENCODING, MM_TYPE1, RESOURCES, STANDARD_ENCODING, STEM_V, SUBTYPE, TO_UNICODE,
-    TRUE_TYPE, TYPE0, TYPE1, WIDTHS, WIN_ANSI_ENCODING, XOBJECT,
+    BASE_ENCODING, BASE_FONT, CIDSYSTEMINFO, CID_FONT_TYPE0, CID_FONT_TYPE2, CID_TO_GID_MAP,
+    DESCENDANT_FONTS, DIFFERENCES, ENCODING, FIRST_CHAR, FLAGS, FONT, FONT_DESC, FONT_FILE,
+    FONT_FILE2, FONT_FILE3, FONT_WEIGHT, FORM, ITALIC_ANGLE, MAC_ROMAN_ENCODING, MM_TYPE1,
+    ORDERING, REGISTRY, RESOURCES, STANDARD_ENCODING, STEM_V, SUBTYPE, TO_UNICODE, TRUE_TYPE,
+    TYPE0, TYPE1, WIDTHS, WIN_ANSI_ENCODING, XOBJECT,
 };
 use hayro_syntax::object::{Array, Dict, Name, Object, Stream};
 use hayro_syntax::page::Page;
@@ -75,6 +76,29 @@ pub(crate) struct Faces<'a> {
     /// labels it with, and the text TeX's layout gives its code. Empty for
     /// a program read by its names ([`tex_glyphs`]).
     tex: HashMap<u128, Vec<Option<TexGlyph>>>,
+    /// Each CID font with no ToUnicode map whose CIDs are an Adobe
+    /// character collection's (`Adobe-Japan1`), until a glyph drawn in it
+    /// is read by its collection ([`Faces::collection`]).
+    collected: HashMap<u128, CidSource<'a>>,
+    /// The text each such font's glyphs are, by glyph ID, once read
+    /// ([`collection_texts`]).
+    collection: HashMap<u128, HashMap<u32, String>>,
+}
+
+/// A CID font's program and the collection its CIDs are numbered in.
+struct CidSource<'a> {
+    family: hayro_interpret::hayro_cmap::CidFamily,
+    program: CidProgram<'a>,
+}
+
+/// How a CID font's glyphs are found from their CIDs.
+enum CidProgram<'a> {
+    /// A CID-keyed CFF program (`CIDFontType0`): its charset numbers each
+    /// glyph by its CID.
+    Cff(Stream<'a>),
+    /// A TrueType program (`CIDFontType2`): a glyph's ID is its CID, or the
+    /// `/CIDToGIDMap` stream maps CIDs to glyph IDs.
+    TrueType(Option<Stream<'a>>),
 }
 
 /// A glyph of a TeX font whose vector labels glyphs by their codes.
@@ -176,6 +200,24 @@ impl<'a> Faces<'a> {
         (unread || g.label.as_deref() == Some(read)).then_some(g.text)
     }
 
+    /// The text a glyph drawn in a CID font with no ToUnicode map is, read
+    /// by the character collection its CIDs are numbered in: the glyph's
+    /// CID (its program's charset, or the CID-to-glyph map), and the
+    /// collection's own map of CIDs to Unicode (`Adobe-Japan1-UCS2`).
+    ///
+    /// A catalog set in a Japanese face for its symbols, `×` in
+    /// `1.76mm(Typ)×1.56mm(Typ)`, `±` in `0.8V±2.0%`, `−` in `−40 to
+    /// +85`, embeds the face with no ToUnicode map. Its CIDs are the
+    /// collection's (694 is ±, 695 ×), as its `/CIDSystemInfo` says, and
+    /// readers read them so. A glyph whose CID the map does not list, or
+    /// lists as a control or private-use character, reads as nothing.
+    pub(crate) fn collection(&mut self, key: u128, glyph: u32) -> Option<String> {
+        if let Some(source) = self.collected.remove(&key) {
+            self.collection.insert(key, collection_texts(&source));
+        }
+        self.collection.get(&key)?.get(&glyph).cloned()
+    }
+
     fn fonts(&mut self, fonts: &Dict<'a>) {
         if !self.read.insert(fonts.cache_key()) {
             return;
@@ -199,6 +241,11 @@ impl<'a> Faces<'a> {
                 if !self.mapped.contains_key(&key) && !self.truetype.contains_key(&key) {
                     if let Some(program) = cid_truetype(&font) {
                         self.truetype.insert(key, program);
+                    }
+                }
+                if !self.collection.contains_key(&key) && !self.collected.contains_key(&key) {
+                    if let Some(source) = cid_source(&font) {
+                        self.collected.insert(key, source);
                     }
                 }
                 if !self.tex.contains_key(&key) && !self.tex_programs.contains_key(&key) {
@@ -265,6 +312,103 @@ fn cid_truetype<'a>(font: &Dict<'a>) -> Option<Stream<'a>> {
     descendant
         .get::<Dict<'a>>(FONT_DESC)?
         .get::<Stream<'a>>(FONT_FILE2)
+}
+
+/// A Type0 font with no ToUnicode map, its CIDs an Adobe collection's
+/// (`/CIDSystemInfo` `Adobe` / `Japan1`, `GB1`, `CNS1`, `Korea1`), and its
+/// program embedded.
+fn cid_source<'a>(font: &Dict<'a>) -> Option<CidSource<'a>> {
+    use hayro_interpret::hayro_cmap::CidFamily;
+    if font.get::<Name<'_>>(SUBTYPE).as_deref() != Some(TYPE0) || font.contains_key(TO_UNICODE) {
+        return None;
+    }
+    let descendant = font
+        .get::<Array<'a>>(DESCENDANT_FONTS)?
+        .iter::<Dict<'a>>()
+        .next()?;
+    let info = descendant.get::<Dict<'a>>(CIDSYSTEMINFO)?;
+    let registry = info.get::<hayro_syntax::object::String<'_>>(REGISTRY)?;
+    let ordering = info.get::<hayro_syntax::object::String<'_>>(ORDERING)?;
+    let family = CidFamily::from_registry_ordering(registry.as_bytes(), ordering.as_bytes());
+    family.ucs2_cmap()?;
+    let descriptor = descendant.get::<Dict<'a>>(FONT_DESC)?;
+    let program = match descendant.get::<Name<'_>>(SUBTYPE).as_deref() {
+        Some(CID_FONT_TYPE0) => CidProgram::Cff(descriptor.get::<Stream<'a>>(FONT_FILE3)?),
+        Some(CID_FONT_TYPE2) => {
+            descriptor.get::<Stream<'a>>(FONT_FILE2)?;
+            CidProgram::TrueType(descendant.get::<Stream<'a>>(CID_TO_GID_MAP))
+        }
+        _ => return None,
+    };
+    Some(CidSource { family, program })
+}
+
+/// The text each glyph of a [`CidSource`] is, by glyph ID: its CID read
+/// through the collection's map to Unicode.
+fn collection_texts(source: &CidSource<'_>) -> HashMap<u32, String> {
+    use hayro_interpret::hayro_cmap::{load_embedded, BfString, CMap};
+    let mut texts = HashMap::new();
+    let Some(cmap) = source
+        .family
+        .ucs2_cmap()
+        .and_then(load_embedded)
+        .and_then(|data| CMap::parse(data, load_embedded))
+    else {
+        return texts;
+    };
+    // Glyph ID to CID.
+    let mut cids: Vec<(u32, u32)> = Vec::new();
+    match &source.program {
+        CidProgram::Cff(stream) => {
+            let Ok(data) = stream.decoded() else {
+                return texts;
+            };
+            let Ok(font) = read_fonts::ps::cff::CffFontRef::new(&data, 0, None) else {
+                return texts;
+            };
+            let Some(charset) = font.charset().filter(|_| font.is_cid()) else {
+                return texts;
+            };
+            cids.extend(
+                charset
+                    .iter()
+                    .map(|(gid, sid)| (gid.to_u32(), u32::from(sid.to_u16()))),
+            );
+        }
+        CidProgram::TrueType(None) => {
+            // The glyph's ID is its CID; the collection's map says which.
+            cids.extend((0..=u16::MAX as u32).map(|c| (c, c)));
+        }
+        CidProgram::TrueType(Some(map)) => {
+            let Ok(data) = map.decoded() else {
+                return texts;
+            };
+            for (cid, pair) in data.chunks_exact(2).enumerate() {
+                let gid = u32::from(u16::from_be_bytes([pair[0], pair[1]]));
+                if gid != 0 {
+                    cids.push((gid, cid as u32));
+                }
+            }
+        }
+    }
+    for (gid, cid) in cids {
+        if gid == 0 || texts.contains_key(&gid) {
+            continue;
+        }
+        let text: String = match cmap.lookup_bf_string(cid) {
+            Some(BfString::Char(c)) => c.to_string(),
+            Some(BfString::String(s)) => s,
+            None => continue,
+        };
+        let readable = !text.is_empty()
+            && text.chars().all(|c| {
+                !c.is_control() && !matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..=0x10FFFF)
+            });
+        if readable {
+            texts.insert(gid, text);
+        }
+    }
+    texts
 }
 
 /// The character a TrueType program's Unicode cmap subtables (Unicode, or
@@ -1037,6 +1181,26 @@ mod tests {
     /// The text of a page drawing CIDs 1..=glyphs in a CID TrueType font
     /// with that program, a ToUnicode map of the entries given.
     fn read_cid(program: Vec<u8>, glyphs: usize, to_unicode: &[(u16, char)]) -> String {
+        let codes: Vec<u16> = (1..=glyphs as u16).collect();
+        read_cid_with(program, &codes, Some(to_unicode), "Identity")
+    }
+
+    /// The text of a page drawing `codes` (Identity-H, each a CID and, with
+    /// no `/CIDToGIDMap` stream, a glyph ID) in a CID TrueType font with
+    /// that program, a ToUnicode map of the entries given or none, and its
+    /// CIDs numbered in Adobe's collection `ordering`.
+    fn read_cid_with(
+        program: Vec<u8>,
+        codes: &[u16],
+        to_unicode: Option<&[(u16, char)]>,
+        ordering: &str,
+    ) -> String {
+        let to_unicode_ref = if to_unicode.is_some() {
+            " /ToUnicode 8 0 R"
+        } else {
+            ""
+        };
+        let to_unicode = to_unicode.unwrap_or(&[]);
         let mut cmap = String::from(
             "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n\
              1 begincodespacerange <0000> <FFFF> endcodespacerange\n",
@@ -1046,7 +1210,7 @@ mod tests {
             cmap.push_str(&format!("<{cid:04X}> <{:04X}>\n", *c as u32));
         }
         cmap.push_str("endbfchar endcmap CMapName currentdict /CMap defineresource pop end end");
-        let codes: String = (1..=glyphs).map(|g| format!("{g:04X}")).collect();
+        let codes: String = codes.iter().map(|g| format!("{g:04X}")).collect();
         let content = format!("BT /F1 12 Tf 72 720 Td <{codes}> Tj ET");
         let stream = |dict: &str, body: &[u8]| {
             let mut s = format!("<< /Length {}{dict} >>\nstream\n", body.len()).into_bytes();
@@ -1060,14 +1224,18 @@ mod tests {
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] \
               /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
                 .to_vec(),
-            b"<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Test /Encoding /Identity-H \
-              /DescendantFonts [6 0 R] /ToUnicode 8 0 R >>"
-                .to_vec(),
+            format!(
+                "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Test /Encoding /Identity-H \
+                 /DescendantFonts [6 0 R]{to_unicode_ref} >>"
+            )
+            .into_bytes(),
             stream("", content.as_bytes()),
-            b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+Test \
-              /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
-              /DW 500 /CIDToGIDMap /Identity /FontDescriptor 7 0 R >>"
-                .to_vec(),
+            format!(
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+Test \
+                 /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 4 >> \
+                 /DW 500 /CIDToGIDMap /Identity /FontDescriptor 7 0 R >>"
+            )
+            .into_bytes(),
             format!(
                 "<< /Type /FontDescriptor /FontName /ABCDEF+Test /Flags 32 \
                  /FontBBox [0 -200 500 800] /ItalicAngle 0 /Ascent 800 /Descent -200 \
@@ -1116,5 +1284,22 @@ mod tests {
         // A symbol font's cmap maps its glyphs into the private-use area.
         let program = truetype(2, &[(0xF042, 1), (0x61, 2)]);
         assert_eq!(read_cid(program, 2, &[(2, 'a')]), "a");
+    }
+
+    #[test]
+    fn a_cid_font_with_no_tounicode_map_is_read_by_its_collection() {
+        // A face's glyphs at Adobe-Japan1's CIDs: 695 is ×, 694 ±, 693 −.
+        let program = truetype(700, &[]);
+        assert_eq!(
+            read_cid_with(program.clone(), &[695, 694, 693], None, "Japan1"),
+            "×±−"
+        );
+        // A ToUnicode map, where there is one, reads the glyphs.
+        assert_eq!(
+            read_cid_with(program.clone(), &[695], Some(&[(695, 'x')]), "Japan1"),
+            "x"
+        );
+        // CIDs no collection numbers (`Adobe-Identity`) read as nothing.
+        assert_eq!(read_cid_with(program, &[695], None, "Identity"), "");
     }
 }

@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "shimadzu-integrated-report-2024.pdf",
+    "url": "https://www.shimadzu.com/sites/shimadzu.com/files/ir/pdf/shimadzu_integrated_report_2024.pdf",
+    "sha256": "5b098d7331946021a5c85d08340df3373f7aa1df1321747b05cb137c8ee0c2a5",
+    "about": "Shimadzu Integrated Report 2024. Page 51 sets two columns of bulleted text under a title band, over a full-width box and a row of product photos."
+  },
+  "notes": [
+    "2026-11-28 (#644): a CID font with no ToUnicode map, its CIDs an Adobe collection's (/CIDSystemInfo), is read through that collection's map of CIDs to Unicode (Adobe-Japan1-UCS2 and the others)."
+  ],
+  "checks": [
+    {
+      "id": "fullwidth-brackets",
+      "found": "2026-11-28",
+      "issue": "`（Billion yen）` read `Billion yen`: the full-width brackets, set in a CID font with no ToUnicode map, read as nothing.",
+      "text": "（Billion yen）"
+    },
+    {
+      "id": "fullwidth-percent",
+      "found": "2026-11-28",
+      "issue": "`18.3％` lost its full-width percent sign.",
+      "text": "18.3％"
+    }
+  ]
+}

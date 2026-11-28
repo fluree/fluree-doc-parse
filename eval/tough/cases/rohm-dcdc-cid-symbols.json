@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "rohm-dcdc-guide.pdf",
+    "url": "https://fscdn.rohm.com/en/products/databook/catalog/common/P_DCDC_EN.pdf",
+    "sha256": "44a9bcccba3ad6c7c7fa014cd9d045ef19e48e5e394e3a673c5ca8ade8a4fefa",
+    "about": "ROHM DC/DC converter product guide. Its symbols (×, ±, −, ＋, °, Ω, ：, ’) are set in a Japanese face, ShinGoPro, embedded as a CID font with no ToUnicode map, its CIDs Adobe-Japan1's."
+  },
+  "notes": [
+    "2026-11-28 (#644): a CID font with no ToUnicode map, its CIDs an Adobe collection's (/CIDSystemInfo), is read through that collection's map of CIDs to Unicode (Adobe-Japan1-UCS2 and the others)."
+  ],
+  "checks": [
+    {
+      "id": "multiply",
+      "found": "2026-11-28",
+      "issue": "`1.76mm(Typ)×1.56mm(Typ)×0.57mm(Max)` read `1.76mm(Typ)1.56mm(Typ)0.57mm(Max)`: the face's × (CID 695) read as nothing.",
+      "text": "1.76mm(Typ)×1.56mm(Typ)×0.57mm(Max)"
+    },
+    {
+      "id": "plus-minus",
+      "found": "2026-11-28",
+      "issue": "`0.8V±2.0%` read `0.8V 2.0%`: ± (CID 694).",
+      "text": "0.8V±2.0%"
+    },
+    {
+      "id": "pcb-size",
+      "found": "2026-11-28",
+      "issue": "`PCB 7mm×11mm` read `PCB 7mm11mm`.",
+      "text": "PCB 7mm×11mm"
+    },
+    {
+      "id": "apostrophe",
+      "found": "2026-11-28",
+      "issue": "`industry’s` read `industry s`.",
+      "text": "industry’s lowest"
+    },
+    {
+      "id": "minus",
+      "found": "2026-11-28",
+      "issue": "`−40 to ＋105` read `40 to 105`: − (CID 693) and ＋ (CID 692).",
+      "text": "−40 to ＋105"
+    }
+  ]
+}
