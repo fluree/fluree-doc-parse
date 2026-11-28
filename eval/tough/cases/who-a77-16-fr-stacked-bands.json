@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "who-wha77-a77-16-fr.pdf",
+    "url": "https://apps.who.int/gb/ebwha/pdf_files/WHA77/A77_16-fr.pdf",
+    "sha256": "fc4e6ca0c5a48cbdd582839ba12f4e78e254c8308a98dec1bc22425eee771ed5",
+    "about": "WHO, Seventy-seventh World Health Assembly, A77/16 (French, Word for Microsoft 365). Its annex's outcomes table sets, under a shaded header, the general programme's goal as a shaded band and each strategic objective as a shaded band under it, their labels centred across both columns."
+  },
+  "notes": [
+    "2026-11-27: the goal's band and the first objective's band were read as the header's second and third rows, so both columns were named after them. The bands' labels, centred, ran over the cut between the columns, so they were not read as bands."
+  ],
+  "checks": [
+    {
+      "id": "goal-band-names-no-column",
+      "found": "2026-11-27",
+      "issue": "Both columns were named `… / Objectif du quatorzième PGT : PROMOUVOIR LA SANTÉ … / Objectif stratégique 1 …`.",
+      "no_column_header": "Objectif stratégique 1"
+    },
+    {
+      "id": "first-outcome-under-the-header",
+      "found": "2026-11-27",
+      "issue": "As above: the first outcome's columns.",
+      "row": {
+        "Résultats communs": "1.1. Des systèmes de santé plus résilients aux changements climatiques font face aux risques et aux conséquences pour la santé",
+        "Projet d’indicateurs de résultats communs pour le projet de quatorzième PGT": "Indice des capacités nationales en matière de changements climatiques et de santé (Nouveau)"
+      }
+    }
+  ]
+}
