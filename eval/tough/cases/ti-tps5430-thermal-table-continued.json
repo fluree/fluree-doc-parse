@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "ti-tps5430.pdf",
+    "url": "https://www.ti.com/lit/ds/symlink/tps5430.pdf",
+    "sha256": "7b79bdb7b425c81987920c102d2c115647e510f4c4591fd1c5f9c54b2998b434",
+    "about": "TI TPS5430 regulator datasheet. Its thermal information table runs from page 4 onto page 5, where its caption is set again with `(continued)` over the header repeated."
+  },
+  "checks": [
+    {
+      "id": "thermal-table-carried-on-under-its-continued-caption",
+      "found": "2026-11-27",
+      "issue": "Page 5's part, under `5.4 Thermal Information (DDA Package) (continued)`, was a table of its own: the caption stood between the parts.",
+      "continues": {
+        "cell": "Junction-to-board characterization parameter",
+        "from": "Junction-to-top characterization parameter"
+      }
+    }
+  ]
+}
