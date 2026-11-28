@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "fda-lib-4651.pdf",
+    "url": "https://www.fda.gov/media/169748/download",
+    "sha256": "c21fd4dc1195710973403ee39af61c5079b2b33d0832a5a26617be62165872d6",
+    "about": "FDA ORA Laboratory Information Bulletin 4651 (Hypoglycin A in ackee). Its references' URLs are blue links whose underline, a blue bar 0.72pt tall, is drawn before the text and lies over the URLs' underscores."
+  },
+  "notes": [
+    "2026-11-28: the rule for text set in its ground's colour took the underline for a ground: each underscore lies wholly on the blue bar, in its blue, and read as a space. A bar across the line, under half the type's size, is a rule and hides nothing."
+  ],
+  "checks": [
+    {
+      "id": "import-alert-url-whole",
+      "found": "2026-11-28",
+      "issue": "Reference 8's URL read `cms ia/importalert 64.html`.",
+      "text": "https://www.accessdata.fda.gov/cms_ia/importalert_64.html"
+    },
+    {
+      "id": "researchgate-url-underscores",
+      "found": "2026-11-28",
+      "issue": "Reference 7's URL read `profile/Sylvia Mitchell/publication/236154238 Ackee`.",
+      "text": "profile/Sylvia_Mitchell/publication/236154238_Ackee_Blighia_sapida"
+    }
+  ]
+}

@@ -372,6 +372,20 @@ fn holds(outer: &BBox, b: &BBox) -> bool {
         && b.y1 <= outer.y1 + BOX_EPS
 }
 
+/// Whether a box painted over or under glyph `g` is a bar across its line
+/// rather than a box round it: narrower across the line than half the
+/// type's size. Such a bar hides no letter, under the glyph or over it. A
+/// link's underline drawn through the underscores of its URL, a rule over a
+/// dash, a cell's rule: each paints the very mark it lies on, and the text
+/// still reads. A bar is a fraction of the type's size (a link's underline
+/// 0.72pt under 11pt type); a box laid over or under a word to hide it is
+/// about the type's size (a 9.6pt box over 10pt type).
+fn bar_across(c: &BBox, g: &Glyph) -> bool {
+    let turned = (g.rotation_deg.rem_euclid(180.0) - 90.0).abs() < 45.0;
+    let across = if turned { c.x1 - c.x0 } else { c.y1 - c.y0 };
+    across < 0.5 * g.font_size as f64
+}
+
 /// Whether two boxes share more than an edge, to float noise.
 fn meets(a: &BBox, b: &BBox) -> bool {
     a.x0 < b.x1 - BOX_EPS && a.x1 > b.x0 + BOX_EPS && a.y0 < b.y1 - BOX_EPS && a.y1 > b.y0 + BOX_EPS
@@ -949,12 +963,11 @@ impl<'a> Collector<'a> {
                 continue;
             }
             // The latest ground of its colour under all of it, drawn before it.
-            let Some(ground) = grounds
-                .iter()
-                .rev()
-                .filter(|p| p.seq < seq)
-                .find(|p| p.colour.is_some_and(|c| close(c, colour)) && holds(&p.bbox, &b))
-            else {
+            let Some(ground) = grounds.iter().rev().filter(|p| p.seq < seq).find(|p| {
+                p.colour.is_some_and(|c| close(c, colour))
+                    && holds(&p.bbox, &b)
+                    && !bar_across(&p.bbox, g)
+            }) else {
                 continue;
             };
             // Nothing painted between the ground and the glyph reaches it:
@@ -1092,17 +1105,8 @@ impl<'a> Collector<'a> {
                     if b.x1 <= b.x0 || b.y1 <= b.y0 || !meets(&b, &c) {
                         continue;
                     }
-                    // A bar narrower across the line than half the type's
-                    // size hides no letter: a link's underline drawn over
-                    // the underscores of its URL, a rule over a dash, paints
-                    // the very mark it lies on, and the text still reads.
-                    // Such a bar is a fraction of the type's size; a box
-                    // laid over a word to hide it is about the type's size
-                    // (a 9.6pt box over 10pt type).
-                    let g = &self.glyphs[i];
-                    let turned = (g.rotation_deg.rem_euclid(180.0) - 90.0).abs() < 45.0;
-                    let across = if turned { c.x1 - c.x0 } else { c.y1 - c.y0 };
-                    if !holds(&c, &b) || across < 0.5 * g.font_size as f64 {
+                    // A bar across the line hides nothing ([`bar_across`]).
+                    if !holds(&c, &b) || bar_across(&c, &self.glyphs[i]) {
                         torn = true;
                         break 'bands;
                     }
@@ -4575,6 +4579,20 @@ mod cover_tests {
              0.56 0.56 0.56 rg BT /F1 12 Tf 1 0 0 1 20 100 Tm (Tinted) Tj ET",
         );
         assert!(text.contains("Tinted"), "{text:?}");
+    }
+
+    #[test]
+    fn a_links_underline_under_its_underscores_is_no_ground() {
+        // A link's underline, a bar a point tall in the link's blue, drawn
+        // before the URL set over it: the URL's underscores lie wholly on
+        // the bar, in its colour, and stay. The bar is a rule, no ground.
+        let url =
+            "0 0 1 rg 15 98.4 80 1 re f BT /F1 11 Tf 1 0 0 1 20 100 Tm (cms_ia/alert_64) Tj ET";
+        assert_eq!(read(url), "cms_ia/alert_64");
+        // A box of the same blue, a line of type tall, hides them all.
+        let boxed =
+            "0 0 1 rg 10 94 120 16 re f BT /F1 11 Tf 1 0 0 1 20 100 Tm (cms_ia/alert_64) Tj ET";
+        assert_eq!(read(boxed), "");
     }
 
     #[test]
