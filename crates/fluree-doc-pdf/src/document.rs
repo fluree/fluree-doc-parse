@@ -1140,13 +1140,18 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             })
             && !runs_on.is_empty();
         let repeats = repeats || repeats_run_on;
-        // A part that sets the header again and then starts its body over,
-        // on the label the part before opens its body with (`Terrains`
-        // under the next year's opening balances), is the table's next
-        // copy, not its rest.
-        let starts_over = repeats
+        // Edges a little off, a part that sets the header again and then
+        // starts its body over, on the label the part before opens its
+        // body with and other values (`Terrains | 524` under the next
+        // year's opening balances, `Terrains | 503` the year before), is
+        // the table's next copy, not its rest. The same row whole, every
+        // value again, is more of the header repeated, a row of it read as
+        // the body's.
+        let starts_over = shifted
+            && repeats
             && own < prev_cells.len()
             && rows.len() > n
+            && prev_cells[own].len() == rows[n].len()
             && prev_cells[own]
                 .first()
                 .zip(rows[n].first())
@@ -1154,7 +1159,8 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
                     !p.trim().is_empty()
                         && !table::is_numeric_cell(p.trim())
                         && p.split_whitespace().eq(q.split_whitespace())
-                });
+                })
+            && !same(&prev_cells[own], &rows[n]);
         if starts_over {
             continue;
         }
