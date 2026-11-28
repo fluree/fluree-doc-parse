@@ -2579,6 +2579,19 @@ fn stray_space(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool
     if between || follows {
         return false;
     }
+    // Out of turn, between two marks that close up: the mark after begins
+    // where the one before stops, and the page leaves no room for a space
+    // there. A producer lays a row of blank spaces across a cell, a space's
+    // width apart, before it sets the cell's text over them; read where they
+    // fell, they parted words between their letters (`wi t h`, `0 4/
+    // 30/20 2 4`). A space drawn out of turn in a real gap stays: the
+    // words stand a space's width apart.
+    if let (Some(b), Some(a)) = (before, after) {
+        let stop = adv.at(b.origin) + width(b);
+        if (adv.at(a.origin) - stop).abs() <= SPACE_INSIDE * em {
+            return true;
+        }
+    }
     let same = SPACE_SAME_PLACE * em;
     before.is_some_and(|b| {
         let start = adv.at(b.origin);
@@ -4525,6 +4538,28 @@ mod tests {
         small.draw_index = 3;
         v.push(small);
         assert_eq!(assemble(&v)[0].text, "As x");
+    }
+
+    #[test]
+    fn a_layer_of_spaces_laid_under_a_cell_parts_no_word() {
+        // A row of blank spaces laid across a cell, 2.8 apart, drawn before
+        // the words set over them: those between two letters that close up
+        // part nothing.
+        let layer =
+            |n: usize| -> Vec<Glyph> { (0..n).map(|k| space(98.0 + 2.8 * k as f64, k)).collect() };
+        let mut v = layer(10);
+        v.extend(run("with", 100.0, 20));
+        assert_eq!(assemble(&v)[0].text.trim(), "with");
+        // Two words a space's width apart keep a space between them.
+        let mut v = layer(14);
+        v.extend(run("of", 100.0, 20));
+        v.extend(run("it", 113.0, 22));
+        let text = assemble(&v)[0].text.clone();
+        assert_eq!(
+            text.split_whitespace().collect::<Vec<_>>(),
+            ["of", "it"],
+            "{text:?}"
+        );
     }
 
     #[test]

@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "fed-mpr-20240705.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20240705_mprfullreport.pdf",
+    "sha256": "6cfad88dd4ee058a01db2012bf009c18da45e5306301edf3ff5d3b486644d09d",
+    "about": "Federal Reserve Monetary Policy Report, July 2024. Its charts stand in a column beside the text, each with a scale of numbers set level with its axis's ticks, lined up with the lines of the paragraph beside it."
+  },
+  "notes": [
+    "2026-11-28 (a second producer): a chart's category labels read with spaces inside their words (`Disabilit y`, `Wage quartil es`, `Ra ce`), from spaces drawn out of turn between letters that close up."
+  ],
+  "checks": [
+    {
+      "id": "disability",
+      "found": "2026-11-28",
+      "issue": "`Disability` read `Disabilit y`.",
+      "no_text": "Disabilit y"
+    },
+    {
+      "id": "wage-quartiles",
+      "found": "2026-11-28",
+      "issue": "`Wage quartiles` read `Wage quartil es`.",
+      "text": "Wage quartiles"
+    }
+  ]
+}
