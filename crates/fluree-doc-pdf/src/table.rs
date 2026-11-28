@@ -2728,7 +2728,9 @@ impl Grid {
     /// vertical ends on a row's rule that runs under its own columns alone,
     /// and under it nothing is ruled or written down to the grid's foot. The
     /// other box's first vertical, where they meet, runs the grid's full
-    /// height. Each box is a grid of its own. Returns the grids, the edge
+    /// height, and the shorter box is one column against two or more:
+    /// columns of one table that end short of the rest are the table's.
+    /// Each box is a grid of its own. Returns the grids, the edge
     /// box first where it stands left; the grid whole where none is so.
     pub fn split_flush_boxes(self, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) -> Vec<Grid> {
         let (rows, cols) = (self.rows(), self.cols());
@@ -2783,7 +2785,7 @@ impl Grid {
             let k = (1..rows)
                 .rev()
                 .find(|&k| covers_v(outer, top, self.ys[k]))?;
-            if covers_v(outer, top, foot) || any_v(outer, self.ys[k], foot) {
+            if any_v(outer, self.ys[k], foot) {
                 return None;
             }
             // Where the boxes meet: the nearest inner vertical running the
@@ -2796,6 +2798,14 @@ impl Grid {
             let c = inner
                 .into_iter()
                 .find(|&c| covers_v(self.xs[c], top, foot))?;
+            // The edge box is one column against a table of two or more: a
+            // label's box set beside the table. Columns of one table that
+            // end short of the others (a block of a table set three times
+            // side by side, columns a note runs on under) are the table's.
+            let width = if left { c } else { cols - c };
+            if width != 1 || cols - width < 2 {
+                return None;
+            }
             let (x0, x1) = if left {
                 (self.xs[0], self.xs[c])
             } else {
@@ -13402,6 +13412,120 @@ mod header_tests {
         let rows: Vec<Vec<String>> = texts.chunks(5).map(|c| c.to_vec()).collect();
         assert_eq!(rows[1][2], "Daily Total: $ 9.00");
         assert_eq!(g.header_rows(&rows, &glyphs, &rules, &fills), 1);
+    }
+
+    /// An invoice's tax box (two rows) flush against the left of its totals
+    /// (four rows): their rules, as drawn, and a word in each cell.
+    fn flush_boxes() -> (Grid, Vec<Rule>, Vec<crate::glyph::Glyph>) {
+        let xs = vec![293.0, 377.0, 460.0, 570.0];
+        let ys = vec![636.0, 658.0, 680.0, 706.0, 733.0];
+        let g = plain_grid(xs, ys);
+        let mut rules = vec![
+            v(636.0, 680.0, 293.0),
+            v(636.0, 733.0, 377.0),
+            v(636.0, 733.0, 460.0),
+            v(636.0, 733.0, 570.0),
+            h(293.0, 570.0, 636.0),
+            h(293.0, 570.0, 658.0),
+            h(293.0, 570.0, 680.0),
+            h(377.0, 570.0, 706.0),
+            h(377.0, 570.0, 733.0),
+        ];
+        rules.sort_by(|a, b| a.axis_pos().total_cmp(&b.axis_pos()));
+        let glyphs = vec![
+            gly(300.0, 650.0, 5.0, "T"),
+            gly(300.0, 672.0, 5.0, "C"),
+            gly(380.0, 650.0, 5.0, "S"),
+            gly(465.0, 650.0, 5.0, "1"),
+            gly(380.0, 700.0, 5.0, "P"),
+            gly(465.0, 727.0, 5.0, "3"),
+        ];
+        (g, rules, glyphs)
+    }
+
+    #[test]
+    fn boxes_flush_side_by_side_are_grids_of_their_own() {
+        let (g, rules, glyphs) = flush_boxes();
+        let parts = g.split_flush_boxes(&rules, &glyphs);
+        assert_eq!(parts.len(), 2);
+        assert_eq!((parts[0].cols(), parts[0].rows()), (1, 2));
+        assert_eq!((parts[1].cols(), parts[1].rows()), (2, 4));
+        assert_eq!(parts[1].xs[0], 377.0);
+        // Set the other way round, the short box at the right.
+        let mirror = |x: f64| 863.0 - x;
+        let flipped: Vec<Rule> = rules
+            .iter()
+            .map(|r| match r.orientation {
+                Orientation::Vertical => v(r.bbox.y0, r.bbox.y1, mirror(r.axis_pos())),
+                Orientation::Horizontal => h(mirror(r.bbox.x1), mirror(r.bbox.x0), r.axis_pos()),
+            })
+            .collect();
+        let glyphs_flipped: Vec<crate::glyph::Glyph> = glyphs
+            .iter()
+            .map(|gl| gly(mirror(gl.origin.0) - 5.0, gl.origin.1, 5.0, &gl.text))
+            .collect();
+        let g = plain_grid(
+            vec![293.0, 403.0, 486.0, 570.0],
+            vec![636.0, 658.0, 680.0, 706.0, 733.0],
+        );
+        let parts = g.split_flush_boxes(&flipped, &glyphs_flipped);
+        assert_eq!(parts.len(), 2);
+        assert_eq!((parts[0].cols(), parts[0].rows()), (2, 4));
+        assert_eq!((parts[1].cols(), parts[1].rows()), (1, 2));
+    }
+
+    #[test]
+    fn a_grid_is_not_parted_without_a_shorter_box_framed_at_its_edge() {
+        let parts = |rules: &[Rule], glyphs: &[crate::glyph::Glyph]| {
+            let (g, _, _) = flush_boxes();
+            g.split_flush_boxes(rules, glyphs).len()
+        };
+        let (_, rules, glyphs) = flush_boxes();
+        assert_eq!(parts(&rules, &glyphs), 2);
+        // The outer vertical runs the full height: one box.
+        let mut full = rules.clone();
+        full.push(v(680.0, 733.0, 293.0));
+        assert_eq!(parts(&full, &glyphs), 1);
+        // The outer edge goes on below a rule under the column: the
+        // column is ruled on, a row more.
+        let mut on = rules.clone();
+        on.push(v(680.0, 733.0, 293.0));
+        on.push(h(293.0, 377.0, 706.0));
+        assert_eq!(parts(&on, &glyphs), 1);
+        // Something written under the short box: its column goes on.
+        let mut written = glyphs.clone();
+        written.push(gly(300.0, 720.0, 5.0, "x"));
+        assert_eq!(parts(&rules, &written), 1);
+        // A rule under the short box: its column is ruled on.
+        let mut ruled = rules.clone();
+        ruled.push(h(293.0, 377.0, 706.0));
+        assert_eq!(parts(&ruled, &glyphs), 1);
+        // The meeting vertical stops with the short box: no other box beside.
+        let short: Vec<Rule> = rules
+            .iter()
+            .filter(|r| {
+                !(r.orientation == Orientation::Vertical && (r.axis_pos() - 377.0).abs() < 1.0)
+            })
+            .cloned()
+            .chain([v(636.0, 680.0, 377.0)])
+            .collect();
+        let short_meet: Vec<Rule> = short
+            .into_iter()
+            .filter(|r| {
+                !(r.orientation == Orientation::Vertical && (r.axis_pos() - 460.0).abs() < 1.0)
+            })
+            .chain([v(636.0, 680.0, 460.0)])
+            .collect();
+        assert_eq!(parts(&short_meet, &glyphs), 1);
+        // Two columns ending short of the rest are the table's own (a block
+        // of a table set side by side, columns a note runs on under).
+        let mut two = rules.clone();
+        two.push(v(636.0, 680.0, 335.0));
+        let g = plain_grid(
+            vec![293.0, 335.0, 377.0, 460.0, 570.0],
+            vec![636.0, 658.0, 680.0, 706.0, 733.0],
+        );
+        assert_eq!(g.split_flush_boxes(&two, &glyphs).len(), 1);
     }
 
     #[test]

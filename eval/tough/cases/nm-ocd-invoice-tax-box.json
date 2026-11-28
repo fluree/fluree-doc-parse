@@ -1,0 +1,28 @@
+{
+  "document": {
+    "path": "../fixtures/nm-ocd-invoice-p124-125.pdf",
+    "sha256": "5113c4fe9a180e3cd05940538f6603027d1925b9f3e3e341e1e2bbf91a8ce2ad",
+    "about": "Pages 124–125 of a New Mexico Oil Conservation Division filing (public): a well-service invoice over two pages. On page 125 the form's tax box (`Tax Location` over `CCN`, two rows) is drawn flush against the left of the totals box (Subtotal, Sales Tax, Payment, Balance Due, four rows)."
+  },
+  "notes": [
+    "Source: https://ocdimage.emnrd.nm.gov/Imaging/FileStore/santafe/cf/20251009/24683_10_09_2025_04_29_13.pdf (sha256 275bbae5e89e5cad2c26becabc09dbcd800c0ae01d87c94be89dcd6a65097940), pages 124 and 125. Made with pypdf: add those two pages to a PdfWriter, `remove_images(to_delete=ImageType.XOBJECT_IMAGES | ImageType.INLINE_IMAGES)` (raster images only: the default also strips vector drawings, the grid's rules and shading), `compress_content_streams()` on each page, `compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)`, write. The images dropped are the letterhead's logo.",
+    "2026-11-28 (#642): two ruled boxes set flush side by side, the edge box one column and shorter, its frame ending on a rule under its own column, are read as boxes of their own."
+  ],
+  "checks": [
+    {
+      "id": "totals-alone",
+      "found": "2026-11-28",
+      "issue": "The tax box was read as the totals table's first column, and the rows' heads for Subtotal and Sales Tax.",
+      "columns": {
+        "with": "Balance Due",
+        "count": 2
+      }
+    },
+    {
+      "id": "tax-box-kept",
+      "found": "2026-11-28",
+      "issue": "The tax box's lines stay in the document.",
+      "text": "Tax Location"
+    }
+  ]
+}
