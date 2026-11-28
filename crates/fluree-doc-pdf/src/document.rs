@@ -3258,7 +3258,7 @@ fn reads_as_rows(grid: &Grid, glyphs: &[Glyph]) -> bool {
 const PROSE_CELL_WORDS: usize = 25;
 
 /// Drop the rows of a table that hold nothing: a blank row a table sets
-/// between its groups of rows, rows of text after it, ruled as its own
+/// between its groups of rows, ruled as its own
 /// ([`table::Grid::trim_to_content_ruled`]). The row is the ruling's
 /// spacing, not data: it is not emitted, and the rows under it number on
 /// from the rows over it. A row a merged cell spans, its text read into the
@@ -3276,14 +3276,17 @@ fn drop_blank_rows(e: &mut Element) {
         return;
     }
     let down = |r: usize, c: usize| e.merged_down.as_ref().is_some_and(|m| m[r * cols + c]);
-    // Only a blank row with text after it: the rows a form leaves blank to
-    // be filled in, to its foot, are its own.
+    // A form's table to fill in, its header over rows that are all blank,
+    // keeps them: they are its rows ([`table::Grid::trim_to_content_ruled`]).
     let holds = |r: usize| rows[r].iter().any(|t| !t.trim().is_empty());
+    let head = e.header_rows.unwrap_or(0).max(1);
+    if (head..n).all(|r| !holds(r)) {
+        return;
+    }
     let blank: Vec<usize> = (1..n - 1)
         .filter(|&r| {
             rows[r].iter().all(|t| t.trim().is_empty())
                 && (0..cols).all(|c| !down(r, c) && !down(r + 1, c))
-                && (r + 1..n).any(holds)
         })
         .collect();
     if blank.is_empty() {
