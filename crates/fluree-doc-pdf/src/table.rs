@@ -4470,7 +4470,9 @@ fn detect_group_trimmed(
                         .iter()
                         .any(|r| (r.bbox.y1 - prev).abs() <= EDGE_TOLERANCE);
                     let restart = vs.iter().any(|r| (r.bbox.y0 - y).abs() <= EDGE_TOLERANCE);
-                    if !crossed && stop && restart && y - prev > EDGE_TOLERANCE {
+                    if (!crossed && stop && restart && y - prev > EDGE_TOLERANCE)
+                        || holds_a_line(glyphs, &hs, prev, y, x_lo, x_hi)
+                    {
                         out.push(y);
                     }
                 }
@@ -4596,6 +4598,48 @@ fn detect_group_trimmed(
     let verticals: Vec<BBox> = vs.iter().map(|r| r.bbox).collect();
     let ys = with_fill_edges(ys, &xs, fills, glyphs, !boxed, &verticals);
     split_row_bands(xs, ys, rules, page, frames, glyphs)
+}
+
+/// A line of type stands between two row lines `top` and `bottom` closer
+/// than a cell's height ([`MIN_CELL_EXTENT`]), between `x0` and `x1`: the
+/// ink of two letters or figures inside the band, give or take a tenth of
+/// their height, each under a rule at the band's top and over one at its
+/// foot. A stray mark is no line, and nor is a line of a cell merged down
+/// beside the band, whose rules are drawn in the other columns.
+///
+/// A table set in small type rules a band as thin as its type (a section's
+/// name in 5.5 point type between rules 7.5 points apart); a border drawn
+/// beside a cell's edge, a spacer row or a thick rule holds no text.
+fn holds_a_line(
+    glyphs: &[crate::glyph::Glyph],
+    hs: &[&Rule],
+    top: f64,
+    bottom: f64,
+    x0: f64,
+    x1: f64,
+) -> bool {
+    let ruled = |y: f64, x: f64| {
+        hs.iter()
+            .any(|r| (r.axis_pos() - y).abs() <= EDGE_TOLERANCE && r.bbox.x0 <= x && r.bbox.x1 >= x)
+    };
+    glyphs
+        .iter()
+        .filter(|g| {
+            g.is_horizontal()
+                && g.text.chars().any(char::is_alphanumeric)
+                && g.bbox.is_some_and(|b| {
+                    let slack = 0.1 * (b.y1 - b.y0);
+                    let x = (b.x0 + b.x1) / 2.0;
+                    b.y0 >= top - slack
+                        && b.y1 <= bottom + slack
+                        && x > x0
+                        && x < x1
+                        && ruled(top, x)
+                        && ruled(bottom, x)
+                })
+        })
+        .nth(1)
+        .is_some()
 }
 
 /// The verticals whose ends say where rows part.
@@ -11934,6 +11978,57 @@ mod header_tests {
         // One value beside it is no row's values either.
         let grids = read([5, 1, 0, 0]);
         assert!(grids.iter().all(|g| g.rows() < 7), "got {grids:?}");
+    }
+
+    #[test]
+    fn a_thin_band_holding_a_line_of_small_type_is_a_row() {
+        // Rows 15 points tall, a band 7.5 points tall after the second,
+        // ruled across and down its three columns.
+        let ys = [0.0, 15.0, 30.0, 37.5, 52.5, 67.5];
+        let mut rules: Vec<Rule> = ys.iter().map(|&y| h(0.0, 300.0, y)).collect();
+        for x in [0.0, 100.0, 200.0, 300.0] {
+            rules.push(v(0.0, 67.5, x));
+        }
+        let small = |x: f64, top: f64, text: &str| crate::glyph::Glyph {
+            text: text.into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: top,
+                x1: x + 4.0,
+                y1: top + 5.5,
+            }),
+            page: 0,
+            origin: (x, top + 5.0),
+            rotation_deg: 0.0,
+            font_size: 5.5,
+            weight: None,
+            italic: false,
+            advance: Some(4.0),
+            draw_index: 0,
+            ocr: None,
+        };
+        let mut rows = Vec::new();
+        for top in [5.0, 20.0, 45.0, 60.0] {
+            for x in [10.0, 110.0, 210.0] {
+                rows.push(small(x, top, "A"));
+            }
+        }
+        let read = |band: &[crate::glyph::Glyph]| {
+            let mut glyphs = rows.clone();
+            glyphs.extend_from_slice(band);
+            let grids = detect_framed(&rules, &[], &glyphs, 0, &[]);
+            grids.iter().map(|g| g.rows()).max().unwrap_or(0)
+        };
+        // A section's name in the band: a row of its own.
+        let name: Vec<_> = ["I", "d", "a"]
+            .iter()
+            .enumerate()
+            .map(|(k, t)| small(10.0 + 4.5 * k as f64, 31.0, t))
+            .collect();
+        assert_eq!(read(&name), 5);
+        // Blank, or a stray mark: a spacer or a double rule, no row.
+        assert_eq!(read(&[]), 4);
+        assert_eq!(read(&[small(10.0, 31.0, "*")]), 4);
     }
 
     #[test]

@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "doe-em-major-procurements-2023-07.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2023-07/July-2023%20Major%20Procurements%207-31-23.pdf",
+    "sha256": "b60e444e257505352b864d47218e5598b0995fa06712eae229c577925cdd04bd",
+    "about": "US Department of Energy, Office of Environmental Management, awarded major procurements (Microsoft Excel for Microsoft 365), shrunk to fit its pages: 6 point type, and each office's contracts under a dark band holding its name in 5.5 point type between rules 7.5 points apart."
+  },
+  "checks": [
+    {
+      "id": "band-over-its-contracts",
+      "found": "2026-11-28",
+      "issue": "On page 2 the band `Idaho (ID)` was no row of its own: its rules stand closer than a cell's height, and the band ran into the row under it (`Idaho (ID) Advanced Mixed Waste Treatment Project`). Its contracts carried the band before it, `Hanford Procurement Office …`.",
+      "cell": {
+        "value": "Spectra Tech, Inc.",
+        "section": "Idaho (ID)"
+      }
+    },
+    {
+      "id": "band-over-its-contracts-2",
+      "found": "2026-11-28",
+      "issue": "As above, the band `Oak Ridge Office OF Environmental Management (OREM)`, its name split between the first two cells of the row under it.",
+      "cell": {
+        "value": "Wastern Advantage, Inc.",
+        "section": "Oak Ridge Office OF Environmental Management (OREM)"
+      }
+    },
+    {
+      "id": "band-over-its-contracts-3",
+      "found": "2026-11-28",
+      "issue": "As above, `Portsmouth Paducah Project Office (PPPO)`.",
+      "cell": {
+        "value": "Fluor Federal Services, Inc.",
+        "section": "Portsmouth Paducah Project Office (PPPO)"
+      }
+    }
+  ]
+}

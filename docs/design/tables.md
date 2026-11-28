@@ -92,6 +92,15 @@ the frame alone too and stays a row; so does a blank row inside one table,
 its columns ruled alike either side, and the band over a box of one row or a
 diagram's panel, which is no table to part off.
 
+Two rules closer than a cell's height, eight points, are one line drawn
+twice, or a border beside a cell's edge: the band between them is no row. A
+table set in small type rules a band as thin as its type, though: an export
+from a spreadsheet, shrunk to fit its page, sets each section's name in
+5.5 point type between rules 7.5 points apart. A thin band stays a row where
+a line of type stands inside it, the ink of two letters or figures between
+its rules. A blank spacer, a double rule or a thick coloured rule holds no
+text, and a stray mark is no line.
+
 A grid's top and bottom are trimmed of bands no vertical crosses: a heading's
 underline welded on above a ruled box. Only verticals within a row's height
 of its rows count.
