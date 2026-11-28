@@ -1447,6 +1447,27 @@ impl Grid {
     /// leading run of filled bands *is* the header depth. A run covering the
     /// whole grid says the shading carries no contrast and falls back to the
     /// single-row logic.
+    /// Row `r` is open across the table: no rule parts its cells, where
+    /// the ruling draws the columns on another row.
+    fn open_across(&self, rules: &[Rule], r: usize) -> bool {
+        let cols = self.cols();
+        if cols < 2 || r + 1 >= self.ys.len() {
+            return false;
+        }
+        let drawn = |r: usize, c: usize| {
+            let mid = (self.ys[r] + self.ys[r + 1]) / 2.0;
+            let x = self.xs[c];
+            rules.iter().any(|rule| {
+                rule.orientation == Orientation::Vertical
+                    && (rule.bbox.x0 - x).abs() <= EDGE_TOLERANCE * 2.0
+                    && rule.bbox.y0 <= mid
+                    && rule.bbox.y1 >= mid
+            })
+        };
+        (1..cols).all(|c| !drawn(r, c))
+            && (0..self.rows()).any(|o| o != r && (1..cols).any(|c| drawn(o, c)))
+    }
+
     pub fn header_rows(
         &self,
         rows: &[Vec<String>],
@@ -1499,9 +1520,14 @@ impl Grid {
         // fill of its own: a funding table's `Months 1 – 12`, shaded as its
         // header is, over the CLINs it groups, and `Months 13-24` over the
         // next. A band labels the rows under it; it names no column.
+        // A band's label centred across the row runs over the columns'
+        // cuts, which deal its words out among the cells (`Base Period 2:
+        // October 1, 2025 to Septem | ber 30, 2026`): the ruling, open
+        // across the row where it parts the rows around it, says it is one.
         let band = |r: usize| {
-            rows[r].first().is_some_and(|t| !t.trim().is_empty())
-                && rows[r].iter().skip(1).all(|t| t.trim().is_empty())
+            (rows[r].first().is_some_and(|t| !t.trim().is_empty())
+                && rows[r].iter().skip(1).all(|t| t.trim().is_empty()))
+                || (rows[r].iter().any(|t| !t.trim().is_empty()) && self.open_across(rules, r))
         };
         // Beside other columns only, and in a run that leaves rows bare: a
         // one-column listing shaded throughout holds nothing but such rows.
@@ -1509,7 +1535,7 @@ impl Grid {
             && run < rows.len()
             && self.cols() >= 2
             && band(run - 1)
-            && (run..rows.len()).any(|r| band(r) && self.band_has_fill(fills, r))
+            && (run..rows.len()).any(|r| self.band_has_fill(fills, r) && band(r))
         {
             run -= 1;
         }
@@ -10840,6 +10866,40 @@ mod header_tests {
         let lines: Vec<Vec<String>> = (0..9).map(|r| vec![format!("line {r}")]).collect();
         let shaded: Vec<_> = (0..9).filter(|&r| r != 5).map(row).collect();
         assert_eq!(one.header_rows(&lines, &[], &[], &shaded), 1);
+    }
+
+    #[test]
+    fn a_first_band_centred_across_the_cuts_is_no_header_row() {
+        // The funding table again, its bands' labels centred across the
+        // row and dealt out among the cells by the columns' cuts. The
+        // ruling draws the columns on every row but the bands.
+        let g = grid_with_bands();
+        let row = |r: usize| fill(0.0, 100.0 + 20.0 * r as f64, 400.0, 120.0 + 20.0 * r as f64);
+        let rows: Vec<Vec<String>> = [
+            ["CLIN", "Funding Amount", "Estimated Date", "Note"],
+            ["", "Months 1 – 12 from", "award", ""],
+            ["0001 – Storage", "TBD", "TBD", "a"],
+            ["", "Months 13 – 24 from", "award", ""],
+            ["0006 – Storage", "$2,947,920.24", "December 3, 2021", "b"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        let fills = [row(0), row(1), row(3)];
+        let mut rules = vec![v(100.0, 200.0, 0.0), v(100.0, 200.0, 400.0)];
+        for x in [100.0, 200.0, 300.0] {
+            for r in [0, 2, 4] {
+                rules.push(v(100.0 + 20.0 * r as f64, 120.0 + 20.0 * r as f64, x));
+            }
+        }
+        assert_eq!(g.header_rows(&rows, &[], &rules, &fills), 1);
+        // Ruled through, the rows are cells of their own: the shaded second
+        // row is the header's.
+        let ruled: Vec<Rule> = [0.0, 100.0, 200.0, 300.0, 400.0]
+            .iter()
+            .map(|&x| v(100.0, 200.0, x))
+            .collect();
+        assert_eq!(g.header_rows(&rows, &[], &ruled, &fills), 2);
     }
 
     #[test]
