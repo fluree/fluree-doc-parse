@@ -1573,12 +1573,12 @@ impl Grid {
         };
         // Beside other columns only, and in a run that leaves rows bare: a
         // one-column listing shaded throughout holds nothing but such rows.
-        if run >= 2
-            && run < rows.len()
+        // Bands set one over another under the header (a section's band
+        // over its first sub-section's) are each the table's.
+        let later_band = run < rows.len()
             && self.cols() >= 2
-            && band(run - 1)
-            && (run..rows.len()).any(|r| self.band_has_fill(fills, r) && band(r))
-        {
+            && (run..rows.len()).any(|r| self.band_has_fill(fills, r) && band(r));
+        while later_band && run >= 2 && band(run - 1) {
             run -= 1;
         }
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
@@ -10912,6 +10912,37 @@ mod header_tests {
         let lines: Vec<Vec<String>> = (0..9).map(|r| vec![format!("line {r}")]).collect();
         let shaded: Vec<_> = (0..9).filter(|&r| r != 5).map(row).collect();
         assert_eq!(one.header_rows(&lines, &[], &[], &shaded), 1);
+    }
+
+    #[test]
+    fn bands_stacked_under_the_header_are_each_a_band() {
+        // A controls listing: its header shaded, a section's band and its
+        // first sub-section's band shaded under it, then controls, and the
+        // next sub-section's band further down.
+        let g = Grid {
+            ys: (0..7).map(|r| 100.0 + 20.0 * r as f64).collect(),
+            bbox: BBox {
+                x0: 0.0,
+                y0: 100.0,
+                x1: 400.0,
+                y1: 220.0,
+            },
+            ..grid_with_bands()
+        };
+        let row = |r: usize| fill(0.0, 100.0 + 20.0 * r as f64, 400.0, 120.0 + 20.0 * r as f64);
+        let rows: Vec<Vec<String>> = [
+            ["Control ID", "Control", "Test", "Result"],
+            ["C1.0 - Environment", "", "", ""],
+            ["C1.1 - Principle 1", "", "", ""],
+            ["C1.1.1", "Board meets", "Inspected", "No exceptions"],
+            ["C1.2 - Principle 2", "", "", ""],
+            ["C1.2.1", "Policies", "Inspected", "No exceptions"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        let fills = [row(0), row(1), row(2), row(4)];
+        assert_eq!(g.header_rows(&rows, &[], &[], &fills), 1);
     }
 
     #[test]
