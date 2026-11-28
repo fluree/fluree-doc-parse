@@ -6256,7 +6256,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             table::opens_under(g, grids, &n.glyphs, &p.glyphs, CONTINUED_EDGE_TOLERANCE)
         };
         let trim = |gs: Vec<Grid>| -> Vec<Grid> {
+            // Boxes set flush side by side are grids of their own
+            // (`Grid::split_flush_boxes`).
             gs.into_iter()
+                .flat_map(|g| g.split_flush_boxes(&p.rules, &p.glyphs))
                 .filter_map(|mut g| {
                     let drawn_to = g.bbox.y1;
                     g.trim_to_content_ruled(&p.glyphs, &p.rules);
