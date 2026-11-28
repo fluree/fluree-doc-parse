@@ -2395,6 +2395,99 @@ impl Grid {
             .collect()
     }
 
+    /// Where the band `y0..y1` of the table holds entries set one under
+    /// another, each opening on a line of a column of figures, its text
+    /// wrapped onto the lines below in the columns beside: the cuts above
+    /// each entry after the first.
+    ///
+    /// An invoice's items under ruled columns and no rule between them: a
+    /// date, an item code, a description run onto a second line and a
+    /// `Daily Total` line under it, a quantity, a unit, a rate and an
+    /// amount, one entry under the next. Read as one row, every cell ran
+    /// its entries together. The column of figures is the evidence: two
+    /// lines or more, each a figure whole, none wrapped. Two other columns
+    /// set a line beside each of its lines, and every line of every column
+    /// stands beside one of them or goes on from the line over it in its
+    /// column, a line's pitch under it. At
+    /// least one line wraps so: entries of one line each are values stacked
+    /// one per line ([`Grid::stacked_cuts`]).
+    fn entry_cuts(&self, glyphs: &[crate::glyph::Glyph], y0: f64, y1: f64) -> Option<Vec<f64>> {
+        let cols = self.cols();
+        let lines: Vec<Vec<(f64, String, f64)>> = (0..cols)
+            .map(|c| Self::lines_in(glyphs, (self.xs[c], self.xs[c + 1], y0, y1)))
+            .collect();
+        let figure = |t: &str| is_numeric_cell(t.trim());
+        // A figure carried on from the line over it (a confidence interval
+        // in brackets under its count, a line opening in lower case or after
+        // a joiner) is one value over two lines: no entry opens on it.
+        let carried = |c: usize| {
+            lines[c].iter().skip(1).any(|l| {
+                l.1.trim_start()
+                    .starts_with(|ch: char| ch.is_lowercase() || ch == '(' || ch == '[')
+            }) || lines[c]
+                .iter()
+                .rev()
+                .skip(1)
+                .any(|l| l.1.trim_end().ends_with(['-', '\u{2013}', '/', ',']))
+        };
+        let key = (0..cols).find(|&c| {
+            lines[c].len() >= 2 && lines[c].iter().all(|l| figure(&l.1)) && !carried(c)
+        })?;
+        let bases: Vec<f64> = lines[key].iter().map(|l| l.0).collect();
+        // Beside an entry's line is on its baseline: a line set between the
+        // two lines of a label centred on it is beside neither.
+        let base_of =
+            |l: &(f64, String, f64)| bases.iter().position(|b| (l.0 - b).abs() <= 0.25 * l.2);
+        let beside_each = (0..cols)
+            .filter(|&c| c != key)
+            .filter(|&c| {
+                lines[c].len() == bases.len() && lines[c].iter().all(|l| base_of(l).is_some())
+            })
+            .count();
+        if beside_each < 2 {
+            return None;
+        }
+        let mut wrapped = false;
+        for col in &lines {
+            for (i, l) in col.iter().enumerate() {
+                if base_of(l).is_some() {
+                    continue;
+                }
+                // A wrapped line: under its column's line before it, a
+                // line's pitch on (too close for an entry to open between).
+                let Some(prev) = i.checked_sub(1).map(|j| &col[j]) else {
+                    return None;
+                };
+                let pitch = l.0 - prev.0;
+                if pitch <= 0.0 || pitch > 1.6 * l.2 {
+                    return None;
+                }
+                wrapped = true;
+            }
+        }
+        if !wrapped {
+            return None;
+        }
+        // Each cut lies between the centres of the last line over the entry,
+        // in any column, and the entry's own line: a glyph belongs to the
+        // row its centre falls in.
+        let all: Vec<&(f64, String, f64)> = lines.iter().flatten().collect();
+        let centre = |l: &(f64, String, f64)| l.0 - 0.35 * l.2;
+        let cuts = lines[key]
+            .iter()
+            .skip(1)
+            .map(|opening| {
+                let over = all
+                    .iter()
+                    .filter(|l| l.0 < opening.0 - 0.5 * opening.2)
+                    .map(|l| centre(l))
+                    .fold(f64::MIN, f64::max);
+                (over + centre(opening)) / 2.0
+            })
+            .collect();
+        Some(cuts)
+    }
+
     /// Where the band `y0..y1` of the table holds values stacked one per
     /// line, a line of each beside a line of the others: the cuts between
     /// those lines, and the columns stacked so, every line of theirs on one
@@ -2414,6 +2507,11 @@ impl Grid {
         y0: f64,
         y1: f64,
     ) -> Option<(Vec<f64>, Vec<usize>)> {
+        // Entries with wrapped lines are parted where each opens, and none
+        // of their columns is read whole across them.
+        if self.entry_cuts(glyphs, y0, y1).is_some() {
+            return None;
+        }
         let cols = self.cols();
         let lines: Vec<Vec<(f64, String, f64)>> = (0..cols)
             .map(|c| Self::lines_in(glyphs, (self.xs[c], self.xs[c + 1], y0, y1)))
@@ -2479,8 +2577,9 @@ impl Grid {
         Some((cuts, stacked))
     }
 
-    /// Part each ruled row holding values stacked one per line
-    /// ([`Grid::stacked_cuts`]) into one row per line. The cells beside them
+    /// Part each ruled row holding entries with wrapped lines
+    /// ([`Grid::entry_cuts`]) into one row per entry, and each holding values
+    /// stacked one per line ([`Grid::stacked_cuts`]) into one row per line. The cells beside them
     /// that do not stack so are read whole across the new rows
     /// ([`Grid::stacked_merges`]).
     ///
@@ -2491,7 +2590,11 @@ impl Grid {
             return added;
         }
         for r in (0..self.rows()).rev() {
-            if let Some((cuts, _)) = self.stacked_cuts(glyphs, self.ys[r], self.ys[r + 1]) {
+            let (y0, y1) = (self.ys[r], self.ys[r + 1]);
+            let cuts = self
+                .entry_cuts(glyphs, y0, y1)
+                .or_else(|| self.stacked_cuts(glyphs, y0, y1).map(|(cuts, _)| cuts));
+            if let Some(cuts) = cuts {
                 added.push((r, cuts.len()));
                 for (i, y) in cuts.into_iter().enumerate() {
                     self.ys.insert(r + 1 + i, y);
@@ -2500,6 +2603,21 @@ impl Grid {
         }
         added.reverse();
         added
+    }
+
+    /// Part a grid of one ruled row into its entries
+    /// ([`Grid::entry_cuts`]); returns whether it parted.
+    pub fn split_entry_row(&mut self, glyphs: &[crate::glyph::Glyph]) -> bool {
+        if self.layout.is_some() || self.rows() != 1 || self.cols() < 2 {
+            return false;
+        }
+        let Some(cuts) = self.entry_cuts(glyphs, self.ys[0], self.ys[1]) else {
+            return false;
+        };
+        for (i, y) in cuts.into_iter().enumerate() {
+            self.ys.insert(1 + i, y);
+        }
+        true
     }
 
     /// The cells of rows [`Grid::split_stacked_rows`] parted that do not
@@ -12929,6 +13047,112 @@ mod header_tests {
         ];
         rules.extend(xs.iter().map(|&x| v(100.0, 140.0, x)));
         (g, glyphs, rules)
+    }
+
+    /// A ruled box, columns at `xs`, one row from y=100 to y=200, each
+    /// line `(x, baseline, text)` set as glyphs.
+    fn entry_box(xs: &[f64], lines: &[(f64, f64, &str)]) -> (Grid, Vec<crate::glyph::Glyph>) {
+        let g = plain_grid(xs.to_vec(), vec![100.0, 200.0]);
+        let mut glyphs = Vec::new();
+        for &(x, y, t) in lines {
+            glyphs.extend(
+                t.chars()
+                    .enumerate()
+                    .map(|(i, c)| gly(x + 5.0 * i as f64, y, 5.0, &c.to_string())),
+            );
+        }
+        (g, glyphs)
+    }
+
+    /// Two invoice items under columns `Date | Item | Description | Qty |
+    /// Amount`: the first's description wrapped onto a second line and a
+    /// daily total under it, the second's onto a total.
+    const ITEMS: &[(f64, f64, &str)] = &[
+        (5.0, 112.0, "12/5"),
+        (55.0, 112.0, "K1"),
+        (105.0, 112.0, "Items by a third party -"),
+        (105.0, 122.0, "Lindsay Trucking"),
+        (105.0, 132.0, "Daily Total $ 2,599.67"),
+        (305.0, 112.0, "1"),
+        (355.0, 112.0, "2,438.15"),
+        (5.0, 152.0, "12/7"),
+        (55.0, 152.0, "14"),
+        (105.0, 152.0, "Pump truck travel"),
+        (105.0, 162.0, "Daily Total $ 200.00"),
+        (305.0, 152.0, "200"),
+        (355.0, 152.0, "200.00"),
+    ];
+    const ITEM_COLUMNS: &[f64] = &[0.0, 50.0, 100.0, 300.0, 350.0, 450.0];
+
+    #[test]
+    fn entries_with_wrapped_lines_part_where_each_opens() {
+        let (mut g, glyphs) = entry_box(ITEM_COLUMNS, ITEMS);
+        assert!(g.split_entry_row(&glyphs));
+        assert_eq!(g.rows(), 2);
+        let texts = g.cell_texts(&glyphs);
+        assert_eq!(
+            texts[2],
+            "Items by a third party - Lindsay Trucking Daily Total $ 2,599.67"
+        );
+        assert_eq!(texts[5 + 2], "Pump truck travel Daily Total $ 200.00");
+        assert_eq!(texts[5 + 4], "200.00");
+        // Parted by the same rule where the grid has more rows, and none of
+        // its columns read whole across them.
+        let (mut g, glyphs) = entry_box(ITEM_COLUMNS, ITEMS);
+        assert!(g.stacked_cuts(&glyphs, 100.0, 200.0).is_none());
+        assert_eq!(g.split_stacked_rows(&glyphs), vec![(0, 1)]);
+    }
+
+    #[test]
+    fn entries_are_not_parted_without_their_evidence() {
+        let without = |drop: &dyn Fn(&(f64, f64, &str)) -> bool,
+                       add: &[(f64, f64, &'static str)]| {
+            let mut lines: Vec<(f64, f64, &str)> =
+                ITEMS.iter().copied().filter(|l| !drop(l)).collect();
+            lines.extend_from_slice(add);
+            let (g, glyphs) = entry_box(ITEM_COLUMNS, &lines);
+            g.entry_cuts(&glyphs, 100.0, 200.0)
+        };
+        assert!(without(&|_| false, &[]).is_some());
+        // A line opening between the entries, not under a line of its own
+        // column: a note, not a wrap.
+        assert!(without(&|_| false, &[(55.0, 142.0, "see note")]).is_none());
+        // One column beside the figures alone (the item codes and dates gone).
+        assert!(without(&|l| l.0 < 100.0, &[]).is_none());
+        // A line over the first entry (a label at the cell's head) goes on
+        // from nothing.
+        assert!(without(&|_| false, &[(55.0, 104.0, "Note")]).is_none());
+        // A wrap two lines' pitch under the line over it is no wrap.
+        assert!(without(
+            &|l| l.2.starts_with("Daily Total $ 2"),
+            &[(105.0, 146.0, "Daily Total")]
+        )
+        .is_none());
+        // A label of two lines centred on its values: the second line sits
+        // a quarter of its size or more off their baseline, beside neither.
+        assert!(without(
+            &|l| l.2 == "Pump truck travel",
+            &[(105.0, 155.0, "Pump truck travel")]
+        )
+        .is_none());
+        // Figures carried on in brackets under the first (counts over their
+        // confidence intervals) are one value each, not two entries.
+        assert!(without(
+            &|l| l.0 >= 305.0,
+            &[
+                (305.0, 112.0, "104"),
+                (305.0, 152.0, "(7.47)"),
+                (355.0, 112.0, "100"),
+                (355.0, 152.0, "(7.33)"),
+            ]
+        )
+        .is_none());
+        // No line wraps: values stacked one a line, parted by `stacked_cuts`.
+        assert!(without(
+            &|l| l.2.starts_with("Lindsay") || l.2.starts_with("Daily"),
+            &[]
+        )
+        .is_none());
     }
 
     #[test]
