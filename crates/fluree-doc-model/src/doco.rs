@@ -1684,10 +1684,30 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                     .join(" / ")
                             };
                             let own = row.get(k).map(|t| t.trim()).unwrap_or("");
+                            // Nor a value set as the next column's are, its
+                            // words and figures in the same places (`Run 1:
+                            // 74.8` beside `Run 1: 89.0`, a sample's run
+                            // under `Shrimp` beside `Tilapia`'s): that column
+                            // is the first of the values, not the rows' names.
+                            let shape = |t: &str| -> String {
+                                t.split_whitespace()
+                                    .map(|w| {
+                                        w.chars()
+                                            .map(|ch| if ch.is_ascii_digit() { '0' } else { ch })
+                                            .collect::<String>()
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            };
+                            let next = row.get(k + 1).map(|t| t.trim()).unwrap_or("");
+                            let valued = own.chars().any(|ch| ch.is_ascii_digit())
+                                && !next.is_empty()
+                                && shape(own) == shape(next);
                             let stacked = (c > k
                                 && !groups.is_empty()
                                 && !own.is_empty()
                                 && !figure(own)
+                                && !valued
                                 && groups.last().map(|g| g.1) != Some(own))
                             .then(|| format!("{} / {own}", left_of(k)));
                             // A cell among the groups is named by those left
@@ -1699,10 +1719,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                     left_of(c)
                                 }
                             });
+                            // An empty cell is a cell too, its value
+                            // empty: a form's blank rows, a row with a
+                            // value missing. Its row and column still name
+                            // it, and it cuts nothing from the text, so it
+                            // carries no offsets.
                             let value = cell.trim();
-                            if value.is_empty() {
-                                continue;
-                            }
                             let cell_idx = em.unstamped("cell", "doc:TableCell", None);
                             em.nodes[cell_idx]
                                 .insert("doc:rowIndex".into(), json!(rows_before + r - n_header));
@@ -2397,8 +2419,14 @@ mod tests {
         ]);
         let g = graph(&[t]);
         let cells = find(&g, "doc:TableCell");
-        // "Revenue" (no column header), "10" (both headers); empty cell dropped.
-        assert_eq!(cells.len(), 2);
+        // "Revenue" (no column header), "10" (both headers), and the empty
+        // cell under 2024, a cell with no value, named all the same.
+        assert_eq!(cells.len(), 3);
+        let empty = cells.iter().find(|c| c["doc:cellValue"] == "").unwrap();
+        assert_eq!(empty["doc:columnIndex"], json!(2));
+        assert_eq!(empty["doc:columnHeader"], "2024");
+        assert_eq!(empty["doc:rowHeader"], "Revenue");
+        assert!(empty.get("nif:beginIndex").is_none(), "it cuts nothing");
         let ten = cells.iter().find(|c| c["doc:cellValue"] == "10").unwrap();
         assert_eq!(ten["doc:rowIndex"], json!(0));
         assert_eq!(ten["doc:columnIndex"], json!(1));
@@ -2634,8 +2662,8 @@ mod tests {
         let projection = to_text(&els);
         let g = graph(&els);
         let cells = find(&g, "doc:TableCell");
-        assert_eq!(cells.len(), 5, "five non-empty data cells");
-        for cell in &cells {
+        assert_eq!(cells.len(), 6, "five data cells and an empty one");
+        for cell in cells.iter().filter(|c| c["doc:cellValue"] != "") {
             let s = cell["nif:beginIndex"].as_u64().unwrap() as usize;
             let e = cell["nif:endIndex"].as_u64().unwrap() as usize;
             let slice: String = projection.chars().skip(s).take(e - s).collect();
@@ -2791,6 +2819,48 @@ mod tests {
             let want = n.get("nif:isString").or(n.get("doc:cellValue")).unwrap();
             assert_eq!(&slice, want.as_str().unwrap());
         }
+    }
+
+    #[test]
+    fn a_column_of_values_beside_a_group_is_no_rows_own_label() {
+        // A recovery table: a spiking level set down the first column over
+        // its runs, each sample's run in its own column, `Run 1: 74.8`
+        // under `Shrimp` set as `Run 1: 89.0` under `Tilapia` is.
+        let mut t = el("doco:Table", "", None);
+        t.id = "elem-00001".into();
+        let row = |a: &str, b: &str, c: &str| vec![a.into(), b.into(), c.into()];
+        t.cells = Some(vec![
+            row("Sample", "Shrimp", "Tilapia"),
+            row("100 ppb", "Run 1: 74.8", "Run 1: 89.0"),
+            row("", "Run 2: 74.9", "Run 2: 84.5"),
+            row("Average", "75.5", "85.0"),
+        ]);
+        t.header_rows = Some(1);
+        let mut md = vec![false; 12];
+        md[2 * 3] = true; // `100 ppb` spans its runs
+        t.merged_down = Some(md);
+        let g = graph(&[t.clone()]);
+        let cell = |g: &[Value], value: &str| -> Value {
+            g.iter()
+                .find(|n| n["doc:cellValue"] == value)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(cell(&g, "Run 1: 89.0")["doc:rowHeader"], "100 ppb");
+        assert_eq!(cell(&g, "Run 2: 84.5")["doc:rowHeader"], "100 ppb");
+        // A row's own label beside the values is still its own.
+        let mut own = t;
+        own.cells = Some(vec![
+            row("Class", "Reaction", "Arm A"),
+            row("Gastrointestinal", "Nausea", "12 (3%)"),
+            row("", "Diarrhoea", "9 (2%)"),
+            row("Average", "", "10"),
+        ]);
+        let g = graph(&[own]);
+        assert_eq!(
+            cell(&g, "9 (2%)")["doc:rowHeader"],
+            "Gastrointestinal / Diarrhoea"
+        );
     }
 
     #[test]
@@ -3586,8 +3656,9 @@ mod tests {
         t.header_rows = Some(0);
         let g = graph(&[t]);
         let cells = find(&g, "doc:TableCell");
-        // Both non-empty cells of row 0 and row 1 materialise as data.
-        assert_eq!(cells.len(), 3);
+        // Every cell of row 0 and row 1 materialises as data, the empty one
+        // too.
+        assert_eq!(cells.len(), 4);
         let first = cells
             .iter()
             .find(|c| c["doc:cellValue"] == "6,785")

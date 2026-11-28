@@ -1,0 +1,20 @@
+{
+  "document": {
+    "file": "fda-lib-f169726.pdf",
+    "url": "https://www.fda.gov/media/169726/download",
+    "sha256": "a685d8ff8f4450f2746afd2f7024ce7c388e9142cff748a984e885fa4f68c1f9",
+    "about": "FDA Laboratory Information Bulletin (aquaculture drug residues). Its Table 4 gives each spiking level down the first column over its three runs, each commodity's runs in a column of its own (`Run 1: 74.8` under Shrimp, `Run 1: 89.0` under Tilapia)."
+  },
+  "checks": [
+    {
+      "id": "run-values-are-no-row-labels",
+      "found": "2026-11-27",
+      "issue": "The Shrimp column, first after the spiking level's, was read as each row's own label: every value named its row `100 ppb … / Run 1: 74.8`.",
+      "cell": {
+        "value": "Run 1: 89.0",
+        "column": "Tilapia",
+        "row": "100 ppb Spiking Level (% Recovery in Triplicate)"
+      }
+    }
+  ]
+}
