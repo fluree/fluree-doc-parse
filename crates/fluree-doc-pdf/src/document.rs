@@ -3258,7 +3258,7 @@ fn reads_as_rows(grid: &Grid, glyphs: &[Glyph]) -> bool {
 const PROSE_CELL_WORDS: usize = 25;
 
 /// Drop the rows of a table that hold nothing: a blank row a table sets
-/// between its groups of rows, ruled as its own
+/// between its groups of rows, rows of text after it, ruled as its own
 /// ([`table::Grid::trim_to_content_ruled`]). The row is the ruling's
 /// spacing, not data: it is not emitted, and the rows under it number on
 /// from the rows over it. A row a merged cell spans, its text read into the
@@ -3276,10 +3276,14 @@ fn drop_blank_rows(e: &mut Element) {
         return;
     }
     let down = |r: usize, c: usize| e.merged_down.as_ref().is_some_and(|m| m[r * cols + c]);
+    // Only a blank row with text after it: the rows a form leaves blank to
+    // be filled in, to its foot, are its own.
+    let holds = |r: usize| rows[r].iter().any(|t| !t.trim().is_empty());
     let blank: Vec<usize> = (1..n - 1)
         .filter(|&r| {
             rows[r].iter().all(|t| t.trim().is_empty())
                 && (0..cols).all(|c| !down(r, c) && !down(r + 1, c))
+                && (r + 1..n).any(holds)
         })
         .collect();
     if blank.is_empty() {
@@ -10593,6 +10597,27 @@ mod tests {
         assert_eq!(t.merged_down.as_ref().map(Vec::len), Some(12));
         assert_eq!(t.merged_down.as_ref().map(|m| m[8]), Some(true));
         assert!(t.text.starts_with("Mode | Constant flow\nHeadspace | "));
+    }
+
+    #[test]
+    fn a_forms_blank_rows_to_its_foot_are_kept() {
+        // A header over four blank rows, to be filled in: no text comes
+        // after them, and they are the table's.
+        let blank = ["", "", ""];
+        let rows = grid(&[
+            &["Task", "Date due", "Cost"],
+            &blank,
+            &blank,
+            &blank,
+            &blank,
+        ]);
+        let mut t = Element {
+            cells: Some(rows.clone()),
+            header_rows: Some(1),
+            ..Element::new("doco:Table", "", "rust", "rules")
+        };
+        drop_blank_rows(&mut t);
+        assert_eq!(t.cells, Some(rows));
     }
 
     /// A list of fields: two read as a table over a gradient table set as

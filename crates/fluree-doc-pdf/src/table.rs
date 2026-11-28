@@ -3738,6 +3738,22 @@ impl Grid {
                 })
                 .count()
         };
+        // A form's table left blank to be filled in: its header, one row of
+        // text, over a run of blank rows to the grid's foot, every column
+        // edge drawn down through each of them as through the header, which
+        // holds its text in two cells or more. A footer's separator below a
+        // table is joined to it by no rule, and a chart's gridlines run on
+        // down past their legend, which holds no header's cells. Under rows
+        // of data, a blank row at the foot still ends the table.
+        let blank_to_foot = first == r0
+            && first + 1 < rows
+            && (first + 1..rows).all(|r| !used[r] && drawn(r))
+            && drawn(first)
+            && filled(first) >= 2
+            && self.row_holds_text(glyphs, first);
+        if last == first && blank_to_foot {
+            return rows - 1;
+        }
         let taken: Vec<usize> = (first + 1..=last).filter(|&r| used[r]).collect();
         if last > first
             && first > r0
@@ -14539,6 +14555,23 @@ mod tests {
             })
             .collect();
         (g, r, glyphs)
+    }
+
+    #[test]
+    fn a_forms_header_over_blank_ruled_rows_keeps_them() {
+        // Only the header holds text, and every column edge runs down
+        // through the four blank rows under it: a form's table to fill in.
+        let (g, rules, glyphs) = spacer_table(&[]);
+        let header: Vec<_> = glyphs.iter().take(2).cloned().collect();
+        let mut g2 = g.clone();
+        g2.trim_to_content_ruled(&header, &rules);
+        assert_eq!(g2.rows(), 5, "the header and its four blank rows");
+        // A line of one cell over ruled blank bands is no header, as a
+        // chart's title over its gridlines is not: it ends at the line.
+        let one: Vec<_> = glyphs.iter().take(1).cloned().collect();
+        let mut g3 = g.clone();
+        g3.trim_to_content_ruled(&one, &rules);
+        assert_eq!(g3.rows(), 1);
     }
 
     #[test]
