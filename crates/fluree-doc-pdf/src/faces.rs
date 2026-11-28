@@ -17,10 +17,10 @@ use std::collections::{HashMap, HashSet};
 
 use hayro_interpret::CacheKey;
 use hayro_syntax::object::dict::keys::{
-    BASE_ENCODING, BASE_FONT, DESCENDANT_FONTS, DIFFERENCES, ENCODING, FIRST_CHAR, FLAGS, FONT,
-    FONT_DESC, FONT_FILE, FONT_FILE3, FONT_WEIGHT, FORM, ITALIC_ANGLE, MAC_ROMAN_ENCODING,
-    MM_TYPE1, RESOURCES, STANDARD_ENCODING, STEM_V, SUBTYPE, TO_UNICODE, TRUE_TYPE, TYPE1, WIDTHS,
-    WIN_ANSI_ENCODING, XOBJECT,
+    BASE_ENCODING, BASE_FONT, CID_FONT_TYPE2, DESCENDANT_FONTS, DIFFERENCES, ENCODING, FIRST_CHAR,
+    FLAGS, FONT, FONT_DESC, FONT_FILE, FONT_FILE2, FONT_FILE3, FONT_WEIGHT, FORM, ITALIC_ANGLE,
+    MAC_ROMAN_ENCODING, MM_TYPE1, RESOURCES, STANDARD_ENCODING, STEM_V, SUBTYPE, TO_UNICODE,
+    TRUE_TYPE, TYPE0, TYPE1, WIDTHS, WIN_ANSI_ENCODING, XOBJECT,
 };
 use hayro_syntax::object::{Array, Dict, Name, Object, Stream};
 use hayro_syntax::page::Page;
@@ -60,6 +60,13 @@ pub(crate) struct Faces<'a> {
     /// The text each program's glyph names give, by glyph ID, once read
     /// ([`program_texts`]).
     names: HashMap<u128, Vec<Option<String>>>,
+    /// The embedded TrueType program of each CID font set in one, by the
+    /// interpreter's key for the font, until a glyph drawn in it is read by
+    /// its program ([`Faces::mapped`]).
+    truetype: HashMap<u128, Stream<'a>>,
+    /// The character each such program's own Unicode cmap gives a glyph,
+    /// by glyph ID, once read ([`cmap_chars`]).
+    mapped: HashMap<u128, HashMap<u32, char>>,
     /// The Type 1 program of each font whose name says it is one of TeX's
     /// Computer Modern families, with that family's layout, until a glyph
     /// drawn in it is read ([`Faces::tex`]).
@@ -138,6 +145,23 @@ impl<'a> Faces<'a> {
         self.names.get(&key)?.get(glyph as usize)?.clone()
     }
 
+    /// The character a CID font's embedded TrueType program maps to a glyph
+    /// in its own Unicode cmap, for a glyph the interpreter reads no text
+    /// for: a ToUnicode map that leaves out codes the page draws.
+    ///
+    /// A producer that subsets fonts again (`KYNVLZ+YIWYLX+Arial`) can write
+    /// a ToUnicode map short of the glyphs it keeps: an invoice's totals box
+    /// read `a ance Due` for `Balance Due`, its `(`, `%` and `)` lost, while
+    /// the program's cmap still maps each to its glyph. Where several
+    /// characters map to one glyph (a space and a no-break space), the
+    /// lowest is read; private-use and control characters are not.
+    pub(crate) fn mapped(&mut self, key: u128, glyph: u32) -> Option<char> {
+        if let Some(program) = self.truetype.remove(&key) {
+            self.mapped.insert(key, cmap_chars(&program));
+        }
+        self.mapped.get(&key)?.get(&glyph).copied()
+    }
+
     /// The text a glyph drawn in one of TeX's fonts is, by TeX's layout for
     /// the font's family, where the font's vector labels glyphs by their
     /// codes and `read`, what the interpreter read for it, says no more than
@@ -170,6 +194,11 @@ impl<'a> Faces<'a> {
                 if !self.names.contains_key(&key) && !self.programs.contains_key(&key) {
                     if let Some(program) = program(&font) {
                         self.programs.insert(key, program);
+                    }
+                }
+                if !self.mapped.contains_key(&key) && !self.truetype.contains_key(&key) {
+                    if let Some(program) = cid_truetype(&font) {
+                        self.truetype.insert(key, program);
                     }
                 }
                 if !self.tex.contains_key(&key) && !self.tex_programs.contains_key(&key) {
@@ -218,6 +247,76 @@ fn program<'a>(font: &Dict<'a>) -> Option<Program<'a>> {
         .get::<Stream<'a>>(FONT_FILE3)
         .map(Program::Cff)
         .or_else(|| descriptor.get::<Stream<'a>>(FONT_FILE).map(Program::Type1))
+}
+
+/// A CID font's embedded TrueType program (`/FontFile2` under a
+/// `CIDFontType2` descendant), if it has one.
+fn cid_truetype<'a>(font: &Dict<'a>) -> Option<Stream<'a>> {
+    if font.get::<Name<'_>>(SUBTYPE).as_deref() != Some(TYPE0) {
+        return None;
+    }
+    let descendant = font
+        .get::<Array<'a>>(DESCENDANT_FONTS)?
+        .iter::<Dict<'a>>()
+        .next()?;
+    if descendant.get::<Name<'_>>(SUBTYPE).as_deref() != Some(CID_FONT_TYPE2) {
+        return None;
+    }
+    descendant
+        .get::<Dict<'a>>(FONT_DESC)?
+        .get::<Stream<'a>>(FONT_FILE2)
+}
+
+/// The character a TrueType program's Unicode cmap subtables (Unicode, or
+/// Windows Unicode BMP or full) map to each glyph: the lowest, where
+/// several do, leaving out private-use and control characters.
+fn cmap_chars(program: &Stream<'_>) -> HashMap<u32, char> {
+    use read_fonts::TableProvider;
+    let mut chars: HashMap<u32, char> = HashMap::new();
+    let Ok(data) = program.decoded() else {
+        return chars;
+    };
+    let Ok(font) = read_fonts::FontRef::new(&data) else {
+        return chars;
+    };
+    let Ok(cmap) = font.cmap() else {
+        return chars;
+    };
+    let limits = read_fonts::tables::cmap::CmapIterLimits {
+        max_char: 0x10FFFF,
+        glyph_count: font
+            .maxp()
+            .map_or(u16::MAX as u32, |m| m.num_glyphs() as u32),
+    };
+    for record in cmap.encoding_records() {
+        let unicode = match record.platform_id() {
+            read_fonts::tables::cmap::PlatformId::Unicode => true,
+            read_fonts::tables::cmap::PlatformId::Windows => {
+                matches!(record.encoding_id(), 1 | 10)
+            }
+            _ => false,
+        };
+        let Some(subtable) = unicode
+            .then(|| record.subtable(cmap.offset_data()).ok())
+            .flatten()
+        else {
+            continue;
+        };
+        for (code, gid) in subtable.iter_with_limits(limits) {
+            let Some(c) = char::from_u32(code) else {
+                continue;
+            };
+            let private = matches!(code, 0xE000..=0xF8FF | 0xF0000..=0x10FFFF);
+            if c.is_control() || private || gid.to_u32() == 0 {
+                continue;
+            }
+            chars
+                .entry(gid.to_u32())
+                .and_modify(|k| *k = (*k).min(c))
+                .or_insert(c);
+        }
+    }
+    chars
 }
 
 /// A simple Type 1 font's embedded Type 1 program, with its layout, where
@@ -800,5 +899,222 @@ mod tests {
         // small capital) keeps the map's reading.
         let small_caps = "/Encoding << /BaseEncoding /WinAnsiEncoding /Differences [70 /F.sc] >>";
         assert_eq!(read(pdf_drawing("Foreign", small_caps, fold)), "foreign");
+    }
+
+    /// A TrueType program of squares, one glyph per character given (glyph
+    /// 1 for the first), its Windows Unicode cmap mapping `cmap`'s
+    /// characters to those glyphs.
+    fn truetype(glyphs: usize, cmap: &[(u16, u16)]) -> Vec<u8> {
+        let be16 = |v: &mut Vec<u8>, x: u16| v.extend_from_slice(&x.to_be_bytes());
+        let be32 = |v: &mut Vec<u8>, x: u32| v.extend_from_slice(&x.to_be_bytes());
+        let n = glyphs as u16 + 1;
+        // A square: one contour of four on-curve points, word deltas.
+        let mut square = Vec::new();
+        for x in [1u16, 100, 0, 400, 300, 3, 0] {
+            be16(&mut square, x);
+        }
+        square.extend_from_slice(&[1, 1, 1, 1]);
+        for d in [100i16, 300, 0, -300, 0, 0, 300, 0] {
+            be16(&mut square, d as u16);
+        }
+        let mut glyf = Vec::new();
+        let mut loca = vec![0u8, 0];
+        for _ in 0..glyphs {
+            glyf.extend_from_slice(&square);
+            be16(&mut loca, (glyf.len() / 2) as u16);
+        }
+        loca.splice(2..2, [0u8, 0]); // .notdef is empty
+        let mut head = Vec::new();
+        for x in [0x0001_0000u32, 0x0001_0000, 0, 0x5F0F_3CF5] {
+            be32(&mut head, x);
+        }
+        be16(&mut head, 0);
+        be16(&mut head, 1000);
+        head.extend_from_slice(&[0; 16]);
+        for x in [0u16, 0, 400, 300, 0, 8, 2, 0, 0] {
+            be16(&mut head, x);
+        }
+        let mut hhea = Vec::new();
+        be32(&mut hhea, 0x0001_0000);
+        for x in [
+            800u16,
+            (-200i16) as u16,
+            0,
+            500,
+            0,
+            0,
+            400,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            n,
+        ] {
+            be16(&mut hhea, x);
+        }
+        let mut maxp = Vec::new();
+        be32(&mut maxp, 0x0001_0000);
+        for x in [n, 4, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] {
+            be16(&mut maxp, x);
+        }
+        let mut hmtx = Vec::new();
+        for _ in 0..n {
+            be16(&mut hmtx, 500);
+            be16(&mut hmtx, 100);
+        }
+        let mut post = Vec::new();
+        for x in [0x0003_0000u32, 0, 0, 0, 0, 0, 0, 0] {
+            be32(&mut post, x);
+        }
+        // cmap: one format 4 subtable, (3, 1), a segment per character.
+        let mut segs: Vec<(u16, u16)> = cmap.to_vec();
+        segs.sort();
+        let count = segs.len() as u16 + 1;
+        let mut sub = Vec::new();
+        for x in [4u16, 0, 0, count * 2, 0, 0, 0] {
+            be16(&mut sub, x);
+        }
+        for (c, _) in &segs {
+            be16(&mut sub, *c);
+        }
+        be16(&mut sub, 0xFFFF);
+        be16(&mut sub, 0);
+        for (c, _) in &segs {
+            be16(&mut sub, *c);
+        }
+        be16(&mut sub, 0xFFFF);
+        for (c, g) in &segs {
+            be16(&mut sub, g.wrapping_sub(*c));
+        }
+        be16(&mut sub, 1);
+        for _ in 0..count {
+            be16(&mut sub, 0);
+        }
+        let len = sub.len() as u16;
+        sub[2..4].copy_from_slice(&len.to_be_bytes());
+        let mut table_cmap = Vec::new();
+        for x in [0u16, 1, 3, 1] {
+            be16(&mut table_cmap, x);
+        }
+        be32(&mut table_cmap, 12);
+        table_cmap.extend(sub);
+        let mut tables: Vec<(&[u8; 4], Vec<u8>)> = vec![
+            (b"cmap", table_cmap),
+            (b"glyf", glyf),
+            (b"head", head),
+            (b"hhea", hhea),
+            (b"hmtx", hmtx),
+            (b"loca", loca),
+            (b"maxp", maxp),
+            (b"post", post),
+        ];
+        let mut font = Vec::new();
+        be32(&mut font, 0x0001_0000);
+        for x in [tables.len() as u16, 128, 3, 0] {
+            be16(&mut font, x);
+        }
+        let mut offset = 12 + 16 * tables.len();
+        let mut body = Vec::new();
+        for (tag, data) in &mut tables {
+            while data.len() % 4 != 0 {
+                data.push(0);
+            }
+            font.extend_from_slice(*tag);
+            be32(&mut font, 0);
+            be32(&mut font, offset as u32);
+            be32(&mut font, data.len() as u32);
+            offset += data.len();
+            body.extend_from_slice(data);
+        }
+        font.extend(body);
+        font
+    }
+
+    /// The text of a page drawing CIDs 1..=glyphs in a CID TrueType font
+    /// with that program, a ToUnicode map of the entries given.
+    fn read_cid(program: Vec<u8>, glyphs: usize, to_unicode: &[(u16, char)]) -> String {
+        let mut cmap = String::from(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n\
+             1 begincodespacerange <0000> <FFFF> endcodespacerange\n",
+        );
+        cmap.push_str(&format!("{} beginbfchar\n", to_unicode.len()));
+        for (cid, c) in to_unicode {
+            cmap.push_str(&format!("<{cid:04X}> <{:04X}>\n", *c as u32));
+        }
+        cmap.push_str("endbfchar endcmap CMapName currentdict /CMap defineresource pop end end");
+        let codes: String = (1..=glyphs).map(|g| format!("{g:04X}")).collect();
+        let content = format!("BT /F1 12 Tf 72 720 Td <{codes}> Tj ET");
+        let stream = |dict: &str, body: &[u8]| {
+            let mut s = format!("<< /Length {}{dict} >>\nstream\n", body.len()).into_bytes();
+            s.extend_from_slice(body);
+            s.extend_from_slice(b"\nendstream");
+            s
+        };
+        let objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] \
+              /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+                .to_vec(),
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Test /Encoding /Identity-H \
+              /DescendantFonts [6 0 R] /ToUnicode 8 0 R >>"
+                .to_vec(),
+            stream("", content.as_bytes()),
+            b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+Test \
+              /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
+              /DW 500 /CIDToGIDMap /Identity /FontDescriptor 7 0 R >>"
+                .to_vec(),
+            format!(
+                "<< /Type /FontDescriptor /FontName /ABCDEF+Test /Flags 32 \
+                 /FontBBox [0 -200 500 800] /ItalicAngle 0 /Ascent 800 /Descent -200 \
+                 /CapHeight 700 /StemV 80 /FontFile2 9 0 R >>"
+            )
+            .into_bytes(),
+            stream("", cmap.as_bytes()),
+            stream(&format!(" /Length1 {}", program.len()), &program),
+        ];
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            pdf.extend_from_slice(body);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        read(pdf)
+    }
+
+    #[test]
+    fn a_glyph_the_tounicode_map_leaves_out_is_read_by_the_programs_cmap() {
+        // `B` (glyph 1) and `a` (glyph 2); the map lists `a` alone.
+        let program = truetype(2, &[(0x42, 1), (0x61, 2)]);
+        assert_eq!(read_cid(program.clone(), 2, &[(2, 'a')]), "Ba");
+        // A map that lists the glyph stands, whatever the cmap says.
+        assert_eq!(read_cid(program, 2, &[(1, 'X'), (2, 'a')]), "Xa");
+    }
+
+    #[test]
+    fn a_private_use_cmap_entry_is_not_read() {
+        // A symbol font's cmap maps its glyphs into the private-use area.
+        let program = truetype(2, &[(0xF042, 1), (0x61, 2)]);
+        assert_eq!(read_cid(program, 2, &[(2, 'a')]), "a");
     }
 }

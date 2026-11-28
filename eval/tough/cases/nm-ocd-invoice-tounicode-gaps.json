@@ -1,0 +1,31 @@
+{
+  "document": {
+    "path": "../fixtures/nm-ocd-invoice-p124-125.pdf",
+    "sha256": "5113c4fe9a180e3cd05940538f6603027d1925b9f3e3e341e1e2bbf91a8ce2ad",
+    "about": "Pages 124–125 of a New Mexico Oil Conservation Division filing (public): a well-service invoice over two pages, its totals box set in Arial subset twice over (`KYNVLZ+YIWYLX+Arial`, `KYNVLZ+Arial,Bold`), CID TrueType fonts whose ToUnicode maps leave out some of the codes the pages draw."
+  },
+  "notes": [
+    "Source: https://ocdimage.emnrd.nm.gov/Imaging/FileStore/santafe/cf/20251009/24683_10_09_2025_04_29_13.pdf (sha256 275bbae5e89e5cad2c26becabc09dbcd800c0ae01d87c94be89dcd6a65097940), pages 124 and 125. Made with pypdf: add those two pages to a PdfWriter, `remove_images(to_delete=ImageType.XOBJECT_IMAGES | ImageType.INLINE_IMAGES)` (raster images only: the default also strips vector drawings, the grid's rules and shading), `compress_content_streams()` on each page, `compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)`, write. The images dropped are the letterhead's logo.",
+    "2026-11-28 (#636): a glyph whose code a CID font's ToUnicode map leaves out is read from the embedded TrueType program's own Unicode cmap."
+  ],
+  "checks": [
+    {
+      "id": "balance-due",
+      "found": "2026-11-28",
+      "issue": "`Balance Due` read `a ance Due`: the bold font's ToUnicode map has no entry for the codes of `B` and `l`.",
+      "text": "Balance Due"
+    },
+    {
+      "id": "sales-tax-rate",
+      "found": "2026-11-28",
+      "issue": "`Sales Tax (6.2708%)` read `Sales Tax 6.2708`: `(`, `%` and `)` have no entry in the regular font's ToUnicode map.",
+      "text": "Sales Tax (6.2708%)"
+    },
+    {
+      "id": "no-broken-balance",
+      "found": "2026-11-28",
+      "issue": "No `a ance Due` left.",
+      "no_text": "a ance Due"
+    }
+  ]
+}
