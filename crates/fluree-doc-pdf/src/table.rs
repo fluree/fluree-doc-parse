@@ -2422,7 +2422,8 @@ impl Grid {
     /// last item of the page before, its `Daily Total` carried over the
     /// break. So are lines under the last entry set off from it by more
     /// than a line's pitch: a note under the items (`Credit of … to be
-    /// applied`).
+    /// applied`). Both are set in the columns whose text wraps between the
+    /// entries, and nowhere else.
     fn entry_cuts(&self, glyphs: &[crate::glyph::Glyph], y0: f64, y1: f64) -> Option<Vec<f64>> {
         let cols = self.cols();
         let lines: Vec<Vec<(f64, String, f64)>> = (0..cols)
@@ -2442,8 +2443,18 @@ impl Grid {
                 .skip(1)
                 .any(|l| l.1.trim_end().ends_with(['-', '\u{2013}', '/', ',']))
         };
+        // Its figures set in one size: a note's mark beside a figure,
+        // smaller and raised, is a line of its own, and no entry opens on it.
+        let one_size = |c: usize| {
+            let sizes = lines[c].iter().map(|l| l.2);
+            let (lo, hi) = sizes.fold((f64::MAX, f64::MIN), |(a, b), z| (a.min(z), b.max(z)));
+            hi <= lo * 1.1
+        };
         let key = (0..cols).find(|&c| {
-            lines[c].len() >= 2 && lines[c].iter().all(|l| figure(&l.1)) && !carried(c)
+            lines[c].len() >= 2
+                && lines[c].iter().all(|l| figure(&l.1))
+                && !carried(c)
+                && one_size(c)
         })?;
         let bases: Vec<f64> = lines[key].iter().map(|l| l.0).collect();
         // Beside an entry's line is on its baseline: a line set between the
@@ -2469,7 +2480,10 @@ impl Grid {
         let mut tail: Option<f64> = None;
         let mut tails: Vec<(f64, f64)> = Vec::new();
         let mut wrapped = false;
-        for col in &lines {
+        // The columns whose text wraps between entries, and those holding
+        // a line of the head or the tail.
+        let (mut wrap_cols, mut edge_cols) = (Vec::new(), Vec::new());
+        for (c, col) in lines.iter().enumerate() {
             let mut prev_tail = false;
             for (i, l) in col.iter().enumerate() {
                 if base_of(l).is_some() {
@@ -2486,17 +2500,20 @@ impl Grid {
                         return None;
                     }
                     head = true;
+                    edge_cols.push(c);
                 } else if wraps && !prev_tail {
                     // A wrapped line: under its column's line before it, a
                     // line's pitch on (too close for an entry to open
                     // between).
                     wrapped = true;
+                    wrap_cols.push(c);
                 } else if wraps || l.0 > last + 0.25 * l.2 {
                     // Under the last entry and set off from it: the tail.
                     if !wraps {
                         tail = Some(tail.map_or(l.0, |t: f64| t.min(l.0)));
                     }
                     tails.push((l.0, l.2));
+                    edge_cols.push(c);
                     prev_tail = true;
                 } else {
                     return None;
@@ -2504,6 +2521,13 @@ impl Grid {
             }
         }
         if !wrapped {
+            return None;
+        }
+        // The head and the tail are text of the kind that wraps, set in the
+        // columns it wraps in: a note's marks over the figures (`2 3 4`
+        // over a row of values) or a source line run across the columns is
+        // neither.
+        if edge_cols.iter().any(|c| !wrap_cols.contains(c)) {
             return None;
         }
         // The tail opens under every line of the last entry, in every column.
@@ -13209,11 +13233,49 @@ mod header_tests {
         );
         assert_eq!(description(2), "Pump truck travel Daily Total $ 200.00");
         assert_eq!(description(3), "Credit to be applied");
+        // A head with a line in a column of figures (a note's mark over the
+        // values) is no rest of an item.
+        let mut marked = lines.clone();
+        marked.push((355.0, 104.0, "2"));
+        let (g, glyphs) = entry_box(ITEM_COLUMNS, &marked);
+        assert!(g.entry_cuts(&glyphs, 100.0, 200.0).is_none());
         // A note whose column's lines run on under it in another column is
         // no tail: the last entry is not over.
         lines.push((305.0, 190.0, "7"));
         let (g, glyphs) = entry_box(ITEM_COLUMNS, &lines);
         assert!(g.entry_cuts(&glyphs, 100.0, 200.0).is_none());
+    }
+
+    #[test]
+    fn rows_parted_into_entries_are_no_header() {
+        // A shaded header row ruled over the items' band, the band parted
+        // into the rest of the page before's last item (one line, on a
+        // shaded stripe) and two items, striped under every other line.
+        let mut lines: Vec<(f64, f64, &str)> = ITEMS.to_vec();
+        lines.push((105.0, 99.0, "Daily Total: $ 9.00"));
+        lines.extend_from_slice(&[
+            (5.0, 84.0, "Date"),
+            (55.0, 84.0, "Item"),
+            (305.0, 84.0, "Qty"),
+        ]);
+        let (mut g, glyphs) = entry_box(ITEM_COLUMNS, &lines);
+        g.ys = vec![74.0, 88.0, 200.0];
+        assert_eq!(g.split_stacked_rows(&glyphs), vec![(1, 2)]);
+        let rules = vec![
+            h(0.0, 450.0, 74.0),
+            h(0.0, 450.0, 88.0),
+            h(0.0, 450.0, 200.0),
+        ];
+        let fills = vec![
+            fill(0.0, 74.0, 450.0, 88.0),
+            fill(0.0, 90.0, 450.0, 101.0),
+            fill(0.0, 114.0, 450.0, 124.0),
+            fill(0.0, 134.0, 450.0, 144.0),
+        ];
+        let texts = g.cell_texts(&glyphs);
+        let rows: Vec<Vec<String>> = texts.chunks(5).map(|c| c.to_vec()).collect();
+        assert_eq!(rows[1][2], "Daily Total: $ 9.00");
+        assert_eq!(g.header_rows(&rows, &glyphs, &rules, &fills), 1);
     }
 
     #[test]
@@ -13245,6 +13307,25 @@ mod header_tests {
             &[(105.0, 155.0, "Pump truck travel")]
         )
         .is_none());
+        // A note's mark, smaller, over a figure in each column of figures:
+        // no entry opens on a mark.
+        assert!(without(
+            &|l| l.0 >= 305.0,
+            &[
+                (305.0, 112.0, "1"),
+                (305.0, 152.0, "200"),
+                (355.0, 112.0, "2,438.15"),
+                (355.0, 152.0, "200.00"),
+            ]
+        )
+        .is_some());
+        let (g, mut glyphs) = entry_box(ITEM_COLUMNS, ITEMS);
+        for x in [305.0, 355.0] {
+            let mut mark = gly(x, 142.0, 3.0, "2");
+            mark.font_size = 5.0;
+            glyphs.push(mark);
+        }
+        assert!(g.entry_cuts(&glyphs, 100.0, 200.0).is_none());
         // Figures carried on in brackets under the first (counts over their
         // confidence intervals) are one value each, not two entries.
         assert!(without(

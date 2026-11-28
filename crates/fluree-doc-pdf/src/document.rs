@@ -12033,6 +12033,70 @@ mod tests {
     }
 
     #[test]
+    fn a_forms_foot_box_and_its_head_read_in_pieces_are_not_between_the_parts() {
+        // An invoice's items at one page's foot and on at the next page's
+        // head, under the header repeated whole. The form's box under the
+        // items on the first page is set again, at the same place, inside
+        // the totals box on the second; the form's head line is read whole
+        // on the first page and in two pieces on the second.
+        let on = |e: Element, page: usize| Element { page, ..e };
+        let rows: &[&[&str]] = &[&["Date", "Item", "Amount"], &["12/5", "K1", "2,438.15"]];
+        let again: &[&[&str]] = &[&["Date", "Item", "Amount"], &["12/28", "K1", "5,255.25"]];
+        let linked = |foot: &str, piece_dx: f64| {
+            let (a, fa) = part("elem-00001", 0, rows, 1, &XS, true, true);
+            let (b, fb) = part("elem-00002", 1, again, 1, &XS, true, true);
+            let els = vec![
+                on(
+                    element(
+                        "Location: Lawton State #001",
+                        295.0,
+                        40.0,
+                        421.0,
+                        50.0,
+                        false,
+                    ),
+                    0,
+                ),
+                a,
+                on(element(foot, 310.0, 730.0, 360.0, 740.0, false), 0),
+                on(element("Location:", 295.0, 40.0, 337.0, 50.0, false), 1),
+                on(
+                    element(
+                        "Lawton State #001",
+                        349.0 + piece_dx,
+                        40.0,
+                        421.0 + piece_dx,
+                        50.0,
+                        false,
+                    ),
+                    1,
+                ),
+                b,
+                on(
+                    element(
+                        "Tax Location Subtotal $48,842.76",
+                        293.0,
+                        725.0,
+                        571.0,
+                        760.0,
+                        true,
+                    ),
+                    1,
+                ),
+            ];
+            let mut els = els;
+            link_continued_tables(&mut els, &[fa, fb]);
+            els[5].continues.clone()
+        };
+        assert_eq!(linked("Tax Location", 0.0).as_deref(), Some("elem-00001"));
+        // A line under the first part that the other page does not set is
+        // the page's own text between them.
+        assert_eq!(linked("Payment terms", 0.0), None);
+        // A head piece set somewhere else is the page's own.
+        assert_eq!(linked("Tax Location", 30.0), None);
+    }
+
+    #[test]
     fn a_parts_page_head_set_as_on_another_page_is_not_between_the_parts() {
         // A schedule's header and rows at one page's foot, its rows going on
         // at the next page's head, under the page's running head: the
