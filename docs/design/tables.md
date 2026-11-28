@@ -96,10 +96,20 @@ Two rules closer than a cell's height, eight points, are one line drawn
 twice, or a border beside a cell's edge: the band between them is no row. A
 table set in small type rules a band as thin as its type, though: an export
 from a spreadsheet, shrunk to fit its page, sets each section's name in
-5.5 point type between rules 7.5 points apart. A thin band stays a row where
-a line of type stands inside it, the ink of two letters or figures between
-its rules. A blank spacer, a double rule or a thick coloured rule holds no
-text, and a stray mark is no line.
+5.5 point type between rules 7.5 points apart. A thin band stays a row
+where all of these hold:
+- it is shaded across the table, as a section's band is drawn;
+- a line of type stands inside it, the ink of two letters or figures between
+  its rules, each under the rule at its top and over the one at its foot;
+- it alone is thin: the rows either side of it are half again its height or
+  more.
+
+A blank spacer, a double rule or a thick coloured rule holds no text, and a
+stray mark is no line. A line of a cell merged down beside the band is not
+under the band's rules, which are drawn in the other columns. A table whose
+rows are all about as thin as its type (a rate table in 6 point type, its
+row lines 8 points apart, its bands as thin) rules no band apart from its
+rows.
 
 A grid's top and bottom are trimmed of bands no vertical crosses: a heading's
 underline welded on above a ruled box. Only verticals within a row's height

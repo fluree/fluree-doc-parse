@@ -4492,13 +4492,26 @@ fn detect_group_trimmed(
     let xs = boundaries(&v_lines, &h_lines, span_y, span_x);
     let first = (xs.len() >= 2).then_some(xs.as_slice());
     let ys = {
-        let mut out: Vec<f64> = Vec::new();
-        for y in boundary_candidates(
+        let cands = boundary_candidates(
             &h_lines,
             &row_breakers(&h_lines, &v_lines, span_x, fills, glyphs, first),
             span_x,
             span_y,
-        ) {
+        );
+        // A thin band is a section's where it alone is thin: a strip between
+        // rows [`BAND_STRIP`] times its height or more either side. A table
+        // whose rows are all set about as thin as its type (a rate table in
+        // 6 point type, its row lines 8 points apart, its bands as thin)
+        // rules no row apart from the next, and its bands go with them.
+        let alone = |i: usize, k: usize| {
+            let band = cands[i] - cands[k];
+            let wide = |a: usize, b: usize| cands[b] - cands[a] >= BAND_STRIP * band;
+            i + 1 < cands.len() && wide(i, i + 1) && (k == 0 || wide(k - 1, k))
+        };
+        let mut out: Vec<f64> = Vec::new();
+        // Where each line of `out` stands among the candidates.
+        let mut at: Vec<usize> = Vec::new();
+        for (i, &y) in cands.iter().enumerate() {
             match out.last() {
                 Some(&prev) if y - prev < MIN_CELL_EXTENT => {
                     let mid = (prev + y) / 2.0;
@@ -4507,13 +4520,21 @@ fn detect_group_trimmed(
                         .iter()
                         .any(|r| (r.bbox.y1 - prev).abs() <= EDGE_TOLERANCE);
                     let restart = vs.iter().any(|r| (r.bbox.y0 - y).abs() <= EDGE_TOLERANCE);
+                    let k = at[at.len() - 1];
                     if (!crossed && stop && restart && y - prev > EDGE_TOLERANCE)
-                        || holds_a_line(glyphs, &hs, prev, y, x_lo, x_hi)
+                        || (k + 1 == i
+                            && alone(i, k)
+                            && shaded_across(fills, prev, y, x_lo, x_hi)
+                            && holds_a_line(glyphs, &hs, prev, y, x_lo, x_hi))
                     {
                         out.push(y);
+                        at.push(i);
                     }
                 }
-                _ => out.push(y),
+                _ => {
+                    out.push(y);
+                    at.push(i);
+                }
             }
         }
         out
@@ -4637,6 +4658,28 @@ fn detect_group_trimmed(
     split_row_bands(xs, ys, rules, page, frames, glyphs)
 }
 
+/// Least height of the rows either side of a thin shaded band, as a multiple
+/// of the band's, for the band to be a strip set between them: half again
+/// its height. Rows as thin as their bands are ruled as one run of lines.
+const BAND_STRIP: f64 = 1.5;
+
+/// Shading between row lines `top` and `bottom` covers the table's width,
+/// `x0` to `x1`: a band across the table, as a section's band is drawn.
+fn shaded_across(fills: &[crate::rule::Fill], top: f64, bottom: f64, x0: f64, x1: f64) -> bool {
+    span_coverage(
+        fills
+            .iter()
+            .filter(|f| {
+                !f.stroked
+                    && f.bbox.y0 >= top - EDGE_TOLERANCE
+                    && f.bbox.y1 <= bottom + EDGE_TOLERANCE
+            })
+            .map(|f| (f.bbox.x0, f.bbox.x1)),
+        x0,
+        x1,
+    ) >= FILL_ROW_COVERAGE * (x1 - x0)
+}
+
 /// A line of type stands between two row lines `top` and `bottom` closer
 /// than a cell's height ([`MIN_CELL_EXTENT`]), between `x0` and `x1`: the
 /// ink of two letters or figures inside the band, give or take a tenth of
@@ -4645,8 +4688,9 @@ fn detect_group_trimmed(
 /// beside the band, whose rules are drawn in the other columns.
 ///
 /// A table set in small type rules a band as thin as its type (a section's
-/// name in 5.5 point type between rules 7.5 points apart); a border drawn
-/// beside a cell's edge, a spacer row or a thick rule holds no text.
+/// name in 5.5 point type between rules 7.5 points apart, shaded across the
+/// table, [`shaded_across`]); a border drawn beside a cell's edge, a spacer
+/// row or a thick rule holds no text.
 fn holds_a_line(
     glyphs: &[crate::glyph::Glyph],
     hs: &[&Rule],
@@ -12018,7 +12062,7 @@ mod header_tests {
     }
 
     #[test]
-    fn a_thin_band_holding_a_line_of_small_type_is_a_row() {
+    fn a_thin_band_shaded_across_holding_a_line_of_small_type_is_a_row() {
         // Rows 15 points tall, a band 7.5 points tall after the second,
         // ruled across and down its three columns.
         let ys = [0.0, 15.0, 30.0, 37.5, 52.5, 67.5];
@@ -12050,22 +12094,62 @@ mod header_tests {
                 rows.push(small(x, top, "A"));
             }
         }
-        let read = |band: &[crate::glyph::Glyph]| {
+        let shading = [crate::rule::Fill::new(
+            BBox {
+                x0: 0.0,
+                y0: 30.0,
+                x1: 300.0,
+                y1: 37.5,
+            },
+            0,
+        )];
+        let read = |band: &[crate::glyph::Glyph], shaded: bool| {
             let mut glyphs = rows.clone();
             glyphs.extend_from_slice(band);
-            let grids = detect_framed(&rules, &[], &glyphs, 0, &[]);
+            let fills: &[crate::rule::Fill] = if shaded { &shading } else { &[] };
+            let grids = detect_framed(&rules, fills, &glyphs, 0, &[]);
             grids.iter().map(|g| g.rows()).max().unwrap_or(0)
         };
-        // A section's name in the band: a row of its own.
+        // A section's name in the band, shaded across the table: a row of
+        // its own.
         let name: Vec<_> = ["I", "d", "a"]
             .iter()
             .enumerate()
             .map(|(k, t)| small(10.0 + 4.5 * k as f64, 31.0, t))
             .collect();
-        assert_eq!(read(&name), 5);
+        assert_eq!(read(&name, true), 5);
         // Blank, or a stray mark: a spacer or a double rule, no row.
-        assert_eq!(read(&[]), 4);
-        assert_eq!(read(&[small(10.0, 31.0, "*")]), 4);
+        assert_eq!(read(&[], true), 4);
+        assert_eq!(read(&[small(10.0, 31.0, "*")], true), 4);
+        // Unshaded, the thin band is no section's band.
+        assert_eq!(read(&name, false), 4);
+        // Rows as thin as the band: one run of lines, no strip between rows.
+        let thin = [0.0, 8.0, 16.0, 23.5, 31.5, 39.5];
+        let mut tight: Vec<Rule> = thin.iter().map(|&y| h(0.0, 300.0, y)).collect();
+        for x in [0.0, 100.0, 200.0, 300.0] {
+            tight.push(v(0.0, 39.5, x));
+        }
+        let band = [crate::rule::Fill::new(
+            BBox {
+                x0: 0.0,
+                y0: 16.0,
+                x1: 300.0,
+                y1: 23.5,
+            },
+            0,
+        )];
+        let named: Vec<_> = ["I", "d", "a"]
+            .iter()
+            .enumerate()
+            .map(|(k, t)| small(10.0 + 4.5 * k as f64, 17.0, t))
+            .collect();
+        let grids = detect_framed(&tight, &band, &named, 0, &[]);
+        assert!(
+            grids
+                .iter()
+                .all(|g| !g.ys.iter().any(|&y| (y - 23.5).abs() < 0.5)),
+            "got {grids:?}"
+        );
     }
 
     #[test]
