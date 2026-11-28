@@ -4518,7 +4518,7 @@ pub fn unruled_grids(
         .filter(|&i| {
             !has_vertical(rules, &grids[i].bbox)
                 && !(ruled_row_by_row(&grids[i], rules, fills)
-                    && !lumped(&grids[i], lines)
+                    && !lumped(&grids[i], lines, fills)
                     && !labels_outside(&grids[i], lines))
         })
         .collect()
@@ -4583,7 +4583,7 @@ pub fn ruled_beside_prose(
 ) -> bool {
     !has_vertical(rules, &g.bbox)
         && ruled_row_by_row(g, rules, fills)
-        && !lumped(g, lines)
+        && !lumped(g, lines, fills)
         && labels_outside(g, lines)
 }
 
@@ -4610,9 +4610,25 @@ fn labels_outside(g: &Grid, lines: &[Line]) -> bool {
 /// under a description, tax lines indented under an item) sit in one place,
 /// and values wrapped in every column under a labelled line (`1.47 lb (.67
 /// kg)` over `±10%`), the first column left empty, carry that row on.
-fn lumped(g: &Grid, lines: &[Line]) -> bool {
+///
+/// Nor is a header shaded apart lumped ([`shaded_head`]) where its lines
+/// hold words alone: its columns' names, wrapped over two lines or three
+/// (`CLIN/` over `SubCLIN`, `Estimated` over `Cost`).
+fn lumped(g: &Grid, lines: &[Line], fills: &[crate::rule::Fill]) -> bool {
     let first = (g.xs[0], g.xs.get(1).copied().unwrap_or(g.bbox.x1));
-    g.ys.windows(2).any(|w| {
+    let named = || {
+        lines
+            .iter()
+            .filter(|l| l.base > g.ys[0] && l.base <= g.ys[1])
+            .flat_map(|l| &l.chunks)
+            .filter(|c| (c.x0 + c.x1) / 2.0 >= g.bbox.x0 && (c.x0 + c.x1) / 2.0 <= g.bbox.x1)
+            .all(|c| !is_figure(&c.text) && c.text.chars().any(char::is_alphabetic))
+    };
+    let head = g.ys.len() >= 3 && named() && shaded_head(g, fills);
+    g.ys.windows(2).enumerate().any(|(k, w)| {
+        if k == 0 && head {
+            return false;
+        }
         let mut labelled_above = false;
         let mut count = 0;
         for l in lines.iter().filter(|l| l.base > w[0] && l.base <= w[1]) {
@@ -4633,6 +4649,56 @@ fn lumped(g: &Grid, lines: &[Line]) -> bool {
         }
         count >= 2
     })
+}
+
+/// The grid's first band is its header, shaded apart: shading inside it
+/// covers its width in a paint that shades none of the bands under it
+/// across theirs. A table striped row by row, or a section's band, shades
+/// its body as well.
+fn shaded_head(g: &Grid, fills: &[crate::rule::Fill]) -> bool {
+    const T: f64 = 2.0;
+    let (x0, x1) = (g.bbox.x0, g.bbox.x1);
+    // The paints shading a band across its width, each on its own.
+    let across = |y0: f64, y1: f64| -> Vec<crate::rule::Paint> {
+        let inside: Vec<&crate::rule::Fill> = fills
+            .iter()
+            .filter(|f| {
+                !f.stroked
+                    && f.bbox.y0 >= y0 - T
+                    && f.bbox.y1 <= y1 + T
+                    && f.bbox.x1 > x0
+                    && f.bbox.x0 < x1
+            })
+            .collect();
+        let mut paints: Vec<crate::rule::Paint> = Vec::new();
+        for p in inside.iter().filter_map(|f| f.paint) {
+            if !paints.contains(&p) {
+                paints.push(p);
+            }
+        }
+        paints.retain(|p| {
+            let mut spans: Vec<(f64, f64)> = inside
+                .iter()
+                .filter(|f| f.paint == Some(*p))
+                .map(|f| (f.bbox.x0.max(x0), f.bbox.x1.min(x1)))
+                .collect();
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (mut covered, mut reach) = (0.0, x0);
+            for (a, b) in spans {
+                if b > reach {
+                    covered += b - a.max(reach);
+                    reach = b;
+                }
+            }
+            covered >= 0.9 * (x1 - x0)
+        });
+        paints
+    };
+    let head = across(g.ys[0], g.ys[1]);
+    !head.is_empty()
+        && g.ys[1..]
+            .windows(2)
+            .all(|w| !across(w[0], w[1]).iter().any(|p| head.contains(p)))
 }
 
 /// A grid with a rule across it at every boundary between its bands: each
@@ -6644,6 +6710,97 @@ mod tests {
             unruled_grids(&grids, &rules, std::slice::from_ref(&band), &lines),
             vec![0]
         );
+    }
+
+    #[test]
+    fn a_shaded_header_of_wrapped_names_is_no_lumped_rows() {
+        // Four columns, five rows ruled one by one; the header's names wrap
+        // over two lines, the first column's too.
+        let g = crate::table::Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 100.0, 200.0, 300.0, 400.0],
+            ys: vec![0.0, 30.0, 50.0, 70.0, 90.0, 110.0],
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 400.0,
+                y1: 110.0,
+            },
+        };
+        let rule = |y: f64| crate::rule::Rule {
+            bbox: BBox {
+                x0: 0.0,
+                y0: y,
+                x1: 400.0,
+                y1: y + 0.5,
+            },
+            orientation: Orientation::Horizontal,
+            page: 0,
+        };
+        let rules = vec![rule(30.0), rule(50.0), rule(70.0), rule(90.0)];
+        let shade = |y0: f64, y1: f64, rgb: [u8; 3]| crate::rule::Fill {
+            bbox: BBox {
+                x0: 0.0,
+                y0,
+                x1: 400.0,
+                y1,
+            },
+            page: 0,
+            paint: Some(crate::rule::Paint::Solid([rgb[0], rgb[1], rgb[2], 255])),
+            stroked: false,
+        };
+        let dark = [20, 96, 130];
+        let pale = [193, 228, 245];
+        let mut glyphs = Vec::new();
+        for (x, top, under) in [
+            (5.0, "Item/", "Sub"),
+            (105.0, "Estimated", "Cost"),
+            (205.0, "Target", "Cost"),
+            (305.0, "Fixed", "Fee"),
+        ] {
+            glyphs.extend(set(top, x, 12.0));
+            glyphs.extend(set(under, x, 24.0));
+        }
+        for (r, y) in [(1, 44.0), (2, 64.0), (3, 84.0), (4, 104.0)] {
+            glyphs.extend(set(&format!("Row {r}"), 5.0, y));
+            for x in [105.0, 205.0, 305.0] {
+                glyphs.extend(set("$0", x, y));
+            }
+        }
+        let lines = lines(&glyphs);
+        let grids = vec![g.clone()];
+        // Dark over a body striped pale: a header, read from the rules.
+        let fills = [
+            shade(0.0, 30.0, dark),
+            shade(30.0, 50.0, pale),
+            shade(70.0, 90.0, pale),
+        ];
+        assert!(unruled_grids(&grids, &rules, &fills, &lines).is_empty());
+        // Unshaded, its two lines of names are two rows lumped in one band.
+        assert_eq!(unruled_grids(&grids, &rules, &[], &lines), vec![0]);
+        // Shaded as the body is: no header set apart.
+        let fills = [shade(0.0, 30.0, pale), shade(50.0, 70.0, pale)];
+        assert_eq!(unruled_grids(&grids, &rules, &fills, &lines), vec![0]);
+        // A row's values under the names in the band: a row lumped in with
+        // the header, however it is shaded.
+        let mut lumped: Vec<Glyph> = glyphs
+            .iter()
+            .filter(|g| g.origin.1 > 30.0)
+            .cloned()
+            .collect();
+        for (x, top, under) in [
+            (5.0, "Item", "Row 0"),
+            (105.0, "Estimated", "$612"),
+            (205.0, "Target", "$0"),
+            (305.0, "Fixed", "$0"),
+        ] {
+            lumped.extend(set(top, x, 12.0));
+            lumped.extend(set(under, x, 24.0));
+        }
+        let lines = super::lines(&lumped);
+        let fills = [shade(0.0, 30.0, dark)];
+        assert_eq!(unruled_grids(&grids, &rules, &fills, &lines), vec![0]);
     }
 
     #[test]
