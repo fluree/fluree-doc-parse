@@ -1,0 +1,12 @@
+{
+ "md table.grid": 7,
+ "md table.header_rows": 48,
+ "md table.shape": 42,
+ "md table.spans": 7,
+ "md table.sub_headers": 50,
+ "xhtml table.grid": 7,
+ "xhtml table.header_rows": 48,
+ "xhtml table.shape": 42,
+ "xhtml table.spans": 7,
+ "xhtml table.sub_headers": 50
+}

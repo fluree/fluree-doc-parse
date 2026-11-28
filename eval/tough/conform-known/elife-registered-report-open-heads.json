@@ -1,0 +1,8 @@
+{
+ "md table.header_rows": 3,
+ "md table.restated_headers": 2,
+ "md table.sub_headers": 3,
+ "xhtml table.header_rows": 3,
+ "xhtml table.restated_headers": 2,
+ "xhtml table.sub_headers": 3
+}

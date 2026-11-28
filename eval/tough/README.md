@@ -86,10 +86,10 @@ never meet in one file. A count above the list fails the run; one below it is
 reported, and `--conform-update` writes the counts of the cases it ran, each to
 its own file, so a change to a list is in the diff.
 
-The lists were once kept in one file per directory (`conform-known.json`,
-`conform/known.json`). A case with no file of its own still reads its entry
-there. That file is no longer written; it goes once its last entries have
-moved to files of their own.
+The lists were once kept in one file per directory. The tracked cases' have
+all moved to files of their own; a directory still holding such a file
+(`conform/known.json`) has it read for any case with no file of its own, and
+never written.
 
 The checks a case adds:
 
