@@ -14,6 +14,12 @@
         "PCB 上に使用していないエリアがある場合は、IC や周辺部品の放熱を助けるためノードの銅箔プレーンを配置してください。",
         "FB、COMP につながるラインは、SW のノードとは可能な限り離してください。"
       ]}
+    },
+    {
+      "id": "variant-columns-are-no-row-labels",
+      "found": "2026-11-27",
+      "issue": "The parts table's first variant column, beside the part names, was read as each row's own label: `COUT / Ceramic 22μF×2` named every capacitor value.",
+      "cell": {"value": "Ceramic 10μF×3", "column": "12V", "row": "COUT"}
     }
   ]
 }
