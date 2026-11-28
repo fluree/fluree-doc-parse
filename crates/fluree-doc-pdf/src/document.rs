@@ -968,13 +968,52 @@ fn running_over_parts(elements: &[Element]) -> Vec<bool> {
         if (opens_alike || !headless) && !head_again {
             continue;
         }
-        if between.iter().all(|&n| over(n) && repeated(n)) {
+        // A caption over the second part that says the table goes on
+        // (`Table 3 (continued)`, `(2 of 3)`) carries it on too, where the
+        // part sets the header again whole: panels of a table, each under
+        // a header of its own, are tables of their own.
+        let caption = |n: usize| says_continued(&elements[n].text);
+        let carried = between.iter().all(|&n| over(n) && repeated(n))
+            || (head_again
+                && between.iter().any(|&n| caption(n))
+                && between
+                    .iter()
+                    .all(|&n| over(n) && (repeated(n) || caption(n))));
+        if carried {
             for &n in between {
                 running[n] = true;
             }
         }
     }
     running
+}
+
+/// Most words a caption saying a table goes on may hold.
+const CONTINUED_CAPTION_WORDS: usize = 25;
+
+/// A caption saying the table over it goes on from the page before: a
+/// line of few words that says it is continued (`Table 3 (continued)`,
+/// `cont'd`, `contd.`), or numbers the part after the first (`(2 of 3)`).
+fn says_continued(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’')
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.is_empty() || words.len() > CONTINUED_CAPTION_WORDS {
+        return false;
+    }
+    let said = words.iter().any(|w| {
+        matches!(
+            *w,
+            "continued" | "cont" | "contd" | "cont'd" | "cont’d" | "continuation"
+        )
+    });
+    let part = words.windows(3).any(|w| {
+        let (n, m) = (w[0].parse::<u32>(), w[2].parse::<u32>());
+        matches!((n, m), (Ok(n), Ok(m)) if w[1] == "of" && n >= 2 && n <= m)
+    });
+    said || part
 }
 
 /// Link a table the page break split to its part on the page before.
@@ -11619,6 +11658,41 @@ mod tests {
             &["Analyst II", "2,820", "$51.99"],
         ];
         assert_eq!(with_second(copy, 0), None);
+    }
+
+    #[test]
+    fn a_caption_saying_the_table_goes_on_is_not_between_its_parts() {
+        let rows: &[&[&str]] = &[&["Element", "Mean", "RSD"], &["Arsenic", "13.4", "4"]];
+        let linked = |caption: &str, second: &[&[&str]]| {
+            let (a, fa) = part("elem-00001", 0, rows, 1, &XS, true, true);
+            let (b, fb) = part("elem-00002", 1, second, 1, &XS, true, true);
+            let over = Element {
+                page: 1,
+                ..element(caption, 200.0, 40.0, 500.0, 52.0, false)
+            };
+            let mut els = vec![a, over, b];
+            link_continued_tables(&mut els, &[fa, fb]);
+            els[2].continues.clone()
+        };
+        let again: &[&[&str]] = &[&["Element", "Mean", "RSD"], &["Barium", "3.9", "3"]];
+        assert_eq!(
+            linked("Table 2. Reference results (continued)", again).as_deref(),
+            Some("elem-00001")
+        );
+        assert_eq!(
+            linked("Table 2. Reference results (2 of 3)", again).as_deref(),
+            Some("elem-00001")
+        );
+        // A caption of its own is a new table's.
+        assert_eq!(linked("Table 3. Recoveries", again), None);
+        // A panel under a header of its own, its caption numbering it, is a
+        // table of its own.
+        let panel: &[&[&str]] = &[
+            &["Element", "Mean (Orchard)", "RSD"],
+            &["Barium", "44.4", "1"],
+        ];
+        assert_eq!(linked("Table 2. Reference results (2 of 3)", panel), None);
+        assert!(!says_continued("Table 2. Reference results (1 of 3)"));
     }
 
     #[test]
