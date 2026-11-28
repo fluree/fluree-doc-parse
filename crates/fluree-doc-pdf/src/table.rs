@@ -1615,27 +1615,30 @@ impl Grid {
         {
             return 0;
         }
-        // A header two rows deep or more, set apart by weight alone: each
-        // row bold in every cell, labels in two cells or more and no
-        // figures, over a plain row (`MRM | Ret. | Quant MRM | Qual MRM`
-        // over `Start | Time | Compound | Q1 | Q3 | CE` over the data). A
-        // bold band, one label across the row, is the body's.
+        // A header two rows deep set apart by weight alone, no shading:
+        // group names over some columns (`MRM | Ret. | Quant MRM | Qual
+        // MRM`), over a row naming every column (`Start | Time | Compound
+        // | Q1 | Q3 | CE`), both bold in every cell, labels and no figures,
+        // over a plain row of figures mostly.
+        let filled = |r: usize| rows[r].iter().filter(|t| !t.trim().is_empty()).count();
         let labels = |r: usize| {
-            rows[r].iter().filter(|t| !t.trim().is_empty()).count() >= 2
-                && rows[r]
-                    .iter()
-                    .all(|t| t.trim().is_empty() || !is_numeric_cell(t.trim()))
+            rows[r]
+                .iter()
+                .all(|t| t.trim().is_empty() || !is_numeric_cell(t.trim()))
         };
-        if run == 0 {
-            let bold_run = (0..rows.len().min(MAX_HEADER_ROWS + 1))
-                .take_while(|&r| self.words_bold(glyphs, r) && labels(r))
-                .count();
-            if (2..=MAX_HEADER_ROWS).contains(&bold_run)
-                && bold_run < rows.len()
-                && !self.row_is_bold(glyphs, bold_run)
-            {
-                return bold_run;
-            }
+        if run == 0
+            && rows.len() > 3
+            && self.cols() >= 3
+            && filled(1) == self.cols()
+            && (2..self.cols()).contains(&filled(0))
+            && labels(0)
+            && labels(1)
+            && self.words_bold(glyphs, 0)
+            && self.words_bold(glyphs, 1)
+            && !self.row_is_bold(glyphs, 2)
+            && rows[2].iter().filter(|t| is_numeric_cell(t.trim())).count() * 2 > filled(2)
+        {
+            return 2;
         }
         // run == 1 is itself the exclusive-stripe evidence: band 0 filled,
         // band 1 not (where the run stopped).
