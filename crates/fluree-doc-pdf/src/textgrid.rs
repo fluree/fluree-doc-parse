@@ -4612,19 +4612,46 @@ fn labels_outside(g: &Grid, lines: &[Line]) -> bool {
 /// kg)` over `±10%`), the first column left empty, carry that row on.
 ///
 /// Nor is a header shaded apart lumped ([`shaded_head`]) where its lines
-/// hold words alone: its columns' names, wrapped over two lines or three
-/// (`CLIN/` over `SubCLIN`, `Estimated` over `Cost`).
+/// hold words alone and the ruling gives each name a column: its columns'
+/// names, wrapped over two lines or three (`CLIN/` over `SubCLIN`,
+/// `Estimated` over `Cost`). Where the rules draw fewer columns than a line
+/// of the header sets names side by side, the text reads the table better.
 fn lumped(g: &Grid, lines: &[Line], fills: &[crate::rule::Fill]) -> bool {
     let first = (g.xs[0], g.xs.get(1).copied().unwrap_or(g.bbox.x1));
+    let mid = |c: &Chunk| (c.x0 + c.x1) / 2.0;
+    let head_lines: Vec<Vec<&Chunk>> = lines
+        .iter()
+        .filter(|l| g.ys.len() >= 3 && l.base > g.ys[0] && l.base <= g.ys[1])
+        .map(|l| {
+            l.chunks
+                .iter()
+                .filter(|c| mid(c) >= g.bbox.x0 && mid(c) <= g.bbox.x1)
+                .collect()
+        })
+        .collect();
     let named = || {
-        lines
+        head_lines
             .iter()
-            .filter(|l| l.base > g.ys[0] && l.base <= g.ys[1])
-            .flat_map(|l| &l.chunks)
-            .filter(|c| (c.x0 + c.x1) / 2.0 >= g.bbox.x0 && (c.x0 + c.x1) / 2.0 <= g.bbox.x1)
+            .flatten()
             .all(|c| !is_figure(&c.text) && c.text.chars().any(char::is_alphabetic))
     };
-    let head = g.ys.len() >= 3 && named() && shaded_head(g, fills);
+    // A column of the ruling for each name a line of the header sets.
+    let columned = || {
+        let column = |c: &Chunk| {
+            g.xs.windows(2)
+                .position(|w| mid(c) >= w[0] && mid(c) < w[1])
+        };
+        let mut held: Vec<usize> = head_lines
+            .iter()
+            .flatten()
+            .filter_map(|c| column(c))
+            .collect();
+        held.sort_unstable();
+        held.dedup();
+        let most = head_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+        held.len() >= 2 && held.len() >= most
+    };
+    let head = g.ys.len() >= 3 && named() && columned() && shaded_head(g, fills);
     g.ys.windows(2).enumerate().any(|(k, w)| {
         if k == 0 && head {
             return false;
@@ -6782,6 +6809,18 @@ mod tests {
         // Shaded as the body is: no header set apart.
         let fills = [shade(0.0, 30.0, pale), shade(50.0, 70.0, pale)];
         assert_eq!(unruled_grids(&grids, &rules, &fills, &lines), vec![0]);
+        // Ruled as one column, the rules draw none of the names' columns:
+        // the text reads them.
+        let one = crate::table::Grid {
+            xs: vec![0.0, 400.0],
+            ..g.clone()
+        };
+        let fills = [
+            shade(0.0, 30.0, dark),
+            shade(30.0, 50.0, pale),
+            shade(70.0, 90.0, pale),
+        ];
+        assert_eq!(unruled_grids(&[one], &rules, &fills, &lines), vec![0]);
         // A row's values under the names in the band: a row lumped in with
         // the header, however it is shaded.
         let mut lumped: Vec<Glyph> = glyphs
