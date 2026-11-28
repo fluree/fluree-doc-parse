@@ -91,6 +91,16 @@ picture is, in the graph and in `-f json`, and adds nothing to the text. Word
 also keeps a fallback copy of a drawing for readers that cannot show it,
 which is not read a second time.
 
+**Text boxes.** A text box (DrawingML or VML) is anchored in a paragraph but
+holds paragraphs of its own, which are not that paragraph's text. They are
+read as elements of their own, in order, right after the paragraph the box is
+anchored in: its text stays whole, `Text before and after.`, wherever in it
+the box sits, and the box's first line does not run onto it. What is inside
+a box is read as any body is (headings, list items, tables, pictures), and a
+box grouped with a picture follows that picture's figure. A box in a table
+cell follows the table, as a picture there does; Word's fallback copy of the
+box is not read a second time.
+
 **The text in a picture** — a screenshot pasted into the report — is read by
 OCR when `convert` has an engine (`--ocr`) or the words one wrote
 (`--ocr-words`, `<stem>_m<n>.json` for the figure `figure-0-<n>`; `fdoc dev

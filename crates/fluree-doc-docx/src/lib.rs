@@ -908,8 +908,8 @@ fn parse_body(
     // Inside `mc:Fallback`: what Word reads in place of content it cannot,
     // a second copy of what `mc:Choice` already holds.
     let mut fallback = 0usize;
-    // A picture, chart or embedded object being read, and the figures read
-    // in the current paragraph or table, which follow it.
+    // A picture, chart or embedded object being read, and what follows the
+    // current paragraph or table: the figures and text boxes read in it.
     let mut pic_depth = 0usize;
     let mut pic = Pic::default();
     // Inside a picture's `pic:pic`, the one place its image is: a shape's
@@ -922,12 +922,55 @@ fn parse_body(
     // Drawings opened inside a deletion, which are no figure: their ends
     // close nothing.
     let mut skipped = 0usize;
-    let mut figures: Vec<Element> = Vec::new();
+    let mut following = Following::default();
+    // Where in `following` the picture being read goes: before the content
+    // of its own text boxes, which is read before the picture ends.
+    let mut pic_at = 0usize;
     let mut figure_count = 0usize;
     let mut media: Vec<FigureImage> = Vec::new();
     // Each list item read, by its place in `out`: the level its number is
     // counted at and whether it reads as a title, where it is numbered.
-    let mut outline: Vec<(usize, Option<Numbered>)> = Vec::new();
+    let mut outline: Vec<Outlined> = Vec::new();
+    // The paragraphs a text box is anchored in, innermost last, each set
+    // aside while its box is read (see [`Anchor`]).
+    let mut anchors: Vec<Anchor> = Vec::new();
+    // Trade the state being read for `a`'s, both ways: entering a text box
+    // sets the anchor's aside and starts the box afresh, and leaving it
+    // takes the anchor's back and leaves `a` with the box's content.
+    macro_rules! swap_anchor {
+        ($a:expr) => {{
+            let a: &mut Anchor = $a;
+            std::mem::swap(&mut out, &mut a.out);
+            std::mem::swap(&mut outline, &mut a.outline);
+            std::mem::swap(&mut following, &mut a.following);
+            std::mem::swap(&mut para, &mut a.para);
+            std::mem::swap(&mut table_depth, &mut a.table_depth);
+            std::mem::swap(&mut rows, &mut a.rows);
+            std::mem::swap(&mut row, &mut a.row);
+            std::mem::swap(&mut cell, &mut a.cell);
+            std::mem::swap(&mut in_cell, &mut a.in_cell);
+            std::mem::swap(&mut look, &mut a.look);
+            std::mem::swap(&mut cell_para_start, &mut a.cell_para_start);
+            std::mem::swap(&mut run_bold, &mut a.run_bold);
+            std::mem::swap(&mut run_font, &mut a.run_font);
+            std::mem::swap(&mut fields, &mut a.fields);
+            std::mem::swap(&mut pic_depth, &mut a.pic_depth);
+            std::mem::swap(&mut pic, &mut a.pic);
+            std::mem::swap(&mut in_pic, &mut a.in_pic);
+            std::mem::swap(&mut pic_at, &mut a.pic_at);
+        }};
+    }
+    // Leave the innermost text box: its last paragraph and what follows it
+    // end the box's content, which then follows its anchor's paragraph.
+    macro_rules! leave_box {
+        ($a:expr) => {{
+            let mut a: Anchor = $a;
+            flush_para(&mut out, &mut para, title_styles);
+            following.place(&mut out, &mut outline);
+            swap_anchor!(&mut a);
+            following.extend(a.out, a.outline);
+        }};
+    }
     let page_field = |instr: &str| {
         let i = instr.trim_start().to_ascii_uppercase();
         ["PAGE", "NUMPAGES", "SECTIONPAGES"]
@@ -978,6 +1021,7 @@ fn parse_body(
                     "drawing" | "pict" | "object" if matches!(ev_kind, Kind::Start) => {
                         if pic_depth == 0 {
                             pic = Pic::default();
+                            pic_at = following.len();
                         }
                         pic.object |= tag == "object";
                         pic_depth += 1;
@@ -1011,6 +1055,19 @@ fn parse_body(
                     }
                     "shape" if pic_depth > 0 && deleted == 0 && pic.alt.is_empty() => {
                         pic.alt = attr(&e, "alt").unwrap_or_default();
+                    }
+                    // A text box (DrawingML's `wps:txbx`, VML's
+                    // `v:textbox`) is anchored in a paragraph's run but
+                    // holds paragraphs of its own, which are not that
+                    // paragraph's text: read in its place, the box's first
+                    // line ran onto the anchor's (`Anchor text.Boxed
+                    // words`). Its content is read as a body of its own and
+                    // follows the paragraph, or the table, it is anchored
+                    // in, as a picture does.
+                    "txbxContent" if matches!(ev_kind, Kind::Start) => {
+                        let mut a = Anchor::default();
+                        swap_anchor!(&mut a);
+                        anchors.push(a);
                     }
                     "fldChar" => match attr(&e, "fldCharType").as_deref() {
                         Some("begin") => fields.push((String::new(), false)),
@@ -1193,7 +1250,12 @@ fn parse_body(
                                 media.push((id.clone(), rid, k));
                             }
                             f.figure = Some(id);
-                            figures.push(f);
+                            following.insert(pic_at, f);
+                        }
+                    }
+                    "txbxContent" => {
+                        if let Some(a) = anchors.pop() {
+                            leave_box!(a);
                         }
                     }
                     "fldSimple" => {
@@ -1258,9 +1320,10 @@ fn parse_body(
                             {
                                 outline.push((at, numbered_at));
                             }
-                            // The paragraph's pictures follow its text.
+                            // The paragraph's pictures and text boxes
+                            // follow its text.
                             if table_depth == 0 {
-                                out.append(&mut figures);
+                                following.place(&mut out, &mut outline);
                             }
                         }
                     }
@@ -1278,9 +1341,9 @@ fn parse_body(
                                     .as_ref()
                                     .is_some_and(|s| header_styles.contains(s));
                             emit_table(&mut out, std::mem::take(&mut rows), styled);
-                            // A picture in a cell has no place in a grid of
-                            // text; it follows the table.
-                            out.append(&mut figures);
+                            // A picture or a text box in a cell has no
+                            // place in a grid of text; it follows the table.
+                            following.place(&mut out, &mut outline);
                         }
                     }
                     _ => {}
@@ -1290,8 +1353,12 @@ fn parse_body(
         }
         buf.clear();
     }
+    // A text box the file leaves open ends with it.
+    while let Some(a) = anchors.pop() {
+        leave_box!(a);
+    }
     flush_para(&mut out, &mut para, title_styles);
-    out.append(&mut figures);
+    following.place(&mut out, &mut outline);
     promote_numbered_titles(&mut out, &outline);
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
@@ -1387,7 +1454,7 @@ fn titled(text: &str) -> bool {
 /// title only among siblings that are mostly titles heading something —
 /// the same list, at the same level, under the same parent — which is what
 /// an outline's sections are and a list's entries are not.
-fn promote_numbered_titles(out: &mut [Element], outline: &[(usize, Option<Numbered>)]) {
+fn promote_numbered_titles(out: &mut [Element], outline: &[Outlined]) {
     let numbered: Vec<(usize, &Numbered)> = outline
         .iter()
         .filter_map(|(i, n)| n.as_ref().map(|n| (*i, n)))
@@ -1428,6 +1495,80 @@ fn promote_numbered_titles(out: &mut [Element], outline: &[(usize, Option<Number
             out[i].level = Some((n.level + 1).min(6));
         }
     }
+}
+
+/// A list item read, by its place among the elements read: the level its
+/// number is counted at and whether it reads as a title, where it is
+/// numbered.
+type Outlined = (usize, Option<Numbered>);
+
+/// What follows the paragraph or table being read, in reading order: its
+/// figures and the content of its text boxes, whose list items keep their
+/// place in the outline once they are placed.
+#[derive(Default)]
+struct Following {
+    elements: Vec<Element>,
+    /// The list items among `elements`, by their place in it.
+    outline: Vec<Outlined>,
+}
+
+impl Following {
+    fn len(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// A figure, at `at`: before the content of its own text boxes, read
+    /// before the figure ends.
+    fn insert(&mut self, at: usize, e: Element) {
+        let at = at.min(self.elements.len());
+        self.elements.insert(at, e);
+        for (i, _) in &mut self.outline {
+            if *i >= at {
+                *i += 1;
+            }
+        }
+    }
+
+    /// A text box's content, after what is already here.
+    fn extend(&mut self, elements: Vec<Element>, outline: Vec<Outlined>) {
+        let base = self.elements.len();
+        self.outline
+            .extend(outline.into_iter().map(|(i, n)| (base + i, n)));
+        self.elements.extend(elements);
+    }
+
+    /// Place it all after `out`, leaving it empty.
+    fn place(&mut self, out: &mut Vec<Element>, outline: &mut Vec<Outlined>) {
+        let base = out.len();
+        outline.extend(self.outline.drain(..).map(|(i, n)| (base + i, n)));
+        out.append(&mut self.elements);
+    }
+}
+
+/// The paragraph a text box is anchored in, with the table and picture it
+/// sits in, set aside while the box is read: the box's paragraphs are its
+/// own, and do not take the anchor's text, style or numbering, nor its
+/// table's cell. Each field is the `parse_body` local of the same name.
+#[derive(Default)]
+struct Anchor {
+    out: Vec<Element>,
+    outline: Vec<Outlined>,
+    following: Following,
+    para: Para,
+    table_depth: usize,
+    rows: Vec<Row>,
+    row: Row,
+    cell: Cell,
+    in_cell: bool,
+    look: TableLook,
+    cell_para_start: usize,
+    run_bold: bool,
+    run_font: Option<String>,
+    fields: Vec<(String, bool)>,
+    pic_depth: usize,
+    pic: Pic,
+    in_pic: usize,
+    pic_at: usize,
 }
 
 /// A numbered paragraph, as the outline sees it.
@@ -3552,6 +3693,206 @@ mod tests {
             tc("42.46", false, "")
         ));
         assert_eq!(header(kv), Some(0));
+    }
+
+    /// A run holding a DrawingML text box (`wps:txbx`) of `content`.
+    fn drawing_box(content: &str) -> String {
+        format!(
+            "<w:r><w:drawing><wp:anchor><wp:docPr id=\"9\" name=\"Text Box 1\"/><a:graphic><a:graphicData>\
+             <wps:wsp><wps:txbx><w:txbxContent>{content}</w:txbxContent></wps:txbx></wps:wsp>\
+             </a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"
+        )
+    }
+
+    /// A run holding a VML text box (`v:textbox`) of `content`.
+    fn vml_box(content: &str) -> String {
+        format!(
+            "<w:r><w:pict><v:shape><v:textbox><w:txbxContent>{content}</w:txbxContent>\
+             </v:textbox></v:shape></w:pict></w:r>"
+        )
+    }
+
+    fn kinds_and_texts(els: &[Element]) -> Vec<(&str, &str)> {
+        els.iter()
+            .map(|e| (e.kind.as_str(), e.text.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn a_text_box_is_read_as_paragraphs_after_its_anchor() {
+        let content = format!(
+            "{}{}",
+            para(None, "Boxed words Kappa"),
+            para(Some("ListBullet"), "A boxed item")
+        );
+        for boxed in [drawing_box(&content), vml_box(&content)] {
+            // The anchor's style is its own, not taken by the box's
+            // paragraphs.
+            let els = read(&format!(
+                "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr>\
+                 <w:r><w:t>Anchor paragraph here.</w:t></w:r>{boxed}</w:p>{}",
+                para(None, "Next.")
+            ));
+            assert_eq!(
+                kinds_and_texts(&els),
+                [
+                    ("doco:SectionTitle", "Anchor paragraph here."),
+                    ("doco:Paragraph", "Boxed words Kappa"),
+                    ("doc:ListItem", "A boxed item"),
+                    ("doco:Paragraph", "Next."),
+                ],
+                "{boxed}"
+            );
+            assert_eq!(els[0].level, Some(1));
+        }
+    }
+
+    #[test]
+    fn a_text_box_anchored_mid_paragraph_leaves_the_paragraph_whole() {
+        let els = read(&format!(
+            "<w:p><w:r><w:t xml:space=\"preserve\">Text before </w:t></w:r>{}\
+             <w:r><w:t>and after.</w:t></w:r></w:p>",
+            drawing_box(&para(None, "In the box."))
+        ));
+        assert_eq!(
+            kinds_and_texts(&els),
+            [
+                ("doco:Paragraph", "Text before and after."),
+                ("doco:Paragraph", "In the box."),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_text_box_in_a_table_cell_follows_the_table() {
+        let els = read(&format!(
+            "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc>\
+             <w:tc><w:p><w:r><w:t>Value</w:t></w:r></w:p></w:tc></w:tr>\
+             <w:tr><w:tc><w:p><w:r><w:t>Pump</w:t></w:r>{}</w:p></w:tc>\
+             <w:tc><w:p><w:r><w:t>12</w:t></w:r></w:p></w:tc></w:tr></w:tbl>{}",
+            drawing_box(&format!(
+                "{}{}",
+                para(None, "Boxed note"),
+                para(None, "Second line")
+            )),
+            para(None, "After.")
+        ));
+        let kinds: Vec<&str> = els.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "doco:Table",
+                "doco:Paragraph",
+                "doco:Paragraph",
+                "doco:Paragraph"
+            ]
+        );
+        assert_eq!(
+            els[0].cells.as_ref().unwrap()[1],
+            ["Pump", "12"],
+            "the cell holds its own text only"
+        );
+        assert_eq!(els[1].text, "Boxed note");
+        assert_eq!(els[2].text, "Second line");
+        assert_eq!(els[3].text, "After.");
+    }
+
+    #[test]
+    fn a_text_box_word_keeps_twice_is_read_once() {
+        // Word writes a text box as DrawingML, and again as VML for readers
+        // that cannot show DrawingML.
+        let content = para(None, "Boxed once");
+        let choice = drawing_box(&content);
+        let fallback = vml_box(&content);
+        let strip = |r: &str| {
+            r.strip_prefix("<w:r>")
+                .and_then(|r| r.strip_suffix("</w:r>"))
+                .unwrap()
+                .to_string()
+        };
+        let els = read(&format!(
+            "<w:p><w:r><w:t>Anchor.</w:t></w:r><w:r><mc:AlternateContent>\
+             <mc:Choice Requires=\"wps\">{}</mc:Choice><mc:Fallback>{}</mc:Fallback>\
+             </mc:AlternateContent></w:r></w:p>",
+            strip(&choice),
+            strip(&fallback)
+        ));
+        assert_eq!(
+            kinds_and_texts(&els),
+            [
+                ("doco:Paragraph", "Anchor."),
+                ("doco:Paragraph", "Boxed once"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_picture_comes_before_the_text_boxes_grouped_with_it() {
+        let els = read(
+            "<w:p><w:r><w:t>Anchor.</w:t></w:r><w:r><w:drawing><wp:anchor>\
+             <wp:docPr id=\"1\" name=\"Group\" descr=\"A diagram\"/><a:graphic><a:graphicData><wpg:wgp>\
+             <wps:wsp><wps:txbx><w:txbxContent><w:p><w:r><w:t>Its caption</w:t></w:r></w:p>\
+             </w:txbxContent></wps:txbx></wps:wsp><pic:pic/></wpg:wgp>\
+             </a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>",
+        );
+        assert_eq!(
+            kinds_and_texts(&els),
+            [
+                ("doco:Paragraph", "Anchor."),
+                ("doco:Figure", "A diagram"),
+                ("doco:Paragraph", "Its caption"),
+            ]
+        );
+    }
+
+    #[test]
+    fn what_follows_keeps_each_list_item_on_its_element() {
+        let p = |t: &str| element("doco:Paragraph", t.into(), None);
+        let mut f = Following::default();
+        // A box of a note and an item, then its group's figure before it.
+        f.extend(vec![p("note"), p("item")], vec![(1, None)]);
+        f.insert(0, element("doco:Figure", String::new(), None));
+        let mut out = vec![p("anchor")];
+        let mut outline: Vec<Outlined> = vec![(0, None)];
+        f.place(&mut out, &mut outline);
+        let at: Vec<&str> = outline.iter().map(|(i, _)| out[*i].text.as_str()).collect();
+        assert_eq!(at, ["anchor", "item"]);
+        assert_eq!(f.len(), 0);
+    }
+
+    #[test]
+    fn numbered_titles_in_a_text_box_keep_their_place_in_the_outline() {
+        let numbering = numbering_xml(
+            &[("0", OUTLINE)],
+            "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>",
+        );
+        let n = Numbering::new(Some(&numbering), None);
+        // Two boxes in one paragraph: the second's items come after the
+        // first's content.
+        let boxed = drawing_box(&para(None, "A note."))
+            + &drawing_box(&[item("1", 1, "PUMP CHECKS"), item("1", 2, "Prime it.")].concat());
+        let body = format!(
+            "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr>\
+             <w:r><w:t>SCOPE</w:t></w:r>{boxed}</w:p>{}{}",
+            item("1", 0, "METHOD"),
+            para(None, "Body.")
+        );
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &TitleStyles::new(), n).unwrap();
+        let got: Vec<(&str, Option<usize>, &str)> = els
+            .iter()
+            .map(|e| (e.kind.as_str(), e.level, e.text.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("doco:SectionTitle", Some(1), "1. SCOPE"),
+                ("doco:Paragraph", None, "A note."),
+                ("doco:SectionTitle", Some(2), "1.1. PUMP CHECKS"),
+                ("doc:ListItem", None, "1.1.1. Prime it."),
+                ("doco:SectionTitle", Some(1), "2. METHOD"),
+                ("doco:Paragraph", None, "Body."),
+            ]
+        );
     }
 
     #[test]
