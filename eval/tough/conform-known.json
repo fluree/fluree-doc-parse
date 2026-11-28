@@ -525,6 +525,14 @@
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
+ "pdf-table-shaded-header-wrapped-names": {
+  "md table.header_rows": 2,
+  "md table.restated_headers": 2,
+  "md table.sub_headers": 4,
+  "xhtml table.header_rows": 2,
+  "xhtml table.restated_headers": 2,
+  "xhtml table.sub_headers": 4
+ },
  "pmc1343572-section-bands": {
   "md table.header_rows": 2,
   "md table.sub_headers": 3,
