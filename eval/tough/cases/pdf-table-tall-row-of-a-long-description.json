@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "doe-em-major-procurements-2026-01.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2026-05/January%202026%20Major%20Procurements%201-12-26-Final.pdf",
+    "sha256": "0bda158ea8b8029ae216f8a381ea75675249660a87db44e158a38011d2ed0ad2",
+    "about": "US Department of Energy, Office of Environmental Management, awarded major procurements (Acrobat PDFMaker for Excel), on a large page. A ruled grid of one row a contract; a few rows are tall, a long description wrapped down the first column, or the contractors of a multiple award listed down theirs."
+  },
+  "checks": [
+    {
+      "id": "long-description-row",
+      "found": "2026-11-27",
+      "issue": "On page 2 a row four times the height of the others was read as the gap between two tables: its description wraps to six lines in the first column, which was taken for a body never ruled, a row on every line. The row came out as paragraphs.",
+      "cell": {
+        "value": "(ETEC) Environmental Remediation Services for Environmental Compliance For Area IV Of The Northern Buffer Zone Of The Santa Susana Field Laboratory In Support of The Energy Technology Engineering Center",
+        "column": "Acquisition Description/ Category"
+      }
+    },
+    {
+      "id": "listed-contractors-row",
+      "found": "2026-11-27",
+      "issue": "On page 5, as above: a multiple award's row, its contractors listed down their column. Its text came out as paragraphs.",
+      "cell": {
+        "value": "Multiple award indefinite delivery/indefinite quality (IDIQ) Set-aside contracts for nationwide environmental services/ environmental cleanup",
+        "column": "Acquisition Description/ Category"
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "doe-em-major-procurements-2023-07.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2023-07/July-2023%20Major%20Procurements%207-31-23.pdf",
+    "sha256": "b60e444e257505352b864d47218e5598b0995fa06712eae229c577925cdd04bd",
+    "about": "US Department of Energy, Office of Environmental Management, awarded major procurements (Microsoft Excel for Microsoft 365). A ruled grid of one row a contract; a multiple award's row lists its fourteen contractors down one column."
+  },
+  "checks": [
+    {
+      "id": "listed-contractors-row",
+      "found": "2026-11-27",
+      "issue": "On page 4 the multiple award's row, eight times the height of the others, was read as the gap between two tables, and came out as eleven paragraphs.",
+      "cell": {
+        "value": "Multiple award indefinite delivery/indefinite quality (IDIQ) Set-aside contracts for nationwide environmental services/ environmental cleanup",
+        "column": "Acquisition Description/ Category"
+      }
+    }
+  ]
+}

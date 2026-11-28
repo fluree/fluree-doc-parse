@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "doe-em-major-contracts-2026-08.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2026-08/MAJOR%20CONTRACTS%20SUMMARY%20August%202026.pdf",
+    "sha256": "b730045299b9cf24069fdd77b7215ae26e09df7517d6bee1191e128950ae18f8",
+    "about": "DOE Office of Environmental Management, major contracts summary (August 2026), 5 pages. Its cells lay blank spaces under their text, as the procurements list's do."
+  },
+  "notes": [
+    "2026-11-28: a period of performance read `0 4/ 30/20 2 4 t o 05/01/2034`."
+  ],
+  "checks": [
+    {
+      "id": "period-of-performance",
+      "found": "2026-11-28",
+      "issue": "`04/30/2024 to 05/01/2034` read `0 4/ 30/20 2 4 t o 05/01/2034`.",
+      "text": "04/30/2024 to 05/01/2034"
+    },
+    {
+      "id": "no-parted-date",
+      "found": "2026-11-28",
+      "issue": "No date parted between its digits.",
+      "no_text": "0 4/ 30/20"
+    }
+  ]
+}
