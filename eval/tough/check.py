@@ -278,6 +278,38 @@ def run_check(check, reading):
                 found.append(sorted({c["doc:columnIndex"] for c in cells}))
         ok = any(idx == list(range(want["count"])) for idx in found)
         return ok, None if ok else f"column indexes {found}"
+    if "continues" in check and "paragraph" in check["continues"]:
+        # The paragraph holding `paragraph` carries on, through
+        # `doc:continues`, the paragraph holding `from`: a paragraph a page
+        # break cut, read as one.
+        want = check["continues"]
+        has = lambda n, t: norm(t) in norm(n.get("nif:isString", ""))
+        paras = [n for n in reading.nodes.values() if n.get("@type") == "doco:Paragraph"]
+        for p in (p for p in paras if has(p, want["paragraph"])):
+            seen, part = set(), p
+            while part.get("doc:continues") and part.get("@id") not in seen:
+                seen.add(part.get("@id"))
+                part = reading.nodes.get(part["doc:continues"], {})
+                if has(part, want["from"]):
+                    return True, None
+        return False, "not carried on from that paragraph"
+    if "no_continues" in check:
+        # No paragraph carries on the one whose text is `from` (or, with
+        # `"match": "opens"`, opens on it): what a page break left at a
+        # page's foot that no paragraph runs on from, a folio, a label, a
+        # caption.
+        want = check["no_continues"]
+        exact = want.get("match", "exact") == "exact"
+        is_from = lambda n: (
+            norm(n.get("nif:isString", "")) == norm(want["from"])
+            if exact
+            else norm(n.get("nif:isString", "")).startswith(norm(want["from"]))
+        )
+        froms = {n.get("@id") for n in reading.nodes.values() if n.get("@type") == "doco:Paragraph" and is_from(n)}
+        if not froms:
+            return False, "no such paragraph"
+        on = [n for n in reading.nodes.values() if n.get("doc:continues") in froms]
+        return not on, None if not on else f"carried on by {norm(on[0].get('nif:isString', ''))[:60]!r}"
     if "continues" in check:
         # The table holding a cell of value `cell` carries on, through
         # `doc:continues`, the table holding a cell of value `from`: a table

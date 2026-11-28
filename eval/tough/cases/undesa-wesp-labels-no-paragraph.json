@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "undesa-wesp-2025.pdf",
+    "url": "https://desapublications.un.org/file/20954/download",
+    "sha256": "3ca8c48a8a2c88293450ddf576406b0560ec9dd2ddfde655109dc4216289d890",
+    "about": "UN DESA World Economic Situation and Prospects 2025 (212 pages). Its annex pages end on a running label, and a box ends on its author's byline."
+  },
+  "notes": [
+    "2026-11-28: guard. A label or a byline at a page's foot, its line far short of the measure, is no line a page break cut."
+  ],
+  "checks": [
+    {
+      "id": "annex-tables",
+      "found": "2026-11-28",
+      "issue": "`ANNEX TABLES` must not run on into the next page's table label.",
+      "no_continues": {
+        "from": "ANNEX TABLES"
+      }
+    },
+    {
+      "id": "byline",
+      "found": "2026-11-28",
+      "issue": "A box's byline must not run on into the next page's text.",
+      "no_continues": {
+        "from": "Author: Grigor Agabekian, UN DESA"
+      }
+    }
+  ]
+}

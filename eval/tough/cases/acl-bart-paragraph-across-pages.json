@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "acl-2020-main-703.pdf",
+    "url": "https://aclanthology.org/2020.acl-main.703.pdf",
+    "sha256": "3562c723fe7bebb8b362533122b3ca5c065037c8e8d67460654cf3740652bb59",
+    "about": "ACL 2020, BART, set in two columns. Page 8's right column ends mid-sentence, and the sentence goes on at the head of page 9's left column."
+  },
+  "notes": [
+    "2026-11-28: a paragraph cut at a page break of a two-column paper, a second producer for the class."
+  ],
+  "checks": [
+    {
+      "id": "mass-most-similar",
+      "found": "2026-11-28",
+      "issue": "`MASS (Song et al.,2019) is perhaps the most similar` / `model to BART.` read as two paragraphs.",
+      "continues": {
+        "paragraph": "model to BART. An input sequence",
+        "from": "is perhaps the most similar"
+      }
+    }
+  ]
+}

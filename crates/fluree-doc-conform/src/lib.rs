@@ -216,6 +216,9 @@ fn reference(elements: &[Element], format: Format) -> Vec<Unit> {
     let mut out = Vec::new();
     let mut i = 0;
     let mut notes_open = false;
+    // The element whose text the last unit ends on, where that unit is a
+    // paragraph: a part carried on from it goes on in that unit.
+    let mut last_para: Option<usize> = None;
     while i < elements.len() {
         let e = &elements[i];
         // A deck's speaker notes, as both writers set them: a heading over
@@ -274,11 +277,31 @@ fn reference(elements: &[Element], format: Format) -> Vec<Unit> {
                 }));
             }
             _ => {
-                if let Some(mut u) = Unit::block(Kind::Para, i, &e.text) {
-                    if e.turn.is_some() && format == Format::Md {
-                        u.may_add = "()0123456789:";
+                use fluree_doc_model::join::{carries_on_paragraph, part_separator, part_text};
+                let text = part_text(&e.text);
+                // A paragraph's part carried on from the page before, as the
+                // writers set it: the paragraph it continues, read on.
+                let carried = carries_on_paragraph(elements, i) && last_para == Some(i - 1);
+                match out.last_mut() {
+                    Some(u) if carried => {
+                        u.text = squeeze(&format!(
+                            "{}{}{}",
+                            u.text,
+                            part_separator(&elements[i - 1].text, &e.text),
+                            text
+                        ));
+                        u.key = key_of(&u.text);
+                        last_para = Some(i);
                     }
-                    out.push(u);
+                    _ => {
+                        if let Some(mut u) = Unit::block(Kind::Para, i, text) {
+                            if e.turn.is_some() && format == Format::Md {
+                                u.may_add = "()0123456789:";
+                            }
+                            out.push(u);
+                            last_para = Some(i);
+                        }
+                    }
                 }
             }
         }

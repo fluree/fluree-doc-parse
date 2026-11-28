@@ -9,6 +9,7 @@ pub mod doco;
 pub mod element;
 pub mod emit;
 pub mod geom;
+pub mod join;
 pub mod marks;
 pub mod merges;
 pub mod message;

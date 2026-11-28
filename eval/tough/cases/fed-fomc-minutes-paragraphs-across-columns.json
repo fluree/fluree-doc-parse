@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "fomcminutes20240131.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/fomcminutes20240131.pdf",
+    "sha256": "6ce451a5bcf43bf90ac2172f6872cd245e04689c80d4b01e28a01519bb3f0dcc",
+    "about": "Minutes of the Federal Open Market Committee, January 2024, set in two columns: a page's text ends in its right column and goes on at the head of the next page's left one."
+  },
+  "notes": [
+    "2026-11-28: a paragraph the page break cut read as two, one on each page. A paragraph at the foot of a page's last column, ending mid-sentence, goes on in the next page's first: the later part carries on the earlier (`doc:continues`), and the writers read them as one."
+  ],
+  "checks": [
+    {
+      "id": "quits-rate-edged-down",
+      "found": "2026-11-28",
+      "issue": "`…and the quits rate edged` / `down; both rates were below their levels` read as two paragraphs across pages 4 and 5.",
+      "continues": {
+        "paragraph": "down; both rates were below their levels at the start of 2023",
+        "from": "and the quits rate edged"
+      }
+    },
+    {
+      "id": "afe-yields",
+      "found": "2026-11-28",
+      "issue": "`…short-term yields in most AFEs,` / `while longer-term foreign yields were little changed` read as two paragraphs.",
+      "continues": {
+        "paragraph": "while longer-term foreign yields were little changed",
+        "from": "short-term yields in most AFEs,"
+      }
+    }
+  ]
+}

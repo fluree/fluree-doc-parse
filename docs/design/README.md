@@ -9,6 +9,7 @@ surface](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 - [Reading order and columns](reading-order.md) — rotation buckets and gutters
 - [Headings](headings.md) — the detector cascade, and the signal nobody uses
 - [Tables](tables.md) — grids from geometry, including grids that look absent
+- [Paragraphs across page breaks](paragraphs-across-pages.md) — a paragraph the page break cuts, and the notes set between its halves (design)
 - [Page furniture](furniture.md) — headers, footers, watermarks
 - [The router](router.md) — what earns escalation
 - [Projection conformance](conformance.md) — every format's writer held to the element model

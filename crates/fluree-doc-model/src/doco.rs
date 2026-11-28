@@ -154,9 +154,7 @@ pub fn slug(name: &str) -> String {
 pub fn to_text(elements: &[Element]) -> String {
     let mut out = String::new();
     for p in projection(elements) {
-        if !out.is_empty() {
-            out.push_str(SEPARATOR);
-        }
+        out.push_str(p.sep);
         out.push_str(&p.text);
     }
     if !out.is_empty() {
@@ -166,6 +164,11 @@ pub fn to_text(elements: &[Element]) -> String {
 }
 
 /// What the projection puts between one element's text and the next's.
+///
+/// But a paragraph a page break cut reads whole: its later part follows the
+/// earlier with a space, or with nothing where the break fell inside a word
+/// ([`crate::join::part_separator`]), so each part's offsets cut its own
+/// text out of the one paragraph.
 const SEPARATOR: &str = "\n\n";
 
 /// One element's place in the text projection.
@@ -174,6 +177,9 @@ pub struct Projected<'a> {
     /// The element's position in the slice walked.
     pub index: usize,
     pub element: &'a Element,
+    /// What the projection puts before it: nothing for the first,
+    /// [`SEPARATOR`] or a paragraph's part separator after that.
+    pub sep: &'static str,
     /// Its text as the projection holds it: [`projection_text`].
     pub text: String,
     /// Where that text begins and ends in the projection, in characters.
@@ -193,7 +199,7 @@ pub fn projection(elements: &[Element]) -> Projection<'_> {
     Projection {
         elements: elements.iter().enumerate(),
         cursor: 0,
-        first: true,
+        prev: None,
     }
 }
 
@@ -202,7 +208,8 @@ pub fn projection(elements: &[Element]) -> Projection<'_> {
 pub struct Projection<'a> {
     elements: std::iter::Enumerate<std::slice::Iter<'a, Element>>,
     cursor: usize,
-    first: bool,
+    /// The last element that put text into the projection.
+    prev: Option<&'a Element>,
 }
 
 impl<'a> Iterator for Projection<'a> {
@@ -214,15 +221,21 @@ impl<'a> Iterator for Projection<'a> {
             if text.is_empty() {
                 continue;
             }
-            if !self.first {
-                self.cursor += SEPARATOR.chars().count();
-            }
-            self.first = false;
+            let sep = match self.prev {
+                None => "",
+                Some(prev) if crate::join::continues_paragraph(prev, element) => {
+                    crate::join::part_separator(&prev.text, &element.text)
+                }
+                Some(_) => SEPARATOR,
+            };
+            self.cursor += sep.chars().count();
+            self.prev = Some(element);
             let begin = self.cursor;
             self.cursor += text.chars().count();
             return Some(Projected {
                 index,
                 element,
+                sep,
                 text,
                 begin,
                 end: self.cursor,
@@ -242,7 +255,7 @@ pub fn projection_text(e: &Element) -> String {
     match (projected_cells(e), e.kind.as_str()) {
         (Some(rows), "doco:Table") => table_projection(&rows).0,
         (None, "doco:Table") => strip_tags(&e.text).trim().to_string(),
-        _ => e.text.trim().to_string(),
+        _ => crate::join::part_text(e.text.trim()).to_string(),
     }
 }
 
@@ -600,6 +613,9 @@ struct Emitter<'a> {
     /// Each table emitted so far, by element id, for a part that carries it
     /// on across a page break.
     tables: HashMap<String, TablePart>,
+    /// Each paragraph's node, by element id, for a part that carries it on
+    /// across a page break.
+    paragraphs: HashMap<String, String>,
     body_idx: usize,
 }
 
@@ -1037,6 +1053,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         open_signature: None,
         mailboxes: HashMap::new(),
         tables: HashMap::new(),
+        paragraphs: HashMap::new(),
         body_idx: 0,
     };
 
@@ -1099,8 +1116,14 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
 
     // Where each element's text sits in the `to_text` projection.
     let mut spans: Vec<Option<(usize, usize)>> = vec![None; elements.len()];
+    // Whether each element carries on the paragraph the projection read just
+    // before it, as one paragraph a page break cut.
+    let mut carried = vec![false; elements.len()];
+    let mut prev: Option<&Element> = None;
     for p in projection(elements) {
         spans[p.index] = Some((p.begin, p.end));
+        carried[p.index] = prev.is_some_and(|q| crate::join::continues_paragraph(q, p.element));
+        prev = Some(p.element);
     }
 
     // The lists open here, outermost first: each list's node, its items'
@@ -1881,6 +1904,17 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             _ => {
                 let parent = em.current_parent();
                 let p = em.node("element", &e.kind, Some("p"));
+                // The later part of a paragraph a page break cut links to
+                // the part it carries on, as a continued table's part does.
+                if carried[i] {
+                    if let Some(earlier) = e.continues.as_ref().and_then(|c| em.paragraphs.get(c)) {
+                        em.nodes[p].insert("doc:continues".into(), Value::String(earlier.clone()));
+                    }
+                }
+                if e.kind == "doco:Paragraph" {
+                    let iri = em.nodes[p]["@id"].as_str().unwrap_or_default().to_string();
+                    em.paragraphs.insert(e.id.clone(), iri);
+                }
                 let text = projection_text(e);
                 em.set_text(p, &text);
                 em.set_provenance(p, e);
@@ -2024,6 +2058,105 @@ mod tests {
     fn graph(elements: &[Element]) -> Vec<Value> {
         let v: Value = serde_json::from_str(&to_doco(elements, &opts())).unwrap();
         v["@graph"].as_array().unwrap().clone()
+    }
+
+    /// The parts of a paragraph a page break cut, each on its page, and a
+    /// paragraph after them.
+    fn cut(before: &str, after: &str) -> Vec<Element> {
+        let mut a = el("doco:Paragraph", before, None);
+        a.id = "p1".into();
+        let mut b = el("doco:Paragraph", after, None);
+        b.id = "p2".into();
+        b.page = 1;
+        b.continues = Some("p1".into());
+        let mut c = el("doco:Paragraph", "Next paragraph.", None);
+        c.id = "p3".into();
+        c.page = 1;
+        vec![a, b, c]
+    }
+
+    /// Each paragraph node's text, the text its offsets cut from the
+    /// projection, and what it continues.
+    fn parts(els: &[Element]) -> Vec<(String, String, Option<String>)> {
+        let text: Vec<char> = to_text(els).chars().collect();
+        let g = graph(els);
+        let iri = |v: &Value| v["@id"].as_str().unwrap().to_string();
+        let paras: Vec<&Value> = g
+            .iter()
+            .filter(|n| n["@type"] == "doco:Paragraph")
+            .collect();
+        paras
+            .iter()
+            .map(|n| {
+                let (b, e) = (
+                    n["nif:beginIndex"].as_u64().unwrap() as usize,
+                    n["nif:endIndex"].as_u64().unwrap() as usize,
+                );
+                let continues = n.get("doc:continues").and_then(Value::as_str).map(|c| {
+                    let k = paras.iter().position(|p| iri(p) == c).unwrap();
+                    format!("part {k}")
+                });
+                (
+                    n["nif:isString"].as_str().unwrap().to_string(),
+                    text[b..e].iter().collect(),
+                    continues,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_paragraph_cut_at_a_word_end_reads_whole_in_the_projection() {
+        let els = cut("decisions and", "can affect inflation.");
+        assert_eq!(
+            to_text(&els),
+            "decisions and can affect inflation.\n\nNext paragraph.\n"
+        );
+        let p = parts(&els);
+        // Each part's offsets cut its own text, a space apart, and the later
+        // part links to the earlier.
+        assert_eq!(p[0], ("decisions and".into(), "decisions and".into(), None));
+        assert_eq!(
+            p[1],
+            (
+                "can affect inflation.".into(),
+                "can affect inflation.".into(),
+                Some("part 0".into())
+            )
+        );
+        assert_eq!(p[2].2, None);
+    }
+
+    #[test]
+    fn a_word_the_page_break_cut_reads_whole_in_the_projection() {
+        let els = cut(
+            &format!("a re{}", crate::join::PART_BREAK),
+            "strictive level.",
+        );
+        assert_eq!(to_text(&els), "a restrictive level.\n\nNext paragraph.\n");
+        let p = parts(&els);
+        assert_eq!(p[0].0, "a re");
+        assert_eq!(p[0].1, "a re");
+        assert_eq!(p[1].1, "strictive level.");
+        assert_eq!(p[1].2.as_deref(), Some("part 0"));
+    }
+
+    #[test]
+    fn a_compound_the_page_break_cut_keeps_its_hyphen_in_the_projection() {
+        let els = cut("a long-", "term view.");
+        assert_eq!(to_text(&els), "a long-term view.\n\nNext paragraph.\n");
+        assert_eq!(parts(&els)[0].1, "a long-");
+    }
+
+    #[test]
+    fn a_paragraph_not_linked_stays_apart() {
+        let mut els = cut("decisions and", "can affect inflation.");
+        els[1].continues = None;
+        assert_eq!(
+            to_text(&els),
+            "decisions and\n\ncan affect inflation.\n\nNext paragraph.\n"
+        );
+        assert!(parts(&els).iter().all(|p| p.2.is_none()));
     }
 
     fn find<'a>(g: &'a [Value], ty: &str) -> Vec<&'a Value> {

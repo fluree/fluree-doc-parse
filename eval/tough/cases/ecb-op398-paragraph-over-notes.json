@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "ecb-op398-monetary-policy-instruments-2024-25.pdf",
+    "url": "https://www.ecb.europa.eu/pub/pdf/scpops/ecb.op398.en.pdf",
+    "sha256": "d4f087fea09e0cab69fa37519193c4155f0e449aff65e32ced4b87ca6f4dd743",
+    "about": "ECB Occasional Paper 398, its pages' foot notes set under the text: sentences cut by a page break, with the notes between their parts."
+  },
+  "notes": [
+    "2026-11-28: a second producer for a paragraph read across its page's foot notes."
+  ],
+  "checks": [
+    {
+      "id": "measures-led-to",
+      "found": "2026-11-28",
+      "issue": "`These measures` / notes / `led to a sustained increase in reserves` read with the notes inside the sentence.",
+      "text": "These measures led to a sustained increase in reserves"
+    }
+  ]
+}

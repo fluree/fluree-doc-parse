@@ -62,6 +62,7 @@
   - [Reading order and columns](design/reading-order.md)
   - [Headings](design/headings.md)
   - [Tables](design/tables.md)
+  - [Paragraphs across page breaks](design/paragraphs-across-pages.md)
   - [Page furniture](design/furniture.md)
   - [The router](design/router.md)
   - [Projection conformance](design/conformance.md)
