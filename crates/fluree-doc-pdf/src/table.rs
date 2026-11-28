@@ -1619,7 +1619,9 @@ impl Grid {
         // group names over some columns (`MRM | Ret. | Quant MRM | Qual
         // MRM`), over a row naming every column (`Start | Time | Compound
         // | Q1 | Q3 | CE`), both bold in every cell, labels and no figures,
-        // over a plain row of figures mostly.
+        // over a plain row of figures mostly. Group names stand apart, each
+        // over its columns: a title dealt out over the cuts runs on across
+        // them as one line, and heads no column.
         let filled = |r: usize| rows[r].iter().filter(|t| !t.trim().is_empty()).count();
         let labels = |r: usize| {
             rows[r]
@@ -1635,6 +1637,7 @@ impl Grid {
             && labels(1)
             && self.words_bold(glyphs, 0)
             && self.words_bold(glyphs, 1)
+            && !self.runs_over_a_cut(glyphs, 0)
             && !self.row_is_bold(glyphs, 2)
             && rows[2].iter().filter(|t| is_numeric_cell(t.trim())).count() * 2 > filled(2)
         {
