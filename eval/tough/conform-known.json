@@ -545,14 +545,6 @@
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
  },
- "pdf-table-shaded-header-wrapped-names": {
-  "md table.header_rows": 2,
-  "md table.restated_headers": 2,
-  "md table.sub_headers": 4,
-  "xhtml table.header_rows": 2,
-  "xhtml table.restated_headers": 2,
-  "xhtml table.sub_headers": 4
- },
  "pdf-table-tall-row-of-a-long-description": {
   "md table.header_rows": 1,
   "md table.sub_headers": 2,
