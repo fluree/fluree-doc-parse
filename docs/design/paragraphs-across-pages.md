@@ -1,7 +1,8 @@
 # Paragraphs across page breaks
 
 Status: design, not built. It is planned for the release after the next one.
-The DoCO shape is to be confirmed.
+The DoCO shape is confirmed (2026-11-28): two nodes, one per page, linked by
+`doc:continues`.
 
 A paragraph the page break cuts is read today as two paragraphs, one on each
 page. Where the page sets its notes at its foot, the notes are read between the
@@ -104,8 +105,9 @@ belongs to the page, and the sentence its mark sits in reads whole before it.
   - Guards: a table of contents and a two-column paper.
 - The bench doesn't move: its PDFs are single pages.
 
-## Open
+## Decided
 
-The DoCO shape (two nodes linked by `doc:continues`) mirrors tables. It is to
-be confirmed before building. The alternative, one node spanning two pages,
-would break "an element sits on one page".
+The DoCO shape is two nodes, one per page, the later linked to the earlier by
+`doc:continues`, as a continued table's parts are. It was confirmed on
+2026-11-28. The alternative was one node spanning two pages, which would break
+"an element sits on one page".
