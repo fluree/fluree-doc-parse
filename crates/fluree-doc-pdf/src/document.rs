@@ -867,6 +867,78 @@ fn is_splice_anchor(e: &Element) -> bool {
     matches!(e.evidence, "route" | "table-confidence" | "table-missing")
 }
 
+/// How far apart, in points, two copies of a page's running line may stand
+/// and still be its template's: a template sets them to the point.
+const RUNNING_PLACE: f64 = 1.5;
+
+/// Which elements are the page's running head over a table's part carried
+/// on from the page before: blocks between the two parts, on the second
+/// part's page and over it, each set word for word at the same place on
+/// another page.
+///
+/// The reading of furniture finds a running head by its repeating on most
+/// pages, or, in a short document, on every page or every page but one. A
+/// document whose head is left off some pages (a schedule's page of rows
+/// carried on with no head, between two pages with one) falls short of
+/// both, and its head was read as text between the parts, which ended the
+/// link. Text that repeats elsewhere does not land at the same place to the
+/// point, as a template's does.
+fn running_over_parts(elements: &[Element]) -> Vec<bool> {
+    let mut running = vec![false; elements.len()];
+    let content: Vec<usize> = (0..elements.len())
+        .filter(|&i| !is_splice_anchor(&elements[i]))
+        .collect();
+    let norm = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+    let at_place = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
+        (a.x0 - b.x0).abs() <= RUNNING_PLACE
+            && (a.x1 - b.x1).abs() <= RUNNING_PLACE
+            && (a.y0 - b.y0).abs() <= RUNNING_PLACE
+            && (a.y1 - b.y1).abs() <= RUNNING_PLACE
+    };
+    let repeated = |i: usize| {
+        let e = &elements[i];
+        let (Some(b), t) = (e.bbox, norm(&e.text)) else {
+            return false;
+        };
+        !t.is_empty()
+            && elements.iter().any(|o| {
+                o.page != e.page
+                    && o.kind != "doco:Table"
+                    && o.bbox.is_some_and(|ob| at_place(&ob, &b))
+                    && norm(&o.text) == t
+            })
+    };
+    let table = |i: usize| elements[i].kind == "doco:Table";
+    for (k, &j) in content.iter().enumerate() {
+        if !table(j) {
+            continue;
+        }
+        // The next table after this one, and the blocks between them.
+        let Some(m) = content[k + 1..].iter().position(|&n| table(n)) else {
+            continue;
+        };
+        let between = &content[k + 1..k + 1 + m];
+        let next = content[k + 1 + m];
+        let (a, b) = (&elements[j], &elements[next]);
+        if between.is_empty() || b.page != a.page + 1 {
+            continue;
+        }
+        let over = |n: usize| {
+            elements[n].page == b.page
+                && elements[n]
+                    .bbox
+                    .zip(b.bbox)
+                    .is_some_and(|(r, t)| r.y1 <= t.y0 + RUNNING_PLACE)
+        };
+        if between.iter().all(|&n| over(n) && repeated(n)) {
+            for &n in between {
+                running[n] = true;
+            }
+        }
+    }
+    running
+}
+
 /// Link a table the page break split to its part on the page before.
 ///
 /// A table that fills the foot of one page and goes on at the head of the
@@ -892,7 +964,11 @@ fn is_splice_anchor(e: &Element) -> bool {
 /// table's anchor goes in just before the table, so with anchors on the
 /// second part follows its own anchor, not the first part, and comparing
 /// neighbours alone lost the link on every run that minted anchors.
+///
+/// Nor is the page's running head over the second part
+/// ([`running_over_parts`]).
 fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
+    let running = running_over_parts(elements);
     let frame = |e: &Element| {
         frames
             .iter()
@@ -912,7 +988,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     let mut table_heads: std::collections::HashMap<String, Vec<Vec<String>>> =
         std::collections::HashMap::new();
     for i in 0..elements.len() {
-        if is_splice_anchor(&elements[i]) {
+        if is_splice_anchor(&elements[i]) || running[i] {
             continue;
         }
         let Some(p) = last.replace(i) else {
@@ -11361,6 +11437,60 @@ mod tests {
             Some(1),
             "the grades row finishes the header"
         );
+    }
+
+    #[test]
+    fn a_parts_page_head_set_as_on_another_page_is_not_between_the_parts() {
+        // A schedule's header and rows at one page's foot, its rows going on
+        // at the next page's head, under the page's running head: the
+        // document's two lines set as on the first page, which the reading
+        // of furniture missed.
+        let on = |e: Element, page: usize| Element { page, ..e };
+        let head = |page: usize, dx: f64, text: &str| {
+            [
+                on(
+                    element(
+                        "Task Order 0001 Attachment J-8",
+                        381.0 + dx,
+                        20.0,
+                        540.0 + dx,
+                        40.0,
+                        false,
+                    ),
+                    page,
+                ),
+                on(
+                    element(text, 205.0 + dx, 45.0, 407.0 + dx, 55.0, false),
+                    page,
+                ),
+            ]
+        };
+        let rows: &[&[&str]] = &[
+            &["Category", "Hours", "Rate"],
+            &["Analyst I", "940", "$48.03"],
+        ];
+        let parts = || {
+            let (a, fa) = part("elem-00001", 0, rows, 1, &XS, true, true);
+            let (b, fb) = part("elem-00002", 1, &rows[1..], 0, &XS, false, false);
+            (a, b, [fa, fb])
+        };
+        let linked = |second_head: [Element; 2]| {
+            let (a, b, frames) = parts();
+            let mut els: Vec<Element> = head(0, 0.0, "PRICING SCHEDULE").into();
+            els.push(a);
+            els.extend(second_head);
+            els.push(b);
+            link_continued_tables(&mut els, &frames);
+            els[5].continues.clone()
+        };
+        assert_eq!(
+            linked(head(1, 0.0, "PRICING SCHEDULE")).as_deref(),
+            Some("elem-00001")
+        );
+        // Set somewhere else, the same words are the page's own text.
+        assert_eq!(linked(head(1, 20.0, "PRICING SCHEDULE")), None);
+        // Words of the page's own over the second table are between them.
+        assert_eq!(linked(head(1, 0.0, "RATES FOR OPTION YEAR 1")), None);
     }
 
     #[test]
