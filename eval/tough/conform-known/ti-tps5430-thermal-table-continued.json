@@ -1,0 +1,10 @@
+{
+ "md table.header_rows": 1,
+ "md table.shape": 4,
+ "md table.spans": 1,
+ "md table.sub_headers": 1,
+ "xhtml table.header_rows": 1,
+ "xhtml table.shape": 4,
+ "xhtml table.spans": 1,
+ "xhtml table.sub_headers": 1
+}
