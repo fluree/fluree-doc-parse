@@ -2594,8 +2594,18 @@ fn stray_space(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool
             (Some(bb), Some(ab)) => adv.start(&ab) - adv.end(&bb),
             _ => f64::INFINITY,
         };
+        // A word space as the line pass measures one: wider between two
+        // figures, whose tabular advances leave a narrow `1` room either
+        // side.
+        let digits = b.text.chars().last().is_some_and(|c| c.is_ascii_digit())
+            && a.text.chars().next().is_some_and(|c| c.is_ascii_digit());
+        let word_space = if digits {
+            DIGIT_SPACE_GAP_RATIO
+        } else {
+            SPACE_GAP_RATIO
+        };
         if (adv.at(a.origin) - stop).abs() <= SPACE_INSIDE * em
-            && ink_gap < SPACE_GAP_RATIO * a.font_size.max(1.0) as f64
+            && ink_gap < word_space * a.font_size.max(1.0) as f64
         {
             return true;
         }
@@ -4576,6 +4586,29 @@ mod tests {
         let mut v = vec![space(100.0, 0), bullet];
         v.extend(run("Shelves", 101.0, 2));
         assert_eq!(assemble(&v)[0].text.trim(), "• Shelves");
+        // Two figures in tabular advances, a narrow `1` well inside its
+        // own: they close up as figures do, and the layer's space between
+        // them parts nothing.
+        let mut one = g("1", 100.0, 0.0, 1.0, 0.0);
+        one.bbox = Some(BBox {
+            x0: 102.0,
+            y0: -7.0,
+            x1: 103.0,
+            y1: 0.0,
+        });
+        one.advance = Some(5.0);
+        one.draw_index = 10;
+        let mut six = g("6", 105.0, 0.0, 4.5, 0.0);
+        six.bbox = Some(BBox {
+            x0: 105.2,
+            y0: -7.0,
+            x1: 109.7,
+            y1: 0.0,
+        });
+        six.advance = Some(5.0);
+        six.draw_index = 11;
+        let v = vec![space(103.6, 0), one, six];
+        assert_eq!(assemble(&v)[0].text.trim(), "16");
     }
 
     #[test]
