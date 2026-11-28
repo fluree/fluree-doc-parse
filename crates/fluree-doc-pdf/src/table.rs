@@ -5609,6 +5609,40 @@ const HEAD_LABEL_WORDS: usize = 20;
 /// space and some. Values set each in its own column stand further apart.
 const WORD_SPACE_EMS: f64 = 0.5;
 
+/// Most an edge between two columns may stand off its place on the page
+/// before, as a share of the narrower column beside it, and the columns
+/// still be one table's.
+pub const CONTINUED_EDGE_SHIFT: f64 = 0.25;
+
+/// Whether column edges `b`, a part's over the page break, carry on the
+/// columns `a` of the part before it: as many, the table's outer edges
+/// where they were to within `tolerance`, and each edge between columns
+/// there too, or moved by less than [`CONTINUED_EDGE_SHIFT`] of the
+/// narrower column beside it, on either page.
+///
+/// A word processor sets a table's cells row by row, and the rows one page
+/// holds can draw an edge a little off where the rows on the page before
+/// draw it: a milestone table's date column 12 pt wider on its middle pages
+/// than on its first and last. A table of other columns parts them
+/// elsewhere.
+pub fn columns_carry_on(a: &[f64], b: &[f64], tolerance: f64) -> bool {
+    let n = a.len();
+    if n != b.len() || n < 2 {
+        return false;
+    }
+    if (a[0] - b[0]).abs() > tolerance || (a[n - 1] - b[n - 1]).abs() > tolerance {
+        return false;
+    }
+    (1..n - 1).all(|i| {
+        let off = (a[i] - b[i]).abs();
+        let narrower = (a[i] - a[i - 1])
+            .min(a[i + 1] - a[i])
+            .min(b[i] - b[i - 1])
+            .min(b[i + 1] - b[i]);
+        off <= tolerance || off < CONTINUED_EDGE_SHIFT * narrower
+    })
+}
+
 /// Does the page whose ruled tables are `next` open on a table whose
 /// columns are drawn where `head`'s are, to within `tolerance`:
 /// [`BREAK_LINES`] lines or fewer over its first table, and as many column
@@ -14654,6 +14688,21 @@ mod tests {
         let mut over = row.clone();
         over.extend([mk(80.0, 10.0), mk(80.0, 22.0), mk(80.0, 34.0)]);
         assert!(continued_row(&tail, &ruled(&[50.0, 66.0]), &over, &[], 1).is_none());
+    }
+
+    #[test]
+    fn a_word_tables_edge_a_little_off_on_the_next_page_carries_its_columns_on() {
+        // A milestone table: its date column's right edge 12 pt further
+        // right on the next page's rows, in a column some 85 pt wide.
+        let first = [72.9, 256.9, 339.7, 434.4];
+        let next = [72.5, 256.0, 352.0, 434.6];
+        assert!(columns_carry_on(&first, &next, 3.0));
+        assert!(columns_carry_on(&next, &first, 3.0));
+        // Moved a third of the column, the edge parts other columns.
+        assert!(!columns_carry_on(&first, &[72.5, 256.0, 368.0, 434.6], 3.0));
+        // The table's outer edges stay where they were.
+        assert!(!columns_carry_on(&first, &[72.5, 256.0, 339.7, 446.0], 3.0));
+        assert!(!columns_carry_on(&first, &[72.5, 256.0, 434.6], 3.0));
     }
 
     #[test]

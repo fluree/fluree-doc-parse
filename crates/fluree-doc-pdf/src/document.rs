@@ -1053,12 +1053,7 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         let (Some(prev_cells), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
             continue;
         };
-        let aligned = a.xs.len() == b.xs.len()
-            && a.xs
-                .iter()
-                .zip(&b.xs)
-                .all(|(x, y)| (x - y).abs() <= CONTINUED_EDGE_TOLERANCE);
-        if !aligned {
+        if !table::columns_carry_on(&a.xs, &b.xs, CONTINUED_EDGE_TOLERANCE) {
             continue;
         }
         // A second part that is the first one over again, every row, is
