@@ -1140,6 +1140,24 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             })
             && !runs_on.is_empty();
         let repeats = repeats || repeats_run_on;
+        // A part that sets the header again and then starts its body over,
+        // on the label the part before opens its body with (`Terrains`
+        // under the next year's opening balances), is the table's next
+        // copy, not its rest.
+        let starts_over = repeats
+            && own < prev_cells.len()
+            && rows.len() > n
+            && prev_cells[own]
+                .first()
+                .zip(rows[n].first())
+                .is_some_and(|(p, q)| {
+                    !p.trim().is_empty()
+                        && !table::is_numeric_cell(p.trim())
+                        && p.split_whitespace().eq(q.split_whitespace())
+                });
+        if starts_over {
+            continue;
+        }
         // A part opening on a section's band under a part that is all
         // header (`Monotherapy` across the columns under `Indication |
         // Recommended Dosage | Duration`) carries on under that header: the
@@ -11657,6 +11675,13 @@ mod tests {
         // Under a head of its own, a table set on its page alike.
         let own: &[&[&str]] = &[&["Program", "2025", "2026"], &["Housing", "320", "280"]];
         assert_eq!(link(own, 1), None);
+        // Under the header again, a body starting over on the first part's
+        // first label is the table's next copy (the next year's).
+        let over: &[&[&str]] = &[
+            &["Milestone", "Date", "Fee"],
+            &["Report complete", "3/26/2026", "$298,000"],
+        ];
+        assert_eq!(link(over, 1), None);
     }
 
     #[test]
