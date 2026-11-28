@@ -136,6 +136,7 @@ pub mod render;
 pub mod route;
 pub mod rule;
 pub mod table;
+pub(crate) mod tex;
 pub mod text;
 pub mod textart;
 pub mod textgrid;

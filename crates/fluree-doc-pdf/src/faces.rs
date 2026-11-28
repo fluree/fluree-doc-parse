@@ -67,6 +67,23 @@ pub(crate) struct Faces<'a> {
     /// The character each such program's own Unicode cmap gives a glyph,
     /// by glyph ID, once read ([`cmap_chars`]).
     mapped: HashMap<u128, HashMap<u32, char>>,
+    /// The Type 1 program of each font whose name says it is one of TeX's
+    /// Computer Modern families, with that family's layout, until a glyph
+    /// drawn in it is read ([`Faces::tex`]).
+    tex_programs: HashMap<u128, (crate::tex::Layout, Stream<'a>)>,
+    /// What each such program's glyphs are, by glyph ID: the text its name
+    /// labels it with, and the text TeX's layout gives its code. Empty for
+    /// a program read by its names ([`tex_glyphs`]).
+    tex: HashMap<u128, Vec<Option<TexGlyph>>>,
+}
+
+/// A glyph of a TeX font whose vector labels glyphs by their codes.
+#[derive(Debug, Clone)]
+struct TexGlyph {
+    /// The text its name gives, which the ToUnicode map, if any, repeats.
+    label: Option<String>,
+    /// The text TeX's layout gives its code.
+    text: &'static str,
 }
 
 /// A simple Type 1 font's embedded program: CFF (`/FontFile3`) or Type 1
@@ -145,6 +162,20 @@ impl<'a> Faces<'a> {
         self.mapped.get(&key)?.get(&glyph).copied()
     }
 
+    /// The text a glyph drawn in one of TeX's fonts is, by TeX's layout for
+    /// the font's family, where the font's vector labels glyphs by their
+    /// codes and `read`, what the interpreter read for it, says no more than
+    /// the label: the label itself, U+FFFD or nothing. See [`crate::tex`].
+    /// A ToUnicode map that reads the glyph otherwise stands.
+    pub(crate) fn tex(&mut self, key: u128, glyph: u32, read: &str) -> Option<&'static str> {
+        if let Some((layout, program)) = self.tex_programs.remove(&key) {
+            self.tex.insert(key, tex_glyphs(layout, &program));
+        }
+        let g = self.tex.get(&key)?.get(glyph as usize)?.as_ref()?;
+        let unread = read.is_empty() || read == "\u{FFFD}";
+        (unread || g.label.as_deref() == Some(read)).then_some(g.text)
+    }
+
     fn fonts(&mut self, fonts: &Dict<'a>) {
         if !self.read.insert(fonts.cache_key()) {
             return;
@@ -168,6 +199,11 @@ impl<'a> Faces<'a> {
                 if !self.mapped.contains_key(&key) && !self.truetype.contains_key(&key) {
                     if let Some(program) = cid_truetype(&font) {
                         self.truetype.insert(key, program);
+                    }
+                }
+                if !self.tex.contains_key(&key) && !self.tex_programs.contains_key(&key) {
+                    if let Some(tex) = tex_program(&font) {
+                        self.tex_programs.insert(key, tex);
                     }
                 }
             }
@@ -281,6 +317,53 @@ fn cmap_chars(program: &Stream<'_>) -> HashMap<u32, char> {
         }
     }
     chars
+}
+
+/// A simple Type 1 font's embedded Type 1 program, with its layout, where
+/// the font's name says it is one of TeX's families ([`crate::tex::layout_of`]).
+fn tex_program<'a>(font: &Dict<'a>) -> Option<(crate::tex::Layout, Stream<'a>)> {
+    if font.get::<Name<'_>>(SUBTYPE).as_deref() != Some(TYPE1) {
+        return None;
+    }
+    let layout = crate::tex::layout_of(font.get::<Name<'_>>(BASE_FONT)?.as_str())?;
+    let program = font
+        .get::<Dict<'a>>(FONT_DESC)?
+        .get::<Stream<'a>>(FONT_FILE)?;
+    Some((layout, program))
+}
+
+/// What each glyph of a TeX font's program is ([`TexGlyph`]), by glyph ID,
+/// where its own vector labels glyphs by their codes; else nothing. A
+/// predefined vector (StandardEncoding) is the names a program reached by
+/// name gives, not a TeX layout, and is never read so.
+fn tex_glyphs(layout: crate::tex::Layout, program: &Stream<'_>) -> Vec<Option<TexGlyph>> {
+    let Ok(data) = program.decoded() else {
+        return Vec::new();
+    };
+    let Ok(font) = read_fonts::ps::type1::Type1Font::new(&data) else {
+        return Vec::new();
+    };
+    let Some(vector) = font.encoding().filter(|e| e.predefined().is_none()) else {
+        return Vec::new();
+    };
+    if !crate::tex::labelled_by_codes(|code| vector.glyph_name(code)) {
+        return Vec::new();
+    }
+    let mut glyphs = vec![None; font.num_glyphs() as usize];
+    for code in 0u8..128 {
+        let (Some(gid), Some(text)) = (vector.map(code), crate::tex::text(layout, code)) else {
+            continue;
+        };
+        if let Some(slot) = glyphs.get_mut(gid.to_u32() as usize) {
+            if slot.is_none() {
+                *slot = Some(TexGlyph {
+                    label: font.glyph_name(gid).and_then(name_text),
+                    text,
+                });
+            }
+        }
+    }
+    glyphs
 }
 
 /// The text a glyph's name gives by the Adobe Glyph List's rules: the
