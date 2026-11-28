@@ -1,0 +1,30 @@
+{
+  "document": {
+    "file": "doe-em-major-contracts-2020-09.pdf",
+    "url": "https://www.energy.gov/sites/prod/files/2020/09/f78/MAJOR-CONTRACTS-SUMMARY-As-of-9-2-20.pdf",
+    "sha256": "06fc3058844bad2c6e6b82d8a0f31597d7f74bfde3bc0c8e3093d131f2586504",
+    "about": "US Department of Energy, Office of Environmental Management, major contracts summary (Microsoft Word 2013), landscape. A ruled grid; a blank shaded band merged across the columns between sites, and each site's name in a first-column cell merged down its rows."
+  },
+  "checks": [
+    {
+      "id": "rows-under-the-band",
+      "found": "2026-11-27",
+      "issue": "The table on page 1 ended at the merged band: the second site's rows came out as paragraphs, its name as the document's title.",
+      "cell": {
+        "value": "Idaho Cleanup Project Core and Advanced Mixed Waste Treatment Project",
+        "column": "Contract Description",
+        "row": "Idaho Operations Office"
+      }
+    },
+    {
+      "id": "rows-under-the-band-2",
+      "found": "2026-11-27",
+      "issue": "As above, the site's second row.",
+      "cell": {
+        "value": "NRC Licensed Facilities Management Contract",
+        "column": "Contract Description",
+        "row": "Idaho Operations Office"
+      }
+    }
+  ]
+}

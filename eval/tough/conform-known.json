@@ -340,71 +340,71 @@
  "hpe-hdd-band-titles": {
   "md table.header_rows": 1,
   "md table.restated_headers": 11,
-  "md table.shape": 1,
+  "md table.shape": 2,
   "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
-  "xhtml table.shape": 1,
+  "xhtml table.shape": 2,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-blank-ruled-row": {
   "md table.header_rows": 1,
   "md table.restated_headers": 11,
-  "md table.shape": 1,
+  "md table.shape": 2,
   "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
-  "xhtml table.shape": 1,
+  "xhtml table.shape": 2,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-minus-items": {
   "md table.header_rows": 1,
   "md table.restated_headers": 11,
-  "md table.shape": 1,
+  "md table.shape": 2,
   "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
-  "xhtml table.shape": 1,
+  "xhtml table.shape": 2,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-partial-columns": {
   "md table.header_rows": 1,
   "md table.restated_headers": 11,
-  "md table.shape": 1,
+  "md table.shape": 2,
   "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
-  "xhtml table.shape": 1,
+  "xhtml table.shape": 2,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-section-running-heads": {
   "md table.header_rows": 1,
   "md table.restated_headers": 11,
-  "md table.shape": 1,
+  "md table.shape": 2,
   "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
-  "xhtml table.shape": 1,
+  "xhtml table.shape": 2,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-tall-rows": {
   "md table.header_rows": 1,
   "md table.restated_headers": 11,
-  "md table.shape": 1,
+  "md table.shape": 2,
   "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
-  "xhtml table.shape": 1,
+  "xhtml table.shape": 2,
   "xhtml table.sub_headers": 1
  },
  "hpe-hdd-workload-row": {
   "md table.header_rows": 1,
   "md table.restated_headers": 11,
-  "md table.shape": 1,
+  "md table.shape": 2,
   "md table.sub_headers": 1,
   "xhtml table.header_rows": 1,
   "xhtml table.restated_headers": 11,
-  "xhtml table.shape": 1,
+  "xhtml table.shape": 2,
   "xhtml table.sub_headers": 1
  },
  "hse-l118-regulation-parts": {
@@ -538,6 +538,12 @@
   "md table.spans": 2,
   "xhtml table.grid": 1,
   "xhtml table.spans": 2
+ },
+ "pdf-table-tall-row-of-a-long-description": {
+  "md table.header_rows": 1,
+  "md table.sub_headers": 2,
+  "xhtml table.header_rows": 1,
+  "xhtml table.sub_headers": 2
  },
  "pmc1343572-section-bands": {
   "md table.header_rows": 2,
