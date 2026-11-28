@@ -1,0 +1,30 @@
+{
+  "document": {
+    "file": "doe-em-major-contracts-2026-08.pdf",
+    "url": "https://www.energy.gov/sites/default/files/2026-08/MAJOR%20CONTRACTS%20SUMMARY%20August%202026.pdf",
+    "sha256": "b730045299b9cf24069fdd77b7215ae26e09df7517d6bee1191e128950ae18f8",
+    "about": "US Department of Energy, Office of Environmental Management, major contracts summary (Microsoft Word). One ruled grid runs page to page with its header reprinted; a blank grey band, merged across the columns, sets each site's contracts apart from the next site's."
+  },
+  "checks": [
+    {
+      "id": "rows-under-the-band",
+      "found": "2026-11-27",
+      "issue": "The table ended at the blank band under the first site's contracts on page 1: a blank row was kept only where every column edge runs through it, and the merged band has only the box's two sides. The next site's rows came out as paragraphs and two partial tables.",
+      "cell": {
+        "value": "Moab Site- Environmental Remediation of the Moab Uranium Mill Tailings",
+        "column": "Contract Description",
+        "row": "Environmental Management Consolidated Business Center"
+      }
+    },
+    {
+      "id": "rows-under-the-band-2",
+      "found": "2026-11-27",
+      "issue": "As above, a later row of the same site.",
+      "cell": {
+        "value": "Nevada- Environmental Program Services",
+        "column": "Contract Description",
+        "row": "Environmental Management Consolidated Business Center"
+      }
+    }
+  ]
+}

@@ -3702,6 +3702,21 @@ impl Grid {
                     })
                 })
         };
+        // A band across the table, merged over its columns: the box's two
+        // sides run down through it, whatever its columns' edges do. A
+        // contract list sets a blank shaded band between its sites' groups.
+        let across = |r: usize| {
+            let mid = (self.ys[r] + self.ys[r + 1]) / 2.0;
+            let through = |x: f64| {
+                rules.iter().any(|rule| {
+                    rule.orientation == Orientation::Vertical
+                        && (rule.axis_pos() - x).abs() <= EDGE_TOLERANCE
+                        && rule.bbox.y0 <= mid
+                        && rule.bbox.y1 >= mid
+                })
+            };
+            self.cols() >= 2 && through(self.xs[0]) && through(self.xs[self.cols()])
+        };
         let mut last = first;
         let mut r = first + 1;
         while r < rows {
@@ -3711,7 +3726,7 @@ impl Grid {
                 continue;
             }
             let mut e = r;
-            while e < rows && !used[e] && drawn(e) {
+            while e < rows && !used[e] && (drawn(e) || across(e)) {
                 e += 1;
             }
             if e == r || e == rows || !used[e] || !drawn(last) || !drawn(e) {
@@ -3742,7 +3757,7 @@ impl Grid {
         if last > first
             && first > r0
             && taken.iter().any(|&r| filled(r) >= 2)
-            && taken.iter().all(|&r| self.row_holds_text(glyphs, r))
+            && taken.iter().all(|&r| self.row_holds_text(glyphs, rules, r))
         {
             last
         } else {
@@ -3754,7 +3769,7 @@ impl Grid {
     /// middle lies in the row lies within it, and no line of text runs on
     /// across a column edge, its glyphs either side of the edge set closer
     /// than [`CELL_GAP_EMS`].
-    fn row_holds_text(&self, glyphs: &[crate::glyph::Glyph], r: usize) -> bool {
+    fn row_holds_text(&self, glyphs: &[crate::glyph::Glyph], rules: &[Rule], r: usize) -> bool {
         let (top, bottom) = (self.ys[r], self.ys[r + 1]);
         let (left, right) = (self.xs[0], self.xs[self.xs.len() - 1]);
         let inner = &self.xs[1..self.xs.len() - 1];
@@ -3768,9 +3783,21 @@ impl Grid {
             })
             .collect();
         // A glyph's ink may reach a little past the rule over or under it.
+        // Past an edge no rule is drawn along over the glyph, it is in a
+        // cell merged down across the edge: a site's name centred down the
+        // rows of its contracts.
+        let ruled = |y: f64, x: f64| {
+            rules.iter().any(|rule| {
+                rule.orientation == Orientation::Horizontal
+                    && (rule.axis_pos() - y).abs() <= EDGE_TOLERANCE
+                    && rule.bbox.x0 <= x
+                    && rule.bbox.x1 >= x
+            })
+        };
         let outside = |b: &BBox| {
             let slack = 0.2 * (b.y1 - b.y0);
-            b.y0 < top - slack || b.y1 > bottom + slack
+            let x = (b.x0 + b.x1) / 2.0;
+            (b.y0 < top - slack && ruled(top, x)) || (b.y1 > bottom + slack && ruled(bottom, x))
         };
         if row.iter().any(|(b, _)| outside(b)) {
             return false;
@@ -4798,6 +4825,12 @@ fn is_banner(xs: &[f64], ys: &[f64], rules: &[Rule]) -> bool {
 /// rarely (0.800); 3.5 is both the best TEDS and the best overall.
 const TABLE_SPLIT_GAP: f64 = 3.5;
 
+/// Most a gap between two lines of one column's text may run to, as a
+/// multiple of the narrowest gap between them, for the lines to be set at
+/// one leading: a description wrapped, or names listed a line each. A line
+/// set a little apart (a raised mark, a rounding) stays well within it.
+const EVEN_LEADING: f64 = 1.5;
+
 /// Split one page's row boundaries into separate tables.
 ///
 /// A page's ruling lines are not one table. One page carries three tables of
@@ -5110,10 +5143,35 @@ fn split_row_bands(
             coalesce(at, 0.3 * size).len()
         };
         let held: Vec<usize> = (0..cols.len() - 1).filter(|&c| lines(c) > 0).collect();
-        let [first, _, ..] = held.as_slice() else {
+        let [first, rest @ ..] = held.as_slice() else {
             return false;
         };
-        if lines(*first) > 2 {
+        // A first column of more lines is one row's still where it is a
+        // description wrapped down beside the row's values, set on a line or
+        // two in half the other columns holding text, two of them at least:
+        // a contract's long title beside its number, dates and value, its
+        // contractors listed down one column. A body never ruled sets a
+        // value beside each of its names, in most of its columns. The
+        // description's lines are set at one leading, each gap within half
+        // again the narrowest: the labels scattered over a drawing's wires
+        // stand at none.
+        let short = rest.iter().filter(|&&c| lines(c) <= 2).count();
+        let led = || {
+            let mut at: Vec<f64> = inside
+                .iter()
+                .filter(|g| column(g) == Some(*first))
+                .map(|g| g.origin.1)
+                .collect();
+            at.sort_by(f64::total_cmp);
+            let gaps: Vec<f64> = coalesce(at, 0.3 * size)
+                .windows(2)
+                .map(|w| w[1] - w[0])
+                .collect();
+            let narrowest = gaps.iter().copied().fold(f64::MAX, f64::min);
+            gaps.iter().all(|&g| g <= EVEN_LEADING * narrowest)
+        };
+        if rest.is_empty() || (lines(*first) > 2 && (short < 2 || short * 2 < rest.len() || !led()))
+        {
             return false;
         }
         spanning
@@ -11644,6 +11702,47 @@ mod header_tests {
     }
 
     #[test]
+    fn a_tall_row_of_a_long_description_beside_its_values_is_a_row() {
+        // Four columns; the tall row's description wraps down the first.
+        let mut rules: Vec<Rule> = TALL_YS.iter().map(|&y| h(0.0, 300.0, y)).collect();
+        for x in [0.0, 75.0, 150.0, 225.0, 300.0] {
+            rules.push(v(0.0, 160.0, x));
+        }
+        let read = |lines: [usize; 4]| {
+            let mut glyphs = Vec::new();
+            for (i, w) in TALL_YS.windows(2).enumerate() {
+                if w[1] - w[0] < 20.0 {
+                    for x in [10.0, 85.0, 160.0, 235.0] {
+                        glyphs.push(gly(x, w[0] + 11.0, 30.0, &format!("C{i}")));
+                    }
+                }
+            }
+            for (c, n) in lines.iter().enumerate() {
+                for k in 0..*n {
+                    let x = 10.0 + 75.0 * c as f64;
+                    glyphs.push(gly(x, 71.0 + 12.0 * k as f64, 50.0, "word"));
+                }
+            }
+            detect_framed(&rules, &[], &glyphs, 0, &[])
+        };
+        // A title wrapped over five lines beside one value in each column.
+        let grids = read([5, 1, 1, 1]);
+        assert_eq!(grids.len(), 1, "got {grids:?}");
+        assert_eq!(grids[0].rows(), 7);
+        // Names listed down one column beside it, a value in each other.
+        let grids = read([5, 5, 1, 1]);
+        assert_eq!(grids.len(), 1, "got {grids:?}");
+        assert_eq!(grids[0].rows(), 7);
+        // A value on every line in most columns: rows never ruled, and the
+        // band is the gap it always was.
+        let grids = read([5, 5, 5, 1]);
+        assert!(grids.iter().all(|g| g.rows() < 7), "got {grids:?}");
+        // One value beside it is no row's values either.
+        let grids = read([5, 1, 0, 0]);
+        assert!(grids.iter().all(|g| g.rows() < 7), "got {grids:?}");
+    }
+
+    #[test]
     fn a_tall_row_ruled_with_horizontals_alone_is_a_row() {
         // Each rule broken at the column, over and under the tall band alike.
         let rules: Vec<Rule> = TALL_YS
@@ -14552,14 +14651,98 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_row_only_the_frame_runs_through_ends_the_table() {
+    fn a_blank_band_the_frame_runs_through_does_not_end_the_table() {
+        // A band merged across the columns, a group's separator: the box's
+        // two sides run down through it, its column rule stops at it.
         let (mut g, rules, glyphs) = spacer_table(&[2]);
         g.trim_to_content_ruled(&glyphs, &rules);
-        assert_eq!(g.rows(), 2, "the column rule stops at the blank row");
+        assert_eq!(g.rows(), 4, "the rows under the band are the table's");
+        // Nothing runs down through it: the table ends there.
+        let open: Vec<Rule> = rules
+            .iter()
+            .copied()
+            .filter(|r| {
+                r.orientation != Orientation::Vertical || r.bbox.y1 <= 141.0 || r.bbox.y0 >= 159.0
+            })
+            .collect();
+        let (mut g, _, _) = spacer_table(&[2]);
+        g.trim_to_content_ruled(&glyphs, &open);
+        assert_eq!(g.rows(), 2, "no rule runs through the band");
         // Read without the page's rules, the table ends at its first blank
         // row, as it always has.
         let (mut g, _, glyphs) = spacer_table(&[]);
         g.trim_to_content(&glyphs);
+        assert_eq!(g.rows(), 2);
+    }
+
+    #[test]
+    fn a_name_centred_down_a_merged_cell_holds_its_rows() {
+        // Two columns, five 20 pt rows from y = 100, every edge drawn, a
+        // blank row between two groups; the second group's name is set in
+        // the first column across its two rows, whose line between them is
+        // drawn under the second column alone.
+        let xs = [68.0, 183.0, 297.0];
+        let ys = [100.0, 120.0, 140.0, 160.0, 180.0, 200.0];
+        let mut rules: Vec<Rule> = Vec::new();
+        for y in ys {
+            rules.push(if y == 180.0 {
+                h(183.0, 297.0, y)
+            } else {
+                h(68.0, 297.0, y)
+            });
+        }
+        for w in ys.windows(2) {
+            for x in xs {
+                rules.push(v(w[0], w[1], x));
+            }
+        }
+        let mk = |x: f64, y0: f64, y1: f64| crate::glyph::Glyph {
+            text: "x".into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0,
+                x1: x + 6.0,
+                y1,
+            }),
+            page: 0,
+            origin: (x, y1),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            italic: false,
+            advance: None,
+            draw_index: 0,
+            ocr: None,
+        };
+        let mut glyphs = Vec::new();
+        for y in [105.0, 125.0] {
+            glyphs.extend([mk(80.0, y, y + 10.0), mk(200.0, y, y + 10.0)]);
+        }
+        // The name across the line at 180; a value in each of its rows.
+        glyphs.extend([
+            mk(80.0, 174.0, 190.0),
+            mk(200.0, 165.0, 175.0),
+            mk(200.0, 185.0, 195.0),
+        ]);
+        let grid = || Grid {
+            layout: None,
+            page: 0,
+            xs: xs.to_vec(),
+            ys: ys.to_vec(),
+            bbox: BBox {
+                x0: 68.0,
+                y0: 100.0,
+                x1: 297.0,
+                y1: 200.0,
+            },
+        };
+        let mut g = grid();
+        g.trim_to_content_ruled(&glyphs, &rules);
+        assert_eq!(g.rows(), 5, "the group under the blank row is the table's");
+        // Ruled across under the name too, the name runs out of its row.
+        rules[4] = h(68.0, 297.0, 180.0);
+        let mut g = grid();
+        g.trim_to_content_ruled(&glyphs, &rules);
         assert_eq!(g.rows(), 2);
     }
 
