@@ -10916,9 +10916,9 @@ mod header_tests {
 
     #[test]
     fn bands_stacked_under_the_header_are_each_a_band() {
-        // A controls listing: its header shaded, a section's band and its
-        // first sub-section's band shaded under it, then controls, and the
-        // next sub-section's band further down.
+        // A checklist: its header shaded, a section's band and its first
+        // sub-section's band shaded under it, then items, and the next
+        // sub-section's band further down.
         let g = Grid {
             ys: (0..7).map(|r| 100.0 + 20.0 * r as f64).collect(),
             bbox: BBox {
@@ -10931,12 +10931,12 @@ mod header_tests {
         };
         let row = |r: usize| fill(0.0, 100.0 + 20.0 * r as f64, 400.0, 120.0 + 20.0 * r as f64);
         let rows: Vec<Vec<String>> = [
-            ["Control ID", "Control", "Test", "Result"],
-            ["C1.0 - Environment", "", "", ""],
-            ["C1.1 - Principle 1", "", "", ""],
-            ["C1.1.1", "Board meets", "Inspected", "No exceptions"],
-            ["C1.2 - Principle 2", "", "", ""],
-            ["C1.2.1", "Policies", "Inspected", "No exceptions"],
+            ["Item", "Detail", "Check", "Outcome"],
+            ["A - Grounds", "", "", ""],
+            ["A.1 - Paths", "", "", ""],
+            ["A.1.1", "Gravel laid", "Walked", "Done"],
+            ["A.2 - Beds", "", "", ""],
+            ["A.2.1", "Soil turned", "Dug", "Done"],
         ]
         .iter()
         .map(|r| r.iter().map(|t| t.to_string()).collect())
