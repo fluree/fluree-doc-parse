@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "fed-beigebook-2024-12.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/BeigeBook_20241204.pdf",
+    "sha256": "88df174690b1b4ce256c8877ed2eb9b7f02281aa149c07b5585befd5499973b8",
+    "about": "Federal Reserve Beige Book, December 2024. A word hyphenated at a page's last line goes on at the head of the next page."
+  },
+  "notes": [
+    "2026-11-28: a word broken by the typesetter at a page break read as two words, its hyphen kept (`con-` / `sumer`). It joins as at a line's end."
+  ],
+  "checks": [
+    {
+      "id": "consumer-credit",
+      "found": "2026-11-28",
+      "issue": "`…industrial loans and con-` / `sumer credit` read as two paragraphs, the word broken.",
+      "text": "commercial and industrial loans and consumer credit"
+    },
+    {
+      "id": "no-con-sumer",
+      "found": "2026-11-28",
+      "issue": "The broken word is gone.",
+      "no_text": "and con- sumer credit"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "document": {
+    "file": "fda-lib-4640.pdf",
+    "url": "https://www.fda.gov/media/169736/download",
+    "sha256": "8b4ad4cd24aeead4d7dbecb9985105cf1ab74bc776f66017e67e77e034dfd0f7",
+    "about": "FDA Laboratory Information Bulletin 4640 (Adobe Paper Capture). Its validation table's header names each measure over its qualifier, both rows bold and unshaded: `RT (min) | RT %Shift | Regression | SD | LOD | LOQ` over `Drug Name | Ave (n=18) | ΔRTmax/RT | R2, an example | unit of X …`."
+  },
+  "checks": [
+    {
+      "id": "measure-over-its-qualifier",
+      "found": "2026-11-27",
+      "issue": "The qualifiers' row was read as data: each value was named by its measure alone, and `Drug Name` named no column.",
+      "cell": {
+        "value": "1.73",
+        "column": "RT (min) / Ave (n=18)",
+        "row": "Amoxicillin"
+      }
+    }
+  ]
+}

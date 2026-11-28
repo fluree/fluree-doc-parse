@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "pmc3039689.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3039689/",
+    "sha256": "7db1869e35180e381250f59367b184a9802746b8801e7a93668b09eb71f065fc",
+    "about": "PLoS Negl Trop Dis 5(2): e962 (2011), PMC3039689. Figure 2's caption runs off the foot of a page and on at the head of the next, in the caption's own size."
+  },
+  "notes": [
+    "2026-11-28: a caption the page break cut goes on in its own size and joins as a paragraph does; text after a caption is set in the text's size and does not."
+  ],
+  "checks": [
+    {
+      "id": "amastigotes-enumerated",
+      "found": "2026-11-28",
+      "issue": "`…Amastigotes` / `enumerated by direct microscopy` read as two paragraphs.",
+      "continues": {
+        "paragraph": "enumerated by direct microscopy in Giemsa stained",
+        "from": "Number amastigotes per 100 macrophages. Amastigotes"
+      }
+    }
+  ]
+}

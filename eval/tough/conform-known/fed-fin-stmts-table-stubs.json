@@ -1,0 +1,12 @@
+{
+ "md table.grid": 4,
+ "md table.header_rows": 10,
+ "md table.shape": 2,
+ "md table.spans": 2,
+ "md table.sub_headers": 10,
+ "xhtml table.grid": 4,
+ "xhtml table.header_rows": 10,
+ "xhtml table.shape": 2,
+ "xhtml table.spans": 2,
+ "xhtml table.sub_headers": 10
+}

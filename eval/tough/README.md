@@ -86,10 +86,10 @@ never meet in one file. A count above the list fails the run; one below it is
 reported, and `--conform-update` writes the counts of the cases it ran, each to
 its own file, so a change to a list is in the diff.
 
-The lists were once kept in one file per directory (`conform-known.json`,
-`conform/known.json`). A case with no file of its own still reads its entry
-there. That file is no longer written; it goes once its last entries have
-moved to files of their own.
+The lists were once kept in one file per directory. The tracked cases' have
+all moved to files of their own; a directory still holding such a file
+(`conform/known.json`) has it read for any case with no file of its own, and
+never written.
 
 The checks a case adds:
 
@@ -107,7 +107,8 @@ The checks a case adds:
 | `no_section` | no section is headed by a title beginning with this text |
 | `under` | an element with exactly this string (`text`), or a table cell with this value, falls in the section headed by `section` |
 | `columns` | the table holding a cell of value `with` has exactly `count` columns, its cells' `doc:columnIndex` running 0 to `count` − 1 |
-| `continues` | the table holding a cell of value `cell` carries on, through `doc:continues`, the table holding a cell of value `from` |
+| `continues` | the table holding a cell of value `cell` carries on, through `doc:continues`, the table holding a cell of value `from`; or, given `paragraph`, the paragraph holding that text carries on the paragraph holding `from` |
+| `no_continues` | no paragraph carries on the one whose text is `from` (with `"match": "opens"`, opens on it) |
 | `no_table` | no table stands on the `page` (its place in the file, from 1) |
 | `list` | one list holds all these items (`holds`), by their strings |
 | `nested` | a list nested in an item whose string begins with `under` holds all these items (`holds`), by their strings |

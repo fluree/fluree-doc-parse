@@ -12,7 +12,7 @@
 //!    blocks or a footer is absorbed into the last paragraph.
 //! 5. **headings** — over blocks, using the outline tree where present.
 
-use crate::block::{self, Block};
+use crate::block::{self, Block, HyphenJoin};
 use crate::dedup;
 use crate::extract::Document as RawDoc;
 use crate::extract::Page;
@@ -1053,14 +1053,19 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         let (Some(prev_cells), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
             continue;
         };
-        let aligned = a.xs.len() == b.xs.len()
-            && a.xs
-                .iter()
-                .zip(&b.xs)
-                .all(|(x, y)| (x - y).abs() <= CONTINUED_EDGE_TOLERANCE);
-        if !aligned {
+        if !table::columns_carry_on(&a.xs, &b.xs, CONTINUED_EDGE_TOLERANCE) {
             continue;
         }
+        // Edges a little off carry on a part that reads as the rest: rows
+        // with no header of their own, or under the header repeated whole.
+        // A part opening on a head of its own there is a table set on its
+        // page alike (a budget's next function under its title and years).
+        let shifted = a.xs.len() != b.xs.len()
+            || a.xs
+                .iter()
+                .zip(&b.xs)
+                .any(|(x, y)| (x - y).abs() > CONTINUED_EDGE_TOLERANCE);
+        let headless = next.header_rows.unwrap_or(0) == 0;
         // A second part that is the first one over again, every row, is
         // the next copy of a form printed box after box down the pages, not
         // the rest of the first: no table carries on by repeating its body.
@@ -1135,6 +1140,30 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             })
             && !runs_on.is_empty();
         let repeats = repeats || repeats_run_on;
+        // Edges a little off, a part that sets the header again and then
+        // starts its body over, on the label the part before opens its
+        // body with and other values (`Terrains | 524` under the next
+        // year's opening balances, `Terrains | 503` the year before), is
+        // the table's next copy, not its rest. The same row whole, every
+        // value again, is more of the header repeated, a row of it read as
+        // the body's.
+        let starts_over = shifted
+            && repeats
+            && own < prev_cells.len()
+            && rows.len() > n
+            && prev_cells[own].len() == rows[n].len()
+            && prev_cells[own]
+                .first()
+                .zip(rows[n].first())
+                .is_some_and(|(p, q)| {
+                    !p.trim().is_empty()
+                        && !table::is_numeric_cell(p.trim())
+                        && p.split_whitespace().eq(q.split_whitespace())
+                })
+            && !same(&prev_cells[own], &rows[n]);
+        if starts_over {
+            continue;
+        }
         // A part opening on a section's band under a part that is all
         // header (`Monotherapy` across the columns under `Indication |
         // Recommended Dosage | Duration`) carries on under that header: the
@@ -1148,6 +1177,9 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
                 .iter()
                 .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()));
         if b.styled && !repeats && !finishes_header && !under_head && !in_bands {
+            continue;
+        }
+        if shifted && !headless && !repeats {
             continue;
         }
         let heads: Vec<(usize, usize, String, String)> = runs_on
@@ -7255,13 +7287,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     };
     let bare: Vec<Vec<Line>> = flat_lines.iter().map(|(l, _)| l.clone()).collect();
     let leading = block::modal_leading(&bare);
-    {
+    let compounds = {
         let mut lines: Vec<&mut Line> = layouts
             .iter_mut()
             .flat_map(|l| l.prose_columns.iter_mut().flatten())
             .collect();
-        crate::line::mark_compounds(&mut lines);
-    }
+        crate::line::mark_compounds(&mut lines)
+    };
 
     let mut blocks_per_page: Vec<Vec<Block>> = Vec::new();
     let mut furniture_removed = 0usize;
@@ -8722,6 +8754,29 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         .filter_map(|p| figure::doubt(&elements, p))
         .collect();
 
+    // A paragraph the page break cut is linked across it, in each page's
+    // reading frame, where a column's left edge is the same on both pages.
+    let part_lines = |e: &Element| -> Vec<PartLine> {
+        let (Some(b), Some((lines, _))) = (e.bbox, flat_lines.get(e.page)) else {
+            return Vec::new();
+        };
+        let mut v: Vec<PartLine> = lines
+            .iter()
+            .filter(|l| {
+                let (x, y) = ((l.bbox.x0 + l.bbox.x1) / 2.0, (l.bbox.y0 + l.bbox.y1) / 2.0);
+                x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1
+            })
+            .map(|l| PartLine {
+                bbox: l.bbox,
+                size: l.font_size,
+                chars: l.text.trim().chars().count(),
+            })
+            .collect();
+        v.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        v
+    };
+    link_continued_paragraphs(&mut elements, part_lines, &compounds);
+
     // Everything above worked in each page's reading frame. The output's
     // boxes are in the display frame — the one a page render has — so a
     // page that was turned to be read has its boxes turned back here, once,
@@ -8776,6 +8831,249 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         tables,
         timings,
     }
+}
+
+/// Share of a type size by which the reported sizes of two lines set in one
+/// face may differ: rounding, and a size scaled by a page's own transform.
+/// A page's foot notes are set a point or more smaller than its text, 10 on
+/// 11 at the closest.
+const SAME_SIZE_SHARE: f32 = 0.05;
+
+/// How far, in ems, a paragraph's part may stand from its column's left
+/// edge, and two columns' measures differ, and still be one column: a first
+/// line's indent, where a part is that one line, and a ragged right edge.
+const CONTINUED_INDENT_EMS: f64 = 2.0;
+
+/// A line of a paragraph's part, as [`link_continued_paragraphs`] reads it:
+/// its box, its type size and how many characters it holds.
+struct PartLine {
+    bbox: crate::geom::BBox,
+    size: f32,
+    chars: usize,
+}
+
+/// Links each paragraph a page break cut: the part at the head of the next
+/// page carries on the part at the foot of this one (`continues`), and the
+/// writers read the two as one paragraph.
+///
+/// A page break counts as cutting a paragraph where all of these hold:
+/// - the earlier part is the page's last element but its foot notes, and a
+///   paragraph;
+/// - it ends mid-sentence: in a word, a comma, or a hyphen after a letter,
+///   not in sentence-final punctuation, a figure or a leader;
+/// - it is set in a column of text (two lines or more, or other text on its
+///   page set from its left edge), and its last line is full: the next
+///   part's first word would not have fitted on it. A folio or a label is
+///   neither;
+/// - the later part is the next page's first element, and a paragraph
+///   opening in lower case;
+/// - both are set in one type size, and the text flows on from one to the
+///   other: the earlier part stands in its page's last column, the later in
+///   the next page's first, and the two columns have one measure. On pages
+///   of one column that is the same column.
+///
+/// The page's foot notes, set under the earlier part in a smaller size and
+/// each opening on its mark, move to after the paragraph: a note belongs to
+/// its page, and the sentence its mark sits in reads whole before it. A
+/// table of contents' last line, ending on its page number, and a
+/// two-column paper's foot line, set under its first column while the text
+/// goes on in the second, are no paragraph cut.
+///
+/// A hyphen ending the earlier part joins the two as a line's end does
+/// ([`HyphenJoin`]): a typesetter's inside a word, which the document does
+/// not set whole as a compound elsewhere ([`crate::line::Compounds`]),
+/// becomes [`PART_BREAK`] for the writers to drop; any other stays.
+///
+/// [`PART_BREAK`]: fluree_doc_model::join::PART_BREAK
+fn link_continued_paragraphs(
+    elements: &mut Vec<Element>,
+    lines: impl Fn(&Element) -> Vec<PartLine>,
+    compounds: &crate::line::Compounds,
+) {
+    // An element's type size: its lines' median.
+    let size = |e: &Element| -> Option<f32> {
+        let mut sizes: Vec<f32> = lines(e).iter().map(|l| l.size).collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.get(sizes.len() / 2).copied()
+    };
+    let Some(last_page) = elements.iter().map(|e| e.page).max() else {
+        return;
+    };
+    let mut on: Vec<Vec<usize>> = vec![Vec::new(); last_page + 1];
+    for (i, e) in elements.iter().enumerate() {
+        on[e.page].push(i);
+    }
+    // A caption the page break cut goes on in its own size, and text after
+    // it is set in the text's: the size tells the two apart.
+    let plain = |e: &Element| {
+        e.kind == "doco:Paragraph"
+            && e.turn.is_none()
+            && e.message.is_none()
+            && e.notes_for.is_none()
+            && !e.text.trim().is_empty()
+    };
+    let note_mark = |t: &str| {
+        t.trim_start().chars().next().is_some_and(|c| {
+            c.is_ascii_digit()
+                || fluree_doc_model::marks::raised_figure(c).is_some()
+                || matches!(c, '*' | '†' | '‡' | '§' | '¶')
+        })
+    };
+    let mid_sentence = |t: &str| {
+        let mut tail = t.trim_end().chars().rev();
+        match (tail.next(), tail.next()) {
+            (Some('-'), Some(c)) => c.is_alphabetic(),
+            (Some(c), _) => c.is_alphabetic() || c == ',',
+            _ => false,
+        }
+    };
+    // (earlier part, later part, the earlier page's notes between them)
+    let mut links: Vec<(usize, usize, Vec<usize>)> = Vec::new();
+    for n in 0..last_page {
+        let Some(&q) = on[n + 1].first() else {
+            continue;
+        };
+        let here = &on[n];
+        let Some(k) = here.iter().rposition(|&i| !note_mark(&elements[i].text)) else {
+            continue;
+        };
+        let (p, notes) = (here[k], here[k + 1..].to_vec());
+        let (a, b) = (&elements[p], &elements[q]);
+        let (Some(sa), Some(sb), Some(ba), Some(bb)) = (size(a), size(b), a.bbox, b.bbox) else {
+            continue;
+        };
+        let em = f64::from(sa.max(sb));
+        let slack = CONTINUED_INDENT_EMS * em;
+        // The text a page's columns hold: its paragraphs and items, its foot
+        // notes aside.
+        let text_boxes = |page: &[usize]| -> Vec<crate::geom::BBox> {
+            page.iter()
+                .filter(|i| !notes.contains(i))
+                .map(|&i| &elements[i])
+                .filter(|e| matches!(e.kind.as_str(), "doco:Paragraph" | "doc:ListItem"))
+                .filter_map(|e| e.bbox)
+                .collect()
+        };
+        let (boxes_a, boxes_b) = (text_boxes(here), text_boxes(&on[n + 1]));
+        // The widest text set from a left edge: the column's measure.
+        let measure = |boxes: &[crate::geom::BBox], x0: f64| {
+            boxes
+                .iter()
+                .filter(|b| (b.x0 - x0).abs() <= slack)
+                .map(|b| b.x1 - b.x0)
+                .fold(0.0, f64::max)
+        };
+        // The text flows on from the page's last column into the next page's
+        // first: no text stands in a column right of the earlier part, none
+        // in a column left of the later, and the two columns have one
+        // measure. On pages of one column, the same column, a quote set in
+        // from it included.
+        let flows_on = !boxes_a.iter().any(|b| b.x0 > ba.x1)
+            && !boxes_b.iter().any(|b| b.x1 < bb.x0)
+            && (measure(&boxes_a, ba.x0) - measure(&boxes_b, bb.x0)).abs() <= slack;
+        // The page break cut a line of running text: the earlier part is set
+        // in a column, and its last line had no room for the next word.
+        let la = lines(a);
+        let column = la.len() >= 2
+            || boxes_a
+                .iter()
+                .filter(|x| (x.x0 - ba.x0).abs() <= slack)
+                .count()
+                >= 2;
+        let full = la.last().is_some_and(|last| {
+            // The column's right edge: the part's own, where it has lines
+            // enough to show it, else the text's set from its left edge.
+            let right = if la.len() >= 2 {
+                ba.x1
+            } else {
+                boxes_a
+                    .iter()
+                    .filter(|x| (x.x0 - ba.x0).abs() <= slack)
+                    .map(|x| x.x1)
+                    .fold(ba.x1, f64::max)
+            };
+            let per_char = (last.bbox.x1 - last.bbox.x0) / last.chars.max(1) as f64;
+            let word = b
+                .text
+                .split_whitespace()
+                .next()
+                .map_or(0, |w| w.chars().count());
+            // The word's width is read at the line's average character's,
+            // give or take the slack.
+            last.bbox.x1 + (word + 1) as f64 * per_char > right - slack
+        });
+        let cut = plain(a)
+            && plain(b)
+            && b.continues.is_none()
+            && mid_sentence(&a.text)
+            && column
+            && full
+            && b.text
+                .trim_start()
+                .chars()
+                .next()
+                .is_some_and(char::is_lowercase)
+            && (sa - sb).abs() <= SAME_SIZE_SHARE * sa.max(sb)
+            && flows_on;
+        // What follows the earlier part on its page is its foot notes, each
+        // set under it and smaller.
+        let foot_notes = notes.iter().all(|&i| {
+            let e = &elements[i];
+            matches!(e.kind.as_str(), "doco:Paragraph" | "doc:ListItem")
+                && e.bbox.is_some_and(|b| b.y0 >= ba.y1 - 0.5 * em)
+                && size(e).is_some_and(|s| s < sa * (1.0 - SAME_SIZE_SHARE))
+        });
+        if cut && foot_notes {
+            links.push((p, q, notes));
+        }
+    }
+    if links.is_empty() {
+        return;
+    }
+    for (p, q, _) in &links {
+        let id = elements[*p].id.clone();
+        let next = elements[*q].text.trim_start().to_string();
+        let a = &mut elements[*p];
+        let t = a.text.trim_end().to_string();
+        if let Some(stem) = t.strip_suffix('-') {
+            if HyphenJoin::of(stem, &next) == HyphenJoin::Word && !compounds.keeps(stem, &next) {
+                a.text = format!("{stem}{}", fluree_doc_model::join::PART_BREAK);
+            }
+        }
+        elements[*q].continues = Some(id);
+    }
+    // Each page's notes go after the paragraph its last part carries on, at
+    // the end of a chain of parts over several pages.
+    use std::collections::{HashMap, HashSet};
+    let next_of: HashMap<usize, usize> = links.iter().map(|(p, q, _)| (*p, *q)).collect();
+    let mut after: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut moved: HashSet<usize> = HashSet::new();
+    for (_, q, notes) in &links {
+        if notes.is_empty() {
+            continue;
+        }
+        let mut end = *q;
+        while let Some(&r) = next_of.get(&end) {
+            end = r;
+        }
+        after.entry(end).or_default().extend(notes);
+        moved.extend(notes);
+    }
+    if moved.is_empty() {
+        return;
+    }
+    let mut order = Vec::with_capacity(elements.len());
+    for i in 0..elements.len() {
+        if moved.contains(&i) {
+            continue;
+        }
+        order.push(i);
+        if let Some(ns) = after.get(&i) {
+            order.extend(ns);
+        }
+    }
+    let mut taken: Vec<Option<Element>> = std::mem::take(elements).into_iter().map(Some).collect();
+    *elements = order.into_iter().filter_map(|i| taken[i].take()).collect();
 }
 
 /// Settles each hyphen a table cell set down at a line's end as
@@ -11622,6 +11920,43 @@ mod tests {
     }
 
     #[test]
+    fn a_part_whose_edge_is_a_little_off_carries_on_only_as_rows() {
+        // The next page's rows draw the date column's edge 12 pt right of
+        // the first page's.
+        let first = [72.0, 257.0, 340.0, 434.0];
+        let off = [72.0, 256.0, 352.0, 434.0];
+        let rows: &[&[&str]] = &[
+            &["Milestone", "Date", "Fee"],
+            &["Report complete", "3/26/2025", "$312,746"],
+        ];
+        let (a, fa) = part("elem-00001", 0, rows, 1, &first, true, true);
+        let link = |second: &[&[&str]], header: usize| {
+            let (b, fb) = part("elem-00002", 1, second, header, &off, false, false);
+            let mut els = vec![a.clone(), b];
+            link_continued_tables(&mut els, &[fa.clone(), fb]);
+            els[1].continues.clone()
+        };
+        // Rows alone, or under the header repeated whole: the rest.
+        let more: &[&[&str]] = &[&["Piping replaced", "11/14/2028", "$1,563,730"]];
+        assert_eq!(link(more, 0).as_deref(), Some("elem-00001"));
+        let again: &[&[&str]] = &[
+            &["Milestone", "Date", "Fee"],
+            &["Piping replaced", "11/14/2028", "$1,563,730"],
+        ];
+        assert_eq!(link(again, 1).as_deref(), Some("elem-00001"));
+        // Under a head of its own, a table set on its page alike.
+        let own: &[&[&str]] = &[&["Program", "2025", "2026"], &["Housing", "320", "280"]];
+        assert_eq!(link(own, 1), None);
+        // Under the header again, a body starting over on the first part's
+        // first label is the table's next copy (the next year's).
+        let over: &[&[&str]] = &[
+            &["Milestone", "Date", "Fee"],
+            &["Report complete", "3/26/2026", "$298,000"],
+        ];
+        assert_eq!(link(over, 1), None);
+    }
+
+    #[test]
     fn a_band_under_a_head_stranded_by_the_break_opens_its_first_section() {
         // The head alone at one page's foot; the next page opens on the
         // first section's band, bold across the columns.
@@ -12706,5 +13041,348 @@ mod tests {
         assert!(!inline_image(&banner, &[own(127.8, 130.3, 309.9, 5.3)]));
         // Nor is a word with no text of the page's on its row near it.
         assert!(!inline_image(&mark, &[own(40.0, 43.0, 309.9, 5.3)]));
+    }
+
+    /// A paragraph `id` on `page`, from `x0` to `x1`, its top at `y`, of
+    /// `lines` lines.
+    fn cut_part(
+        id: &str,
+        page: usize,
+        text: &str,
+        x0: f64,
+        x1: f64,
+        y: f64,
+        lines: usize,
+    ) -> Element {
+        Element {
+            id: id.into(),
+            page,
+            ..element(text, x0, y, x1, y + 14.0 * lines as f64, false)
+        }
+    }
+
+    /// An element's lines: one every 14 points down its box, each across it,
+    /// in a type size by its id: a note (`n…`) 10 points, a caption (`c…`)
+    /// 9, a heading's size (`h…`) 14, the text 11.
+    fn cut_lines(e: &Element) -> Vec<PartLine> {
+        let size = match e.id.chars().next() {
+            Some('n') => 10.0,
+            Some('c') => 9.0,
+            Some('h') => 14.0,
+            _ => 11.0,
+        };
+        let b = e.bbox.unwrap();
+        let n = (((b.y1 - b.y0) / 14.0).round() as usize).max(1);
+        let chars = (e.text.chars().count() / n).max(1);
+        (0..n)
+            .map(|k| PartLine {
+                bbox: BBox {
+                    x0: b.x0,
+                    y0: b.y0 + 14.0 * k as f64,
+                    x1: b.x1,
+                    y1: b.y0 + 14.0 * (k + 1) as f64,
+                },
+                size,
+                chars,
+            })
+            .collect()
+    }
+
+    fn cut_linked(mut els: Vec<Element>) -> Vec<Element> {
+        link_continued_paragraphs(&mut els, cut_lines, &crate::line::Compounds::default());
+        els
+    }
+
+    fn cut_ids(els: &[Element]) -> Vec<&str> {
+        els.iter().map(|e| e.id.as_str()).collect()
+    }
+
+    /// A page's last paragraph ending `before`, and the next page's first
+    /// opening `after`, one column on both.
+    fn page_break(before: &str, after: &str) -> Vec<Element> {
+        vec![
+            cut_part("e1", 0, "Text above it.", 72.0, 540.0, 100.0, 3),
+            cut_part("e2", 0, before, 72.0, 540.0, 600.0, 4),
+            cut_part("e3", 1, after, 72.0, 540.0, 72.0, 2),
+            cut_part("e4", 1, "Another paragraph.", 72.0, 540.0, 120.0, 2),
+        ]
+    }
+
+    #[test]
+    fn a_paragraph_the_page_break_cut_is_linked_and_its_notes_follow_it() {
+        let mut els = page_break(
+            "as electric vehicle adoption",
+            "and demands for storage grow.",
+        );
+        els.insert(
+            2,
+            cut_part(
+                "n1",
+                0,
+                "1 Source: https://example.org/a",
+                72.0,
+                300.0,
+                700.0,
+                1,
+            ),
+        );
+        els.insert(
+            3,
+            cut_part(
+                "n2",
+                0,
+                "2 Source: https://example.org/b",
+                72.0,
+                300.0,
+                715.0,
+                1,
+            ),
+        );
+        let els = cut_linked(els);
+        assert_eq!(cut_ids(&els), ["e1", "e2", "e3", "n1", "n2", "e4"]);
+        assert_eq!(els[2].continues.as_deref(), Some("e2"));
+        assert_eq!(els[1].text, "as electric vehicle adoption");
+    }
+
+    #[test]
+    fn a_cut_with_nothing_between_is_linked() {
+        let els = cut_linked(page_break(
+            "matter for economic decisions and",
+            "can affect inflation.",
+        ));
+        assert_eq!(els[2].continues.as_deref(), Some("e2"));
+        assert_eq!(els[3].continues, None);
+        // At a comma too.
+        let els = cut_linked(page_break("on balance, in turn,", "the rate held."));
+        assert_eq!(els[2].continues.as_deref(), Some("e2"));
+    }
+
+    #[test]
+    fn a_hyphen_at_the_page_break_joins_as_at_a_lines_end() {
+        use fluree_doc_model::join::PART_BREAK;
+        // A word the typesetter broke: its hyphen becomes the break mark.
+        let els = cut_linked(page_break("rates held at a re-", "strictive level."));
+        assert_eq!(els[1].text, format!("rates held at a re{PART_BREAK}"));
+        assert_eq!(els[2].continues.as_deref(), Some("e2"));
+        // A compound the document sets whole elsewhere keeps its hyphen.
+        let mut els = page_break("over the long-", "term the view held.");
+        let compounds = crate::line::Compounds::of(["a long-term view"].into_iter());
+        link_continued_paragraphs(&mut els, cut_lines, &compounds);
+        assert_eq!(els[1].text, "over the long-");
+        assert_eq!(els[2].continues.as_deref(), Some("e2"));
+        // Without that evidence, the same letters read as a word broken.
+        let els = cut_linked(page_break("over the long-", "term the view held."));
+        assert_eq!(els[1].text, format!("over the long{PART_BREAK}"));
+        // A hyphen after a figure is no paragraph cut mid-word: the part
+        // ends on a figure's hyphen, not a word's.
+        let els = cut_linked(page_break("call 1-800-", "222-1222 today."));
+        assert_eq!(els[2].continues, None);
+    }
+
+    #[test]
+    fn a_two_column_paper_flows_from_the_last_column_to_the_first() {
+        let els = cut_linked(vec![
+            cut_part("e1", 0, "Left column text.", 50.0, 300.0, 100.0, 40),
+            cut_part(
+                "e2",
+                0,
+                "the right column ends on a word and",
+                320.0,
+                560.0,
+                100.0,
+                40,
+            ),
+            cut_part(
+                "e3",
+                1,
+                "goes on at the head of the left one.",
+                50.0,
+                300.0,
+                72.0,
+                30,
+            ),
+            cut_part("e4", 1, "Right column text.", 320.0, 560.0, 72.0, 40),
+        ]);
+        assert_eq!(els[2].continues.as_deref(), Some("e2"));
+    }
+
+    #[test]
+    fn what_no_paragraph_cut_is_not_linked() {
+        let none = |els: Vec<Element>| cut_linked(els).iter().all(|e| e.continues.is_none());
+        // A sentence ended, a page number, a capital after the break.
+        assert!(none(page_break(
+            "demands for storage grow.",
+            "and then more."
+        )));
+        assert!(none(page_break("Outlook ................ 48", "ii")));
+        assert!(none(page_break(
+            "as electric vehicle adoption",
+            "Demands grew."
+        )));
+        // Another size: a heading's line.
+        let mut els = page_break(
+            "as electric vehicle adoption",
+            "and demands for storage grow.",
+        );
+        els[2].id = "h3".into();
+        assert!(none(els));
+        // A two-column paper's foot line, under its first column, while the
+        // text goes on in the second.
+        assert!(none(vec![
+            cut_part("e1", 0, "Right column text.", 320.0, 560.0, 100.0, 40),
+            cut_part(
+                "e2",
+                0,
+                "Association for Computational",
+                50.0,
+                300.0,
+                740.0,
+                1
+            ),
+            cut_part("e3", 1, "the left column goes on.", 50.0, 300.0, 72.0, 30),
+        ]));
+        // A folio the furniture pass left, ending on a letter, over the next
+        // page's: no column of text.
+        assert!(none(vec![
+            cut_part("e1", 0, "Text above it.", 72.0, 540.0, 100.0, 3),
+            cut_part("e2", 0, "v", 300.0, 305.0, 760.0, 1),
+            cut_part("e3", 1, "vi", 300.0, 307.0, 760.0, 1),
+        ]));
+        // A label set from the column's edge, its line far short of the
+        // measure: no line the page break cut.
+        assert!(none(vec![
+            cut_part("e1", 0, "Text above it.", 72.0, 540.0, 100.0, 3),
+            cut_part("e2", 0, "ANNEX TABLES", 72.0, 142.0, 760.0, 1),
+            cut_part(
+                "e3",
+                1,
+                "table A.3 sets out the figures.",
+                72.0,
+                540.0,
+                72.0,
+                2
+            ),
+        ]));
+        // A paragraph in a page's first column, text set in a column to its
+        // right: the page's text does not end in it.
+        assert!(none(vec![
+            cut_part("e1", 0, "A sidebar read first.", 320.0, 560.0, 100.0, 40),
+            cut_part(
+                "e2",
+                0,
+                "the left column ends on a word and",
+                50.0,
+                300.0,
+                100.0,
+                40
+            ),
+            cut_part(
+                "e3",
+                1,
+                "goes on at the head of the next page.",
+                50.0,
+                300.0,
+                72.0,
+                30
+            ),
+        ]));
+        // A narrow sidebar at the page's foot, and the next page's text set
+        // to the full measure: no one column.
+        assert!(none(vec![
+            cut_part("e1", 0, "Text above it.", 72.0, 540.0, 100.0, 30),
+            cut_part(
+                "e2",
+                0,
+                "a sidebar's quote ends on a word and",
+                420.0,
+                540.0,
+                600.0,
+                8
+            ),
+            cut_part(
+                "e3",
+                1,
+                "the next page's text goes on.",
+                72.0,
+                540.0,
+                72.0,
+                30
+            ),
+        ]));
+        // A caption at the page's foot, set smaller, and the text at the
+        // head of the next page: the caption is no part of it.
+        let mut els = page_break(
+            "Figure 2: Rates by region and",
+            "and demands for storage grow.",
+        );
+        els[1].id = "c2".into();
+        assert!(none(els));
+        // Text after the paragraph in its own size is no foot note, even
+        // opening on a figure.
+        let mut els = page_break(
+            "as electric vehicle adoption",
+            "and demands for storage grow.",
+        );
+        els.insert(
+            2,
+            cut_part("e9", 0, "2024 was a year of change.", 72.0, 540.0, 700.0, 1),
+        );
+        assert!(none(els));
+    }
+
+    #[test]
+    fn a_caption_the_page_break_cut_goes_on_in_its_own_size() {
+        let els = cut_linked(vec![
+            cut_part("e1", 0, "Text above it.", 72.0, 540.0, 100.0, 3),
+            cut_part(
+                "c2",
+                0,
+                "Figure 2. (D) Amastigotes per 100 macrophages. Amastigotes",
+                72.0,
+                540.0,
+                700.0,
+                3,
+            ),
+            cut_part(
+                "c3",
+                1,
+                "enumerated by direct microscopy.",
+                72.0,
+                540.0,
+                72.0,
+                1,
+            ),
+            cut_part("e4", 1, "Body text goes on.", 72.0, 540.0, 100.0, 3),
+        ]);
+        assert_eq!(els[2].continues.as_deref(), Some("c2"));
+    }
+
+    #[test]
+    fn a_paragraph_over_three_pages_keeps_its_parts_together_before_the_notes() {
+        let els = cut_linked(vec![
+            cut_part("e1", 0, "it began on one page and", 72.0, 540.0, 100.0, 40),
+            cut_part(
+                "n1",
+                0,
+                "1 A note on the first page.",
+                72.0,
+                300.0,
+                700.0,
+                1,
+            ),
+            cut_part(
+                "e2",
+                1,
+                "filled the whole of the next, and",
+                72.0,
+                540.0,
+                72.0,
+                45,
+            ),
+            cut_part("e3", 2, "ended on the third.", 72.0, 540.0, 72.0, 2),
+        ]);
+        assert_eq!(cut_ids(&els), ["e1", "e2", "e3", "n1"]);
+        assert_eq!(els[1].continues.as_deref(), Some("e1"));
+        assert_eq!(els[2].continues.as_deref(), Some("e2"));
     }
 }

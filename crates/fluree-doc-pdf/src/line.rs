@@ -3213,42 +3213,75 @@ pub(crate) fn opening_letters(text: &str) -> String {
     letters(text.split_whitespace().next().unwrap_or(""), false)
 }
 
-/// Marks each line that ends on a word and a hyphen with the words the
-/// document sets after that word and a hyphen whole on one line, and never
-/// closed up (`treatment-emergent`, never `treatmentemergent`). A break
-/// inside a word and a break at a compound's own hyphen look alike at a
-/// line's end, both between two lowercase letters; the document's own
+/// The words a document sets after a word and a hyphen whole on one line,
+/// and never closed up (`treatment-emergent`, never `treatmentemergent`).
+/// A break inside a word and a break at a compound's own hyphen look alike
+/// at a line's end, both between two lowercase letters; the document's own
 /// text tells them apart.
-pub fn mark_compounds(lines: &mut [&mut Line]) {
-    use std::collections::{HashMap, HashSet};
-    let mut whole: HashMap<String, Vec<String>> = HashMap::new();
-    let mut closed: HashSet<String> = HashSet::new();
-    for l in lines.iter() {
-        let words: Vec<&str> = l.text.split_whitespace().collect();
-        for (i, w) in words.iter().enumerate() {
-            // A line's closing hyphen is no evidence: it may be the break.
-            let last = i + 1 == words.len() && w.ends_with('-');
-            let parts: Vec<&str> = w.split('-').collect();
-            if parts.len() == 1 {
-                closed.insert(w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase());
-                continue;
-            }
-            if last {
-                continue;
-            }
-            for p in parts.windows(2) {
-                let (a, b) = (letters(p[0], true), letters(p[1], false));
-                if a.chars().count() >= 2 && b.chars().count() >= 2 {
-                    let v = whole.entry(a).or_default();
-                    if !v.contains(&b) {
-                        v.push(b);
+#[derive(Debug, Default)]
+pub struct Compounds {
+    whole: std::collections::HashMap<String, Vec<String>>,
+    closed: std::collections::HashSet<String>,
+}
+
+impl Compounds {
+    /// Read from the document's lines.
+    pub fn of<'a>(lines: impl Iterator<Item = &'a str>) -> Compounds {
+        let mut c = Compounds::default();
+        for text in lines {
+            let words: Vec<&str> = text.split_whitespace().collect();
+            for (i, w) in words.iter().enumerate() {
+                // A line's closing hyphen is no evidence: it may be the break.
+                let last = i + 1 == words.len() && w.ends_with('-');
+                let parts: Vec<&str> = w.split('-').collect();
+                if parts.len() == 1 {
+                    c.closed
+                        .insert(w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase());
+                    continue;
+                }
+                if last {
+                    continue;
+                }
+                for p in parts.windows(2) {
+                    let (a, b) = (letters(p[0], true), letters(p[1], false));
+                    if a.chars().count() >= 2 && b.chars().count() >= 2 {
+                        let v = c.whole.entry(a).or_default();
+                        if !v.contains(&b) {
+                            v.push(b);
+                        }
                     }
                 }
             }
         }
+        c
     }
-    if whole.is_empty() {
-        return;
+
+    /// The words the document sets whole after `stem`'s last word and a
+    /// hyphen, and never closed up with it.
+    pub fn after(&self, stem: &str) -> Vec<String> {
+        let a = letters(stem.split_whitespace().next_back().unwrap_or(""), true);
+        self.whole.get(&a).map_or_else(Vec::new, |v| {
+            v.iter()
+                .filter(|b| !self.closed.contains(&format!("{a}{b}")))
+                .cloned()
+                .collect()
+        })
+    }
+
+    /// Whether a hyphen ending `stem`, with `next` after it, is a compound's
+    /// own: the document sets the two halves whole elsewhere.
+    pub fn keeps(&self, stem: &str, next: &str) -> bool {
+        self.after(stem).contains(&opening_letters(next))
+    }
+}
+
+/// Marks each line that ends on a word and a hyphen with the words the
+/// document sets after that word and a hyphen whole on one line, and never
+/// closed up ([`Compounds`]).
+pub fn mark_compounds(lines: &mut [&mut Line]) -> Compounds {
+    let c = Compounds::of(lines.iter().map(|l| l.text.as_str()));
+    if c.whole.is_empty() {
+        return c;
     }
     for l in lines.iter_mut() {
         let Some(stem) = l
@@ -3259,15 +3292,12 @@ pub fn mark_compounds(lines: &mut [&mut Line]) {
         else {
             continue;
         };
-        let a = letters(stem, true);
-        if let Some(v) = whole.get(&a) {
-            l.compounds = v
-                .iter()
-                .filter(|b| !closed.contains(&format!("{a}{b}")))
-                .cloned()
-                .collect();
+        let after = c.after(stem);
+        if c.whole.contains_key(&letters(stem, true)) {
+            l.compounds = after;
         }
     }
+    c
 }
 
 #[cfg(test)]
@@ -5341,7 +5371,7 @@ mod tests {
         let mut e = mk("A break in a long word as well as in a dis-");
         {
             let mut lines: Vec<&mut Line> = vec![&mut a, &mut b, &mut c, &mut d, &mut e];
-            mark_compounds(&mut lines);
+            let _ = mark_compounds(&mut lines);
         }
         assert_eq!(b.compounds, vec!["emergent".to_string()]);
         // A closing hyphen is no evidence, and `micro` is set closed up.

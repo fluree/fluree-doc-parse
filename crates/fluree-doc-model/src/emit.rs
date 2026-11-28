@@ -1,6 +1,7 @@
 //! Markdown and XHTML emission from the element model.
 
 use crate::element::{Element, Link, Notes, Turn};
+use crate::join::{carries_on_paragraph, part_separator};
 use crate::message::Message;
 
 mod md_escape;
@@ -361,6 +362,19 @@ fn repeated_header_rows(elements: &[Element], i: usize) -> usize {
         0
     } else {
         elements[i].header_rows.unwrap_or(0)
+    }
+}
+
+/// A paragraph as written: without the mark its end carries where a page
+/// break cut a word in it ([`crate::join::PART_BREAK`]), which only says how
+/// it joins the part after it.
+fn written(e: &Element) -> std::borrow::Cow<'_, Element> {
+    if e.text.ends_with(crate::join::PART_BREAK) {
+        let mut w = e.clone();
+        w.text = crate::join::part_text(&e.text).to_string();
+        std::borrow::Cow::Owned(w)
+    } else {
+        std::borrow::Cow::Borrowed(e)
     }
 }
 
@@ -758,10 +772,18 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                 (None, Some(m)) => out.push_str(&html_message(e, m)),
                 // A paragraph whose lines were stacked by hand, an
                 // address, keeps their breaks.
-                (None, None) => out.push_str(&format!(
-                    "<p>{}</p>\n",
-                    html_linked(e).replace('\n', "<br/>\n")
-                )),
+                (None, None) => {
+                    let text = html_linked(&written(e)).replace('\n', "<br/>\n");
+                    // A paragraph's part carried on from the page before goes
+                    // on in the paragraph it continues.
+                    if carries_on_paragraph(elements, i) && out.ends_with("</p>\n") {
+                        out.truncate(out.len() - "</p>\n".len());
+                        out.push_str(part_separator(&elements[i - 1].text, &e.text));
+                        out.push_str(&format!("{text}</p>\n"));
+                    } else {
+                        out.push_str(&format!("<p>{text}</p>\n"));
+                    }
+                }
             },
         }
     }
@@ -977,6 +999,17 @@ pub fn to_markdown_with_options(
                 }
             }
             _ => {
+                // A paragraph's part carried on from the page before goes on
+                // in the paragraph it continues.
+                if carries_on_paragraph(elements, i) && out.ends_with("\n\n") {
+                    out.truncate(out.len() - 2);
+                    out.push_str(part_separator(&elements[i - 1].text, &e.text));
+                    out.push_str(&format!(
+                        "{}\n\n",
+                        md_linked(&written(e), opts, Context::Block).replace('\n', "  \n")
+                    ));
+                    continue;
+                }
                 // A list's last item ends its line and no more. A paragraph
                 // set straight under it is a lazy continuation of the item
                 // under CommonMark, read as the item's own text: a blank line
@@ -992,7 +1025,7 @@ pub fn to_markdown_with_options(
                     // as a space.
                     (None, None) => out.push_str(&format!(
                         "{}\n\n",
-                        md_linked(e, opts, Context::Block).replace('\n', "  \n")
+                        md_linked(&written(e), opts, Context::Block).replace('\n', "  \n")
                     )),
                 }
             }
@@ -1007,6 +1040,62 @@ pub fn to_markdown_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A paragraph a page break cut: the part on the second page linked to
+    /// the part it carries on, and a paragraph of its own after it.
+    fn cut(before: &str, after: &str) -> Vec<Element> {
+        let mut a = Element::new("doco:Paragraph", before, "rust", "layout");
+        a.id = "p1".into();
+        let mut b = Element::new("doco:Paragraph", after, "rust", "layout");
+        b.id = "p2".into();
+        b.page = 1;
+        b.continues = Some("p1".into());
+        let mut c = Element::new("doco:Paragraph", "Next paragraph.", "rust", "layout");
+        c.id = "p3".into();
+        c.page = 1;
+        vec![a, b, c]
+    }
+
+    #[test]
+    fn a_paragraph_cut_at_a_word_end_is_written_whole_with_a_space() {
+        let els = cut(
+            "matter for economic decisions and",
+            "can affect the persistence of inflation.",
+        );
+        let whole = "matter for economic decisions and can affect the persistence of inflation.";
+        let md = to_markdown(&els);
+        assert!(md.contains(&format!("{whole}\n\nNext paragraph.")), "{md}");
+        let x = to_xhtml(&els);
+        assert!(
+            x.contains(&format!("<p>{whole}</p>\n<p>Next paragraph.</p>")),
+            "{x}"
+        );
+        // Unlinked, the two parts are two paragraphs, as before.
+        let mut apart = els.clone();
+        apart[1].continues = None;
+        assert!(to_markdown(&apart).contains("decisions and\n\ncan affect"));
+    }
+
+    #[test]
+    fn a_word_the_page_break_cut_is_written_whole() {
+        let els = cut(
+            &format!("held at a re{}", crate::join::PART_BREAK),
+            "strictive level.",
+        );
+        let md = to_markdown(&els);
+        assert!(md.contains("held at a restrictive level.\n\n"), "{md}");
+        assert!(!md.contains(crate::join::PART_BREAK));
+        let x = to_xhtml(&els);
+        assert!(x.contains("<p>held at a restrictive level.</p>"), "{x}");
+        assert!(!x.contains(crate::join::PART_BREAK));
+    }
+
+    #[test]
+    fn a_compound_the_page_break_cut_keeps_its_hyphen() {
+        let els = cut("a long-", "term view.");
+        assert!(to_markdown(&els).contains("a long-term view.\n\n"));
+        assert!(to_xhtml(&els).contains("<p>a long-term view.</p>"));
+    }
     use crate::element::{Link, Target};
 
     /// Two slides, each titled and with a line, and the speaker notes of
