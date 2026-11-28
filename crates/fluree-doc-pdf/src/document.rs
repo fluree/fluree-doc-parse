@@ -1056,6 +1056,16 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         if !table::columns_carry_on(&a.xs, &b.xs, CONTINUED_EDGE_TOLERANCE) {
             continue;
         }
+        // Edges a little off carry on a part that reads as the rest: rows
+        // with no header of their own, or under the header repeated whole.
+        // A part opening on a head of its own there is a table set on its
+        // page alike (a budget's next function under its title and years).
+        let shifted = a.xs.len() != b.xs.len()
+            || a.xs
+                .iter()
+                .zip(&b.xs)
+                .any(|(x, y)| (x - y).abs() > CONTINUED_EDGE_TOLERANCE);
+        let headless = next.header_rows.unwrap_or(0) == 0;
         // A second part that is the first one over again, every row, is
         // the next copy of a form printed box after box down the pages, not
         // the rest of the first: no table carries on by repeating its body.
@@ -1143,6 +1153,9 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
                 .iter()
                 .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()));
         if b.styled && !repeats && !finishes_header && !under_head && !in_bands {
+            continue;
+        }
+        if shifted && !headless && !repeats {
             continue;
         }
         let heads: Vec<(usize, usize, String, String)> = runs_on
@@ -11614,6 +11627,36 @@ mod tests {
             &["Analyst II", "2,820", "$51.99"],
         ];
         assert_eq!(with_second(copy, 0), None);
+    }
+
+    #[test]
+    fn a_part_whose_edge_is_a_little_off_carries_on_only_as_rows() {
+        // The next page's rows draw the date column's edge 12 pt right of
+        // the first page's.
+        let first = [72.0, 257.0, 340.0, 434.0];
+        let off = [72.0, 256.0, 352.0, 434.0];
+        let rows: &[&[&str]] = &[
+            &["Milestone", "Date", "Fee"],
+            &["Report complete", "3/26/2025", "$312,746"],
+        ];
+        let (a, fa) = part("elem-00001", 0, rows, 1, &first, true, true);
+        let link = |second: &[&[&str]], header: usize| {
+            let (b, fb) = part("elem-00002", 1, second, header, &off, false, false);
+            let mut els = vec![a.clone(), b];
+            link_continued_tables(&mut els, &[fa.clone(), fb]);
+            els[1].continues.clone()
+        };
+        // Rows alone, or under the header repeated whole: the rest.
+        let more: &[&[&str]] = &[&["Piping replaced", "11/14/2028", "$1,563,730"]];
+        assert_eq!(link(more, 0).as_deref(), Some("elem-00001"));
+        let again: &[&[&str]] = &[
+            &["Milestone", "Date", "Fee"],
+            &["Piping replaced", "11/14/2028", "$1,563,730"],
+        ];
+        assert_eq!(link(again, 1).as_deref(), Some("elem-00001"));
+        // Under a head of its own, a table set on its page alike.
+        let own: &[&[&str]] = &[&["Program", "2025", "2026"], &["Housing", "320", "280"]];
+        assert_eq!(link(own, 1), None);
     }
 
     #[test]
