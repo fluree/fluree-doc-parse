@@ -3857,7 +3857,7 @@ impl Grid {
             && drawn(first)
             && filled(first) >= 2
             && apart
-            && self.row_holds_text(glyphs, first);
+            && self.row_holds_text(glyphs, rules, first);
         if last == first && blank_to_foot {
             return rows - 1;
         }
