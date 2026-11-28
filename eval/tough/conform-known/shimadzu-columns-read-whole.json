@@ -2,11 +2,13 @@
  "md table.grid": 1,
  "md table.header_rows": 3,
  "md table.restated_headers": 2,
+ "md table.shape": 1,
  "md table.spans": 1,
  "md table.sub_headers": 3,
  "xhtml table.grid": 1,
  "xhtml table.header_rows": 3,
  "xhtml table.restated_headers": 2,
+ "xhtml table.shape": 1,
  "xhtml table.spans": 1,
  "xhtml table.sub_headers": 3
 }
