@@ -284,3 +284,33 @@ fn text_markdown_reads_as_markup_is_written_as_text() {
 fn to_md(els: &[Element]) -> String {
     fluree_doc_model::to_markdown(els)
 }
+
+/// A paragraph a page break cut: the later part linked to the earlier.
+fn cut(before: &str, after: &str) -> Vec<Element> {
+    let mut a = el("doco:Paragraph", before);
+    a.id = "p1".into();
+    let mut b = el("doco:Paragraph", after);
+    b.id = "p2".into();
+    b.page = 1;
+    b.continues = Some("p1".into());
+    vec![
+        heading("Outlook", 2),
+        a,
+        b,
+        el("doco:Paragraph", "Next paragraph."),
+    ]
+}
+
+#[test]
+fn a_paragraph_a_page_break_cut_conforms_as_one() {
+    for els in [
+        cut("matter for decisions and", "can affect inflation."),
+        cut(
+            &format!("held at a re{}", fluree_doc_model::join::PART_BREAK),
+            "strictive level.",
+        ),
+        cut("a long-", "term view."),
+    ] {
+        assert_eq!(conform(&els, &Notes::default()), [], "{:?}", els[1].text);
+    }
+}

@@ -181,88 +181,10 @@ impl Block {
     }
 }
 
-/// Whether a line ending in a dash set closed, or in a web address broken
-/// at a slash, runs on into the next with no space: `restore—` over `D2D`,
-/// `10–` over `20`, `…TechnicalDocumentLibrary/` over its file's name.
-///
-/// A dash set closed against the word before it joins that word to the
-/// next, as the line's own hyphen does; one with a space before it was set
-/// apart, and keeps its space. A slash ending a word may have had a space
-/// after it on the line the break took (`fuego/ desprendimiento`), but an
-/// address holds none.
-pub(crate) fn closed_join(before: &str, next: &str) -> bool {
-    let mut tail = before.chars().rev();
-    let (Some(mark), Some(prev)) = (tail.next(), tail.next()) else {
-        return false;
-    };
-    if prev.is_whitespace() || !next.chars().next().is_some_and(|c| !c.is_whitespace()) {
-        return false;
-    }
-    match mark {
-        '—' | '–' => true,
-        '/' => {
-            let token = before.rsplit(char::is_whitespace).next().unwrap_or("");
-            token.contains("://") || token.to_ascii_lowercase().starts_with("www.")
-        }
-        _ => false,
-    }
-}
-
-/// What a hyphen ending a line is, and so how the line joins the next.
-#[derive(Debug, PartialEq)]
-pub(crate) enum HyphenJoin {
-    /// A break wrapping set inside a word (`microcom-` over `puter`):
-    /// dropped, and the word read whole.
-    Word,
-    /// The text's own, in a number, a code, a compound or a range
-    /// (`1-800-222-` over `1222`, `Polish-` over `German`, `(A)-` over
-    /// `(L)`): kept, the lines joined without a space.
-    Hyphen,
-    /// A dash, set apart from the word before it (`a pause -`), or a
-    /// compound's first half left hanging for the second it shares
-    /// (`wage-` over `and price-setting`): kept, the lines joined with a
-    /// space.
-    Dash,
-}
-
-impl HyphenJoin {
-    /// Read from the text before the hyphen and the next line.
-    ///
-    /// A typesetter breaks a word between two letters of one case, and
-    /// leaves at least two on each side. Anything else at the end of a line
-    /// was printed there: a figure beside it, a capital after a lowercase
-    /// letter or before one (`Fly-Casting`, `R-warfarin`), a single letter
-    /// (`e-mail`, `X-Forwarded`). An all-capital compound (`BY-PRODUCTS`)
-    /// cannot be told from an all-capital word broken (`SO-LAR`), and is
-    /// read as the word.
-    pub(crate) fn of(stem: &str, next: &str) -> HyphenJoin {
-        let Some(before) = stem.chars().next_back().filter(|c| !c.is_whitespace()) else {
-            return HyphenJoin::Dash;
-        };
-        let Some(after) = next.chars().next() else {
-            return HyphenJoin::Hyphen;
-        };
-        let left = stem.chars().rev().take_while(|c| c.is_alphabetic()).count();
-        let right = next.chars().take_while(|c| c.is_alphabetic()).count();
-        // A conjunction after the hyphen joins two compounds that share
-        // their second half: no typesetter's break leaves one of these
-        // words whole on the next line.
-        let first = next
-            .split(|c: char| !c.is_alphabetic())
-            .next()
-            .unwrap_or("");
-        if left >= 2 && matches!(first, "and" | "or" | "nor") {
-            return HyphenJoin::Dash;
-        }
-        let one_case = (before.is_lowercase() && after.is_lowercase())
-            || (before.is_uppercase() && after.is_uppercase());
-        if one_case && left >= 2 && right >= 2 {
-            HyphenJoin::Word
-        } else {
-            HyphenJoin::Hyphen
-        }
-    }
-}
+// How a line ending on a hyphen, a closed dash or a broken address joins
+// the next is the model's, shared with the writers that join a paragraph's
+// parts across a page break.
+pub(crate) use fluree_doc_model::join::{closed_join, HyphenJoin};
 
 /// Largest gap that can plausibly be *within* a paragraph. Gaps beyond this are
 /// paragraph or section breaks in any typography, and must not be mistaken for
