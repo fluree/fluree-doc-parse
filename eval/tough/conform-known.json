@@ -91,10 +91,10 @@
   "md table.restated_headers": 1,
   "xhtml table.restated_headers": 1
  },
- "doe-wcs-funding-bands-across-the-break": {
-  "md table.header_rows": 2,
+ "doe-em-cell-space-layer": {
+  "md table.header_rows": 1,
   "md table.sub_headers": 2,
-  "xhtml table.header_rows": 2,
+  "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 2
  },
  "ecb-diagram-picture-no-table": {
@@ -228,6 +228,14 @@
   "md table.sub_headers": 5,
   "xhtml table.header_rows": 5,
   "xhtml table.sub_headers": 5
+ },
+ "fed-mpr-chart-labels-space-layer": {
+  "md table.header_rows": 2,
+  "md table.shape": 1,
+  "md table.sub_headers": 2,
+  "xhtml table.header_rows": 2,
+  "xhtml table.shape": 1,
+  "xhtml table.sub_headers": 2
  },
  "fed-mpr-chart-titles-side-by-side": {
   "md table.header_rows": 1,
@@ -816,12 +824,6 @@
  },
  "wd-gold-title": {
   "md table.sub_headers": 3,
-  "xhtml table.sub_headers": 3
- },
- "who-a77-16-fr-stacked-bands": {
-  "md table.header_rows": 1,
-  "md table.sub_headers": 3,
-  "xhtml table.header_rows": 1,
   "xhtml table.sub_headers": 3
  },
  "worldbank-pad-template-markers": {

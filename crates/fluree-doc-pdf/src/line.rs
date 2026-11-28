@@ -2579,6 +2579,37 @@ fn stray_space(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool
     if between || follows {
         return false;
     }
+    // Out of turn, between two marks that close up: the mark after begins
+    // where the one before stops, its ink no further from the other's than
+    // a word space, and the page leaves no room for a space there. A
+    // producer lays a row of blank spaces across a cell, a space's width
+    // apart, before it sets the cell's text over them; read where they
+    // fell, they parted words between their letters (`wi t h`, `0 4/
+    // 30/20 2 4`). A space drawn out of turn in a real gap stays: the words
+    // stand a space's width apart. So does one after a bullet whose advance
+    // runs on past its ink to the text: the page shows the room.
+    if let (Some(b), Some(a)) = (before, after) {
+        let stop = adv.at(b.origin) + width(b);
+        let ink_gap = match (b.bbox, a.bbox) {
+            (Some(bb), Some(ab)) => adv.start(&ab) - adv.end(&bb),
+            _ => f64::INFINITY,
+        };
+        // A word space as the line pass measures one: wider between two
+        // figures, whose tabular advances leave a narrow `1` room either
+        // side.
+        let digits = b.text.chars().last().is_some_and(|c| c.is_ascii_digit())
+            && a.text.chars().next().is_some_and(|c| c.is_ascii_digit());
+        let word_space = if digits {
+            DIGIT_SPACE_GAP_RATIO
+        } else {
+            SPACE_GAP_RATIO
+        };
+        if (adv.at(a.origin) - stop).abs() <= SPACE_INSIDE * em
+            && ink_gap < word_space * a.font_size.max(1.0) as f64
+        {
+            return true;
+        }
+    }
     let same = SPACE_SAME_PLACE * em;
     before.is_some_and(|b| {
         let start = adv.at(b.origin);
@@ -4525,6 +4556,59 @@ mod tests {
         small.draw_index = 3;
         v.push(small);
         assert_eq!(assemble(&v)[0].text, "As x");
+    }
+
+    #[test]
+    fn a_layer_of_spaces_laid_under_a_cell_parts_no_word() {
+        // A row of blank spaces laid across a cell, 2.8 apart, drawn before
+        // the words set over them: those between two letters that close up
+        // part nothing.
+        let layer =
+            |n: usize| -> Vec<Glyph> { (0..n).map(|k| space(98.0 + 2.8 * k as f64, k)).collect() };
+        let mut v = layer(10);
+        v.extend(run("with", 100.0, 20));
+        assert_eq!(assemble(&v)[0].text.trim(), "with");
+        // Two words a space's width apart keep a space between them.
+        let mut v = layer(14);
+        v.extend(run("of", 100.0, 20));
+        v.extend(run("it", 113.0, 22));
+        let text = assemble(&v)[0].text.clone();
+        assert_eq!(
+            text.split_whitespace().collect::<Vec<_>>(),
+            ["of", "it"],
+            "{text:?}"
+        );
+        // A bullet whose advance runs on past its ink to the text, and its
+        // space drawn before it: the page shows the room, and it stays.
+        let mut bullet = g("•", 90.0, 0.0, 3.0, 0.0);
+        bullet.advance = Some(10.0);
+        bullet.draw_index = 1;
+        let mut v = vec![space(100.0, 0), bullet];
+        v.extend(run("Shelves", 101.0, 2));
+        assert_eq!(assemble(&v)[0].text.trim(), "• Shelves");
+        // Two figures in tabular advances, a narrow `1` well inside its
+        // own: they close up as figures do, and the layer's space between
+        // them parts nothing.
+        let mut one = g("1", 100.0, 0.0, 1.0, 0.0);
+        one.bbox = Some(BBox {
+            x0: 102.0,
+            y0: -7.0,
+            x1: 103.0,
+            y1: 0.0,
+        });
+        one.advance = Some(5.0);
+        one.draw_index = 10;
+        let mut six = g("6", 105.0, 0.0, 4.5, 0.0);
+        six.bbox = Some(BBox {
+            x0: 105.2,
+            y0: -7.0,
+            x1: 109.7,
+            y1: 0.0,
+        });
+        six.advance = Some(5.0);
+        six.draw_index = 11;
+        let v = vec![space(103.6, 0), one, six];
+        assert_eq!(assemble(&v)[0].text.trim(), "16");
     }
 
     #[test]
